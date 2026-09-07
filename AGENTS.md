@@ -65,8 +65,10 @@ tests/support/
 
 不要把 HTTP/1、HTTP/2 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
 target 专属的支撑代码跟随所属 target，只有跨 target 的通用支撑保留在
-独立目录。测试只保留可直接验证功能行为的单元测试，不新增 guards、
-server/integration、conformance、benchmark 或故意失败的 probe target。
+独立目录。测试只保留可直接验证被测单元正确性的功能单测；不得为历史缺陷、
+目录/target/依赖边界、安装消费或编译 API 表面保留防回归测试或门禁。需要时可为
+当次变更临时生成上述验证，完成后必须立即删除临时文件、target 和 CTest 注册。
+不新增长期 guards、server/integration、conformance、benchmark 或故意失败的 probe target。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/` 或 `web/`。
 

@@ -106,9 +106,7 @@ private:
     RecordingTransportState* state_;
 };
 
-static_assert(!std::constructible_from<WebSocketConnection<RecordingTransport>, RecordingTransport,
-    ConnectionScanner::Entry&, ruvia::WebSocketLifecycleOptions, std::size_t,
-    std::pmr::memory_resource*, std::string_view, bool>);
+
 
 std::string maskedFrame(
     std::uint8_t opcode, std::string_view payload, bool fin = true, bool rsv1 = false) {

@@ -16,27 +16,15 @@ using ruvia::detail::HttpByteRangeUnsatisfiable;
 using ruvia::detail::HttpResolvedByteRange;
 using ruvia::detail::resolveHttpByteRange;
 
-template <typename T>
-concept HasByteRangeOutcomeField = requires(const T& value) { value.outcome; };
 
-template <typename T>
-concept HasByteRangePayloadField = requires(const T& value) { value.range; };
 
-template <typename T>
-concept HasByteRangeOffsetAccessor = requires(const T& value) {
-    { value.offset() } -> std::same_as<std::uint64_t>;
-};
 
-template <typename T>
-concept HasByteRangeLengthAccessor = requires(const T& value) {
-    { value.length() } -> std::same_as<std::uint64_t>;
-};
 
-template <typename T>
-concept HasAnyRvalueByteRangeResolutionAccessor =
-    requires(T&& value) { std::move(value).ignored(); } || requires(T&& value) {
-        std::move(value).unsatisfiable();
-    } || requires(T&& value) { std::move(value).resolved(); };
+
+
+
+
+
 
 [[nodiscard]] bool isIgnoredRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
@@ -49,28 +37,25 @@ concept HasAnyRvalueByteRangeResolutionAccessor =
     return resolution.unsatisfiable() != nullptr;
 }
 
-static_assert(!std::default_initializable<HttpByteRangeResolution>);
-static_assert(!HasAnyRvalueByteRangeResolutionAccessor<HttpByteRangeResolution>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().ignored()),
-    const HttpByteRangeIgnored*>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().unsatisfiable()),
-    const HttpByteRangeUnsatisfiable*>);
-static_assert(std::same_as<decltype(std::declval<const HttpByteRangeResolution&>().resolved()),
-    const HttpResolvedByteRange*>);
-static_assert(!HasByteRangeOutcomeField<HttpByteRangeResolution>);
-static_assert(!HasByteRangePayloadField<HttpByteRangeResolution>);
-static_assert(!HasByteRangeOffsetAccessor<HttpByteRangeResolution>);
-static_assert(!HasByteRangeLengthAccessor<HttpByteRangeResolution>);
-static_assert(!HasByteRangeOffsetAccessor<HttpByteRangeIgnored>);
-static_assert(!HasByteRangeLengthAccessor<HttpByteRangeIgnored>);
-static_assert(!HasByteRangeOffsetAccessor<HttpByteRangeUnsatisfiable>);
-static_assert(!HasByteRangeLengthAccessor<HttpByteRangeUnsatisfiable>);
-static_assert(HasByteRangeOffsetAccessor<HttpResolvedByteRange>);
-static_assert(HasByteRangeLengthAccessor<HttpResolvedByteRange>);
-static_assert(!std::default_initializable<HttpByteRangeIgnored>);
-static_assert(!std::default_initializable<HttpByteRangeUnsatisfiable>);
-static_assert(!std::default_initializable<HttpResolvedByteRange>);
-static_assert(!std::constructible_from<HttpResolvedByteRange, std::uint64_t, std::uint64_t>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

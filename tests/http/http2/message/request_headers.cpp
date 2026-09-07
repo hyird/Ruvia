@@ -26,49 +26,19 @@ std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
 }
 
-template <typename T>
-concept HasValueSemanticRequestExpectations = requires(const T& value, const T&& temporary) {
-    { value.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
-    { temporary.requestExpectations() } -> std::same_as<HttpRequestExpectations>;
-};
 
-static_assert(HasValueSemanticRequestExpectations<Http2StreamState>);
 
-template <typename T>
-concept ExposesRvalueHttp2StreamRequestStateStorage =
-    requires(T&& state) { std::move(state).responseStatus(); };
 
-template <typename T>
-concept ExposesRvalueHttp2StreamHeaderBlocksStorage =
-    requires(T&& blocks) { std::move(blocks).request(); } ||
-    requires(const T&& blocks) { std::move(blocks).request(); } ||
-    requires(T&& blocks) { std::move(blocks).response(); } ||
-    requires(const T&& blocks) { std::move(blocks).response(); };
 
-template <typename T>
-concept ExposesRvalueHttp2StreamStateStorage =
-    requires(T&& stream) { std::move(stream).receiveWindowCredit(); } ||
-    requires(T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
-    requires(const T&& stream) { std::move(stream).remoteHeaderBlock(); } ||
-    requires(T&& stream) { std::move(stream).localHeaderBlock(); } ||
-    requires(const T&& stream) { std::move(stream).localHeaderBlock(); } ||
-    requires(T&& stream) { std::move(stream).remoteContent(); } ||
-    requires(T&& stream) { std::move(stream).localContent(); } ||
-    requires(T&& stream) { std::move(stream).localSend(); } ||
-    requires(T&& stream) { std::move(stream).remoteReceive(); } ||
-    requires(T&& stream) { std::move(stream).requestMethod(); } ||
-    requires(T&& stream) { std::move(stream).requestAuthority(); } ||
-    requires(T&& stream) { std::move(stream).requestPath(); } ||
-    requires(T&& stream) { std::move(stream).requestProtocol(); } ||
-    requires(T&& stream) { std::move(stream).requestCookie(); } ||
-    requires(T&& stream) { std::move(stream).remoteHeaderAt(std::size_t{}); } ||
-    requires(T&& stream) { std::move(stream).requestScheme(); } ||
-    requires(T&& stream) { std::move(stream).tunnel(); } ||
-    requires(T&& stream) { std::move(stream).responseStatus(); };
 
-static_assert(!ExposesRvalueHttp2StreamRequestStateStorage<Http2StreamRequestState>);
-static_assert(!ExposesRvalueHttp2StreamHeaderBlocksStorage<Http2StreamHeaderBlocks>);
-static_assert(!ExposesRvalueHttp2StreamStateStorage<Http2StreamState>);
+
+
+
+
+
+
+
+
 
 }  // namespace
 

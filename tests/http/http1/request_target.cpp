@@ -27,17 +27,14 @@ using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::RequestTargetView;
 
-template <typename Input>
-concept AcceptsTemporaryRequestTargetInput = requires(Input&& input, RequestTargetView& output) {
-    parseRequestTarget(HttpKnownMethod::kGet, std::forward<Input>(input), output);
-};
 
-static_assert(!AcceptsTemporaryRequestTargetInput<std::string>);
-static_assert(!AcceptsTemporaryRequestTargetInput<const std::string>);
-static_assert(!AcceptsTemporaryRequestTargetInput<std::pmr::string>);
-static_assert(AcceptsTemporaryRequestTargetInput<std::string&>);
-static_assert(AcceptsTemporaryRequestTargetInput<std::pmr::string&>);
-static_assert(AcceptsTemporaryRequestTargetInput<std::string_view>);
+
+
+
+
+
+
+
 
 }  // namespace
 

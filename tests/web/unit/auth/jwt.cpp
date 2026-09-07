@@ -25,127 +25,78 @@ using ruvia::JwtSignOptions;
 using ruvia::JwtVerifyOptions;
 using ruvia::testing::throwsOn;
 
-static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
-static_assert(
-    std::is_same_v<decltype(JwtSignOptions{}.expiresIn), std::optional<std::chrono::seconds>>);
-static_assert(
-    std::is_same_v<decltype(JwtSignOptions{}.notBeforeDelay), std::optional<std::chrono::seconds>>);
-static_assert(std::is_same_v<decltype(JwtSignOptions{}.secret), ruvia::BorrowedText>);
-static_assert(std::is_same_v<decltype(JwtSignOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.token), ruvia::BorrowedText>);
-static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.secret), ruvia::BorrowedText>);
-static_assert(
-    std::is_same_v<decltype(JwtVerifyOptions{}.expirationClaim), JwtExpirationClaimPolicy>);
-static_assert(std::is_same_v<decltype(JwtVerifyOptions{}.resource), std::pmr::memory_resource*>);
-static_assert(std::is_aggregate_v<ruvia::JwtDecodeUnverifiedOptions>);
-static_assert(
-    std::is_same_v<decltype(ruvia::JwtDecodeUnverifiedOptions{}.token), ruvia::BorrowedText>);
-static_assert(std::is_same_v<decltype(ruvia::JwtDecodeUnverifiedOptions{}.resource),
-    std::pmr::memory_resource*>);
-static_assert(JwtVerifyOptions{}.expirationClaim == JwtExpirationClaimPolicy::kRequire);
 
-template <typename T>
-concept ExposesAnyRvalueJwtOwnedView =
-    requires(T&& value) { std::move(value).name(); } ||
-    requires(T&& value) { std::move(value).value(); } ||
-    requires(T&& value) { std::move(value).issuer(); } ||
-    requires(T&& value) { std::move(value).subject(); } ||
-    requires(T&& value) { std::move(value).audience(); } ||
-    requires(T&& value) { std::move(value).id(); } ||
-    requires(T&& value) { std::move(value).claims(); } ||
-    requires(T&& value) { std::move(value).claim(std::string_view{}); };
 
-template <typename T>
-concept HasJwtRequireExpirationBoolean = requires(T& options) { options.requireExpiration; };
 
-template <typename T>
-concept HasJwtSignResourceArgument = requires(
-    const T& options, std::pmr::memory_resource* resource) { ruvia::jwtSign(options, resource); };
 
-template <typename T>
-concept HasJwtVerifyPositionalToken = requires(std::string_view token, const T& options) {
-    ruvia::jwtVerify(token, options);
-} || requires(std::string_view token, const T& options, std::pmr::memory_resource* resource) {
-    ruvia::jwtVerify(token, options, resource);
-};
 
-template <typename Token>
-concept HasJwtDecodeUnverifiedPositionalToken =
-    requires(Token&& token) { ruvia::jwtDecodeUnverified(std::forward<Token>(token)); };
 
-template <typename T>
-concept HasJwtClaimPositionalConstructor = requires { T(std::string_view{}, std::string_view{}); };
 
-template <typename String>
-concept AcceptsAnyRvalueJwtClaimOptionText = requires(String&& value) {
-    ruvia::JwtClaimOptions{.name = std::forward<String>(value), .value = "value"};
-} || requires(String&& value) {
-    ruvia::JwtClaimOptions{.name = "name", .value = std::forward<String>(value)};
-};
 
-template <typename String>
-concept AcceptsAnyRvalueJwtTokenOptionText = requires(String&& value) {
-    ruvia::JwtVerifyOptions{.token = std::forward<String>(value)};
-} || requires(String&& value) {
-    ruvia::JwtDecodeUnverifiedOptions{.token = std::forward<String>(value)};
-};
 
-template <typename String>
-concept AcceptsAnyRvalueJwtSecretOptionText = requires(String&& value) {
-    ruvia::JwtSignOptions{.secret = std::forward<String>(value)};
-} || requires(String&& value) { ruvia::JwtVerifyOptions{.secret = std::forward<String>(value)}; };
 
-template <typename String>
-concept AcceptsLvalueJwtSecretOptionText = requires(String& value) {
-    ruvia::JwtSignOptions{.secret = value};
-    ruvia::JwtVerifyOptions{.secret = value};
-};
 
-template <typename String>
-concept AcceptsLvalueJwtClaimOptionText =
-    requires(String& value) { ruvia::JwtClaimOptions{.name = value, .value = value}; };
 
-static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtClaim>);
-static_assert(!ExposesAnyRvalueJwtOwnedView<ruvia::JwtPayload>);
-static_assert(!HasJwtRequireExpirationBoolean<JwtVerifyOptions>);
-static_assert(!HasJwtSignResourceArgument<JwtSignOptions>);
-static_assert(!HasJwtVerifyPositionalToken<JwtVerifyOptions>);
-static_assert(!HasJwtDecodeUnverifiedPositionalToken<std::string_view>);
-static_assert(!HasJwtDecodeUnverifiedPositionalToken<std::string&>);
-static_assert(std::is_aggregate_v<ruvia::JwtClaimOptions>);
-static_assert(std::is_same_v<decltype(ruvia::JwtClaimOptions{}.name), ruvia::BorrowedText>);
-static_assert(std::is_same_v<decltype(ruvia::JwtClaimOptions{}.value), ruvia::BorrowedText>);
-static_assert(!HasJwtClaimPositionalConstructor<ruvia::JwtClaim>);
-static_assert(AcceptsLvalueJwtClaimOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueJwtClaimOptionText<std::pmr::string>);
-static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueJwtTokenOptionText<std::pmr::string>);
-static_assert(AcceptsLvalueJwtSecretOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::string>);
-static_assert(!AcceptsAnyRvalueJwtSecretOptionText<std::pmr::string>);
 
-template <typename Token>
-concept AcceptsJwtTokenSplit =
-    requires(Token&& token) { ruvia::detail::jwtSplitToken(std::forward<Token>(token)); };
 
-template <typename Authorization>
-concept AcceptsJwtBearerToken = requires(Authorization&& authorization) {
-    ruvia::jwtBearerToken(std::forward<Authorization>(authorization));
-};
 
-static_assert(!AcceptsJwtTokenSplit<std::string>);
-static_assert(!AcceptsJwtTokenSplit<const std::string>);
-static_assert(!AcceptsJwtTokenSplit<std::pmr::string>);
-static_assert(AcceptsJwtTokenSplit<std::string&>);
-static_assert(AcceptsJwtTokenSplit<std::pmr::string&>);
-static_assert(AcceptsJwtTokenSplit<std::string_view>);
-static_assert(!AcceptsJwtBearerToken<std::string>);
-static_assert(!AcceptsJwtBearerToken<const std::string>);
-static_assert(!AcceptsJwtBearerToken<std::pmr::string>);
-static_assert(AcceptsJwtBearerToken<std::string&>);
-static_assert(AcceptsJwtBearerToken<std::pmr::string&>);
-static_assert(AcceptsJwtBearerToken<std::string_view>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;

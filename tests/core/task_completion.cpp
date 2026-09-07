@@ -55,21 +55,15 @@ private:
     AllocationCounts* counts_;
 };
 
-template <typename Result>
-concept HasLooseCompletionFields = requires(Result& result) {
-    result.exception;
-    result.value;
-};
 
-template <typename Result>
-concept HasRvalueCompletionBorrow = requires(Result&& result) { std::move(result).success(); } ||
-                                    requires(Result&& result) { std::move(result).failure(); };
 
-static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<void>>);
-static_assert(!HasLooseCompletionFields<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!HasRvalueCompletionBorrow<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!HasRvalueCompletionBorrow<ruvia::detail::TaskCompletionResult<void>>);
+
+
+
+
+
+
+
 
 ruvia::Task<std::unique_ptr<int>> makeValue() {
     co_return std::make_unique<int>(42);

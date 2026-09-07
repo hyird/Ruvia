@@ -72,199 +72,106 @@ inline ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     return *result.section();
 }
 
-template <typename T>
-concept HasLooseHttp2EventFields = requires(T& event) {
-    event.kind = Http2EventKind::kMessageHead;
-    event.streamId;
-    event.bytes;
-    event.error;
-};
 
-template <typename T>
-concept HasAnyRvalueHttp2EventBorrow =
-    requires(T&& event) { std::move(event).messageHead(); } ||
-    requires(T&& event) { std::move(event).messageBodyChunk(); } ||
-    requires(T&& event) { std::move(event).messageEnd(); } ||
-    requires(T&& event) { std::move(event).tunnelData(); } ||
-    requires(T&& event) { std::move(event).tunnelEnd(); } ||
-    requires(T&& event) { std::move(event).streamClosed(); } ||
-    requires(T&& event) { std::move(event).requestUnprocessed(); } ||
-    requires(T&& event) { std::move(event).goaway(); } ||
-    requires(T&& event) { std::move(event).peerGoaway(); };
 
-template <typename T>
-concept ExposesRvalueHttp2ConnectionStorage =
-    requires(T&& connection) { std::move(connection).pendingOutput(); } ||
-    requires(T&& connection) { std::move(connection).takeDrainedDataStreams(); } ||
-    requires(T&& connection) { std::move(connection).stream(std::uint32_t{}); };
 
-static_assert(!HasAnyRvalueHttp2EventBorrow<Http2Event>);
-static_assert(!HasAnyRvalueHttp2EventBorrow<ruvia::detail::Http2GoawayEvent>);
-static_assert(!ExposesRvalueHttp2ConnectionStorage<Http2Connection>);
 
-template <typename T>
-concept HasHttp2EventError = requires(const T& event) {
-    { event.error() } -> std::same_as<Http2ErrorCode>;
-};
 
-template <typename T>
-concept HasFeedStatusField = requires(const T& result) { result.status; };
 
-template <typename T>
-concept HasFeedConsumedField = requires(const T& result) { result.consumed; };
 
-template <typename T>
-concept HasRequestHeadStatusAccessor = requires(const T& result) { result.status(); };
 
-template <typename T>
-concept HasRequestHeadAcceptedAccessor = requires(const T& result) { result.accepted(); };
 
-template <typename T>
-concept HasRequestHeadStreamIdAccessor = requires(const T& result) {
-    { result.streamId() } -> std::same_as<std::uint32_t>;
-};
 
-template <typename T>
-concept HasRequestHeadErrorAccessor = requires(const T& result) {
-    { result.error() } -> std::same_as<Http2RequestHeadSubmitError>;
-};
 
-template <typename T>
-concept HasResponseHeadStatusAccessor = requires(const T& result) { result.status(); };
 
-template <typename T>
-concept HasResponseHeadAcceptedAccessor = requires(const T& result) { result.accepted(); };
 
-template <typename T>
-concept HasResponseHeadPlanAccessor = requires(const T& result) { result.plan(); };
 
-template <typename T>
-concept HasResponseHeadErrorAccessor = requires(const T& result) { result.error(); };
 
-template <typename T>
-concept HasResponseHeadFailureContract = requires(const T& failure) {
-    { failure.peerClosed() } -> std::same_as<bool>;
-    { failure.error() } -> std::same_as<Http2ResponseHeadSubmitError>;
-};
 
-template <typename T>
-concept HasRequestContentMode = requires(const T& content) { content.mode(); };
 
-template <typename T>
-concept HasRequestContentLength = requires(const T& content) {
-    { content.length() } -> std::same_as<std::uint64_t>;
-};
 
-template <typename T>
-concept HasStaleLocalContentForwarders = requires(const T& stream) {
-    stream.localContentMode();
-    stream.localContentHasKnownLength();
-    stream.localContentDeclaredLength();
-    stream.localContentAcceptedBytes();
-    stream.localContentCommittedBytes();
-    stream.localContentLengthComplete();
-};
 
-template <typename T>
-concept HasStaleTunnelForwarders = requires(const T& stream) {
-    stream.standardConnect();
-    stream.extendedConnect();
-    stream.extendedConnectWebSocket();
-    stream.webSocketTunnel();
-    stream.connectRequest();
-    stream.connectPending();
-    stream.tunnelOpen();
-    stream.connectRejected();
-};
 
-template <typename T>
-concept HasStaleLocalSendForwarders = requires(const T& stream) {
-    stream.localSendPhase();
-    stream.localMessageKind();
-    stream.localEndStream();
-    stream.localEndStreamCommitted();
-    stream.canSubmitLocalHead();
-    stream.localBodyOpen();
-    stream.localTrailersOnly();
-};
 
-static_assert(!HasRequestContentMode<Http2RequestContent>);
-static_assert(!HasRequestContentLength<Http2RequestContent>);
-static_assert(!HasRequestContentLength<ruvia::detail::Http2RequestWithoutContent>);
-static_assert(HasRequestContentLength<ruvia::detail::Http2KnownLengthRequestContent>);
-static_assert(!HasRequestContentLength<ruvia::detail::Http2StreamingRequestContent>);
-static_assert(!std::default_initializable<Http2RequestContent>);
-static_assert(!std::default_initializable<ruvia::detail::Http2RequestWithoutContent>);
-static_assert(!std::default_initializable<ruvia::detail::Http2KnownLengthRequestContent>);
-static_assert(!std::default_initializable<ruvia::detail::Http2StreamingRequestContent>);
-static_assert(!HasStaleLocalContentForwarders<Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const Http2StreamState&>().localContent()),
-    const Http2LocalContentState&>);
-static_assert(!HasStaleTunnelForwarders<Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const Http2StreamState&>().tunnel()),
-    const Http2TunnelState&>);
-static_assert(!HasStaleLocalSendForwarders<Http2StreamState>);
-static_assert(std::same_as<decltype(std::declval<const Http2StreamState&>().localSend()),
-    const Http2LocalSendState&>);
 
-static_assert(std::same_as<decltype(std::declval<Http2Connection&>().nextEvent()),
-    std::optional<Http2Event>>);
-static_assert(!std::is_default_constructible_v<Http2Event>);
-static_assert(!HasLooseHttp2EventFields<Http2Event>);
-static_assert(HasHttp2EventError<ruvia::detail::Http2StreamClosedEvent>);
-static_assert(!HasHttp2EventError<ruvia::detail::Http2RequestUnprocessedEvent>);
-static_assert(std::same_as<decltype(std::declval<Http2Connection&>().feed(std::string_view{})),
-    Http2FeedResult>);
-static_assert(std::is_enum_v<Http2FeedResult>);
-static_assert(!HasFeedStatusField<Http2FeedResult>);
-static_assert(!HasFeedConsumedField<Http2FeedResult>);
-static_assert(!std::default_initializable<Http2WebSocketHandshakeSubmitResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2WebSocketHandshakeSubmitResult&>().submitted()),
-        const ruvia::detail::WebSocketServerNegotiation*>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2WebSocketHandshakeSubmitResult&>().failure()),
-        const Http2WebSocketHandshakeSubmitFailure*>);
-static_assert(!std::default_initializable<Http2RequestHeadSubmitResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2RequestHeadSubmitResult&>().submitted()),
-        const Http2SubmittedRequestHead*>);
-static_assert(std::same_as<decltype(std::declval<const Http2RequestHeadSubmitResult&>().failure()),
-    const Http2RequestHeadSubmitFailure*>);
-static_assert(!HasRequestHeadStatusAccessor<Http2RequestHeadSubmitResult>);
-static_assert(!HasRequestHeadAcceptedAccessor<Http2RequestHeadSubmitResult>);
-static_assert(!HasRequestHeadStreamIdAccessor<Http2RequestHeadSubmitResult>);
-static_assert(!std::constructible_from<Http2SubmittedRequestHead, std::uint32_t>);
-static_assert(HasRequestHeadStreamIdAccessor<Http2SubmittedRequestHead>);
-static_assert(!HasRequestHeadErrorAccessor<Http2SubmittedRequestHead>);
-static_assert(HasRequestHeadErrorAccessor<Http2RequestHeadSubmitFailure>);
-static_assert(!HasRequestHeadStreamIdAccessor<Http2RequestHeadSubmitFailure>);
-static_assert(!std::default_initializable<Http2BufferedResponseHeadSubmitResult>);
-static_assert(!std::default_initializable<Http2StreamingResponseHeadSubmitResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2BufferedResponseHeadSubmitResult&>().submitted()),
-        const ruvia::detail::HttpBufferedResponseWritePlan*>);
-static_assert(std::same_as<
-    decltype(std::declval<const Http2StreamingResponseHeadSubmitResult&>().submitted()),
-    const ruvia::detail::ResponseStreamCommitPlan*>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2BufferedResponseHeadSubmitResult&>().failure()),
-        const Http2ResponseHeadSubmitFailure*>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2StreamingResponseHeadSubmitResult&>().failure()),
-        const Http2ResponseHeadSubmitFailure*>);
-static_assert(!HasResponseHeadStatusAccessor<Http2BufferedResponseHeadSubmitResult>);
-static_assert(!HasResponseHeadAcceptedAccessor<Http2BufferedResponseHeadSubmitResult>);
-static_assert(!HasResponseHeadPlanAccessor<Http2BufferedResponseHeadSubmitResult>);
-static_assert(!HasResponseHeadErrorAccessor<Http2BufferedResponseHeadSubmitResult>);
-static_assert(HasResponseHeadErrorAccessor<Http2ResponseHeadSubmitFailure>);
-static_assert(HasResponseHeadFailureContract<Http2ResponseHeadSubmitFailure>);
-static_assert(!std::derived_from<Http2ResponseHeadSubmitError, std::exception>);
-static_assert(std::is_trivially_copyable_v<Http2ResponseHeadSubmitFailure>);
-static_assert(sizeof(Http2ResponseHeadSubmitFailure) <= 1);
-static_assert(!HasResponseHeadPlanAccessor<Http2ResponseHeadSubmitFailure>);
-static_assert(
-    !std::constructible_from<Http2ResponseHeadSubmitFailure, Http2ResponseHeadSubmitError>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 inline const Http2LocalContentKnownLength& requireLocalKnownLength(const Http2StreamState& stream) {
     if (const auto* knownLength = stream.localContent().knownLength()) {

@@ -22,32 +22,21 @@ namespace {
 
 using ruvia::HttpResponse;
 
-template <typename T>
-concept HasCustomReasonPhraseSetter =
-    requires(T& response) { response.status(std::uint16_t{200}, std::string_view{}); };
 
-static_assert(!HasCustomReasonPhraseSetter<HttpResponse>);
-static_assert(!std::is_copy_constructible_v<HttpResponse>);
-static_assert(!std::is_copy_assignable_v<HttpResponse>);
-static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
-static_assert(std::is_nothrow_move_assignable_v<HttpResponse>);
-static_assert(
-    std::same_as<decltype(HttpResponse::HeaderOptions{}.mode), ruvia::HttpResponseHeaderMode>);
-static_assert(HttpResponse::HeaderOptions{}.mode == ruvia::HttpResponseHeaderMode::kReplace);
 
-template <typename T>
-concept ExposesAnyRvalueResponseView =
-    requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).header(std::string_view{}); } ||
-    requires(T&& value) { std::move(value).begin(); } ||
-    requires(T&& value) { std::move(value).end(); } ||
-    requires(T&& value) { std::move(value).cbegin(); } ||
-    requires(T&& value) { std::move(value).cend(); };
 
-static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponse>);
-static_assert(!ExposesAnyRvalueResponseView<ruvia::HttpResponseHeaders>);
-static_assert(std::same_as<decltype(std::declval<const HttpResponse&>().header(std::string_view{})),
-    std::optional<std::string_view>>);
+
+
+
+
+
+
+
+
+
+
+
+
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -108,12 +97,9 @@ private:
     std::size_t liveAllocations_{0};
 };
 
-static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit,
-    std::array<ruvia::HttpHeaderView, 1>&&>);
-static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit,
-    const std::vector<ruvia::HttpHeaderView>&>);
-static_assert(!std::is_constructible_v<ruvia::HttpInterimResponseHead::HeaderInit,
-    std::initializer_list<ruvia::HttpHeaderView>>);
+
+
+
 
 HttpResponse makeResponse() {
     return HttpResponse({.resource = std::pmr::new_delete_resource()});

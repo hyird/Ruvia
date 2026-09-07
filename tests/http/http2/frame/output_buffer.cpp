@@ -48,10 +48,9 @@ private:
 };
 #endif  // !_MSC_VER
 
-template <typename T>
-concept ExposesRvalueHttp2OutputBuffer = requires(T&& output) { std::move(output).pending(); };
 
-static_assert(!ExposesRvalueHttp2OutputBuffer<Http2OutputBuffer>);
+
+
 
 const unsigned char* bytes(const char* value) noexcept {
     return reinterpret_cast<const unsigned char*>(value);

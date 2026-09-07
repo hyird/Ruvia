@@ -13,13 +13,9 @@ namespace {
 using ruvia::detail::Http2LocalSettings;
 using ruvia::detail::Http2StreamTable;
 
-template <typename T>
-concept ExposesRvalueHttp2StreamTableStorage =
-    requires(T&& table) { std::move(table).find(std::uint32_t{}); } || requires(const T&& table) {
-        std::move(table).find(std::uint32_t{});
-    } || requires(T&& table) { std::move(table).create(std::uint32_t{}, std::int32_t{}); };
 
-static_assert(!ExposesRvalueHttp2StreamTableStorage<Http2StreamTable>);
+
+
 
 }  // namespace
 

@@ -248,7 +248,7 @@ RUVIA_TEST(context_error_normalizes_non_error_status_before_response_state) {
 }
 
 RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
-    static_assert(std::same_as<Context::HeaderOptions, ruvia::HttpResponse::HeaderOptions>);
+
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
     bool threw = false;

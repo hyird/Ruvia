@@ -91,35 +91,21 @@ private:
     std::size_t maximumBlockBytes_;
 };
 
-static_assert(std::same_as<decltype(std::declval<TransferCodingDecoder&>().decode(
-                               std::string_view{}, std::span<char>{})),
-    TransferCodingDecodeResult>);
-static_assert(!std::default_initializable<TransferCodingDecodeResult>);
 
-template <typename T>
-concept HasAnyRvalueTransferCodingDecodeAccessor =
-    requires(T&& result) { std::move(result).needInput(); } ||
-    requires(T&& result) { std::move(result).output(); } ||
-    requires(T&& result) { std::move(result).complete(); } ||
-    requires(T&& result) { std::move(result).protocolFailure(); } ||
-    requires(T&& result) { std::move(result).decoderFailure(); };
 
-static_assert(!HasAnyRvalueTransferCodingDecodeAccessor<TransferCodingDecodeResult>);
 
-template <typename T>
-concept HasRawTransferDecodeError = requires(const T& result) { result.error(); };
 
-template <typename T>
-concept HasRawRequestContentDecodeError = requires(const T& result) { result.error(); };
 
-static_assert(!HasRawTransferDecodeError<TransferCodingDecodeProtocolFailure>);
-static_assert(std::same_as<
-    decltype(std::declval<const TransferCodingDecodeProtocolFailure&>().protocolError()),
-    ruvia::HttpProtocolError>);
-static_assert(!HasRawRequestContentDecodeError<HttpRequestContentDecodeProtocolFailure>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpRequestContentDecodeProtocolFailure&>().protocolError()),
-    ruvia::HttpProtocolError>);
+
+
+
+
+
+
+
+
+
+
 
 inline std::string gzipCompress(std::string_view data) {
     z_stream stream{};
@@ -253,113 +239,69 @@ inline std::string chunked(std::string_view body) {
     return wire;
 }
 
-template <typename T>
-concept HasRequestBodyMode = requires(const T& value) { value.mode(); };
 
-template <typename T>
-concept HasRequestContentLength = requires(const T& value) {
-    { value.contentLength() } -> std::same_as<std::size_t>;
-};
 
-template <typename T>
-concept HasRequestTransferCodings = requires(const T& value) {
-    { value.transferCodings() } -> std::same_as<HttpTransferCodings>;
-} && requires(const T&& value) {
-    { std::move(value).transferCodings() } -> std::same_as<HttpTransferCodings>;
-};
 
-template <typename T>
-concept HasValueSemanticRequestExpectations = requires(const T& value) {
-    { value.expectations() } -> std::same_as<ruvia::HttpRequestExpectations>;
-} && requires(const T&& value) {
-    { std::move(value).expectations() } -> std::same_as<ruvia::HttpRequestExpectations>;
-};
 
-template <typename T>
-concept HasPublicRequestBodyPlanFactories = requires {
-    T::makeWithoutBody();
-    T::makeKnownLength(std::size_t{});
-    T::makeChunked(HttpTransferCodings{});
-};
 
-template <typename T>
-concept ExposesRvalueEncodedContent = requires(T&& result) { std::move(result).encoded(); };
 
-template <typename T>
-concept ExposesRvalueEncodeFailure = requires(const T&& result) { std::move(result).failure(); };
 
-static_assert(!std::default_initializable<Http1RequestBodyPlan>);
-static_assert(!std::constructible_from<Http1RequestBodyPlan, ruvia::HttpRequestExpectations>);
-static_assert(!std::default_initializable<ruvia::Http1RequestWithoutBody>);
-static_assert(!std::default_initializable<ruvia::Http1KnownLengthRequestBody>);
-static_assert(!std::default_initializable<ruvia::Http1ChunkedRequestBody>);
-static_assert(!std::constructible_from<ruvia::Http1KnownLengthRequestBody, std::size_t>);
-static_assert(!std::constructible_from<ruvia::Http1ChunkedRequestBody, HttpTransferCodings>);
-static_assert(!HasPublicRequestBodyPlanFactories<Http1RequestBodyPlan>);
-static_assert(!HasRequestBodyMode<Http1RequestBodyPlan>);
-static_assert(!HasRequestContentLength<Http1RequestBodyPlan>);
-static_assert(!HasRequestTransferCodings<Http1RequestBodyPlan>);
-static_assert(HasRequestContentLength<ruvia::Http1KnownLengthRequestBody>);
-static_assert(!HasRequestContentLength<ruvia::Http1ChunkedRequestBody>);
-static_assert(HasRequestTransferCodings<ruvia::Http1ChunkedRequestBody>);
-static_assert(HasValueSemanticRequestExpectations<Http1RequestBodyPlan>);
-static_assert(!HasRequestTransferCodings<ruvia::Http1KnownLengthRequestBody>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().withoutBody()),
-    const ruvia::Http1RequestWithoutBody*>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().knownLength()),
-    const ruvia::Http1KnownLengthRequestBody*>);
-static_assert(std::same_as<decltype(std::declval<const Http1RequestBodyPlan&>().chunked()),
-    const ruvia::Http1ChunkedRequestBody*>);
-static_assert(!std::default_initializable<HttpContentDecodeResult>);
-static_assert(!std::copy_constructible<HttpContentDecodeResult>);
-static_assert(std::move_constructible<HttpContentDecodeResult>);
-static_assert(!std::is_move_assignable_v<HttpContentDecodeResult>);
-static_assert(!std::default_initializable<HttpDecodedContent>);
-static_assert(!std::default_initializable<HttpContentDecodeFailure>);
-static_assert(std::same_as<decltype(std::declval<HttpContentDecodeResult&>().decoded()),
-    HttpDecodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const HttpContentDecodeResult&>().failure()),
-    const HttpContentDecodeFailure*>);
-static_assert(
-    std::same_as<decltype(std::declval<HttpDecodedContent&&>().takeBytes()), std::pmr::string>);
-static_assert(
-    std::same_as<decltype(decodeHttpContent(HttpContentCoding::kGzip, std::string_view{},
-                     HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})),
-        HttpContentDecodeResult>);
-static_assert(!std::default_initializable<HttpRequestContentDecodeResult>);
-static_assert(!std::copy_constructible<HttpRequestContentDecodeResult>);
-static_assert(std::move_constructible<HttpRequestContentDecodeResult>);
-static_assert(!std::is_move_assignable_v<HttpRequestContentDecodeResult>);
-static_assert(std::same_as<decltype(std::declval<HttpRequestContentDecodeResult&>().decoded()),
-    HttpDecodedContent*>);
-static_assert(
-    std::same_as<decltype(std::declval<const HttpRequestContentDecodeResult&>().protocolFailure()),
-        const HttpRequestContentDecodeProtocolFailure*>);
-static_assert(
-    std::same_as<decltype(std::declval<const HttpRequestContentDecodeResult&>().decoderFailure()),
-        const HttpRequestContentDecoderFailure*>);
-static_assert(
-    std::same_as<decltype(decodeHttpRequestContent(HttpContentCoding::kGzip, std::string_view{},
-                     HttpContentDecodeOptions{.maxDecodedBytes = 0, .resource = nullptr})),
-        HttpRequestContentDecodeResult>);
-static_assert(!std::default_initializable<HttpContentEncodeResult>);
-static_assert(!std::copy_constructible<HttpContentEncodeResult>);
-static_assert(std::move_constructible<HttpContentEncodeResult>);
-static_assert(!std::is_move_assignable_v<HttpContentEncodeResult>);
-static_assert(!std::default_initializable<HttpEncodedContent>);
-static_assert(!std::default_initializable<HttpContentEncodeFailure>);
-static_assert(!ExposesRvalueEncodedContent<HttpContentEncodeResult>);
-static_assert(!ExposesRvalueEncodeFailure<HttpContentEncodeResult>);
-static_assert(std::same_as<decltype(std::declval<HttpContentEncodeResult&>().encoded()),
-    HttpEncodedContent*>);
-static_assert(std::same_as<decltype(std::declval<const HttpContentEncodeResult&>().failure()),
-    const HttpContentEncodeFailure*>);
-static_assert(
-    std::same_as<decltype(std::declval<HttpEncodedContent&&>().takeBytes()), std::pmr::string>);
-static_assert(
-    std::same_as<decltype(encodeHttpContent(HttpContentCoding::kGzip, std::string_view{},
-                     HttpContentEncodeOptions{.maxEncodedBytes = 0, .resource = nullptr})),
-        HttpContentEncodeResult>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());

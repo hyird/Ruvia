@@ -35,17 +35,14 @@ using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::httpResponseBodyPlan;
 using ruvia::detail::ResponseHeadBuffer;
 
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseCommitResult&>().committed()),
-        const Http1ServerConnectionPlan*>);
-static_assert(std::derived_from<Http1FinalResponseCommitError, std::exception>);
-static_assert(std::is_trivially_copyable_v<Http1FinalResponseCommitResult>);
-static_assert(sizeof(Http1FinalResponseCommitResult) <= 8);
 
-template <typename T>
-concept HasRawFinalCommitError = requires(const T& failure) { failure.error(); };
 
-static_assert(!HasRawFinalCommitError<Http1FinalResponseCommitFailure>);
+
+
+
+
+
+
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {

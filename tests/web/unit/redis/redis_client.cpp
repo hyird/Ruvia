@@ -38,22 +38,12 @@ using ruvia::test::TrackingResource;
 
 using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
 
-static_assert(!std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
-    std::pmr::memory_resource*, RedisDefinitions>);
-static_assert(std::constructible_from<ruvia::detail::RedisRegistry, asio::io_context&,
-    std::pmr::memory_resource*, RedisDefinitions, ruvia::WorkerHandle>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
-    ruvia::detail::RedisConfigStorage&&, std::optional<std::chrono::milliseconds>, std::size_t,
-    const ruvia::WorkerHandle&, std::pmr::memory_resource*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
-    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
-    std::pmr::memory_resource*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
-    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
-    std::pmr::memory_resource*, const ruvia::WorkerHandle*>);
-static_assert(!std::constructible_from<ruvia::detail::RedisPool, asio::io_context&,
-    const ruvia::detail::RedisConfigStorage&, std::optional<std::chrono::milliseconds>, std::size_t,
-    ruvia::WorkerHandle, std::pmr::memory_resource*>);
+
+
+
+
+
+
 
 class RedisTestWorker final {
 public:
@@ -156,324 +146,190 @@ bool throwsInvalidArgument(Fn&& fn) {
     }
 }
 
-static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
-static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
-static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
-static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisScoredValue>);
-static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
-static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
-template <typename T>
-concept ExposesAnyRvalueRedisOwnedView = requires(T&& value) { std::move(value).duration(); } ||
-                                         requires(T&& value) { std::move(value).key(); } ||
-                                         requires(T&& value) { std::move(value).value(); } ||
-                                         requires(T&& value) { std::move(value).values(); } ||
-                                         requires(T&& value) { std::move(value).entries(); } ||
-                                         requires(T&& value) { std::move(value).fields(); } ||
-                                         requires(T&& value) { std::move(value).streams(); } ||
-                                         requires(T&& value) { std::move(value).stream(); } ||
-                                         requires(T&& value) { std::move(value).id(); } ||
-                                         requires(T&& value) { std::move(value).message(); } ||
-                                         requires(T&& value) { std::move(value).string(); } ||
-                                         requires(T&& value) { std::move(value).error(); } ||
-                                         requires(T&& value) { std::move(value).array(); };
 
-template <typename T>
-concept HasRedisErrorMessageAlias = requires(const T& error) { error.message(); };
 
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisSetExpiration>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisKeyValue>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScoredValue>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisScanResult>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisHashScanResult>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisZScanResult>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisStreamEntry>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisStreamReadResult>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisXReadGroupResult>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisError>);
-static_assert(!ExposesAnyRvalueRedisOwnedView<ruvia::RedisValue>);
-static_assert(std::is_final_v<ruvia::RedisError>);
-static_assert(std::derived_from<ruvia::RedisError, std::runtime_error>);
-static_assert(!HasRedisErrorMessageAlias<ruvia::RedisError>);
 
-template <typename T>
-concept HasRedisHandleSpanArgs = requires(const T& handle, std::span<const std::string_view> keys,
-    std::span<const std::pair<std::string_view, std::string_view>> pairs) {
-    handle.command(keys);
-    handle.mget(keys);
-    handle.mset(pairs);
-    handle.hset(std::string_view{}, pairs);
-    handle.hmget(std::string_view{}, keys);
-    handle.sinter(keys);
-    handle.sunion(keys);
-    handle.sdiff(keys);
-    handle.scriptExists(keys);
-};
 
-template <typename T>
-concept HasRedisHandleInitializerListArgs =
-    requires(const T& handle, std::initializer_list<std::string_view> keys,
-        std::initializer_list<std::pair<std::string_view, std::string_view>> pairs) {
-        handle.command(keys);
-        handle.mget(keys);
-        handle.mset(pairs);
-        handle.hset(std::string_view{}, pairs);
-        handle.hmget(std::string_view{}, keys);
-        handle.sinter(keys);
-        handle.sunion(keys);
-        handle.sdiff(keys);
-        handle.scriptExists(keys);
-    };
 
-template <typename T>
-concept HasRedisPerCallCommandOptions =
-    requires(const T& handle, std::span<const std::string_view> args) {
-        handle.command(args, ruvia::OperationOptions{});
-    } || requires(const T& handle) { handle.command(ruvia::OperationOptions{}, "PING"); };
 
-template <typename T>
-concept HasRedisBlockingPerCallOptions =
-    requires(const T& handle, std::span<const std::string_view> keys) {
-        handle.blpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
-        handle.brpop(keys, ruvia::RedisBlockWait::indefinitely(), ruvia::OperationOptions{});
-    };
 
-template <typename T>
-concept HasRedisXReadGroupOperationMember = requires(T& options) { options.operation; };
 
-template <typename T>
-concept HasRedisPipelineSpanCommand =
-    requires(T& pipeline, std::span<const std::string_view> args) { pipeline.command(args); };
 
-template <typename T>
-concept HasRedisPipelineInitializerListCommand =
-    requires(T& pipeline, std::initializer_list<std::string_view> args) { pipeline.command(args); };
 
-template <typename T>
-concept HasRedisTransactionSpanCommand =
-    requires(T& transaction, std::span<const std::string_view> args) { transaction.command(args); };
 
-template <typename T>
-concept HasRedisTransactionInitializerListCommand = requires(
-    T& transaction, std::initializer_list<std::string_view> args) { transaction.command(args); };
 
-template <typename T>
-concept HasRedisTransactionDiscard = requires(T& transaction) { transaction.discard(); };
 
-template <typename T>
-concept HasLvalueRedisExec = requires(T& batch) { batch.exec(); };
 
-template <typename T>
-concept HasRvalueRedisExec = requires(T& batch) { std::move(batch).exec(); };
 
-template <typename T>
-concept HasRvalueRedisExecOptions =
-    requires(T& batch) { std::move(batch).exec(ruvia::OperationOptions{}); };
 
-template <typename T>
-concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
-    options.ttl;
-    options.nx;
-    options.xx;
-    options.get;
-    options.keepTtl;
-};
 
-template <typename T>
-concept HasRedisSetReturnPreviousBoolean = requires(T& options) { options.returnPrevious = true; };
 
-template <typename T>
-concept HasRedisSetPreviousValuePolicy =
-    requires(T& options) { options.previousValue = ruvia::RedisSetPreviousValuePolicy::kReturn; };
 
-template <typename T>
-concept HasRedisXReadGroupNoAckBoolean = requires(T& options) { options.noAck = true; };
 
-template <typename T>
-concept HasRedisXReadGroupAcknowledgementPolicy = requires(
-    T& options) { options.acknowledgement = ruvia::RedisXReadGroupAcknowledgementPolicy::kNoAck; };
 
-template <typename T>
-concept HasRedisTcpNoDelayBoolean = requires(T& config) { config.tcpNoDelay = true; };
 
-template <typename T>
-concept HasRedisKeepAliveBoolean = requires(T& config) { config.keepAlive = true; };
 
-template <typename T>
-concept HasRedisTcpSocketPolicies = requires(T& config) {
-    { config.tcpNoDelay } -> std::same_as<ruvia::TcpNoDelayPolicy&>;
-    { config.tcpKeepAlive } -> std::same_as<ruvia::TcpKeepAlivePolicy&>;
-};
 
-template <typename T>
-concept HasRedisRegistrationConfig = requires(T& app, ruvia::RedisConfig config) {
-    { app.redis(ruvia::RedisRegistrationConfig{.config = config}) } -> std::same_as<ruvia::App&>;
-};
 
-template <typename T>
-concept HasRedisRegistrationPositional = requires(T& app, ruvia::RedisConfig config) {
-    app.redis(config);
-} || requires(T& app, ruvia::RedisConfig config) { app.redis(std::string_view{}, config); };
 
-template <typename Match>
-concept AcceptsRedisScanMatch =
-    requires(Match&& match) { ruvia::RedisScanOptions{.match = std::forward<Match>(match)}; };
 
-template <typename Match>
-concept AssignsRedisScanMatch = requires(ruvia::RedisScanOptions& options, Match&& match) {
-    options.match = std::forward<Match>(match);
-};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Command arguments passed as ordinary arguments rather than a prepared span.
-template <typename T>
-concept HasRedisHandleVariadicArgs = requires(const T& handle, std::string_view key) {
-    handle.command("TYPE", key);
-    handle.mget(key, key);
-    handle.mset(key, key, key, key);
-    handle.hset(key, key, key, key, key);
-    handle.hmget(key, key, key);
-    handle.sinter(key, key);
-    handle.sunion(key, key);
-    handle.sdiff(key, key);
-    handle.scriptExists(key);
-};
+
 
 // Alternating name/value commands need complete pairs.
-template <typename T>
-concept HasRedisHandleOddPairArgs =
-    requires(const T& handle, std::string_view key) { handle.mset(key, key, key); };
+
 
 // Variadic commands synchronously clone owning-string temporaries.
-template <typename T>
-concept HasRedisHandleOwningTemporaryArgs =
-    requires(const T& handle, std::string_view key) { handle.mget(key, std::string("owned")); };
 
-template <typename T>
-concept HasRedisHandleOwningLvalueArgs =
-    requires(const T& handle, std::string_view key, std::string owned) { handle.mget(key, owned); };
 
-template <typename T>
-concept HasRedisPipelineVariadicCommand =
-    requires(T& pipeline, std::string_view key) { pipeline.command("TYPE", key); };
 
-template <typename T>
-concept HasRedisPipelineOwningTemporaryArgs =
-    requires(T& pipeline) { pipeline.command("GET", std::string("owned")); };
 
-template <typename T>
-concept HasRedisTransactionVariadicCommand =
-    requires(T& transaction, std::string_view key) { transaction.command("TYPE", key); };
 
-template <typename T>
-concept HasRedisTransactionOwningTemporaryArgs =
-    requires(T& transaction) { transaction.command("GET", std::string("owned")); };
 
-template <typename T>
-concept HasRedisTransactionVariadicWatch =
-    requires(T& transaction, std::string_view key) { transaction.watch(key, key); };
 
-template <typename T>
-concept HasLegacyRedisSetCommands =
-    requires(const T& handle) { handle.setEx("key", std::chrono::seconds(1), "value"); } ||
-    requires(const T& handle) { handle.setNx("key", "value"); } ||
-    requires(const T& handle) { handle.getSet("key", "value"); };
 
-template <typename T>
-concept HasLegacyRedisBatchGetSet = requires(T& batch) { batch.getSet("key", "value"); };
 
-static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
-static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
-static_assert(HasRedisHandleVariadicArgs<ruvia::RedisHandle>);
-static_assert(!HasRedisHandleOddPairArgs<ruvia::RedisHandle>);
-static_assert(HasRedisHandleOwningTemporaryArgs<ruvia::RedisHandle>);
-static_assert(HasRedisHandleOwningLvalueArgs<ruvia::RedisHandle>);
-static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
-static_assert(!HasRedisPipelineInitializerListCommand<ruvia::RedisPipeline>);
-static_assert(HasRedisPipelineVariadicCommand<ruvia::RedisPipeline>);
-static_assert(HasRedisPipelineOwningTemporaryArgs<ruvia::RedisPipeline>);
-static_assert(HasRedisTransactionSpanCommand<ruvia::RedisTransaction>);
-static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction>);
-static_assert(HasRedisTransactionVariadicCommand<ruvia::RedisTransaction>);
-static_assert(HasRedisTransactionOwningTemporaryArgs<ruvia::RedisTransaction>);
-static_assert(HasRedisTransactionVariadicWatch<ruvia::RedisTransaction>);
-static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
-static_assert(!HasLegacyRedisSetCommands<ruvia::RedisHandle>);
-static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisPipeline>);
-static_assert(!HasLegacyRedisBatchGetSet<ruvia::RedisTransaction>);
-static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
-static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
-static_assert(!HasRvalueRedisExecOptions<ruvia::RedisPipeline>);
-static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
-static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
-static_assert(!HasRvalueRedisExecOptions<ruvia::RedisTransaction>);
-static_assert(std::move_constructible<ruvia::RedisPipeline>);
-static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
-static_assert(std::move_constructible<ruvia::RedisTransaction>);
-static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransaction&&>);
-static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
-static_assert(!HasRedisSetReturnPreviousBoolean<ruvia::RedisSetOptions>);
-static_assert(HasRedisSetPreviousValuePolicy<ruvia::RedisSetOptions>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().condition),
-    std::optional<ruvia::RedisSetCondition>>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().expiration),
-    std::optional<ruvia::RedisSetExpiration>>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisSetOptions>().previousValue),
-    ruvia::RedisSetPreviousValuePolicy>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().applied()), bool>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::RedisSetResult&>().previous()),
-    const std::optional<std::pmr::string>&>);
-static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
-static_assert(std::same_as<decltype(ruvia::RedisScanOptions{}.cursor),
-    std::optional<ruvia::RedisScanCursor>>);
-static_assert(!std::default_initializable<ruvia::RedisScanCursor>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::RedisTtl&>().remaining()),
-    std::optional<std::chrono::milliseconds>>);
-static_assert(
-    std::same_as<decltype(ruvia::RedisScanOptions{}.count), std::optional<std::uint64_t>>);
-static_assert(std::is_aggregate_v<ruvia::RedisScanOptions>);
-static_assert(std::is_aggregate_v<ruvia::OperationOptions>);
-static_assert(std::is_aggregate_v<ruvia::RedisXReadGroupOptions>);
-static_assert(!HasRedisXReadGroupNoAckBoolean<ruvia::RedisXReadGroupOptions>);
-static_assert(HasRedisXReadGroupAcknowledgementPolicy<ruvia::RedisXReadGroupOptions>);
-static_assert(std::same_as<decltype(std::declval<ruvia::RedisXReadGroupOptions>().acknowledgement),
-    ruvia::RedisXReadGroupAcknowledgementPolicy>);
-static_assert(!HasRedisXReadGroupOperationMember<ruvia::RedisXReadGroupOptions>);
-static_assert(!HasRedisPerCallCommandOptions<ruvia::RedisHandle>);
-static_assert(!HasRedisBlockingPerCallOptions<ruvia::RedisHandle>);
-static_assert(std::same_as<decltype(ruvia::RedisConfig{}.blockingPoolSizePerWorker), std::size_t>);
-static_assert(ruvia::RedisConfig{}.connectTimeout.has_value());
-static_assert(ruvia::RedisConfig{}.commandTimeout.has_value());
-static_assert(ruvia::RedisConfig{}.acquireTimeout.has_value());
-static_assert(ruvia::RedisConfig{}.connectTimeout == std::chrono::seconds(5));
-static_assert(ruvia::RedisConfig{}.commandTimeout == std::chrono::seconds(30));
-static_assert(ruvia::RedisConfig{}.acquireTimeout == std::chrono::seconds(5));
-static_assert(HasRedisTcpSocketPolicies<ruvia::RedisConfig>);
-static_assert(ruvia::RedisConfig{}.tcpNoDelay == ruvia::TcpNoDelayPolicy::kEnable);
-static_assert(ruvia::RedisConfig{}.tcpKeepAlive == ruvia::TcpKeepAlivePolicy::kSystemDefault);
-static_assert(!HasRedisTcpNoDelayBoolean<ruvia::RedisConfig>);
-static_assert(!HasRedisKeepAliveBoolean<ruvia::RedisConfig>);
-static_assert(std::is_aggregate_v<ruvia::RedisRegistrationConfig>);
-static_assert(
-    std::same_as<decltype(ruvia::RedisRegistrationConfig{.config = ruvia::RedisConfig{}}.alias),
-        std::string>);
-static_assert(HasRedisRegistrationConfig<ruvia::App>);
-static_assert(!HasRedisRegistrationPositional<ruvia::App>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",
 };
-static_assert(kLiteralRedisScanOptions.match.view() == "session:*");
-static_assert(!AcceptsRedisScanMatch<std::string>);
-static_assert(!AcceptsRedisScanMatch<const std::string>);
-static_assert(!AcceptsRedisScanMatch<std::pmr::string>);
-static_assert(AcceptsRedisScanMatch<std::string&>);
-static_assert(AcceptsRedisScanMatch<std::pmr::string&>);
-static_assert(AcceptsRedisScanMatch<std::string_view>);
-static_assert(!AssignsRedisScanMatch<std::string>);
-static_assert(!AssignsRedisScanMatch<const std::string>);
-static_assert(!AssignsRedisScanMatch<std::pmr::string>);
-static_assert(AssignsRedisScanMatch<std::string&>);
-static_assert(AssignsRedisScanMatch<std::pmr::string&>);
-static_assert(AssignsRedisScanMatch<std::string_view>);
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

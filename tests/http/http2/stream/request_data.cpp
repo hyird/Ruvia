@@ -18,17 +18,9 @@ Http2StreamRequestData makeData() {
     return Http2StreamRequestData(std::pmr::new_delete_resource());
 }
 
-template <typename T>
-concept ExposesRvalueHttp2StreamRequestDataStorage =
-    requires(T&& data) { std::move(data).method(); } ||
-    requires(T&& data) { std::move(data).scheme(); } ||
-    requires(T&& data) { std::move(data).authority(); } ||
-    requires(T&& data) { std::move(data).path(); } ||
-    requires(T&& data) { std::move(data).protocol(); } ||
-    requires(T&& data) { std::move(data).cookie(); } ||
-    requires(T&& data) { std::move(data).headerAt(std::size_t{}); };
 
-static_assert(!ExposesRvalueHttp2StreamRequestDataStorage<Http2StreamRequestData>);
+
+
 
 }  // namespace
 

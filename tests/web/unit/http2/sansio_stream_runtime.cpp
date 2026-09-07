@@ -102,57 +102,30 @@ ruvia::HttpResponse okStreamingHead(ruvia::Context&) {
     return *selected.selected();
 }
 
-template <typename T>
-concept HasDirectBodyModeSelection =
-    requires(T& body) { body.selectMode(RequestBodyMode::kBuffered); };
 
-template <typename T>
-concept HasRawStreamIdAdmission = requires(T& table) { table.ensure(std::uint32_t{1}); };
 
-template <typename T>
-concept ExposesRvalueHttp2BodyQueuePop = requires(T&& queue) { std::move(queue).pop(); };
 
-static_assert(!HasDirectBodyModeSelection<Http2RequestBodyRuntime>);
-static_assert(!std::copy_constructible<Http2BufferedResponseWriter>);
-static_assert(!std::movable<Http2BufferedResponseWriter>);
-static_assert(!std::default_initializable<Http2RequestBodyRuntime>);
-static_assert(sizeof(Http2RequestBodyRuntime) <
-              sizeof(Http2BufferedRequestBody) + sizeof(Http2StreamingRequestBody));
-static_assert(!HasRawStreamIdAdmission<Http2SansIoStreamRuntimeTable>);
-static_assert(!ExposesRvalueHttp2BodyQueuePop<Http2SansIoBodyQueue>);
-static_assert(std::same_as<decltype(std::declval<Http2SansIoStreamRuntimeTable&>().ensureAccepted(
-                               std::declval<const Http2StreamState&>())),
-    Http2SansIoStreamRuntime&>);
-static_assert(!std::default_initializable<Http2SendWindowWaitResult>);
-static_assert(std::same_as<decltype(std::declval<const Http2SendWindowWaitResult&>().ready()),
-    const ruvia::detail::Http2SendWindowReady*>);
-static_assert(std::same_as<decltype(std::declval<const Http2SendWindowWaitResult&>().aborted()),
-    const ruvia::detail::Http2SendWindowAborted*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::Http2SansIoSleepAwaiter&>().await_resume()),
-    ruvia::TimerSleepResult>);
-static_assert(!std::constructible_from<ruvia::detail::Http2SansIoStreamSignal,
-    ruvia::WorkerHandle&&, ruvia::detail::Http2SansIoTermination&>);
-static_assert(
-    !std::constructible_from<ruvia::detail::Http2SansIoSleepAwaiter, ruvia::WorkerHandle&&,
-        ruvia::detail::Http2SansIoTermination&, std::chrono::steady_clock::duration>);
-static_assert(!std::constructible_from<ruvia::detail::Http2SansIoSleepAwaiter,
-    ruvia::WorkerHandle&&, ruvia::detail::Http2SansIoTermination&,
-    std::chrono::steady_clock::duration, ruvia::StopToken>);
-static_assert(
-    std::constructible_from<Http2SansIoResponseStreamSink, ruvia::detail::Http2Connection&,
-        std::uint32_t, ruvia::detail::ResponseStreamKind, ruvia::detail::WorkerSignal&,
-        ruvia::detail::Http2SansIoStreamSignal&, std::pmr::memory_resource*, ruvia::HttpKnownMethod,
-        HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
-static_assert(!std::constructible_from<Http2SansIoResponseStreamSink,
-    ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind,
-    ruvia::detail::WorkerSignal&, ruvia::detail::Http2SansIoStreamSignal&,
-    std::pmr::memory_resource*, ruvia::HttpKnownMethod, HttpResponseCodingSelection>);
-static_assert(!std::constructible_from<Http2SansIoResponseStreamSink,
-    ruvia::detail::Http2Connection&, std::uint32_t, ruvia::detail::ResponseStreamKind,
-    const ruvia::WorkerHandle&, ruvia::detail::WorkerSignal&,
-    ruvia::detail::Http2SansIoStreamSignal&, std::pmr::memory_resource*, ruvia::HttpKnownMethod,
-    HttpResponseCodingSelection, ruvia::detail::HttpResponseCodingAvailability>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 Http2SansIoStreamRuntime& ensureAcceptedRuntime(Http2SansIoStreamRuntimeTable& table,
     std::uint32_t streamId, std::pmr::memory_resource* resource) {

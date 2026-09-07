@@ -24,20 +24,16 @@ using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::visitHttpResponseTrailerFields;
 
-template <typename T>
-concept HasAnyRvalueTrailerSectionAccessor = requires(T&& result) {
-    std::move(result).section();
-} || requires(T&& result) { std::move(result).failure(); };
 
-static_assert(!HasAnyRvalueTrailerSectionAccessor<HttpResponseTrailerSectionResult>);
-static_assert(std::derived_from<HttpResponseTrailerSectionError, std::exception>);
-static_assert(std::is_trivially_copyable_v<HttpResponseTrailerSectionResult>);
-static_assert(sizeof(HttpResponseTrailerSectionResult) <= 24);
 
-template <typename T>
-concept HasRawTrailerSectionError = requires(const T& failure) { failure.error(); };
 
-static_assert(!HasRawTrailerSectionError<HttpResponseTrailerSectionFailure>);
+
+
+
+
+
+
+
 
 }  // namespace
 

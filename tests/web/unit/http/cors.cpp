@@ -17,9 +17,9 @@
 #include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
 
-static_assert(std::is_aggregate_v<ruvia::CorsOriginConfig>);
-static_assert(std::is_aggregate_v<ruvia::CorsRequestHeadersConfig>);
-static_assert(std::is_aggregate_v<ruvia::CorsConfig>);
+
+
+
 
 namespace {
 
@@ -94,8 +94,7 @@ RUVIA_TEST(cors_rejects_the_entire_config_before_owner_allocation) {
 }
 
 RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
-    static_assert(
-        std::same_as<decltype(ruvia::CorsConfig{}.maxAge), std::optional<std::chrono::seconds>>);
+
 
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(

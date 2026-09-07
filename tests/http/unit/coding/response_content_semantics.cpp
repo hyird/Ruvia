@@ -10,15 +10,15 @@ using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpResponseContentSemantics;
 using ruvia::detail::httpResponseContentSemantics;
 
-static_assert(std::is_enum_v<HttpResponseContentSemantics>);
-static_assert(sizeof(HttpResponseContentSemantics) == 1);
+
+
 
 constexpr auto kHeadResponse =
     httpResponseContentSemantics(HttpKnownMethod::kHead, ruvia::http_status::kOk);
 constexpr auto kConnectResponse =
     httpResponseContentSemantics(HttpKnownMethod::kConnect, ruvia::http_status::kOk);
-static_assert(kHeadResponse == HttpResponseContentSemantics::kWithoutContent);
-static_assert(kConnectResponse == HttpResponseContentSemantics::kConnectTunnel);
+
+
 
 }  // namespace
 

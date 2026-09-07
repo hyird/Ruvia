@@ -49,20 +49,15 @@ using ruvia::detail::RequestKnownHeader;
 // std::constructible_from check below covers the same "cannot forge" invariant
 // through the private SecureTokenReady constructor.
 #if defined(__GNUC__) && !defined(__clang__)
-template <typename Value>
-concept CanForgeSecureTokenResult = requires(
-    Value&& value) { ruvia::detail::SecureTokenResult::makeReady(std::forward<Value>(value)); };
+
 #endif
 
-template <typename Result>
-concept ExposesRvalueSecureTokenAlternative = requires(Result&& result) {
-    std::move(result).ready();
-} || requires(Result&& result) { std::move(result).failure(); };
 
-static_assert(!ExposesRvalueSecureTokenAlternative<ruvia::detail::SecureTokenResult>);
-static_assert(!std::constructible_from<ruvia::detail::SecureTokenReady, std::string_view>);
+
+
+
 #if defined(__GNUC__) && !defined(__clang__)
-static_assert(!CanForgeSecureTokenResult<std::string_view>);
+
 #endif
 
 bool isLowerHex(char c) noexcept {

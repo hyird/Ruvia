@@ -18,12 +18,11 @@
 #include <type_traits>
 #include <utility>
 
-template <typename T>
-concept HasRvalueBlockingError = requires(T&& result) { std::move(result).error(); };
 
-static_assert(!std::is_constructible_v<ruvia::BlockingResult<int>, ruvia::BlockingStatus>);
-static_assert(!std::is_constructible_v<ruvia::BlockingOperationRejected, ruvia::BlockingStatus>);
-static_assert(!HasRvalueBlockingError<ruvia::BlockingResult<int>>);
+
+
+
+
 
 namespace {
 

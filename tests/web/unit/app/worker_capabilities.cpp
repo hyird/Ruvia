@@ -13,19 +13,14 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
-static_assert(!std::is_copy_constructible_v<ruvia::detail::WorkerCapabilities>);
-static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerCapabilities>);
-static_assert(std::is_trivially_copyable_v<ruvia::detail::WorkerClientRegistryView>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::WorkerClientRegistryView>);
-static_assert(!std::constructible_from<ruvia::detail::WorkerClientRegistryView,
-    ruvia::detail::DbRegistry*, ruvia::detail::RedisRegistry*, ruvia::detail::HttpClientRegistry*>);
-static_assert(std::constructible_from<ruvia::detail::WorkerClientRegistryView,
-    ruvia::detail::DbRegistry&, ruvia::detail::RedisRegistry&, ruvia::detail::HttpClientRegistry&>);
-static_assert(ruvia::detail::WorkerCapabilityOptions{}.rateLimitCapacity ==
-              ruvia::kDefaultRateLimitCapacityPerWorker);
-static_assert(!std::constructible_from<ruvia::detail::WorkerCapabilities, asio::io_context&,
-    ruvia::WorkerHandle&&, std::pmr::memory_resource*, ruvia::detail::WorkerCapabilityDefinitions,
-    ruvia::detail::WorkerCapabilityOptions>);
+
+
+
+
+
+
+
+
 
 RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     asio::io_context ioContext;

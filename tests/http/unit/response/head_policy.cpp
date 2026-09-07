@@ -15,74 +15,46 @@ namespace {
 
 using ruvia::detail::responseWritePolicy;
 
-template <typename Policy>
-concept ExposesAnyRvalueResponseWritePolicyAlternative =
-    requires(const Policy&& policy) { std::move(policy).normal(); } ||
-    requires(const Policy&& policy) { std::move(policy).bodyForbidden(); } ||
-    requires(const Policy&& policy) { std::move(policy).zeroLength(); } ||
-    requires(const Policy&& policy) { std::move(policy).notModified(); };
 
-static_assert(!std::default_initializable<ruvia::detail::ResponseWritePolicy>);
-static_assert(!std::default_initializable<ruvia::detail::ResponseNormalWrite>);
-static_assert(!std::default_initializable<ruvia::detail::ResponseBodyForbiddenWrite>);
-static_assert(!std::default_initializable<ruvia::detail::ResponseZeroLengthWrite>);
-static_assert(!std::default_initializable<ruvia::detail::ResponseNotModifiedWrite>);
-static_assert(!ExposesAnyRvalueResponseWritePolicyAlternative<ruvia::detail::ResponseWritePolicy>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().normal()),
-        const ruvia::detail::ResponseNormalWrite*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().bodyForbidden()),
-    const ruvia::detail::ResponseBodyForbiddenWrite*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().zeroLength()),
-        const ruvia::detail::ResponseZeroLengthWrite*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::detail::ResponseWritePolicy&>().notModified()),
-        const ruvia::detail::ResponseNotModifiedWrite*>);
-static_assert(sizeof(ruvia::detail::ResponseWritePolicy) <= 2);
 
-template <typename T>
-concept HasValueSemanticResponseBodyPlan = requires(const T& plan, const T&& temporary) {
-    { plan.bodyPlan() } -> std::same_as<ruvia::detail::HttpResponseBodyPlan>;
-    { temporary.bodyPlan() } -> std::same_as<ruvia::detail::HttpResponseBodyPlan>;
-};
 
-static_assert(!std::default_initializable<ruvia::detail::Http1ResponseHeadPlan>);
-static_assert(!std::default_initializable<ruvia::detail::Http1BufferedResponsePlan>);
-static_assert(!std::default_initializable<ruvia::detail::Http1BufferedResponseHead>);
-static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedResponseStreamHead>);
-static_assert(!std::default_initializable<ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 
-template <typename BodyPlan>
-concept AcceptsLooseBufferedResponseBodyPlan =
-    requires(BodyPlan bodyPlan, const ruvia::HttpResponse& response) {
-        ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response);
-    };
 
-static_assert(!AcceptsLooseBufferedResponseBodyPlan<ruvia::detail::HttpResponseBodyPlan>);
 
-template <typename T>
-concept HasStaleHttp1BufferedWritePlanForwarder = requires(const T& plan) { plan.writePlan(); };
 
-static_assert(!HasStaleHttp1BufferedWritePlanForwarder<ruvia::detail::Http1BufferedResponsePlan>);
-static_assert(std::is_trivially_copyable_v<ruvia::detail::Http1BufferedResponsePlan>);
-static_assert(sizeof(ruvia::detail::Http1BufferedResponsePlan) ==
-              sizeof(ruvia::detail::Http1ResponseHeadPlan));
 
-template <typename Plan>
-concept HasValueSemanticResponseWritePolicy = requires(const Plan& plan) {
-    { plan.policy() } -> std::same_as<ruvia::detail::ResponseWritePolicy>;
-} && requires(const Plan&& plan) {
-    { std::move(plan).policy() } -> std::same_as<ruvia::detail::ResponseWritePolicy>;
-};
 
-static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpResponseBodyPlan>);
-static_assert(HasValueSemanticResponseWritePolicy<ruvia::detail::HttpBufferedResponseWritePlan>);
-static_assert(HasValueSemanticResponseBodyPlan<ruvia::detail::HttpBufferedResponseWritePlan>);
-static_assert(HasValueSemanticResponseBodyPlan<ruvia::detail::Http1ResponseHeadPlan>);
-static_assert(std::is_trivially_copyable_v<ruvia::detail::HttpResponseBodyPlan>);
-static_assert(sizeof(ruvia::detail::HttpResponseBodyPlan) <= 12);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

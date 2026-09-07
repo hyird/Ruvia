@@ -10,10 +10,9 @@
 
 // Sans-I/O HTTP/2 driver: connection setup, round trips, multiplexing and teardown.
 
-static_assert(std::copy_constructible<ruvia::detail::Http2SansIoSessionContext>);
-static_assert(!std::assignable_from<ruvia::detail::Http2SansIoSessionContext&,
-    const ruvia::detail::Http2SansIoSessionContext&>);
-static_assert(!std::default_initializable<ruvia::detail::ContextServices>);
+
+
+
 
 RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
     using Phase = ruvia::detail::ConnectionScanner::Phase;

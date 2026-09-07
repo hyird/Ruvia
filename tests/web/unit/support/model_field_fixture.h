@@ -15,39 +15,25 @@
 
 namespace model_field_test {
 
-template <typename T>
-concept HasCookiesAccessor = requires(const T& request) { request.cookies(); };
 
-template <typename T>
-concept HasQueryListAccessor = requires(const T& request) { request.query(); };
 
-template <typename T>
-concept HasQueriesVectorAccessor =
-    requires(const T& request) { request.queries(std::string_view{}); };
 
-template <typename T>
-concept ParsesAnyRvalueOwningString = requires(std::string&& body) {
-    T::parse(
-        std::move(body), ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()});
-} || requires(const std::string&& body) {
-    T::parse(
-        std::move(body), ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()});
-};
 
-template <typename T>
-concept ParsesLvalueOwningString = requires(const std::string& body) {
-    T::parse(body, ruvia::ModelParseOptions{.resource = std::pmr::get_default_resource()});
-};
 
-static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
-static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);
-static_assert(!HasQueriesVectorAccessor<ruvia::HttpRequest>);
-static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonValue>);
-static_assert(!ParsesAnyRvalueOwningString<ruvia::JsonObject>);
-static_assert(!ParsesAnyRvalueOwningString<ruvia::FormObject>);
-static_assert(ParsesLvalueOwningString<ruvia::JsonValue>);
-static_assert(ParsesLvalueOwningString<ruvia::JsonObject>);
-static_assert(ParsesLvalueOwningString<ruvia::FormObject>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 RUVIA_REQUEST_MODEL(AccessorSurfaceRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
@@ -93,24 +79,14 @@ RUVIA_RESPONSE_MODEL(UnlimitedFieldCountResponse, RUVIA_TEST_BOOL_FIELD(f01),
     RUVIA_TEST_BOOL_FIELD(f65));
 #undef RUVIA_TEST_BOOL_FIELD
 
-static_assert(ruvia::detail::isResponseModel<UnlimitedFieldCountResponse>);
 
-template <typename T>
-concept ExposesAnyRvalueGeneratedMessageMember =
-    requires { std::declval<const T&&>().template get<"message">(); } || requires {
-        std::declval<T&&>().template ensure<"message">();
-    } || requires { std::declval<T&&>().template set<"message">(std::string_view{}); };
 
-static_assert(
-    std::same_as<std::remove_cvref_t<
-                     decltype(std::declval<AccessorSurfaceRequest&>().template get<"message">())>,
-        std::optional<ruvia::String>>);
-static_assert(
-    std::same_as<std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>()
-                         .template get<"message">())>,
-        std::optional<ruvia::String>>);
-static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceRequest>);
-static_assert(!ExposesAnyRvalueGeneratedMessageMember<AccessorSurfaceResponse>);
+
+
+
+
+
+
 
 }  // namespace model_field_test
 

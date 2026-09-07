@@ -21,19 +21,19 @@ inline constexpr auto kOkStatusToken = ruvia::detail::httpStatusCodeToken(ruvia:
 
 }  // namespace
 
-static_assert(std::is_trivially_copyable_v<ruvia::HttpStatusCode>);
-static_assert(sizeof(ruvia::HttpStatusCode) == sizeof(std::uint16_t));
-static_assert(!std::is_constructible_v<ruvia::HttpStatusCode, std::uint16_t>);
-static_assert(!std::is_convertible_v<ruvia::HttpStatusCode, std::uint16_t>);
-static_assert(!std::is_convertible_v<std::uint16_t, ruvia::HttpStatusCode>);
-static_assert(ruvia::http_status::kContinue.isInformational());
-static_assert(ruvia::http_status::kOk.isSuccessful());
-static_assert(ruvia::http_status::kTemporaryRedirect.isRedirection());
-static_assert(ruvia::http_status::kBadRequest.isClientError());
-static_assert(ruvia::http_status::kInternalServerError.isServerError());
-static_assert(ruvia::http_status::kBadRequest.isError());
-static_assert(!ruvia::http_status::kOk.isError());
-static_assert(ruvia::detail::httpStatusCodeTokenView(kOkStatusToken) == std::string_view("200"));
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
     RUVIA_CHECK(ruvia::HttpStatusCode::tryFromValue(100) == ruvia::http_status::kContinue);

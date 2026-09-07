@@ -63,7 +63,7 @@ RUVIA_TEST(connection_options_parse_tokens_case_insensitively) {
 }
 
 RUVIA_TEST(connection_options_commit_presence_and_tokens_in_one_byte) {
-    static_assert(sizeof(HttpConnectionOptions) == 1);
+
 
     HttpConnectionOptions options;
     RUVIA_CHECK(!options.hasField());

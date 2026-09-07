@@ -21,41 +21,21 @@ RUVIA_REQUEST_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, r
 
 }  // namespace
 
-template <typename T>
-concept ExposesAnyRvalueValidationIssueBorrow = requires { std::declval<const T&&>().field(); } ||
-                                                requires { std::declval<const T&&>().code(); } ||
-                                                requires { std::declval<const T&&>().message(); };
 
-template <typename T>
-concept ExposesAnyRvalueValidationErrorBorrow = requires { std::declval<const T&&>().issues(); } ||
-                                                requires { std::declval<const T&&>().info(); };
 
-template <typename T>
-concept ExposesRvalueValidatorIssues = requires { std::declval<const T&&>().issues(); };
 
-template <typename T>
-concept AcceptsAnyRvalueValidatorMutation = requires {
-    std::declval<T&&>().add("field", "code", "message");
-} || requires(const std::optional<std::string>& value) {
-    std::declval<T&&>().required(value, "field");
-} || requires(const std::optional<std::string>& value) {
-    std::declval<T&&>().minLength(value, "field", std::size_t{1});
-} || requires(const std::optional<std::string>& value) {
-    std::declval<T&&>().maxLength(value, "field", std::size_t{1});
-} || requires(const std::optional<int>& value) {
-    std::declval<T&&>().range(value, "field", 0, 1);
-} || requires(const std::optional<std::string>& value) {
-    std::declval<T&&>().oneOf(value, "field", {"value"});
-};
 
-static_assert(!ExposesAnyRvalueValidationIssueBorrow<ruvia::ValidationIssue>);
-static_assert(!ExposesAnyRvalueValidationErrorBorrow<ruvia::ValidationError>);
-static_assert(!ExposesRvalueValidatorIssues<ruvia::Validator>);
-static_assert(!AcceptsAnyRvalueValidatorMutation<ruvia::Validator>);
-static_assert(sizeof(ruvia::detail::RequestBindings) == sizeof(void*));
-template <typename Bindings>
-concept AcceptsRvalueValidatedModel = requires(Bindings& bindings) { bindings.bind(int{1}); };
-static_assert(!AcceptsRvalueValidatedModel<ruvia::detail::RequestBindings>);
+
+
+
+
+
+
+
+
+
+
+
 
 RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
     auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredOptionalModel>(

@@ -18,45 +18,27 @@ using ruvia::HttpError;
 
 }  // namespace
 
-template <typename T>
-concept ExposesRvalueHttpErrorInfo = requires { std::declval<const T&&>().info(); };
 
-template <typename String>
-concept AcceptsAnyRvalueHttpErrorInfoText =
-    requires(String&& value) { ruvia::HttpErrorInfo({.code = std::forward<String>(value)}); } ||
-    requires(String&& value) { ruvia::HttpErrorInfo({.message = std::forward<String>(value)}); } ||
-    requires(String&& value) { ruvia::HttpErrorInfo({.statusText = std::forward<String>(value)}); };
 
-template <typename String>
-concept AcceptsLvalueHttpErrorInfoText = requires(String& value) {
-    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
-        .code = value,
-        .message = value,
-        .statusText = value});
-};
 
-template <typename Issues>
-concept AcceptsRvalueHttpErrorInfoIssues = requires(Issues&& issues) {
-    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
-        .validationIssues = std::forward<Issues>(issues)});
-};
 
-template <typename Issues>
-concept AcceptsLvalueHttpErrorInfoIssues = requires(Issues& issues) {
-    ruvia::HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .validationIssues = issues});
-};
 
-static_assert(!ExposesRvalueHttpErrorInfo<ruvia::HttpError>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::string>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<const std::string>);
-static_assert(!AcceptsAnyRvalueHttpErrorInfoText<std::pmr::string>);
-static_assert(AcceptsLvalueHttpErrorInfoText<std::string>);
-static_assert(!AcceptsRvalueHttpErrorInfoIssues<ruvia::ValidationError::IssueList>);
-static_assert(AcceptsLvalueHttpErrorInfoIssues<ruvia::ValidationError::IssueList>);
-static_assert(AcceptsRvalueHttpErrorInfoIssues<std::span<const ruvia::ValidationIssue>>);
+
+
+
+
+
+
+
+
+
+
+
+
+
 using ValidationIssuesOwningView = std::ranges::owning_view<ruvia::ValidationError::IssueList>;
-static_assert(!AcceptsRvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
-static_assert(AcceptsLvalueHttpErrorInfoIssues<ValidationIssuesOwningView>);
+
+
 
 RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(

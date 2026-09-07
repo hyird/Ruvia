@@ -17,226 +17,98 @@
 
 namespace {
 
-template <typename Input>
-concept AcceptsMultipartPartName = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::make(
-        std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
-    ruvia::detail::MultipartPartAccess::makeDecoded(
-        std::forward<Input>(input), {}, {}, {}, std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsMultipartPartFilename = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::make(
-        {}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
-    ruvia::detail::MultipartPartAccess::makeDecoded(
-        {}, std::forward<Input>(input), {}, {}, std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsMultipartPartContentType = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::make(
-        {}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsMultipartPartBody = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::make(
-        {}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsDecodedMultipartPartContentType = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::makeDecoded(
-        {}, {}, std::forward<Input>(input), {}, std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsDecodedMultipartPartBody = requires(Input&& input) {
-    ruvia::detail::MultipartPartAccess::makeDecoded(
-        {}, {}, {}, std::forward<Input>(input), std::pmr::get_default_resource());
-};
 
-template <typename Input>
-concept AcceptsMultipartStreamName = requires(Input&& input) {
-    ruvia::detail::MultipartStreamPartAccess::make(
-        std::forward<Input>(input), {}, {}, {}, ruvia::MultipartChunkPhase::kComplete);
-};
 
-template <typename Input>
-concept AcceptsMultipartStreamFilename = requires(Input&& input) {
-    ruvia::detail::MultipartStreamPartAccess::make(
-        {}, std::forward<Input>(input), {}, {}, ruvia::MultipartChunkPhase::kComplete);
-};
 
-template <typename Input>
-concept AcceptsMultipartStreamContentType = requires(Input&& input) {
-    ruvia::detail::MultipartStreamPartAccess::make(
-        {}, {}, std::forward<Input>(input), {}, ruvia::MultipartChunkPhase::kComplete);
-};
 
-template <typename Input>
-concept AcceptsMultipartStreamBody = requires(Input&& input) {
-    ruvia::detail::MultipartStreamPartAccess::make(
-        {}, {}, {}, std::forward<Input>(input), ruvia::MultipartChunkPhase::kComplete);
-};
 
-static_assert(AcceptsMultipartPartName<std::string>);
-static_assert(AcceptsMultipartPartName<std::pmr::string>);
-static_assert(AcceptsMultipartPartFilename<std::string>);
-static_assert(AcceptsMultipartPartFilename<std::pmr::string>);
 
-#define RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(Concept) \
-    static_assert(!Concept<std::string>);                       \
-    static_assert(!Concept<const std::string>);                 \
-    static_assert(!Concept<std::pmr::string>)
 
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartPartContentType);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartPartBody);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsDecodedMultipartPartContentType);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsDecodedMultipartPartBody);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamName);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamFilename);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamContentType);
-RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD(AcceptsMultipartStreamBody);
 
-#undef RUVIA_ASSERT_REJECTS_TEMPORARY_MULTIPART_FIELD
 
-#define RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(Concept) \
-    static_assert(Concept<std::string&>);                    \
-    static_assert(Concept<std::pmr::string&>);               \
-    static_assert(Concept<std::string_view>)
 
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartPartContentType);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartPartBody);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsDecodedMultipartPartContentType);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsDecodedMultipartPartBody);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamName);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamFilename);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamContentType);
-RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD(AcceptsMultipartStreamBody);
 
-#undef RUVIA_ASSERT_ACCEPTS_STABLE_MULTIPART_FIELD
 
-template <typename T>
-concept HasMultipartStatus = requires(const T& result) { result.status(); };
 
-template <typename T>
-concept HasMultipartOffset = requires(const T& result) {
-    { result.offset() } -> std::same_as<std::size_t>;
-};
 
-template <typename T>
-concept HasMultipartLineBytes = requires(const T& result) {
-    { result.lineBytes() } -> std::same_as<std::size_t>;
-};
 
-template <typename T>
-concept HasMultipartError = requires(const T& result) { result.error(); };
 
-template <typename T>
-concept HasMultipartProtocolError = requires(const T& result) {
-    { result.protocolError() } -> std::same_as<ruvia::HttpProtocolError>;
-};
 
-template <typename T>
-concept ExposesRvalueMultipartInputStorage =
-    requires(T&& input) { std::move(input).borrowed(); } ||
-    requires(T&& input) { std::move(input).streamingOpen(); } ||
-    requires(T&& input) { std::move(input).streamingEof(); } ||
-    requires(T&& input) { std::move(input).view(); };
 
-static_assert(!ExposesRvalueMultipartInputStorage<ruvia::detail::MultipartInputLifecycle>);
 
-template <typename T>
-concept HasMultipartParseError = requires(const T& result) {
-    { result.parseError() } -> std::same_as<ruvia::MultipartParseError>;
-};
 
-template <typename T>
-concept HasAnyRvalueMultipartPollAccessor =
-    requires(T&& result) { std::move(result).needInput(); } ||
-    requires(T&& result) { std::move(result).part(); } ||
-    requires(T&& result) { std::move(result).done(); } ||
-    requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept HasAnyRvalueMultipartDelimiterAccessor =
-    requires(T&& result) { std::move(result).noMatch(); } ||
-    requires(T&& result) { std::move(result).needInput(); } ||
-    requires(T&& result) { std::move(result).part(); } ||
-    requires(T&& result) { std::move(result).close(); };
 
-template <typename T>
-concept HasAnyRvalueMultipartPartHeaderAccessor = requires(T&& result) {
-    std::move(result).headers();
-} || requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept HasAnyRvalueMultipartBoundaryAccessor =
-    requires(T&& result) { std::move(result).boundary(); } || requires(T&& result) {
-        std::move(result).notApplicable();
-    } || requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept ExposesAnyRvalueMultipartOwnedView = requires(T&& value) { std::move(value).value(); } ||
-                                             requires(T&& value) { std::move(value).name(); } ||
-                                             requires(T&& value) { std::move(value).filename(); };
 
-static_assert(std::same_as<decltype(std::declval<ruvia::MultipartParser&>().poll()),
-    ruvia::MultipartPollResult>);
-static_assert(!std::default_initializable<ruvia::MultipartPollResult>);
-static_assert(!HasMultipartStatus<ruvia::MultipartPollResult>);
-static_assert(!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().part()),
-    const ruvia::MultipartStreamPart*>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartPollResult&>().failure()),
-    const ruvia::MultipartPollFailure*>);
-static_assert(!HasMultipartError<ruvia::MultipartPollNeedInput>);
-static_assert(!HasMultipartError<ruvia::MultipartStreamPart>);
-static_assert(!HasMultipartError<ruvia::MultipartPollDone>);
-static_assert(!HasMultipartError<ruvia::MultipartPollFailure>);
-static_assert(HasMultipartProtocolError<ruvia::MultipartPollFailure>);
-static_assert(
-    std::same_as<decltype(ruvia::parseMultipartBody(std::string_view{},
-                     ruvia::MultipartParseOptions{.boundary = ruvia::MultipartBoundary("x"),
-                         .resource = std::pmr::get_default_resource()})),
-        ruvia::MultipartBodyParseResult>);
-static_assert(!std::default_initializable<ruvia::MultipartBodyParseResult>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().body()),
-    const ruvia::MultipartBody*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()),
-        const ruvia::MultipartBodyParseFailure*>);
-static_assert(!HasMultipartError<ruvia::MultipartBodyParseFailure>);
-static_assert(HasMultipartProtocolError<ruvia::MultipartBodyParseFailure>);
 
-static_assert(!std::default_initializable<ruvia::detail::HttpMultipartDelimiterResult>);
-static_assert(!HasMultipartStatus<ruvia::detail::HttpMultipartDelimiterResult>);
-static_assert(!HasAnyRvalueMultipartDelimiterAccessor<ruvia::detail::HttpMultipartDelimiterResult>);
-static_assert(!HasMultipartOffset<ruvia::detail::HttpMultipartDelimiterNoMatch>);
-static_assert(HasMultipartOffset<ruvia::detail::HttpMultipartDelimiterNeedInput>);
-static_assert(!HasMultipartLineBytes<ruvia::detail::HttpMultipartDelimiterNeedInput>);
-static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartPartDelimiter>);
-static_assert(HasMultipartLineBytes<ruvia::detail::HttpMultipartCloseDelimiter>);
 
-static_assert(!std::default_initializable<ruvia::MultipartBoundaryParseResult>);
-static_assert(!HasMultipartStatus<ruvia::MultipartBoundaryParseResult>);
-static_assert(!HasAnyRvalueMultipartBoundaryAccessor<ruvia::MultipartBoundaryParseResult>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::MultipartBoundaryParseResult&>().notApplicable()),
-    const ruvia::MultipartBoundaryNotApplicable*>);
-static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
-static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartBoundary>);
-static_assert(!ExposesAnyRvalueMultipartOwnedView<ruvia::MultipartPart>);
-static_assert(!HasMultipartError<ruvia::MultipartBoundaryParseFailure>);
-static_assert(HasMultipartProtocolError<ruvia::MultipartBoundaryParseFailure>);
-static_assert(!std::default_initializable<ruvia::detail::HttpMultipartPartHeaderParseResult>);
-static_assert(
-    !HasAnyRvalueMultipartPartHeaderAccessor<ruvia::detail::HttpMultipartPartHeaderParseResult>);
-static_assert(!HasMultipartError<ruvia::detail::HttpMultipartPartHeaders>);
-static_assert(!HasMultipartError<ruvia::detail::HttpMultipartPartHeaderParseFailure>);
-static_assert(HasMultipartParseError<ruvia::detail::HttpMultipartPartHeaderParseFailure>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

@@ -40,28 +40,21 @@ using ruvia::detail::Http2SubmitStatus;
 using ruvia::detail::Http2TunnelOpen;
 using ruvia::detail::Http2TunnelState;
 
-template <typename T>
-concept HasConnectForm = requires(const T& state) {
-    { state.form() } -> std::same_as<Http2ConnectForm>;
-};
 
-template <typename T>
-concept HasStaleTunnelKindPhase = requires(const T& state) {
-    state.kind();
-    state.phase();
-};
 
-static_assert(std::default_initializable<Http2TunnelState>);
-static_assert(!std::default_initializable<Http2NotConnect>);
-static_assert(!std::default_initializable<Http2ConnectPending>);
-static_assert(!std::default_initializable<Http2TunnelOpen>);
-static_assert(!std::default_initializable<Http2ConnectRejected>);
-static_assert(!HasConnectForm<Http2TunnelState>);
-static_assert(!HasConnectForm<Http2NotConnect>);
-static_assert(HasConnectForm<Http2ConnectPending>);
-static_assert(!HasConnectForm<Http2TunnelOpen>);
-static_assert(!HasConnectForm<Http2ConnectRejected>);
-static_assert(!HasStaleTunnelKindPhase<Http2TunnelState>);
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 std::uint32_t submittedRequestStreamId(const Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {

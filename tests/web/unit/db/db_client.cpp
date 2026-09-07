@@ -45,11 +45,9 @@ using ruvia::test::RejectingMemoryResource;
 using ruvia::test::TrackingResource;
 using ruvia::testing::throwsOn;
 
-template <typename T>
-concept HasMariaDbFactory = requires { T::mariaDb(); };
 
-template <typename T>
-concept HasPostgreSqlFactory = requires { T::postgreSql(); };
+
+
 
 [[nodiscard]] ruvia::DbConfig testDbConfig() {
 #ifdef RUVIA_ENABLE_MARIADB
@@ -138,210 +136,125 @@ public:
     ruvia::WorkerHandle worker;
 };
 
-static_assert(std::is_move_assignable_v<ruvia::DbField>);
-static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
-static_assert(std::is_move_assignable_v<ruvia::DbRow>);
-static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbRow>);
-static_assert(std::is_copy_constructible_v<ruvia::DbValue>);
-static_assert(std::is_nothrow_move_constructible_v<ruvia::DbValue>);
-static_assert(!std::is_copy_assignable_v<ruvia::DbValue>);
-static_assert(!std::is_move_assignable_v<ruvia::DbValue>);
-static_assert(!std::is_copy_constructible_v<ruvia::DbMigrator>);
-static_assert(!std::is_copy_assignable_v<ruvia::DbMigrator>);
-static_assert(std::is_nothrow_move_constructible_v<ruvia::DbMigrator>);
-static_assert(std::is_nothrow_move_assignable_v<ruvia::DbMigrator>);
 
-template <typename String>
-concept AcceptsTemporaryDbValueText =
-    requires(String&& value) { ruvia::DbValue(std::forward<String>(value)); };
 
-template <typename String>
-concept AcceptsLvalueDbValueText = requires(String& value) { ruvia::DbValue(value); };
 
-template <typename Config>
-concept AcceptsValidatedDbConfig =
-    requires(Config&& config) { ruvia::detail::validatedDbConfig(std::forward<Config>(config)); };
 
-static_assert(!AcceptsTemporaryDbValueText<std::string>);
-static_assert(!AcceptsTemporaryDbValueText<const std::string>);
-static_assert(AcceptsLvalueDbValueText<std::string>);
-static_assert(AcceptsValidatedDbConfig<ruvia::DbConfig&>);
-static_assert(!AcceptsValidatedDbConfig<ruvia::DbConfig>);
-static_assert(!AcceptsValidatedDbConfig<const ruvia::DbConfig>);
-static_assert(std::constructible_from<ruvia::DbValue, ruvia::BorrowedText>);
-static_assert(!std::constructible_from<ruvia::detail::DbRegistry, asio::io_context&,
-    std::pmr::memory_resource*, std::span<const ruvia::detail::DbDefinition>>);
 
-template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsAnyTemporaryDbMigrationText = requires(String&& value) {
-    ruvia::DbMigrationOptions{.id = std::forward<String>(value), .sql = "SELECT 1"};
-} || requires(String&& value) {
-    ruvia::DbMigrationOptions{.id = "migration", .sql = std::forward<String>(value)};
-};
 
-template <typename String, typename Migration = ruvia::DbMigration>
-concept AcceptsLvalueDbMigrationText =
-    requires(String& value) { Migration{{.id = value, .sql = value}}; };
 
-template <typename Migration = ruvia::DbMigration>
-concept HasPositionalDbMigrationConstructor =
-    requires { Migration(ruvia::BorrowedText{"migration"}, ruvia::BorrowedText{"SELECT 1"}); };
 
-template <typename T>
-concept HasDbMigrationTextAccessors = requires(const T& migration) {
-    { migration.id() } -> std::same_as<std::string_view>;
-    { migration.sql() } -> std::same_as<std::string_view>;
-};
 
-static_assert(AcceptsAnyTemporaryDbMigrationText<std::string>);
-static_assert(AcceptsAnyTemporaryDbMigrationText<const std::string>);
-static_assert(AcceptsLvalueDbMigrationText<std::string>);
-static_assert(std::is_aggregate_v<ruvia::DbMigrationOptions>);
-static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.id), std::string>);
-static_assert(std::same_as<decltype(ruvia::DbMigrationOptions{}.sql), std::string>);
-static_assert(
-    std::same_as<decltype(ruvia::DbMigrationOptions{}.atomicity), ruvia::DbMigrationAtomicity>);
-static_assert(!HasPositionalDbMigrationConstructor<ruvia::DbMigration>);
-static_assert(HasDbMigrationTextAccessors<ruvia::DbMigration>);
 
-template <typename T>
-concept ExposesDbValueInspection = requires(const T& value) {
-    value.type();
-    value.text();
-    value.signedValue();
-    value.unsignedValue();
-    value.doubleValue();
-    value.boolValue();
-};
 
-static_assert(!ExposesDbValueInspection<ruvia::DbValue>);
-static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
-static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
-static_assert(std::is_move_constructible_v<ruvia::DbRows>);
-static_assert(!std::is_move_assignable_v<ruvia::DbRows>);
-static_assert(std::is_trivially_copyable_v<ruvia::DbExecResult>);
-static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
-static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
-static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
-static_assert(!std::is_move_assignable_v<ruvia::DbTransaction>);
 
-template <typename T>
-concept ExposesAnyRvalueDbOwnedView =
-    requires(T&& value) { std::move(value).value(); } ||
-    requires(T&& value) { std::move(value).template as<std::string_view>(); } ||
-    requires(T&& value) { std::move(value)[std::size_t{}]; } ||
-    requires(T&& value) { std::move(value).begin(); } ||
-    requires(T&& value) { std::move(value).end(); } ||
-    requires(T&& value) { std::move(value).applied(); } ||
-    requires(T&& value) { std::move(value).skipped(); };
 
-template <typename T>
-concept HasLegacyDbRowsAccessor = requires(const T& value) { value.rows(); };
 
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbValue>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbField>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRow>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbRows>);
-static_assert(!ExposesAnyRvalueDbOwnedView<ruvia::DbMigrationReport>);
-static_assert(!HasLegacyDbRowsAccessor<ruvia::DbRows>);
 
-template <typename T>
-concept HasDbHandleDefaultParams = requires(const T& handle) {
-    handle.query(std::string_view{});
-    handle.execute(std::string_view{});
-    handle.queryStream(std::string_view{});
-};
 
-template <typename T>
-concept HasDbHandleSpanParams = requires(const T& handle, std::span<const ruvia::DbValue> params) {
-    handle.query(std::string_view{}, params);
-    handle.execute(std::string_view{}, params);
-    handle.queryStream(std::string_view{}, params);
-};
 
-template <typename T>
-concept HasDbHandleInitializerListParams =
-    requires(const T& handle, std::initializer_list<ruvia::DbValue> params) {
-        handle.query(std::string_view{}, params);
-        handle.execute(std::string_view{}, params);
-        handle.queryStream(std::string_view{}, params);
-    };
 
-template <typename T>
-concept HasDbTransactionDefaultParams = requires(T& transaction) {
-    transaction.query(std::string_view{});
-    transaction.execute(std::string_view{});
-};
 
-template <typename T>
-concept HasDbTransactionSpanParams =
-    requires(T& transaction, std::span<const ruvia::DbValue> params) {
-        transaction.query(std::string_view{}, params);
-        transaction.execute(std::string_view{}, params);
-    };
 
-template <typename T>
-concept HasDbTransactionInitializerListParams =
-    requires(T& transaction, std::initializer_list<ruvia::DbValue> params) {
-        transaction.query(std::string_view{}, params);
-        transaction.execute(std::string_view{}, params);
-    };
 
-static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
-static_assert(HasDbHandleSpanParams<ruvia::DbHandle>);
-static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::DbHandle&>().withOptions(
-                               ruvia::OperationOptions{})),
-    ruvia::DbHandle>);
-static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
-static_assert(HasDbTransactionSpanParams<ruvia::DbTransaction>);
-static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Bound parameters passed as ordinary arguments.
-template <typename T>
-concept HasVariadicParams = requires(T& handle) {
-    handle.query(std::string_view{}, 1, std::string_view{});
-    handle.execute(std::string_view{}, 1, std::string_view{});
-};
+
 
 // A prepared sequence must keep selecting the span overload rather than being
 // absorbed as a single bound parameter, which would send the wrong argument.
-template <typename T>
-concept VariadicParamsRejectSequences =
-    !requires(T& handle, std::span<const ruvia::DbValue> params) {
-        { handle.query(std::string_view{}, params) } -> std::same_as<void>;
-    } && !std::constructible_from<ruvia::DbValue, std::span<const ruvia::DbValue>> &&
-    !std::constructible_from<ruvia::DbValue, std::array<ruvia::DbValue, 2>>;
+
 
 // Variadic calls clone an owning-string temporary before returning, while the
 // storable DbValue type above continues to reject the same temporary.
-template <typename T>
-concept HasVariadicOwningTemporaryParams = requires(T& handle) {
-    handle.query(std::string_view{}, std::string("owned"));
-    handle.execute(std::string_view{}, std::string("owned"));
-};
 
-static_assert(HasVariadicParams<ruvia::DbHandle>);
-static_assert(HasVariadicParams<ruvia::DbTransaction>);
-static_assert(VariadicParamsRejectSequences<ruvia::DbHandle>);
-static_assert(VariadicParamsRejectSequences<ruvia::DbTransaction>);
-static_assert(HasVariadicOwningTemporaryParams<ruvia::DbHandle>);
-static_assert(HasVariadicOwningTemporaryParams<ruvia::DbTransaction>);
+
+
+
+
+
+
+
 
 // An lvalue string is fine: it outlives the call, which is all the synchronous
 // parameter cloning requires.
-template <typename T>
-concept HasVariadicOwningLvalueParams =
-    requires(T& handle, std::string owned) { handle.query(std::string_view{}, owned); };
 
-static_assert(HasVariadicOwningLvalueParams<ruvia::DbHandle>);
-static_assert(HasVariadicOwningLvalueParams<ruvia::DbTransaction>);
-static_assert(std::default_initializable<ruvia::DbConfig>);
-static_assert(std::is_aggregate_v<ruvia::DbConfig>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::DbConfig&>().driver), ruvia::DbDriver>);
-static_assert(!HasMariaDbFactory<ruvia::DbConfig>);
-static_assert(!HasPostgreSqlFactory<ruvia::DbConfig>);
+
+
+
+
+
+
+
+
 
 }  // namespace
 
@@ -640,7 +553,7 @@ RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) 
     };
     using State = ruvia::detail::DbOperationState<Payload>;
     using Guard = ruvia::detail::DbOperationGuard<Payload>;
-    static_assert(!std::is_move_constructible_v<State>);
+
 
     struct ResumeGate final {
         [[nodiscard]] bool await_ready() const noexcept {

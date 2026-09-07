@@ -28,12 +28,11 @@
 
 namespace {
 
-template <typename T>
-concept HasRvalueIoContextBorrow = requires(T&& loop) { std::move(loop).ioContext(); };
 
-static_assert(std::move_constructible<ruvia::EventLoopAttachment>);
-static_assert(!std::assignable_from<ruvia::EventLoopAttachment&, ruvia::EventLoopAttachment&&>);
-static_assert(!HasRvalueIoContextBorrow<ruvia::EventLoop>);
+
+
+
+
 
 bool testPostOutcomeInvariantsAndEmptyCallbacks() {
     bool acceptedTakeRejected = false;

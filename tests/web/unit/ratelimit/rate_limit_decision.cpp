@@ -43,16 +43,12 @@ bool rateLimitAllowed(RateLimitDecision decision) {
     return decision.allowed() != nullptr;
 }
 
-template <typename Decision>
-concept HasTemporaryRateLimitAlternative = requires(Decision decision) {
-    std::move(decision).allowed();
-    std::move(decision).rejection();
-};
 
-static_assert(!std::default_initializable<RateLimitDecision>);
-static_assert(!std::default_initializable<ruvia::detail::RateLimitAllowed>);
-static_assert(!std::default_initializable<ruvia::detail::RateLimitRejection>);
-static_assert(!HasTemporaryRateLimitAlternative<RateLimitDecision>);
+
+
+
+
+
 
 struct RouteLimitResult final {
     bool allowed{false};

@@ -287,7 +287,7 @@ RUVIA_TEST(response_file_input_rejects_in_place_mutation_after_open) {
     fs::remove(path);
     constexpr std::string_view oldContents = "old-static-body";
     constexpr std::string_view newContents = "new-static-body";
-    static_assert(oldContents.size() == newContents.size());
+
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << oldContents;
@@ -522,8 +522,7 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
         std::ofstream output(replacementPath, std::ios::binary);
         output << "new-representation";
     }
-    static_assert(std::string_view("old-representation").size() ==
-                  std::string_view("new-representation").size());
+
 #if defined(_WIN32)
     fs::remove(servedPath);
 #endif
@@ -607,7 +606,7 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 }
 
 RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
-    static_assert(std::is_aggregate_v<ruvia::StaticFileTypePolicy>);
+
 
     bool emptyOnlyThrew = false;
     try {

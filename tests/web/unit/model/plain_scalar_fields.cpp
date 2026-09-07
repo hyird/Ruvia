@@ -26,25 +26,25 @@ RUVIA_REQUEST_MODEL(
 
 namespace {
 
-static_assert(ruvia::detail::isRuviaScalar<ruvia::UInt32>);
-static_assert(ruvia::detail::isRuviaScalar<ruvia::Bool>);
-static_assert(ruvia::detail::isRuviaScalar<ruvia::Double>);
-static_assert(!ruvia::detail::isRuviaScalar<std::uint32_t>);
-static_assert(!ruvia::detail::isRuviaScalar<bool>);
-static_assert(!ruvia::detail::isRuviaScalar<double>);
-static_assert(!ruvia::detail::isRuviaScalar<char>);
-static_assert(!ruvia::detail::isRuviaScalar<unsigned char>);
-static_assert(!ruvia::detail::isRuviaScalar<ruvia::String>);
 
-static_assert(std::is_same_v<ruvia::detail::ModelScalarValueT<ruvia::UInt32>, std::uint32_t>);
-static_assert(ruvia::detail::isRequestModelField<ruvia::UInt32>);
-static_assert(ruvia::detail::isRequestModelField<ruvia::Array<ruvia::UInt32>>);
-static_assert(!ruvia::detail::isRequestModelField<std::uint32_t>);
-static_assert(!ruvia::detail::isRequestModelField<bool>);
-static_assert(!ruvia::detail::isRequestModelField<double>);
-static_assert(!ruvia::detail::isRequestModelField<std::string>);
-static_assert(!ruvia::detail::isRequestModelField<std::string_view>);
-static_assert(!ruvia::detail::isRequestModelField<ruvia::Array<std::uint32_t>>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

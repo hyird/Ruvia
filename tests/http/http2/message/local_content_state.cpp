@@ -12,26 +12,22 @@ using ruvia::detail::Http2LocalContentCheck;
 using ruvia::detail::Http2LocalContentKnownLength;
 using ruvia::detail::Http2LocalContentState;
 
-template <typename T>
-concept HasLocalContentMode = requires(const T& content) { content.mode(); };
 
-template <typename T>
-concept HasDeclaredLength = requires(const T& content) {
-    { content.declaredLength() } -> std::same_as<std::uint64_t>;
-};
 
-static_assert(!HasLocalContentMode<Http2LocalContentState>);
-static_assert(!HasDeclaredLength<Http2LocalContentState>);
-static_assert(!HasDeclaredLength<ruvia::detail::Http2LocalContentUnset>);
-static_assert(!HasDeclaredLength<ruvia::detail::Http2LocalContentForbidden>);
-static_assert(!HasDeclaredLength<ruvia::detail::Http2LocalContentUnbounded>);
-static_assert(HasDeclaredLength<Http2LocalContentKnownLength>);
-static_assert(std::default_initializable<Http2LocalContentState>);
-static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentUnset>);
-static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentForbidden>);
-static_assert(!std::default_initializable<ruvia::detail::Http2LocalContentUnbounded>);
-static_assert(!std::default_initializable<Http2LocalContentKnownLength>);
-static_assert(!std::constructible_from<Http2LocalContentKnownLength, std::uint64_t>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

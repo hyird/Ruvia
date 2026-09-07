@@ -15,27 +15,19 @@ namespace {
 
 using ruvia::detail::readDotenvEntries;
 
-template <typename T>
-concept ExposesAnyRvalueEnvBorrow = requires {
-    std::declval<const T&&>().get("NAME");
-} || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
 
-template <typename T>
-concept HasDotenvOverrideExistingBoolean = requires(T& options) { options.overrideExisting; };
 
-template <typename T>
-concept HasDotenvRequiredBoolean = requires(T& options) { options.required; };
 
-static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
-static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.existingVariables),
-    ruvia::DotenvExistingVariablePolicy>);
-static_assert(
-    std::is_same_v<decltype(ruvia::DotenvOptions{}.missingFile), ruvia::DotenvMissingFilePolicy>);
-static_assert(
-    ruvia::DotenvOptions{}.existingVariables == ruvia::DotenvExistingVariablePolicy::kPreserve);
-static_assert(ruvia::DotenvOptions{}.missingFile == ruvia::DotenvMissingFilePolicy::kIgnore);
-static_assert(!HasDotenvOverrideExistingBoolean<ruvia::DotenvOptions>);
-static_assert(!HasDotenvRequiredBoolean<ruvia::DotenvOptions>);
+
+
+
+
+
+
+
+
+
+
 
 std::filesystem::path writeTempEnv(std::string_view name, std::string_view contents) {
     const auto path = std::filesystem::temp_directory_path() / name;

@@ -25,27 +25,17 @@ using Clock = std::chrono::steady_clock;
 // A far-future deadline so a waiter never expires during a resume/close test.
 constexpr Clock::time_point kNever = Clock::time_point::max();
 
-template <typename T>
-concept HasAnyRvaluePoolWaiterAccessor = requires(T&& result) { std::move(result).acquired(); } ||
-                                         requires(T&& result) { std::move(result).timedOut(); } ||
-                                         requires(T&& result) { std::move(result).closed(); } ||
-                                         requires(T&& result) { std::move(result).cancelled(); };
 
-static_assert(!std::default_initializable<PoolWaiter>);
-static_assert(!std::default_initializable<PoolWaiterResult>);
-static_assert(!HasAnyRvaluePoolWaiterAccessor<PoolWaiterResult>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().acquired()),
-    const PoolWaiterAcquired*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().timedOut()),
-    const PoolWaiterTimedOut*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().closed()),
-    const PoolWaiterClosed*>);
-static_assert(std::same_as<decltype(std::declval<const PoolWaiterResult&>().cancelled()),
-    const PoolWaiterCancelled*>);
-static_assert(
-    std::same_as<decltype(std::declval<PoolWaiter&>().await_resume()), const PoolWaiterResult&>);
-static_assert(
-    std::same_as<decltype(&PoolWaiterQueue::closeAll), void (PoolWaiterQueue::*)() noexcept>);
+
+
+
+
+
+
+
+
+
+
 
 class WaiterProbeTask final {
 public:

@@ -25,43 +25,27 @@ using ruvia::lookupUniqueHttpClientResponseHeader;
 using ruvia::planHttpClientRedirectRequest;
 using ruvia::resolveHttpClientRedirectTarget;
 
-template <typename T>
-concept HasAnyRvalueHttpClientHeaderLookupAccessor =
-    requires(T&& result) { std::move(result).absent(); } || requires(T&& result) {
-        std::move(result).found();
-    } || requires(T&& result) { std::move(result).repeated(); };
 
-template <typename T>
-concept ExposesRvalueHttpClientRedirectRequestMethod =
-    requires(T&& plan) { std::move(plan).method(); };
 
-template <typename T>
-concept AcceptsTemporaryHttpClientResponseHeaderLookup = requires(T&& response) {
-    lookupUniqueHttpClientResponseHeader(std::move(response), std::string_view{});
-};
 
-static_assert(
-    !HasAnyRvalueHttpClientHeaderLookupAccessor<ruvia::HttpClientResponseHeaderLookupResult>);
-static_assert(!ExposesRvalueHttpClientRedirectRequestMethod<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(!std::copy_constructible<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(std::move_constructible<ruvia::HttpClientRedirectRequestPlan>);
-static_assert(!AcceptsTemporaryHttpClientResponseHeaderLookup<ruvia::HttpClientResponseHead>);
 
-template <typename T>
-concept HasHeaderValue = requires(const T& value) {
-    { value.value() } -> std::same_as<std::string_view>;
-};
 
-template <typename T>
-concept HasRedirectStatus = requires(const T& value) { value.status(); };
 
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::HttpClientResponseHeaderLookupResult&>().found()),
-    const ruvia::HttpClientResponseHeaderFound*>);
-static_assert(!HasHeaderValue<ruvia::HttpClientResponseHeaderAbsent>);
-static_assert(HasHeaderValue<ruvia::HttpClientResponseHeaderFound>);
-static_assert(!HasHeaderValue<ruvia::HttpClientResponseHeaderRepeated>);
-static_assert(!HasRedirectStatus<ruvia::HttpClientResponseHeaderLookupResult>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 HttpOriginView originFor(
     std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {

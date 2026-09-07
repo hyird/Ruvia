@@ -29,17 +29,14 @@ using ruvia::detail::WebSocketMessageAccess;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
 
-template <typename Payload>
-concept AcceptsWebSocketMessagePayload = requires(Payload&& payload) {
-    WebSocketMessageAccess::make(WebSocketOpcode::kText, std::forward<Payload>(payload));
-};
 
-static_assert(!AcceptsWebSocketMessagePayload<std::string>);
-static_assert(!AcceptsWebSocketMessagePayload<const std::string>);
-static_assert(!AcceptsWebSocketMessagePayload<std::pmr::string>);
-static_assert(AcceptsWebSocketMessagePayload<std::string&>);
-static_assert(AcceptsWebSocketMessagePayload<std::pmr::string&>);
-static_assert(AcceptsWebSocketMessagePayload<std::string_view>);
+
+
+
+
+
+
+
 
 WebSocketFrameView frame(WebSocketOpcode opcode, std::string_view payload, bool fin,
     bool continuation = false, bool rsv1 = false) {
@@ -99,60 +96,35 @@ std::uint16_t acceptCloseCode(WebSocketInboundAssembler& assembler, const WebSoc
     return failure != nullptr ? webSocketProtocolFailureCloseCode(failure->error()) : 0;
 }
 
-template <typename T>
-concept HasInboundAction = requires(const T& result) { result.action(); };
 
-template <typename T>
-concept HasInboundError = requires(const T& result) {
-    { result.error() } -> std::same_as<WebSocketProtocolFailure>;
-};
 
-template <typename T>
-concept HasInboundOpcode = requires(const T& result) {
-    { result.opcode() } -> std::same_as<WebSocketOpcode>;
-};
 
-template <typename T>
-concept HasInboundContentEncoding = requires(const T& result) {
-    { result.contentEncoding() } -> std::same_as<WebSocketInboundContentEncoding>;
-};
 
-template <typename T>
-concept HasAnyRvalueInboundAccessor =
-    requires(T&& result) { std::move(result).continueReading(); } ||
-    requires(T&& result) { std::move(result).controlFrame(); } ||
-    requires(T&& result) { std::move(result).message(); } ||
-    requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept ExposesRvalueInboundMessageMember = requires(T&& message) { std::move(message).message(); };
 
-static_assert(!std::default_initializable<WebSocketInboundResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const WebSocketInboundResult&>().continueReading()),
-        const ruvia::detail::WebSocketInboundContinue*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketInboundResult&>().controlFrame()),
-    const ruvia::detail::WebSocketInboundControlFrame*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketInboundResult&>().message()),
-    const ruvia::detail::WebSocketInboundMessage*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketInboundResult&>().failure()),
-    const ruvia::detail::WebSocketInboundFailure*>);
-static_assert(!HasInboundAction<WebSocketInboundResult>);
-static_assert(!HasInboundError<WebSocketInboundResult>);
-static_assert(!HasAnyRvalueInboundAccessor<WebSocketInboundResult>);
-static_assert(HasInboundOpcode<ruvia::detail::WebSocketInboundControlFrame>);
-static_assert(!HasInboundContentEncoding<ruvia::detail::WebSocketInboundControlFrame>);
-static_assert(!HasInboundOpcode<ruvia::detail::WebSocketInboundMessage>);
-static_assert(HasInboundContentEncoding<ruvia::detail::WebSocketInboundMessage>);
-static_assert(!HasInboundError<ruvia::detail::WebSocketInboundMessage>);
-static_assert(!ExposesRvalueInboundMessageMember<ruvia::detail::WebSocketInboundMessage>);
-static_assert(HasInboundError<ruvia::detail::WebSocketInboundFailure>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().opcode()),
-    WebSocketOpcode>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::WebSocketInboundFragmented&>().encoding()),
-    WebSocketInboundContentEncoding>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

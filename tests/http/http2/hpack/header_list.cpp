@@ -18,11 +18,9 @@ std::pmr::memory_resource* resource() noexcept {
     return std::pmr::new_delete_resource();
 }
 
-template <typename T>
-concept ExposesRvalueHttp2HeaderListStorage =
-    requires(T&& list) { std::move(list).at(std::size_t{}); };
 
-static_assert(!ExposesRvalueHttp2HeaderListStorage<Http2HeaderList>);
+
+
 
 }  // namespace
 

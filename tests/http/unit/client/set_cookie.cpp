@@ -16,39 +16,22 @@
 
 namespace {
 
-template <typename Input>
-concept CanParseSetCookie =
-    requires(Input&& input) { ruvia::parseSetCookie(std::forward<Input>(input)); };
 
-template <typename T>
-concept HasSetCookiePublicField =
-    requires(T& cookie) { cookie.name = std::string_view{}; } ||
-    requires(T& cookie) { cookie.value = std::string_view{}; } ||
-    requires(T& cookie) { cookie.path = std::string_view{}; } ||
-    requires(T& cookie) { cookie.domain = std::string_view{}; } ||
-    requires(T& cookie) { cookie.expires = std::optional<std::time_t>{}; } ||
-    requires(T& cookie) { cookie.maxAgeSeconds = std::optional<std::int64_t>{}; } ||
-    requires(T& cookie) { cookie.secure = true; } ||
-    requires(T& cookie) { cookie.hasPathAttribute = true; } ||
-    requires(T& cookie) { cookie.sameSiteNone = true; };
 
-static_assert(CanParseSetCookie<std::string&>);
-static_assert(CanParseSetCookie<const std::string&>);
-static_assert(CanParseSetCookie<std::pmr::string&>);
-static_assert(CanParseSetCookie<std::string_view>);
-static_assert(!CanParseSetCookie<std::string>);
-static_assert(!CanParseSetCookie<const std::string>);
-static_assert(!CanParseSetCookie<std::pmr::string>);
-static_assert(std::same_as<std::underlying_type_t<ruvia::HttpSetCookieAttribute>, std::uint8_t>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().name()),
-    std::string_view>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().maxAgeSeconds()),
-        std::optional<std::int64_t>>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::HttpSetCookieView&>().has(
-                               ruvia::HttpSetCookieAttribute::kSecure)),
-    bool>);
-static_assert(!HasSetCookiePublicField<ruvia::HttpSetCookieView>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

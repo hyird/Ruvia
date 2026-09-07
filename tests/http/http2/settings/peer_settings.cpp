@@ -31,54 +31,37 @@ using ruvia::detail::kHttp2DefaultInitialWindowSize;
 using ruvia::detail::kHttp2DefaultMaxFrameSize;
 using ruvia::detail::kHttp2MaxFrameSizeLimit;
 
-template <typename T>
-concept HasPeerSettingStatusField = requires(const T& result) { result.status; };
 
-template <typename T>
-concept HasPeerSettingChangedField = requires(const T& result) { result.initialWindowChanged; };
 
-template <typename T>
-concept HasPeerSettingDeltaField = requires(const T& result) { result.initialWindowDelta; };
 
-template <typename T>
-concept HasPeerSettingDeltaAccessor = requires(const T& result) {
-    { result.delta() } -> std::same_as<std::int64_t>;
-};
 
-template <typename T>
-concept HasPeerSettingErrorAccessor = requires(const T& result) {
-    { result.error() } -> std::same_as<Http2PeerSettingError>;
-};
 
-template <typename T>
-concept HasAnyRvaluePeerSettingAccessor =
-    requires(T&& result) { std::move(result).applied(); } || requires(T&& result) {
-        std::move(result).initialWindowChange();
-    } || requires(T&& result) { std::move(result).failure(); };
 
-static_assert(!std::default_initializable<Http2PeerSettingApplyResult>);
-static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().applied()),
-    const Http2PeerSettingApplied*>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().initialWindowChange()),
-        const Http2PeerInitialWindowChange*>);
-static_assert(std::same_as<decltype(std::declval<const Http2PeerSettingApplyResult&>().failure()),
-    const Http2PeerSettingFailure*>);
-static_assert(!HasPeerSettingStatusField<Http2PeerSettingApplyResult>);
-static_assert(!HasPeerSettingChangedField<Http2PeerSettingApplyResult>);
-static_assert(!HasPeerSettingDeltaField<Http2PeerSettingApplyResult>);
-static_assert(!HasPeerSettingDeltaAccessor<Http2PeerSettingApplyResult>);
-static_assert(!HasPeerSettingErrorAccessor<Http2PeerSettingApplyResult>);
-static_assert(!HasAnyRvaluePeerSettingAccessor<Http2PeerSettingApplyResult>);
-static_assert(!HasPeerSettingDeltaAccessor<Http2PeerSettingApplied>);
-static_assert(!HasPeerSettingErrorAccessor<Http2PeerSettingApplied>);
-static_assert(HasPeerSettingDeltaAccessor<Http2PeerInitialWindowChange>);
-static_assert(!HasPeerSettingErrorAccessor<Http2PeerInitialWindowChange>);
-static_assert(!HasPeerSettingDeltaAccessor<Http2PeerSettingFailure>);
-static_assert(HasPeerSettingErrorAccessor<Http2PeerSettingFailure>);
-static_assert(!std::default_initializable<Http2PeerSettingApplied>);
-static_assert(!std::constructible_from<Http2PeerInitialWindowChange, std::int64_t>);
-static_assert(!std::constructible_from<Http2PeerSettingFailure, Http2PeerSettingError>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 constexpr std::uint32_t kInt32Max =
     static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());

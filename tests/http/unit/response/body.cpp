@@ -28,45 +28,29 @@ using ruvia::detail::setResponseBodyStaticView;
 using ruvia::detail::setResponseBorrowedFileBody;
 using ruvia::detail::setResponseFileBody;
 
-static_assert(std::is_same_v<decltype(responseBody(std::declval<const HttpResponse&>())),
-    const HttpResponseBody&>);
-static_assert(!std::is_copy_constructible_v<HttpResponseBody>);
-static_assert(std::is_nothrow_move_constructible_v<HttpResponseBody>);
-static_assert(!std::is_move_assignable_v<HttpResponseBody>);
-static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::HttpBorrowedResponseBytes>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::HttpStaticResponseBytes>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::HttpOwnedResponseBytes>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::HttpOwnedResponseFile>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::HttpBorrowedResponseFile>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ResponseFileBody>);
 
-template <typename T>
-concept ExposesAnyRvalueResponseBodyBorrow =
-    requires(T&& value) { std::move(value).empty(); } ||
-    requires(T&& value) { std::move(value).borrowedBytes(); } ||
-    requires(T&& value) { std::move(value).staticBytes(); } ||
-    requires(T&& value) { std::move(value).ownedBytes(); } ||
-    requires(T&& value) { std::move(value).ownedFile(); } ||
-    requires(T&& value) { std::move(value).borrowedFile(); } ||
-    requires(T&& value) { std::move(value).bytes(); } ||
-    requires(T&& value) { std::move(value).file(); } ||
-    requires(T&& value) { std::move(value).nativePathCStr(); };
 
-template <typename T>
-concept ExposesRvalueResponseBodyAccess = requires(T&& response) {
-    responseBody(std::move(response));
-} || requires(T&& response) { ruvia::detail::HttpResponseBodyAccess::body(std::move(response)); };
 
-template <typename T>
-concept ExposesRvalueResponseFileIdentityWords =
-    requires(T&& identity) { std::move(identity).words(); };
 
-static_assert(!ExposesAnyRvalueResponseBodyBorrow<HttpResponseBody>);
-static_assert(!ExposesAnyRvalueResponseBodyBorrow<ruvia::detail::HttpOwnedResponseBytes>);
-static_assert(!ExposesAnyRvalueResponseBodyBorrow<ruvia::detail::HttpOwnedResponseFile>);
-static_assert(!ExposesRvalueResponseBodyAccess<HttpResponse>);
-static_assert(!ExposesRvalueResponseFileIdentityWords<ruvia::detail::ResponseFileIdentity>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 [[nodiscard]] std::size_t activeAlternativeCount(const HttpResponseBody& body) noexcept {
     return static_cast<std::size_t>(body.empty() != nullptr) +

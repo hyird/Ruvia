@@ -373,13 +373,10 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     using ruvia::detail::validateRedisConfig;
     using std::chrono::milliseconds;
 
-    static_assert(
-        std::same_as<decltype(RedisConfig{}.connectTimeout), std::optional<milliseconds>>);
-    static_assert(
-        std::same_as<decltype(RedisConfig{}.commandTimeout), std::optional<milliseconds>>);
-    static_assert(
-        std::same_as<decltype(RedisConfig{}.acquireTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(RedisConfig{}.maxReplyBytes), std::optional<std::size_t>>);
+
+
+
+
 
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));

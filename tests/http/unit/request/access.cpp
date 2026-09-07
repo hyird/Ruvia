@@ -28,19 +28,17 @@ using ruvia::detail::requestContentCoding;
 using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::requestKnownHeader;
 
-template <typename T>
-concept ExposesRvalueHttpRequestHeaders = requires(T&& request) { std::move(request).headers(); };
 
-static_assert(!ExposesRvalueHttpRequestHeaders<HttpRequest>);
-static_assert(std::same_as<decltype(std::declval<const HttpRequest&>().header(std::string_view{})),
-    std::optional<std::string_view>>);
-static_assert(std::is_constructible_v<HttpHeaderView, const std::string&, const std::string&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, std::string&&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, const std::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, const std::string&&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::pmr::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, const std::pmr::string&&>);
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

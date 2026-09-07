@@ -227,18 +227,13 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
 
-    static_assert(std::default_initializable<DbConfig>);
-    static_assert(std::is_aggregate_v<DbConfig>);
-    static_assert(std::same_as<decltype(std::declval<DbConfig&>().connectTimeout),
-        std::optional<milliseconds>>);
-    static_assert(
-        std::same_as<decltype(std::declval<DbConfig&>().readTimeout), std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(std::declval<DbConfig&>().writeTimeout),
-        std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(std::declval<DbConfig&>().queryTimeout),
-        std::optional<milliseconds>>);
-    static_assert(std::same_as<decltype(std::declval<DbConfig&>().acquireTimeout),
-        std::optional<milliseconds>>);
+
+
+
+
+
+
+
     RUVIA_CHECK(throwsOn([] { validateDbConfig(DbConfig{}); }));
 
     // An omitted port selects the driver's standard port during normalization.

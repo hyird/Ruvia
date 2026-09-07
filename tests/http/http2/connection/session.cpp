@@ -619,9 +619,7 @@ RUVIA_TEST(http2_connection_undecodable_discarded_block_is_compression_error) {
                 ruvia::detail::Http2FeedResult::kAccepted);
     constexpr auto kFullFrameCount =
         ruvia::detail::kMaxHttp2EncodedHeaderBlockBytes / ruvia::detail::kHttp2DefaultMaxFrameSize;
-    static_assert(ruvia::detail::kMaxHttp2EncodedHeaderBlockBytes %
-                      ruvia::detail::kHttp2DefaultMaxFrameSize ==
-                  0);
+
     for (std::size_t i = 1; i < kFullFrameCount; ++i) {
         const auto continuation = continuationFrame(&resource, 1, 0, fullFrame);
         RUVIA_CHECK(conn.feed(std::string_view(continuation.data(), continuation.size())) ==

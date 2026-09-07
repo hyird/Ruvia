@@ -28,13 +28,11 @@ using ruvia::detail::chooseWebSocketSubprotocol;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::webSocketProtocolOffered;
 
-template <typename T>
-concept HasRvalueWebSocketHandshakeSubprotocol =
-    requires(T&& handshake) { std::move(handshake).subprotocol(); };
 
-static_assert(!HasRvalueWebSocketHandshakeSubprotocol<ruvia::WebSocketServerHandshake>);
-static_assert(!std::copy_constructible<ruvia::WebSocketServerHandshake>);
-static_assert(std::move_constructible<ruvia::WebSocketServerHandshake>);
+
+
+
+
 
 class FailingHandshakeWriteStream final {
 public:

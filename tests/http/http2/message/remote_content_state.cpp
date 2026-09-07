@@ -16,45 +16,31 @@ using ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength;
 using ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength;
 using ruvia::detail::Http2RemoteContentState;
 
-template <typename T>
-concept HasDeclaredLength = requires(const T& value) {
-    { value.declaredLength() } -> std::same_as<std::size_t>;
-};
 
-template <typename T>
-concept HasStaleCheckAcceptSplit = requires(T& value) {
-    value.checkAccept(std::size_t{1});
-    value.accept(std::size_t{1});
-};
 
-template <typename T>
-concept HasStaleLengthTuple = requires(const T& value) {
-    value.hasContentLength();
-    value.contentLength();
-};
 
-template <typename T>
-concept HasReceivedBytes = requires(const T& value) {
-    { value.receivedBytes() } -> std::same_as<std::size_t>;
-};
 
-static_assert(std::default_initializable<Http2RemoteContentState>);
-static_assert(!std::default_initializable<Http2RemoteContentAllowedWithoutLength>);
-static_assert(!std::default_initializable<Http2RemoteContentAllowedKnownLength>);
-static_assert(!std::default_initializable<Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(!std::default_initializable<Http2RemoteContentMetadataOnlyKnownLength>);
-static_assert(!HasDeclaredLength<Http2RemoteContentState>);
-static_assert(!HasReceivedBytes<Http2RemoteContentState>);
-static_assert(HasReceivedBytes<Http2RemoteContentAllowedWithoutLength>);
-static_assert(HasReceivedBytes<Http2RemoteContentAllowedKnownLength>);
-static_assert(!HasReceivedBytes<Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(!HasReceivedBytes<Http2RemoteContentMetadataOnlyKnownLength>);
-static_assert(!HasDeclaredLength<Http2RemoteContentAllowedWithoutLength>);
-static_assert(HasDeclaredLength<Http2RemoteContentAllowedKnownLength>);
-static_assert(!HasDeclaredLength<Http2RemoteContentMetadataOnlyWithoutLength>);
-static_assert(HasDeclaredLength<Http2RemoteContentMetadataOnlyKnownLength>);
-static_assert(!HasStaleCheckAcceptSplit<Http2RemoteContentState>);
-static_assert(!HasStaleLengthTuple<Http2RemoteContentState>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

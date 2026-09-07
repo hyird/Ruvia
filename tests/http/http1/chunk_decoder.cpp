@@ -20,69 +20,45 @@ using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
 using ruvia::detail::Http1ChunkDecodeFailure;
 
-static_assert(std::same_as<decltype(std::declval<const ProtocolByteLimit&>().maximum()),
-    std::optional<std::size_t>>);
+
 using ruvia::detail::Http1ChunkDecodeNeedMore;
 using ruvia::detail::Http1ChunkDecodeResult;
 using ruvia::detail::Http1ChunkTrailerRole;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 
-template <typename T>
-concept HasLooseHttp1ChunkDecodeFields = requires(T& result) {
-    result.kind = 0;
-    result.body = std::string_view{};
-    result.consumedBytes = std::size_t{};
-};
 
-template <typename T>
-concept HasChunkBytes = requires(const T& result) {
-    { result.bytes() } -> std::same_as<std::string_view>;
-};
 
-template <typename T>
-concept HasConsumedBytes = requires(const T& result) {
-    { result.consumedBytes() } -> std::same_as<std::size_t>;
-};
 
-template <typename T>
-concept HasTrailers = requires(const T& result) {
-    { result.trailers() } -> std::same_as<std::string_view>;
-};
 
-template <typename T>
-concept HasRvalueTrailers = requires(T&& result) { std::move(result).trailers(); };
 
-template <typename T>
-concept HasAnyRvalueHttp1ChunkDecodeAccessor =
-    requires(T&& result) { std::move(result).needMore(); } ||
-    requires(T&& result) { std::move(result).bodyChunk(); } ||
-    requires(T&& result) { std::move(result).complete(); } ||
-    requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept HasRawDecodeError = requires(const T& result) { result.error(); };
 
-static_assert(std::same_as<decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})),
-    Http1ChunkDecodeResult>);
-static_assert(!std::default_initializable<Http1ChunkDecodeResult>);
-static_assert(!HasAnyRvalueHttp1ChunkDecodeAccessor<Http1ChunkDecodeResult>);
-static_assert(!HasLooseHttp1ChunkDecodeFields<Http1ChunkDecodeResult>);
-static_assert(HasConsumedBytes<Http1ChunkDecodeNeedMore>);
-static_assert(HasConsumedBytes<Http1ChunkDecodeBodyChunk>);
-static_assert(HasConsumedBytes<Http1ChunkDecodeComplete>);
-static_assert(HasConsumedBytes<Http1ChunkDecodeFailure>);
-static_assert(!HasChunkBytes<Http1ChunkDecodeNeedMore>);
-static_assert(HasChunkBytes<Http1ChunkDecodeBodyChunk>);
-static_assert(!HasChunkBytes<Http1ChunkDecodeComplete>);
-static_assert(!HasChunkBytes<Http1ChunkDecodeFailure>);
-static_assert(!HasTrailers<Http1ChunkDecodeNeedMore>);
-static_assert(!HasTrailers<Http1ChunkDecodeBodyChunk>);
-static_assert(HasTrailers<Http1ChunkDecodeComplete>);
-static_assert(!HasTrailers<Http1ChunkDecodeFailure>);
-static_assert(!HasRvalueTrailers<Http1ChunkDecodeComplete>);
-static_assert(!HasRawDecodeError<Http1ChunkDecodeFailure>);
-static_assert(std::same_as<decltype(std::declval<const Http1ChunkDecodeFailure&>().protocolError()),
-    ruvia::HttpProtocolError>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace
 

@@ -40,7 +40,7 @@ WebSocketLivenessDecision decide(const WebSocketLifecycleOptions& opts, WsLivene
 }  // namespace
 
 RUVIA_TEST(ws_heartbeat_config_is_a_plain_optional_value) {
-    static_assert(std::is_aggregate_v<ruvia::WebSocketHeartbeatConfig>);
+
     const ruvia::WebSocketHeartbeatConfig disabled;
     RUVIA_CHECK(!disabled.pingInterval.has_value());
 }

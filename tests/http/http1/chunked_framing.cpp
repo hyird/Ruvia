@@ -10,10 +10,9 @@
 #include <string_view>
 #include <utility>
 
-template <typename T>
-concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) { std::move(header).view(); };
 
-static_assert(!ExposesRvalueHttp1ChunkHeaderView<ruvia::detail::Http1ChunkHeader>);
+
+
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
     const ruvia::detail::Http1ChunkHeader zero(0);

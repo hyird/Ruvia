@@ -33,40 +33,20 @@ using ruvia::HttpClientRequestContentSignal;
 using ruvia::HttpClientResponseHead;
 using ruvia::HttpProtocolVersion;
 
-template <typename T>
-concept HasAnyRvalueHttp1ClientResponseParseAccessor =
-    requires(T&& result) { std::move(result).needMore(); } ||
-    requires(T&& result) { std::move(result).parsed(); } ||
-    requires(const T&& result) { std::move(result).parsed(); } ||
-    requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
-    requires(T&& plan) { std::move(plan).informational(); } ||
-    requires(T&& plan) { std::move(plan).withoutContent(); } ||
-    requires(T&& plan) { std::move(plan).zeroContent(); } ||
-    requires(T&& plan) { std::move(plan).knownLength(); } ||
-    requires(T&& plan) { std::move(plan).chunked(); } ||
-    requires(T&& plan) { std::move(plan).closeDelimited(); } ||
-    requires(T&& plan) { std::move(plan).connectTunnel(); } ||
-    requires(T&& plan) { std::move(plan).protocolUpgrade(); };
 
-template <typename T>
-concept HasAnyRvalueHttp1ParsedClientResponseBorrow = requires(T&& parsed) {
-    std::move(parsed).head();
-} || requires(T&& parsed) { std::move(parsed).plan(); };
 
-static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<Http1ClientResponseParseResult>);
-static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<ruvia::Http1ClientResponsePlan>);
-static_assert(
-    !HasAnyRvalueHttp1ClientResponsePlanAccessor<ruvia::Http1ClientResponseWithZeroContent>);
-static_assert(!HasAnyRvalueHttp1ParsedClientResponseBorrow<Http1ParsedClientResponseHead>);
 
-template <typename Access>
-concept CanMutateHttpClientResponseHeadStatus =
-    requires(HttpClientResponseHead& head) { Access::setStatus(head, std::uint16_t{200}); };
 
-static_assert(!CanMutateHttpClientResponseHeadStatus<ruvia::detail::HttpClientResponseHeadAccess>);
+
+
+
+
+
+
+
+
+
 
 inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire,
     Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse,
@@ -221,78 +201,53 @@ private:
     std::size_t allocationCount_{0};
 };
 
-template <typename T>
-concept HasResponsePlanMode = requires(const T& value) { value.mode(); };
 
-template <typename T>
-concept HasResponseConnectionDisposition =
-    requires(const T& value) { value.connectionDisposition(); };
 
-template <typename T>
-concept HasResponseContentLength = requires(const T& value) { value.contentLength(); };
 
-template <typename T>
-concept HasResponseTransferCodings = requires(const T& value) {
-    { value.transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
-} && requires(const T&& value) {
-    { std::move(value).transferCodings() } -> std::same_as<ruvia::HttpTransferCodings>;
-};
 
-template <typename T>
-concept HasResponsePersistence = requires(const T& value) { value.persistence(); };
 
-template <typename T>
-concept ExposesAnyRvalueHttpClientOwnedView = requires(T&& value) { std::move(value).name(); } ||
-                                              requires(T&& value) { std::move(value).value(); } ||
-                                              requires(T&& value) { std::move(value).headers(); } ||
-                                              requires(T&& value) { std::move(value).body(); };
 
-template <typename T>
-concept HasHttpClientResponseBody = requires(const T& head) {
-    { head.body() } -> std::same_as<std::string_view>;
-};
 
-static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientResponseHeader>);
-static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::HttpClientResponseHead>);
-static_assert(!HasHttpClientResponseBody<ruvia::HttpClientResponseHead>);
-static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::Http1ClientChunkedResponse>);
-static_assert(!ExposesAnyRvalueHttpClientOwnedView<ruvia::Http1ClientCloseDelimitedResponse>);
 
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientResponsePlan>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientInformationalResponse>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientResponseWithoutContent>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientResponseWithZeroContent>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientChunkedResponse>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientCloseDelimitedResponse>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientConnectTunnel>);
-static_assert(!std::is_default_constructible_v<ruvia::Http1ClientProtocolUpgrade>);
-static_assert(!HasResponsePlanMode<ruvia::Http1ClientResponsePlan>);
-static_assert(!HasResponseConnectionDisposition<ruvia::Http1ClientResponsePlan>);
-static_assert(!HasResponseContentLength<ruvia::Http1ClientResponsePlan>);
-static_assert(!HasResponseTransferCodings<ruvia::Http1ClientResponsePlan>);
-static_assert(HasResponseContentLength<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(!HasResponseContentLength<ruvia::Http1ClientChunkedResponse>);
-static_assert(!HasResponseContentLength<ruvia::Http1ClientCloseDelimitedResponse>);
-static_assert(HasResponseTransferCodings<ruvia::Http1ClientChunkedResponse>);
-static_assert(HasResponseTransferCodings<ruvia::Http1ClientCloseDelimitedResponse>);
-static_assert(!HasResponseTransferCodings<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(HasResponsePersistence<ruvia::Http1ClientResponseWithoutContent>);
-static_assert(HasResponsePersistence<ruvia::Http1ClientKnownLengthResponse>);
-static_assert(HasResponsePersistence<ruvia::Http1ClientChunkedResponse>);
-static_assert(!HasResponsePersistence<ruvia::Http1ClientCloseDelimitedResponse>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().zeroContent()),
-        const ruvia::Http1ClientResponseWithZeroContent*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().knownLength()),
-        const ruvia::Http1ClientKnownLengthResponse*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().connectTunnel()),
-        const ruvia::Http1ClientConnectTunnel*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::Http1ClientResponsePlan&>().protocolUpgrade()),
-        const ruvia::Http1ClientProtocolUpgrade*>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 }  // namespace http_client_response_test
 

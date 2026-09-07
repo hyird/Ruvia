@@ -26,11 +26,9 @@ using ruvia::detail::http2OnDecodedInitialHeader;
 using ruvia::detail::Http2StreamHeaderDecodeTransaction;
 using ruvia::detail::Http2StreamState;
 
-template <typename T>
-concept HasAnyRvalueHpackDecodeAccessor = requires(T&& result) { std::move(result).decoded(); } ||
-                                          requires(T&& result) { std::move(result).failure(); };
 
-static_assert(!HasAnyRvalueHpackDecodeAccessor<HpackDecodeResult>);
+
+
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;

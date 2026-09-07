@@ -30,14 +30,14 @@ using ruvia::BodyReader;
 using ruvia::MultipartReader;
 using ruvia::Task;
 
-static_assert(!std::is_copy_constructible_v<ruvia::MultipartParser>);
-static_assert(!std::is_copy_assignable_v<ruvia::MultipartParser>);
-static_assert(!std::is_move_constructible_v<ruvia::MultipartParser>);
-static_assert(!std::is_move_assignable_v<ruvia::MultipartParser>);
-static_assert(!std::is_copy_constructible_v<MultipartReader>);
-static_assert(!std::is_copy_assignable_v<MultipartReader>);
-static_assert(!std::is_move_constructible_v<MultipartReader>);
-static_assert(!std::is_move_assignable_v<MultipartReader>);
+
+
+
+
+
+
+
+
 
 // A BodyReader source that yields a fixed list of chunks, then end-of-body. The
 // chunks vector must outlive the reads (string_views point into it).

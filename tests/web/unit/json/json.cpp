@@ -15,18 +15,15 @@
 
 namespace {
 
-template <typename Input>
-concept ConstructsJsonScanner =
-    requires(Input&& input) { ruvia::detail::JsonScanner(std::forward<Input>(input)); };
 
-static_assert(!ConstructsJsonScanner<std::string>);
-static_assert(!ConstructsJsonScanner<const std::string>);
-static_assert(!ConstructsJsonScanner<std::pmr::string>);
-static_assert(ConstructsJsonScanner<std::string&>);
-static_assert(ConstructsJsonScanner<std::pmr::string&>);
-static_assert(ConstructsJsonScanner<std::string_view>);
-static_assert(!std::constructible_from<ruvia::detail::JsonStringToken, std::string_view,
-    ruvia::detail::JsonStringEncoding>);
+
+
+
+
+
+
+
+
 
 std::optional<std::pmr::string> decodeJson(std::string_view raw) {
     return ruvia::detail::decodeJsonString(raw, std::pmr::get_default_resource());

@@ -22,26 +22,16 @@ using ruvia::Http1InterimResponseWriter;
 using ruvia::HttpHeaderView;
 using ruvia::HttpInterimResponseHead;
 
-template <typename T>
-concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
-    requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) {
-        std::move(result).prepared();
-    } || requires(T&& result) { std::move(result).failure(); };
 
-template <typename T>
-concept HasResultKindDiscriminator = requires(const T& result) { result.kind(); };
 
-template <typename T>
-concept HasBooleanFinalConnectionClose =
-    requires(const T& prepared) { prepared.requiresFinalConnectionClose(); };
 
-static_assert(
-    !HasAnyRvalueHttp1InterimResponsePrepareAccessor<ruvia::Http1InterimResponsePrepareResult>);
-static_assert(!HasResultKindDiscriminator<ruvia::Http1InterimResponsePrepareResult>);
-static_assert(!HasBooleanFinalConnectionClose<ruvia::PreparedHttp1InterimResponse>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::PreparedHttp1InterimResponse&>().connectionDisposition()),
-    Http1InterimConnectionDisposition>);
+
+
+
+
+
+
+
 
 [[nodiscard]] bool unchanged(const std::array<char, 64>& buffer, char sentinel) {
     return std::ranges::all_of(buffer, [sentinel](char value) { return value == sentinel; });

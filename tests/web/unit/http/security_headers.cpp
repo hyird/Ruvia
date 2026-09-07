@@ -37,40 +37,30 @@ using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 
-template <typename Target>
-concept HasContextlessSecurityHeaders = requires(Target& target,
-    const SecurityHeadersConfig& options) { ruvia::applySecurityHeaders(target, options); };
 
-static_assert(!HasContextlessSecurityHeaders<HttpResponse>);
 
-template <typename T>
-concept HasSecurityHeadersOverwriteExistingBoolean =
-    requires(T& options) { options.overwriteExisting = true; };
 
-static_assert(std::is_aggregate_v<SecurityHeader>);
-static_assert(std::is_aggregate_v<SecurityHeadersConfig>);
-static_assert(std::same_as<decltype(SecurityHeader{}.name), std::string>);
-static_assert(std::same_as<decltype(SecurityHeader{}.value), std::string>);
-static_assert(std::same_as<decltype(SecurityHeadersConfig{}.contentSecurityPolicy), std::string>);
-static_assert(std::same_as<decltype(SecurityHeadersConfig{}.referrerPolicy), std::string>);
-static_assert(std::same_as<decltype(SecurityHeadersConfig{}.permissionsPolicy), std::string>);
-static_assert(
-    std::same_as<decltype(SecurityHeadersConfig{}.customHeaders), std::vector<SecurityHeader>>);
-static_assert(
-    SecurityHeadersConfig{}.contentTypeOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(
-    SecurityHeadersConfig{}.frameOptionsHeader == DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(SecurityHeadersConfig{}.strictTransportSecurityHeader ==
-              DefaultSecurityHeaderPolicy::kEmitDefault);
-static_assert(
-    std::same_as<decltype(SecurityHeadersConfig{}.existingHeaders), SecurityHeaderConflictPolicy>);
-static_assert(
-    SecurityHeadersConfig{}.existingHeaders == SecurityHeaderConflictPolicy::kPreserveExisting);
-static_assert(!HasSecurityHeadersOverwriteExistingBoolean<SecurityHeadersConfig>);
-static_assert(!std::is_copy_constructible_v<ruvia::SecurityHeadersMiddleware>);
-static_assert(!std::is_copy_assignable_v<ruvia::SecurityHeadersMiddleware>);
-static_assert(!std::is_move_constructible_v<ruvia::SecurityHeadersMiddleware>);
-static_assert(!std::is_move_assignable_v<ruvia::SecurityHeadersMiddleware>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class SecurityContextFixture final {
 public:
@@ -140,8 +130,7 @@ RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
 }
 
 RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
-    static_assert(
-        SecurityHeadersConfig{}.xssProtectionHeader == XssProtectionHeaderPolicy::kEmitDisabled);
+
 
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{

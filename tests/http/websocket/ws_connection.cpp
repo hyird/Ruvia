@@ -57,107 +57,63 @@ private:
     bool reject_{false};
 };
 
-template <typename T>
-concept HasLooseWsEventFields = requires(T& event) {
-    event.kind = WsEventKind::kMessage;
-    event.opcode = WebSocketOpcode::kText;
-    event.payload = std::string_view{};
-    event.closeCode = std::uint16_t{};
-};
 
-template <typename T>
-concept HasAnyRvalueWsEventBorrow = requires(T&& event) { std::move(event).message(); } ||
-                                    requires(T&& event) { std::move(event).ping(); } ||
-                                    requires(T&& event) { std::move(event).pong(); } ||
-                                    requires(T&& event) { std::move(event).close(); } ||
-                                    requires(T&& event) { std::move(event).protocolError(); } ||
-                                    requires(T&& event) { std::move(event).transportEnd(); };
 
-template <typename T>
-concept ExposesRvalueWsConnectionStorage = requires(T&& connection) {
-    std::move(connection).poll();
-} || requires(T&& connection) { std::move(connection).outputPlan(); };
 
-static_assert(!HasAnyRvalueWsEventBorrow<WsEvent>);
-static_assert(!ExposesRvalueWsConnectionStorage<WsConnection>);
 
-template <typename T>
-concept HasWsCloseCode = requires(const T& event) {
-    { event.closeCode() } -> std::same_as<std::uint16_t>;
-};
 
-template <typename T>
-concept HasWsPayload = requires(const T& event) {
-    { event.payload() } -> std::same_as<std::string_view>;
-};
 
-template <typename T>
-concept HasWsReason = requires(const T& event) {
-    { event.reason() } -> std::same_as<std::string_view>;
-};
 
-template <typename T>
-concept HasWsSubmitMessageAlias = requires(
-    T& connection) { connection.submitMessage(WebSocketOpcode::kText, std::string_view{}); };
 
-template <typename T>
-concept HasWsSubmitPingAlias =
-    requires(T& connection) { connection.submitPing(std::string_view{}); };
 
-template <typename T>
-concept HasWsSubmitPongAlias =
-    requires(T& connection) { connection.submitPong(std::string_view{}); };
 
-template <typename T>
-concept HasWsApplicationFrameStateSideChannel =
-    requires(const T& connection) { connection.acceptsApplicationFrames(); };
 
-template <typename T>
-concept HasWsEndsTransportAlias = requires(const T& plan) { plan.endsTransport(); };
 
-template <typename T>
-concept HasWsTransportEndPendingSideChannel =
-    requires(const T& connection) { connection.transportEndPending(); };
 
-template <typename T>
-concept HasWsClosedStateSideChannel = requires(const T& connection) { connection.closed(); };
 
-template <typename T>
-concept HasWsClosePhaseSideChannel = requires(const T& connection) { connection.closePhase(); };
 
-static_assert(std::same_as<decltype(std::declval<WsConnection&>().poll()), std::optional<WsEvent>>);
-static_assert(!std::default_initializable<WsEvent>);
-static_assert(!HasLooseWsEventFields<WsEvent>);
-static_assert(!std::constructible_from<WsConnection, std::pmr::string&, std::size_t>);
-static_assert(std::constructible_from<WsConnection, std::pmr::string&, ProtocolByteLimit>);
-static_assert(!HasWsCloseCode<WsMessageEvent>);
-static_assert(HasWsCloseCode<WsCloseEvent>);
-static_assert(HasWsCloseCode<WsProtocolErrorEvent>);
-static_assert(HasWsPayload<WsMessageEvent>);
-static_assert(!HasWsPayload<WsCloseEvent>);
-static_assert(HasWsReason<WsCloseEvent>);
-static_assert(!HasWsReason<WsProtocolErrorEvent>);
-static_assert(!std::constructible_from<WsConnection, std::pmr::string&, std::size_t, bool>);
-static_assert(!HasWsSubmitMessageAlias<WsConnection>);
-static_assert(!HasWsSubmitPingAlias<WsConnection>);
-static_assert(!HasWsSubmitPongAlias<WsConnection>);
-static_assert(!HasWsApplicationFrameStateSideChannel<WsConnection>);
-static_assert(!HasWsEndsTransportAlias<ruvia::detail::WsOutputPlan>);
-static_assert(!HasWsTransportEndPendingSideChannel<WsConnection>);
-static_assert(!HasWsClosedStateSideChannel<WsConnection>);
-static_assert(!HasWsClosePhaseSideChannel<WsConnection>);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::detail::WsOutputPlan&>().disposition()),
-        WsTransportDisposition>);
-static_assert(std::same_as<decltype(std::declval<WsConnection&>().submitFrame(
-                               WebSocketOpcode::kText, std::string_view{})),
-    WsFrameSubmitStatus>);
-static_assert(std::same_as<decltype(std::declval<WsConnection&>().submitClose(
-                               std::uint16_t{}, std::string_view{})),
-    WsCloseSubmitStatus>);
-static_assert(
-    std::same_as<decltype(std::declval<const WsConnection&>().livenessMode()), WsLivenessMode>);
-static_assert(std::same_as<decltype(std::declval<WsConnection&>().abort()), WsAbortDisposition>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // Build a masked client->server frame (RFC 6455 §5.1): FIN/opcode byte, MASK bit + a
 // short length (<=125 for tests), a 4-byte mask, then the masked payload.

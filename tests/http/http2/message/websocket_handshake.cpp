@@ -23,13 +23,11 @@ using ruvia::detail::Http2StreamState;
 using ruvia::detail::makeWebSocketServerNegotiation;
 using ruvia::detail::validateHttp2WebSocketHandshake;
 
-template <typename T>
-concept ExposesRvalueWebSocketServerSubprotocol =
-    requires(T&& negotiation) { std::move(negotiation).subprotocol(); };
 
-static_assert(!ExposesRvalueWebSocketServerSubprotocol<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(!std::copy_constructible<ruvia::detail::WebSocketServerNegotiation>);
-static_assert(std::move_constructible<ruvia::detail::WebSocketServerNegotiation>);
+
+
+
+
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;

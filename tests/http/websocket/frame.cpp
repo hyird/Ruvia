@@ -35,74 +35,49 @@ using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketTryReadFrame;
 
-template <typename T>
-concept HasFrameReadStatusField = requires(const T& result) { result.status; };
 
-template <typename T>
-concept HasFrameReadStatusAccessor = requires(const T& result) { result.status(); };
 
-template <typename T>
-concept HasRequiredBytesField = requires(const T& result) { result.requiredBytes; };
 
-template <typename T>
-concept HasCleanEofAllowedField = requires(const T& result) { result.cleanEofAllowed; };
 
-template <typename T>
-concept HasFrameReadError = requires(const T& result) {
-    { result.error() } -> std::same_as<WebSocketProtocolFailure>;
-};
 
-template <typename T>
-concept HasAnyRvalueFrameReadAccessor = requires(T&& result) { std::move(result).needInput(); } ||
-                                        requires(T&& result) { std::move(result).frame(); } ||
-                                        requires(T&& result) { std::move(result).failure(); };
 
-template <typename String>
-concept AcceptsTemporaryTextFramePayload =
-    requires(String&& payload) { WebSocketFrameView::text(std::move(payload), true); };
 
-template <typename String>
-concept AcceptsTemporaryBinaryFramePayload =
-    requires(String&& payload) { WebSocketFrameView::binary(std::move(payload), true); };
 
-template <typename String>
-concept AcceptsTemporaryContinuationFramePayload =
-    requires(String&& payload) { WebSocketFrameView::continuation(std::move(payload), true); };
 
-template <typename String>
-concept AcceptsTemporaryCloseFramePayload =
-    requires(String&& payload) { WebSocketFrameView::close(std::move(payload)); };
 
-template <typename String>
-concept AcceptsTemporaryPingFramePayload =
-    requires(String&& payload) { WebSocketFrameView::ping(std::move(payload)); };
 
-template <typename String>
-concept AcceptsTemporaryPongFramePayload =
-    requires(String&& payload) { WebSocketFrameView::pong(std::move(payload)); };
 
-static_assert(!std::default_initializable<WebSocketFrameReadResult>);
-static_assert(!std::default_initializable<WebSocketFrameStart>);
-static_assert(!std::default_initializable<WebSocketFrameView>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().needInput()),
-    const ruvia::detail::WebSocketFrameNeedInput*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().frame()),
-    const ruvia::detail::WebSocketFrameView*>);
-static_assert(std::same_as<decltype(std::declval<const WebSocketFrameReadResult&>().failure()),
-    const ruvia::detail::WebSocketFrameReadFailure*>);
-static_assert(!HasFrameReadStatusField<WebSocketFrameReadResult>);
-static_assert(!HasFrameReadStatusAccessor<WebSocketFrameReadResult>);
-static_assert(!HasRequiredBytesField<WebSocketFrameReadResult>);
-static_assert(!HasCleanEofAllowedField<WebSocketFrameReadResult>);
-static_assert(!HasFrameReadError<WebSocketFrameReadResult>);
-static_assert(!HasAnyRvalueFrameReadAccessor<WebSocketFrameReadResult>);
-static_assert(HasFrameReadError<ruvia::detail::WebSocketFrameReadFailure>);
-static_assert(!AcceptsTemporaryTextFramePayload<std::string>);
-static_assert(!AcceptsTemporaryBinaryFramePayload<std::string>);
-static_assert(!AcceptsTemporaryContinuationFramePayload<std::string>);
-static_assert(!AcceptsTemporaryCloseFramePayload<std::string>);
-static_assert(!AcceptsTemporaryPingFramePayload<std::string>);
-static_assert(!AcceptsTemporaryPongFramePayload<std::string>);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 std::pmr::string maskedFrame(unsigned char first, std::string_view payload) {
     constexpr std::array<unsigned char, 4> mask{0x12, 0x34, 0x56, 0x78};
