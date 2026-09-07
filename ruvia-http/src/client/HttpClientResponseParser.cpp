@@ -2,8 +2,6 @@
 
 #include "ruvia/http/detail/client/HttpClientResponseHead.h"
 
-#include <variant>
-
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/client/HttpClientResponseLimits.h"
@@ -126,16 +124,16 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     // shape as every preceding line except that it has no trailing delimiter.
     const auto headSection = buffer.substr(0, headerBytes - 4);
     auto parsedHead = detail::parseHttp1ClientResponseHeadFields(headSection, exchangeState_);
-    if (const auto* parseError = std::get_if<Http1ClientResponseParseError>(&parsedHead)) {
-        return fail(*parseError);
+    if (!parsedHead) {
+        return fail(parsedHead.error());
     }
-    const auto& parsed = std::get<detail::Http1ClientParsedResponseHead>(parsedHead);
+    const auto& parsed = *parsedHead;
 
     auto planning = detail::planHttp1ClientResponse(exchangeState_, parsed, requestContentPhase_);
-    if (const auto* planningError = std::get_if<Http1ClientResponseParseError>(&planning)) {
-        return fail(*planningError);
+    if (!planning) {
+        return fail(planning.error());
     }
-    auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
+    auto plan = std::move(*planning);
     const auto* const informationalPlan = plan.informational();
     const bool informational = informationalPlan != nullptr;
     const bool closingInformational =

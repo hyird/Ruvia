@@ -1,8 +1,8 @@
 #pragma once
 
+#include <expected>
 #include <optional>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/MultipartParser.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -116,12 +116,12 @@ private:
 class HttpMultipartPartHeaderParseResult final {
 public:
     [[nodiscard]] constexpr const HttpMultipartPartHeaders* headers() const& noexcept {
-        return std::get_if<HttpMultipartPartHeaders>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const HttpMultipartPartHeaders* headers() const&& = delete;
 
     [[nodiscard]] constexpr const HttpMultipartPartHeaderParseFailure* failure() const& noexcept {
-        return std::get_if<HttpMultipartPartHeaderParseFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const HttpMultipartPartHeaderParseFailure* failure() const&& = delete;
 
@@ -129,14 +129,14 @@ private:
     friend HttpMultipartPartHeaderParseResult httpParseMultipartPartHeaders(
         std::string_view) noexcept;
 
-    using Value = std::variant<HttpMultipartPartHeaders, HttpMultipartPartHeaderParseFailure>;
+    using Value = std::expected<HttpMultipartPartHeaders, HttpMultipartPartHeaderParseFailure>;
 
     explicit constexpr HttpMultipartPartHeaderParseResult(HttpMultipartPartHeaders headers) noexcept
         : value_(headers) {}
 
     explicit constexpr HttpMultipartPartHeaderParseResult(
         HttpMultipartPartHeaderParseFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static constexpr HttpMultipartPartHeaderParseResult makeHeaders(
         std::string_view name, std::string_view filename, std::string_view contentType,

@@ -152,8 +152,8 @@ void TaskScope::finish(Node* node) noexcept {
     try {
         node->task.handle_.promise().result();
     } catch (...) {
-        if (std::holds_alternative<TaskScopeSuccess>(outcome_)) {
-            outcome_.template emplace<TaskScopeFailure>(std::current_exception());
+        if (outcome_) {
+            outcome_ = std::unexpected(TaskScopeFailure(std::current_exception()));
             requestStop();
         }
     }
@@ -182,8 +182,8 @@ void TaskScope::finish(Node* node) noexcept {
 }
 
 void TaskScope::rethrowFailure() {
-    if (const auto* failure = std::get_if<TaskScopeFailure>(&outcome_)) {
-        std::rethrow_exception(failure->exception());
+    if (!outcome_) {
+        std::rethrow_exception(outcome_.error().exception());
     }
 }
 

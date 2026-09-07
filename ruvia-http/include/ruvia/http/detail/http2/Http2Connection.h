@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -136,26 +137,26 @@ public:
     Http2WebSocketHandshakeSubmitResult& operator=(Http2WebSocketHandshakeSubmitResult&&) = delete;
 
     [[nodiscard]] const WebSocketServerNegotiation* submitted() const& noexcept {
-        return std::get_if<WebSocketServerNegotiation>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const WebSocketServerNegotiation* submitted() const&& = delete;
 
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure* failure() const& noexcept {
-        return std::get_if<Http2WebSocketHandshakeSubmitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<WebSocketServerNegotiation, Http2WebSocketHandshakeSubmitFailure>;
+    using Value = std::expected<WebSocketServerNegotiation, Http2WebSocketHandshakeSubmitFailure>;
 
     explicit Http2WebSocketHandshakeSubmitResult(WebSocketServerNegotiation&& negotiation) noexcept
         : value_(std::move(negotiation)) {}
 
     explicit Http2WebSocketHandshakeSubmitResult(
         Http2WebSocketHandshakeSubmitFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult makeSubmitted(
         WebSocketServerNegotiation&& negotiation) noexcept {
@@ -227,23 +228,25 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return std::get_if<Http2SubmittedRequestHead>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const&& = delete;
 
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
+    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
 
-    template <typename Alternative>
-    explicit constexpr Http2RequestHeadSubmitResult(Alternative alternative) noexcept
-        : value_(alternative) {}
+    explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead submitted) noexcept
+        : value_(submitted) {}
+
+    explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure failure) noexcept
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
         std::uint32_t streamId) noexcept {
@@ -352,23 +355,25 @@ template <typename Plan>
 class Http2ResponseHeadSubmitResult final {
 public:
     [[nodiscard]] const Plan* submitted() const& noexcept {
-        return std::get_if<Plan>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const Plan* submitted() const&& = delete;
 
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return std::get_if<Http2ResponseHeadSubmitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
 
-    using Value = std::variant<Plan, Http2ResponseHeadSubmitFailure>;
+    using Value = std::expected<Plan, Http2ResponseHeadSubmitFailure>;
 
-    template <typename Alternative>
-    explicit Http2ResponseHeadSubmitResult(Alternative alternative)
-        : value_(std::move(alternative)) {}
+    explicit Http2ResponseHeadSubmitResult(Plan plan)
+        : value_(std::move(plan)) {}
+
+    explicit Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http2ResponseHeadSubmitResult makeSubmitted(Plan plan) {
         return Http2ResponseHeadSubmitResult(std::move(plan));

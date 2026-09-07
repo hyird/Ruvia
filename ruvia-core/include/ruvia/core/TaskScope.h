@@ -2,6 +2,7 @@
 
 #include <coroutine>
 #include <cstddef>
+#include <expected>
 #include <exception>
 #include <memory_resource>
 #include <utility>
@@ -117,7 +118,7 @@ private:
 
     using Lifecycle = std::variant<TaskScopeEmpty, TaskScopeOpen, TaskScopeJoinReserved,
         TaskScopeJoining, TaskScopeJoined>;
-    using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;
+    using Outcome = std::expected<TaskScopeSuccess, TaskScopeFailure>;
 
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;

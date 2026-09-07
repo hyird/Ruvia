@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -197,21 +198,21 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return std::get_if<Http2SubmittedRequestHead>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const Http2SubmittedRequestHead* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const Http2RequestHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
-    using Value = std::variant<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
+    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
     explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead value) noexcept
         : value_(value) {}
     explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure value) noexcept
-        : value_(value) {}
+        : value_(std::unexpected(value)) {}
     [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
         std::uint32_t streamId) noexcept {
         return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));

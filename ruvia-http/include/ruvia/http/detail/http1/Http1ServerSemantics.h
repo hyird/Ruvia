@@ -13,10 +13,10 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstdint>
+#include <expected>
 #include <exception>
 #include <optional>
 #include <utility>
-#include <variant>
 
 namespace ruvia::detail {
 
@@ -160,12 +160,12 @@ private:
 class Http1FinalResponseCommitResult final {
 public:
     [[nodiscard]] const Http1ServerConnectionPlan* committed() const& noexcept {
-        return std::get_if<Http1ServerConnectionPlan>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const Http1ServerConnectionPlan* committed() const&& = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure* failure() const& noexcept {
-        return std::get_if<Http1FinalResponseCommitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] const Http1FinalResponseCommitFailure* failure() const&& = delete;
 
@@ -173,11 +173,13 @@ private:
     friend Http1FinalResponseCommitResult http1CommitFinalResponse(
         HttpResponse&, Http1ServerConnectionPlan);
 
-    using Value = std::variant<Http1ServerConnectionPlan, Http1FinalResponseCommitFailure>;
+    using Value = std::expected<Http1ServerConnectionPlan, Http1FinalResponseCommitFailure>;
 
-    template <typename Alternative>
-    explicit Http1FinalResponseCommitResult(Alternative alternative) noexcept
-        : value_(alternative) {}
+    explicit Http1FinalResponseCommitResult(Http1ServerConnectionPlan connectionPlan) noexcept
+        : value_(connectionPlan) {}
+
+    explicit Http1FinalResponseCommitResult(Http1FinalResponseCommitFailure failure) noexcept
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http1FinalResponseCommitResult committed(
         Http1ServerConnectionPlan connectionPlan) noexcept {
@@ -287,17 +289,17 @@ private:
 class PreparedHttp1ResponseStreamResult final {
 public:
     [[nodiscard]] const PreparedHttp1ResponseStream* prepared() const& noexcept {
-        return std::get_if<PreparedHttp1ResponseStream>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const PreparedHttp1ResponseStream* prepared() const&& = delete;
 
     [[nodiscard]] PreparedHttp1ResponseStream* prepared() & noexcept {
-        return std::get_if<PreparedHttp1ResponseStream>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] PreparedHttp1ResponseStream* prepared() && = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure* failure() const& noexcept {
-        return std::get_if<Http1FinalResponseCommitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] const Http1FinalResponseCommitFailure* failure() const&& = delete;
 
@@ -307,11 +309,13 @@ private:
     friend PreparedHttp1ResponseStreamResult prepareHttp1KnownLengthResponseStreamHead(
         HttpResponse, std::uint64_t, ResponseStreamKind, const Http1ResponseStreamPlan&);
 
-    using Value = std::variant<PreparedHttp1ResponseStream, Http1FinalResponseCommitFailure>;
+    using Value = std::expected<PreparedHttp1ResponseStream, Http1FinalResponseCommitFailure>;
 
-    template <typename Alternative>
-    explicit PreparedHttp1ResponseStreamResult(Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+    explicit PreparedHttp1ResponseStreamResult(PreparedHttp1ResponseStream prepared) noexcept
+        : value_(std::move(prepared)) {}
+
+    explicit PreparedHttp1ResponseStreamResult(Http1FinalResponseCommitFailure failure) noexcept
+        : value_(std::unexpected(failure)) {}
 
     Value value_;
 };

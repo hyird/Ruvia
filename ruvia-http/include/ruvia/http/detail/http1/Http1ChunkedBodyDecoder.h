@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -195,12 +196,12 @@ public:
           trailerRole_(trailerRole) {}
 
     [[nodiscard]] Http1ChunkDecodeResult decode(std::string_view available) {
-        if (const auto* failure = std::get_if<Http1ChunkDecodeError>(&state_)) {
-            return Http1ChunkDecodeResult::makeFailure(0, *failure);
+        if (!state_) {
+            return Http1ChunkDecodeResult::makeFailure(0, state_.error());
         }
         std::size_t cursor = 0;
         for (;;) {
-            switch (std::get<ProgressState>(state_)) {
+            switch (*state_) {
                 case ProgressState::kSizeLine: {
                     const auto lineEnd = available.find("\r\n", cursor);
                     if (lineEnd == std::string_view::npos) {
@@ -314,7 +315,7 @@ private:
     // Progress and terminal failure are mutually exclusive. Keeping the exact
     // failure in the state value makes repeated decode() calls stable without
     // a kFailed marker plus a separately combinable error side channel.
-    using State = std::variant<ProgressState, Http1ChunkDecodeError>;
+    using State = std::expected<ProgressState, Http1ChunkDecodeError>;
 
     [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(std::size_t bytes) noexcept {
         if (encodedOverheadBytes_ > kMaxHttpHeaderBytes ||
@@ -345,7 +346,7 @@ private:
 
     [[nodiscard]] Http1ChunkDecodeResult fail(
         std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept {
-        state_ = error;
+        state_ = std::unexpected(error);
         return Http1ChunkDecodeResult::makeFailure(consumedBytes, error);
     }
 

@@ -11,12 +11,12 @@
 
 #include <algorithm>
 #include <concepts>
+#include <expected>
 #include <exception>
 #include <ranges>
 #include <span>
 #include <string_view>
 #include <type_traits>
-#include <variant>
 
 namespace ruvia::detail {
 
@@ -271,12 +271,12 @@ private:
 class HttpResponseTrailerSectionResult final {
 public:
     [[nodiscard]] const HttpResponseTrailerSection* section() const& noexcept {
-        return std::get_if<HttpResponseTrailerSection>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const HttpResponseTrailerSection* section() const&& = delete;
 
     [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const& noexcept {
-        return std::get_if<HttpResponseTrailerSectionFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] const HttpResponseTrailerSectionFailure* failure() const&& = delete;
 
@@ -284,11 +284,13 @@ private:
     friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
         std::span<const HttpHeaderView>) noexcept;
 
-    using Value = std::variant<HttpResponseTrailerSection, HttpResponseTrailerSectionFailure>;
+    using Value = std::expected<HttpResponseTrailerSection, HttpResponseTrailerSectionFailure>;
 
-    template <typename Alternative>
-    explicit HttpResponseTrailerSectionResult(Alternative alternative) noexcept
-        : value_(alternative) {}
+    explicit HttpResponseTrailerSectionResult(HttpResponseTrailerSection section) noexcept
+        : value_(section) {}
+
+    explicit HttpResponseTrailerSectionResult(HttpResponseTrailerSectionFailure failure) noexcept
+        : value_(std::unexpected(failure)) {}
 
     Value value_;
 };

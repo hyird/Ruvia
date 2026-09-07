@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/HttpContentCoding.h"
 
@@ -74,17 +74,17 @@ public:
     HttpContentEncodeResult& operator=(HttpContentEncodeResult&&) = delete;
 
     [[nodiscard]] HttpEncodedContent* encoded() & noexcept {
-        return std::get_if<HttpEncodedContent>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
 
     [[nodiscard]] const HttpEncodedContent* encoded() const& noexcept {
-        return std::get_if<HttpEncodedContent>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     HttpEncodedContent* encoded() && = delete;
     const HttpEncodedContent* encoded() const&& = delete;
 
     [[nodiscard]] const HttpContentEncodeFailure* failure() const& noexcept {
-        return std::get_if<HttpContentEncodeFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const HttpContentEncodeFailure* failure() const&& = delete;
 
@@ -92,7 +92,7 @@ private:
     friend HttpContentEncodeResult encodeHttpContent(
         HttpContentCoding, std::string_view, HttpContentEncodeOptions);
 
-    using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
+    using Value = std::expected<HttpEncodedContent, HttpContentEncodeFailure>;
 
     [[nodiscard]] static HttpContentEncodeResult makeEncoded(std::pmr::string bytes) noexcept {
         return HttpContentEncodeResult(HttpEncodedContent(std::move(bytes)));
@@ -107,7 +107,7 @@ private:
         : value_(std::move(encoded)) {}
 
     explicit HttpContentEncodeResult(HttpContentEncodeFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     Value value_;
 };
@@ -179,17 +179,17 @@ public:
     HttpContentDecodeResult& operator=(HttpContentDecodeResult&&) = delete;
 
     [[nodiscard]] HttpDecodedContent* decoded() & noexcept {
-        return std::get_if<HttpDecodedContent>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
 
     [[nodiscard]] const HttpDecodedContent* decoded() const& noexcept {
-        return std::get_if<HttpDecodedContent>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     HttpDecodedContent* decoded() && = delete;
     const HttpDecodedContent* decoded() const&& = delete;
 
     [[nodiscard]] const HttpContentDecodeFailure* failure() const& noexcept {
-        return std::get_if<HttpContentDecodeFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const HttpContentDecodeFailure* failure() const&& = delete;
 
@@ -198,7 +198,7 @@ private:
     friend HttpContentDecodeResult decodeHttpContent(
         HttpContentCoding, std::string_view, HttpContentDecodeOptions);
 
-    using Value = std::variant<HttpDecodedContent, HttpContentDecodeFailure>;
+    using Value = std::expected<HttpDecodedContent, HttpContentDecodeFailure>;
 
     [[nodiscard]] static HttpContentDecodeResult makeDecoded(std::pmr::string bytes) noexcept {
         return HttpContentDecodeResult(HttpDecodedContent(std::move(bytes)));
@@ -213,7 +213,7 @@ private:
         : value_(std::move(decoded)) {}
 
     explicit HttpContentDecodeResult(HttpContentDecodeFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     Value value_;
 };

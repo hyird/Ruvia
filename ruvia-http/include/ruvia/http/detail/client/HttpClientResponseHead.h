@@ -2,8 +2,8 @@
 
 #include <array>
 #include <cstddef>
+#include <expected>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpHeader.h"
@@ -44,11 +44,11 @@ struct Http1ClientParsedResponseHead final {
 };
 
 using Http1ClientStatusLineParseResult =
-    std::variant<Http1ClientParsedStatusLine, Http1ClientResponseParseError>;
+    std::expected<Http1ClientParsedStatusLine, Http1ClientResponseParseError>;
 using Http1ClientResponseHeadParseResult =
-    std::variant<Http1ClientParsedResponseHead, Http1ClientResponseParseError>;
+    std::expected<Http1ClientParsedResponseHead, Http1ClientResponseParseError>;
 using Http1ClientResponsePlanningResult =
-    std::variant<Http1ClientResponsePlan, Http1ClientResponseParseError>;
+    std::expected<Http1ClientResponsePlan, Http1ClientResponseParseError>;
 
 // Parse the status line and header fields of one complete head section.
 [[nodiscard]] Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
