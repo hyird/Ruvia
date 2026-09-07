@@ -101,7 +101,7 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    // Leftmost is the original client; the rest are intermediate hops.
+    // 10.0.0.5 is the trusted hop and is skipped; 203.0.113.9 is the caller.
     (void)HttpRequestAccess::addHeader(
         request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9, 10.0.0.5"});
     (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "https"});
@@ -146,6 +146,116 @@ RUVIA_TEST(conn_info_prefers_rfc7239_forwarded_over_the_x_headers) {
     // Bracketed IPv6 with a port, unwrapped, and the X- header not consulted.
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("2001:db8::1"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
+}
+
+RUVIA_TEST(conn_info_forwarded_skips_client_prepended_hops) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    (void)HttpRequestAccess::addHeader(request,
+        HttpHeaderView{
+            "Forwarded", R"(for=198.51.100.1;proto=https, for=203.0.113.9;proto=http)"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
+}
+
+RUVIA_TEST(conn_info_forwarded_ignores_proto_on_prepended_hops) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // The last untrusted hop omitted proto. A prepended proto=https must not
+    // become the client scheme -- that is how a caller claims TLS.
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https, for=203.0.113.9"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
+    RUVIA_CHECK(info.viaTrustedProxy());
+}
+
+RUVIA_TEST(conn_info_forwarded_proto_is_case_insensitive) {
+    // RFC 7239 §5.4 proto tokens are ABNF strings, so "HTTPS" is "https".
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=HTTPS"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
+    RUVIA_CHECK(info.viaTrustedProxy());
+}
+
+RUVIA_TEST(conn_info_x_forwarded_proto_is_case_insensitive_and_uses_the_last_hop) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
+    // Some TLS-terminating proxies emit uppercase HTTPS. The last token is the
+    // hop that delivered the request; a client-prepended https must not win.
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"X-Forwarded-Proto", "http, HTTPS"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
+}
+
+RUVIA_TEST(conn_info_ignores_client_prepended_forwarding_hops) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"X-Forwarded-For", "198.51.100.1, 203.0.113.9"});
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"X-Forwarded-Proto", "https, http"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
 
 RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {

@@ -91,11 +91,14 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
             co_return;
         }
         const auto connection = getConnInfo(c);
+        // Secure follows the client's scheme, including TLS a trusted proxy
+        // terminated. tls() is this hop only; using it would omit Secure behind
+        // a plaintext reverse proxy and leave the token readable on HTTP.
         const CookieOptions options{
             .path = "/",
             .sameSite = CookieSameSite::kLax,
-            .secure = connection.tls() != nullptr ? CookieAttributePolicy::kEmit
-                                                  : CookieAttributePolicy::kOmit,
+            .secure = connection.scheme() == HttpScheme::kHttps ? CookieAttributePolicy::kEmit
+                                                                : CookieAttributePolicy::kOmit,
         };
         c.setCookie({.name = config_.cookieName, .value = token->value(), .attributes = options});
     }
