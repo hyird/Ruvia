@@ -55,9 +55,9 @@ RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
             byte = static_cast<char>(next());
         }
 
-        const auto method = sample % 3 == 0 ? HttpKnownMethod::kGet
-                          : sample % 3 == 1 ? HttpKnownMethod::kOptions
-                                            : HttpKnownMethod::kConnect;
+        const auto method = sample % 3 == 0   ? HttpKnownMethod::kGet
+                            : sample % 3 == 1 ? HttpKnownMethod::kOptions
+                                              : HttpKnownMethod::kConnect;
         RequestTargetView target;
         const auto accepted = parseRequestTarget(method, input, target);
         const auto authority = parseHttpAuthority(input);
@@ -73,9 +73,9 @@ RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
             continue;
         }
 
-        RUVIA_CHECK(target.query.empty() || input.find(target.query) != std::string::npos);
+        RUVIA_CHECK(target.query.empty() || input.contains(target.query));
         RUVIA_CHECK(
-            target.authority.empty() || input.find(target.authority) != std::string::npos);
+            target.authority.empty() || input.contains(target.authority));
         switch (target.form) {
             case HttpRequestTargetForm::kOrigin:
                 RUVIA_CHECK(target.scheme.empty());
@@ -87,7 +87,7 @@ RUVIA_TEST(request_target_parsers_handle_deterministic_arbitrary_bytes) {
                 RUVIA_CHECK(input.starts_with(target.scheme));
                 RUVIA_CHECK_EQ(target.defaultPort, httpUriSchemeDefaultPort(target.scheme));
                 RUVIA_CHECK(target.path.empty() || target.path == "/" || target.path == "*" ||
-                            input.find(target.path) != std::string::npos);
+                            input.contains(target.path));
                 break;
             case HttpRequestTargetForm::kAuthority:
                 RUVIA_CHECK(method == HttpKnownMethod::kConnect);

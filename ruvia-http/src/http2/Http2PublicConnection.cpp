@@ -889,8 +889,8 @@ bool Http2Connection::draining() const noexcept {
     return impl_->connection.draining();
 }
 std::optional<Http2ErrorCode> Http2Connection::connectionError() const noexcept {
-    const auto error = impl_->connection.connectionError();
-    return error ? std::optional<Http2ErrorCode>(toPublic(*error)) : std::nullopt;
+    return impl_->connection.connectionError().transform(
+        [](detail::Http2ErrorCode error) noexcept { return toPublic(error); });
 }
 
 }  // namespace ruvia

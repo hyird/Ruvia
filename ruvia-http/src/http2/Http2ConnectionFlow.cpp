@@ -295,8 +295,7 @@ void Http2Connection::releaseAllReceivedData(std::uint32_t streamId) {
 }
 
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
-    return std::ranges::find(pendingSends_, streamId, &Http2PendingSend::streamId) !=
-           pendingSends_.end();
+    return std::ranges::contains(pendingSends_, streamId, &Http2PendingSend::streamId);
 }
 
 void Http2Connection::queueConsumedDataCredit(Http2StreamState* stream, std::uint32_t bytes) {

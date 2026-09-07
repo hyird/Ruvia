@@ -6,27 +6,28 @@
 #include "ruvia/http/UrlEncoding.h"
 
 #include <system_error>
+#include <utility>
 
 namespace ruvia {
 namespace {
 
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAccept) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kAccept) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kAuthorization) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kAuthorization) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kContentEncoding) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kContentEncoding) + 1);
-static_assert(static_cast<std::size_t>(detail::RequestHeaderKind::kUserAgent) ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kAccept) ==
+              std::to_underlying(detail::RequestKnownHeader::kAccept) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kAuthorization) ==
+              std::to_underlying(detail::RequestKnownHeader::kAuthorization) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kContentEncoding) ==
+              std::to_underlying(detail::RequestKnownHeader::kContentEncoding) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kUserAgent) ==
+              std::to_underlying(detail::RequestKnownHeader::kUserAgent) + 1);
 static_assert(detail::kRequestHeaderKindCount ==
-              static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 2);
+              std::to_underlying(detail::RequestKnownHeader::kUserAgent) + 2);
 
 }  // namespace
 
 std::optional<std::string_view> HttpRequest::header(std::string_view name) const noexcept {
     const auto kind = detail::classifyRequestHeader(name);
     if (kind != detail::RequestHeaderKind::kOther) {
-        const auto knownSlot = static_cast<std::size_t>(kind) - 1;
+        const auto knownSlot = std::to_underlying(kind) - 1;
         const auto bit = std::uint32_t{1} << knownSlot;
         if ((cachedHeaderBits_ & bit) == 0) {
             return std::nullopt;

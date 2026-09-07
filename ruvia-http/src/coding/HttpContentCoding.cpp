@@ -104,7 +104,8 @@ HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noex
 
 HttpContentDecodeResult decodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
-    detail::ContentDecodeAttempt attempt = HttpContentDecodeError::kUnsupportedCoding;
+    detail::ContentDecodeAttempt attempt{
+        std::unexpect, HttpContentDecodeError::kUnsupportedCoding};
     switch (coding) {
         case HttpContentCoding::kGzip:
             attempt = detail::decodeGzipContent(input, options.maxDecodedBytes, options.resource);
@@ -117,7 +118,7 @@ HttpContentDecodeResult decodeHttpContent(
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > options.maxDecodedBytes) {
-                attempt = HttpContentDecodeError::kDecodedSizeExceeded;
+                attempt = std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
             } else {
                 attempt =
                     std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
@@ -125,15 +126,15 @@ HttpContentDecodeResult decodeHttpContent(
             break;
         }
     }
-    if (auto* decoded = std::get_if<std::pmr::string>(&attempt)) {
-        return HttpContentDecodeResult::makeDecoded(std::move(*decoded));
+    if (attempt) {
+        return HttpContentDecodeResult::makeDecoded(std::move(*attempt));
     }
-    return HttpContentDecodeResult::makeFailure(std::get<HttpContentDecodeError>(attempt));
+    return HttpContentDecodeResult::makeFailure(attempt.error());
 }
 
 HttpContentEncodeResult encodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options) {
-    detail::ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
+    detail::ContentEncodeAttempt attempt{std::unexpect, HttpContentEncodeError::kEncoderFailure};
     switch (coding) {
         case HttpContentCoding::kBrotli:
             attempt = detail::encodeBrotliContent(input, options.maxEncodedBytes, options.resource);
@@ -146,7 +147,7 @@ HttpContentEncodeResult encodeHttpContent(
             break;
         case HttpContentCoding::kIdentity: {
             if (input.size() > options.maxEncodedBytes) {
-                attempt = HttpContentEncodeError::kEncodedSizeExceeded;
+                attempt = std::unexpected(HttpContentEncodeError::kEncodedSizeExceeded);
             } else {
                 attempt =
                     std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
@@ -154,10 +155,10 @@ HttpContentEncodeResult encodeHttpContent(
             break;
         }
     }
-    if (auto* encoded = std::get_if<std::pmr::string>(&attempt)) {
-        return HttpContentEncodeResult::makeEncoded(std::move(*encoded));
+    if (attempt) {
+        return HttpContentEncodeResult::makeEncoded(std::move(*attempt));
     }
-    return HttpContentEncodeResult::makeFailure(std::get<HttpContentEncodeError>(attempt));
+    return HttpContentEncodeResult::makeFailure(attempt.error());
 }
 
 }  // namespace ruvia

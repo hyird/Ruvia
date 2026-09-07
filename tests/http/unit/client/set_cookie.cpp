@@ -62,7 +62,7 @@ RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
     const auto verifyBorrowedFields = [&](std::string_view input,
                                           const ruvia::HttpSetCookieView& parsed) {
         const auto isBorrowedInputText = [input](std::string_view value) {
-            return value.empty() || input.find(value) != std::string_view::npos;
+            return value.empty() || input.contains(value);
         };
         RUVIA_CHECK(isBorrowedInputText(parsed.name()));
         RUVIA_CHECK(isBorrowedInputText(parsed.value()));

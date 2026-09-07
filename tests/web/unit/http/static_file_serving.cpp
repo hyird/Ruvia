@@ -281,7 +281,7 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
 }
 
 RUVIA_TEST(response_file_input_rejects_in_place_mutation_after_open) {
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#if defined(__unix__) || defined(_WIN32)
     namespace fs = std::filesystem;
     const auto path = fs::temp_directory_path() / "ruvia_static_in_place_mutation.bin";
     fs::remove(path);
@@ -851,7 +851,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         context.staticFile(root, {.relativePath = "app.js", .contentType = "text/javascript"});
     RUVIA_CHECK_EQ(served.status(), ruvia::http_status::kOk);
     RUVIA_CHECK(
-        served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
+        served.header("Vary").value_or("").contains("Accept-Encoding"));
     RUVIA_CHECK(!served.header("Content-Encoding").has_value());
 
     // Context::file serves a single path with no encoding negotiation, so it must
@@ -1493,7 +1493,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     const auto gz = serve("data.txt", "gzip");
     RUVIA_CHECK_EQ(gz.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(gz.size, std::uint64_t{20});
-    RUVIA_CHECK(gz.vary.find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(gz.vary.contains("Accept-Encoding"));
 
     const auto compressionDisabled = serve("data.txt", "gzip", false);
     RUVIA_CHECK(compressionDisabled.contentEncoding.empty());

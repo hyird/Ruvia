@@ -318,7 +318,7 @@ private:
         Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
 
     static_assert(
-        static_cast<std::size_t>(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
+        std::to_underlying(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit Http2Event(Event event) noexcept

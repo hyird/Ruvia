@@ -191,7 +191,7 @@ private:
     friend class WebSocketServerConnection;
     using Value = std::variant<WebSocketMessageEvent, WebSocketPingEvent, WebSocketPongEvent,
         WebSocketCloseEvent, WebSocketProtocolErrorEvent, WebSocketTransportEndEvent>;
-    static_assert(static_cast<std::size_t>(WebSocketEventKind::kTransportEnd) + 1 ==
+    static_assert(std::to_underlying(WebSocketEventKind::kTransportEnd) + 1 ==
                   std::variant_size_v<Value>);
     template <typename Event>
     explicit WebSocketEvent(Event event) noexcept

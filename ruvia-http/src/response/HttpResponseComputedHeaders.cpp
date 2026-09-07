@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
@@ -18,8 +19,7 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots =
-    static_cast<std::size_t>(HttpKnownMethod::kOptions) + 1;
+inline constexpr std::size_t kAllowHeaderMethodSlots = std::to_underlying(HttpKnownMethod::kOptions) + 1;
 
 void appendHeaderValueLiteral(char*& cursor, std::string_view value) noexcept {
     std::memcpy(cursor, value.data(), value.size());

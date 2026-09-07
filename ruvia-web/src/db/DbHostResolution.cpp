@@ -49,7 +49,7 @@ std::pmr::string makeMariaDbResolvedHostList(
     const bool multiple = addresses.size() > 1;
     for (const auto& address : addresses) {
         appendListSeparator(output);
-        if (multiple && address.find(':') != std::string_view::npos) {
+        if (multiple && address.contains(':')) {
             output.push_back('[');
             output.append(address);
             output.push_back(']');

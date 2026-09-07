@@ -334,7 +334,7 @@ RUVIA_TEST(sansio_driver_h2_bodyless_response_survives_empty_accept_encoding_set
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     HpackCollect fields;
                     (void)decoder.decode(payload, &fields, &HpackCollect::onHeader);
-                    gotNoContentHead = fields.joined.find(":status=204;") != std::string::npos;
+                    gotNoContentHead = fields.joined.contains(":status=204;");
                 } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     sawData = true;
                 }

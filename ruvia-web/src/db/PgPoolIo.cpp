@@ -231,7 +231,7 @@ Task<void> PostgreSqlPool::sendQuery(ConnectionSlot& slot, const std::pmr::strin
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
-    if (sql.find('\0') != std::string_view::npos) {
+    if (sql.contains('\0')) {
         throw std::invalid_argument("SQL must not contain NUL bytes");
     }
     if (!std::in_range<int>(params.size())) {

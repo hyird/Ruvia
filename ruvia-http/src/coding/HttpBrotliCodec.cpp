@@ -37,7 +37,7 @@ ContentDecodeAttempt decodeBrotliContent(
     auto* state = BrotliDecoderCreateInstance(
         &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
-        return HttpContentDecodeError::kDecoderFailure;
+        return std::unexpected(HttpContentDecodeError::kDecoderFailure);
     }
     struct Guard final {
         BrotliDecoderState* state;
@@ -58,24 +58,25 @@ ContentDecodeAttempt decodeBrotliContent(
         const auto produced = sizeof(buffer) - availableOutput;
         if (!appendDecodedBytes(
                 output, reinterpret_cast<const char*>(buffer), produced, maxDecodedBytes)) {
-            return HttpContentDecodeError::kDecodedSizeExceeded;
+            return std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
         }
         if (result == BROTLI_DECODER_RESULT_SUCCESS) {
             // RFC 7932 defines one Brotli stream. Its decoder deliberately does
             // not over-consume, so remaining bytes are not part of this content.
-            return availableInput == 0
-                       ? ContentDecodeAttempt(std::move(output))
-                       : ContentDecodeAttempt(HttpContentDecodeError::kInvalidContent);
+            if (availableInput == 0) {
+                return output;
+            }
+            return std::unexpected(HttpContentDecodeError::kInvalidContent);
         }
         if (result == BROTLI_DECODER_RESULT_ERROR) {
-            return brotliAllocationFailure(BrotliDecoderGetErrorCode(state))
-                       ? HttpContentDecodeError::kDecoderFailure
-                       : HttpContentDecodeError::kInvalidContent;
+            return std::unexpected(brotliAllocationFailure(BrotliDecoderGetErrorCode(state))
+                                       ? HttpContentDecodeError::kDecoderFailure
+                                       : HttpContentDecodeError::kInvalidContent);
         }
         const bool progressed = produced != 0 || availableInput != beforeInput;
         if (!progressed ||
             (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && availableInput == 0)) {
-            return HttpContentDecodeError::kInvalidContent;
+            return std::unexpected(HttpContentDecodeError::kInvalidContent);
         }
     }
 }
@@ -86,7 +87,7 @@ ContentEncodeAttempt encodeBrotliContent(
     auto* state = BrotliEncoderCreateInstance(
         &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
     if (state == nullptr) {
-        return HttpContentEncodeError::kEncoderFailure;
+        return std::unexpected(HttpContentEncodeError::kEncoderFailure);
     }
     struct Guard final {
         BrotliEncoderState* state;
@@ -95,7 +96,7 @@ ContentEncodeAttempt encodeBrotliContent(
         }
     } guard{state};
     if (BrotliEncoderSetParameter(state, BROTLI_PARAM_QUALITY, 5) != BROTLI_TRUE) {
-        return HttpContentEncodeError::kEncoderFailure;
+        return std::unexpected(HttpContentEncodeError::kEncoderFailure);
     }
 
     std::size_t availableInput = input.size();
@@ -107,18 +108,18 @@ ContentEncodeAttempt encodeBrotliContent(
         auto* nextOutput = buffer;
         if (BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH, &availableInput, &nextInput,
                 &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
-            return HttpContentEncodeError::kEncoderFailure;
+            return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
         const auto produced = sizeof(buffer) - availableOutput;
         if (output.size() > maxEncodedBytes || produced > maxEncodedBytes - output.size()) {
-            return HttpContentEncodeError::kEncodedSizeExceeded;
+            return std::unexpected(HttpContentEncodeError::kEncodedSizeExceeded);
         }
         output.append(reinterpret_cast<const char*>(buffer), produced);
         if (BrotliEncoderIsFinished(state) == BROTLI_TRUE) {
             return output;
         }
         if (produced == 0 && availableInput == beforeInput) {
-            return HttpContentEncodeError::kEncoderFailure;
+            return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
     }
 }

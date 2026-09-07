@@ -30,7 +30,7 @@ constexpr std::size_t kHttp2RapidResetGoawayBytes =
 }  // namespace
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::ranges::find(pinnedStreams_, streamId) != pinnedStreams_.end();
+    return std::ranges::contains(pinnedStreams_, streamId);
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {

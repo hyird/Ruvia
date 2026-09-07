@@ -70,8 +70,7 @@ const detail::StaticRootMimeTypeStorage* findStaticMimeType(
 namespace detail {
 
 bool isValidStaticFileExtension(std::string_view extension) noexcept {
-    if (extension.empty() || extension.find('/') != std::string_view::npos ||
-        extension.find('\\') != std::string_view::npos) {
+    if (extension.empty() || extension.contains('/') || extension.contains('\\')) {
         return false;
     }
     if (extension == "." || extension == "..") {

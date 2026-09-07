@@ -208,7 +208,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<std::uint16_t>("BAD_PORT");
     } catch (const std::invalid_argument& error) {
-        badPortThrew = std::string_view(error.what()).find("BAD_PORT") != std::string_view::npos;
+        badPortThrew = std::string_view(error.what()).contains("BAD_PORT");
     }
     RUVIA_CHECK(badPortThrew);
 
@@ -216,7 +216,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<bool>("ENABLED");
     } catch (const std::invalid_argument& error) {
-        badBoolThrew = std::string_view(error.what()).find("ENABLED") != std::string_view::npos;
+        badBoolThrew = std::string_view(error.what()).contains("ENABLED");
     }
     RUVIA_CHECK(badBoolThrew);
 
@@ -225,7 +225,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
         (void)env.get<double>("BAD_DOUBLE");
     } catch (const std::invalid_argument& error) {
         badDoubleThrew =
-            std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos;
+            std::string_view(error.what()).contains("BAD_DOUBLE");
     }
     RUVIA_CHECK(badDoubleThrew);
 
@@ -233,7 +233,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<double>("BAD_INF");
     } catch (const std::invalid_argument& error) {
-        badInfThrew = std::string_view(error.what()).find("BAD_INF") != std::string_view::npos;
+        badInfThrew = std::string_view(error.what()).contains("BAD_INF");
     }
     RUVIA_CHECK(badInfThrew);
 }

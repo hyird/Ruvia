@@ -108,7 +108,7 @@ RUVIA_TEST(middleware_chain_rejects_next_after_response) {
         }
     }
     RUVIA_CHECK_EQ(handlerRuns, std::size_t{0});
-    RUVIA_CHECK(body.find("next_called_after_response") != std::string::npos);
+    RUVIA_CHECK(body.contains("next_called_after_response"));
 }
 
 RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
@@ -312,7 +312,7 @@ RUVIA_TEST(websocket_middleware_pre_upgrade_failure_stays_http_buffered) {
     RUVIA_CHECK(!observation.terminalInvoked);
     RUVIA_CHECK(observation.buffered);
     RUVIA_CHECK(
-        observation.bufferedBody.find("\"code\":\"mw_rejected\"") != std::string_view::npos);
+        observation.bufferedBody.contains("\"code\":\"mw_rejected\""));
 }
 
 RUVIA_TEST(websocket_middleware_wraps_upgrade_and_session_terminal) {
@@ -361,7 +361,7 @@ RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {
     // response through the same handleException path as a handler exception -- its
     // "code" survives, so it is not swallowed into a generic 500.
     RUVIA_CHECK(g_chainOrder.empty());
-    RUVIA_CHECK(body.find("\"code\":\"mw_rejected\"") != std::string_view::npos);
+    RUVIA_CHECK(body.contains("\"code\":\"mw_rejected\""));
 }
 
 RUVIA_TEST(middleware_chain_controller_middleware_wraps_route_middleware) {

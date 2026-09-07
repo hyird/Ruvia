@@ -6,7 +6,7 @@ README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡
 
 ## 项目定位
 
-Ruvia 是 C++20 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
+Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
 
 ```text
 ruvia-core  -> ruvia::core

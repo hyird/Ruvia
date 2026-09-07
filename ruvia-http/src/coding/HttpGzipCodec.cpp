@@ -52,7 +52,7 @@ ContentDecodeAttempt decodeGzipContent(
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     auto stream = makeGzipStream(output.get_allocator().resource());
     if (inflateInit2(&stream, 15 + 16) != Z_OK) {
-        return HttpContentDecodeError::kDecoderFailure;
+        return std::unexpected(HttpContentDecodeError::kDecoderFailure);
     }
     struct Guard final {
         z_stream* stream;
@@ -71,7 +71,7 @@ ContentDecodeAttempt decodeGzipContent(
         const int status = inflate(&stream, Z_NO_FLUSH);
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (!appendDecodedBytes(output, buffer, produced, maxDecodedBytes)) {
-            return HttpContentDecodeError::kDecodedSizeExceeded;
+            return std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
         }
 
         if (status == Z_STREAM_END) {
@@ -86,17 +86,17 @@ ContentDecodeAttempt decodeGzipContent(
             const auto availableInput = stream.avail_in;
             const int reset = inflateReset2(&stream, 15 + 16);
             if (reset != Z_OK) {
-                return HttpContentDecodeError::kDecoderFailure;
+                return std::unexpected(HttpContentDecodeError::kDecoderFailure);
             }
             stream.next_in = nextInput;
             stream.avail_in = availableInput;
             continue;
         }
         if (status == Z_MEM_ERROR) {
-            return HttpContentDecodeError::kDecoderFailure;
+            return std::unexpected(HttpContentDecodeError::kDecoderFailure);
         }
         if (status != Z_OK && status != Z_BUF_ERROR) {
-            return HttpContentDecodeError::kInvalidContent;
+            return std::unexpected(HttpContentDecodeError::kInvalidContent);
         }
 
         const bool progressed = produced != 0 || stream.avail_in != beforeInput;
@@ -104,7 +104,7 @@ ContentDecodeAttempt decodeGzipContent(
             if (stream.avail_in == 0 && supplied < input.size()) {
                 continue;
             }
-            return HttpContentDecodeError::kInvalidContent;
+            return std::unexpected(HttpContentDecodeError::kInvalidContent);
         }
     }
 }
@@ -115,7 +115,7 @@ ContentEncodeAttempt encodeGzipContent(
     auto stream = makeGzipStream(output.get_allocator().resource());
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
         Z_OK) {
-        return HttpContentEncodeError::kEncoderFailure;
+        return std::unexpected(HttpContentEncodeError::kEncoderFailure);
     }
     struct Guard final {
         z_stream* stream;
@@ -137,10 +137,10 @@ ContentEncodeAttempt encodeGzipContent(
                     return output;
                 }
                 if (status == Z_MEM_ERROR) {
-                    return HttpContentEncodeError::kEncoderFailure;
+                    return std::unexpected(HttpContentEncodeError::kEncoderFailure);
                 }
             }
-            return HttpContentEncodeError::kEncodedSizeExceeded;
+            return std::unexpected(HttpContentEncodeError::kEncodedSizeExceeded);
         }
         const auto offset = output.size();
         const auto writable = std::min<std::size_t>(8192, maxEncodedBytes - offset);
@@ -154,10 +154,10 @@ ContentEncodeAttempt encodeGzipContent(
             return output;
         }
         if (status == Z_MEM_ERROR) {
-            return HttpContentEncodeError::kEncoderFailure;
+            return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
         if (status != Z_OK || (output.size() == offset && stream.avail_in == beforeInput)) {
-            return HttpContentEncodeError::kEncoderFailure;
+            return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
     }
 }

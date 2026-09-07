@@ -108,8 +108,8 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
         const auto body = ruvia::detail::responseBody(response).bytes();
         RUVIA_CHECK(body.find(R"("error":"Bad Request")") != std::string_view::npos);
-        RUVIA_CHECK(body.find('\r') == std::string_view::npos);
-        RUVIA_CHECK(body.find('\n') == std::string_view::npos);
+        RUVIA_CHECK(!body.contains('\r'));
+        RUVIA_CHECK(!body.contains('\n'));
     }
     // An extension status has no conventional reason phrase. The Web JSON
     // envelope gets its own neutral label instead of inventing wire semantics.

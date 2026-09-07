@@ -234,8 +234,7 @@ void detail::RouteTable::buildServerExtensionMethodTokens() {
     serverExtensionMethodTokens_.reserve(plan_->extensionRouteIndices_.size());
     for (const auto routeIndex : plan_->extensionRouteIndices_) {
         const auto token = routes_[routeIndex].methodToken();
-        if (std::ranges::find(serverExtensionMethodTokens_, token) ==
-            serverExtensionMethodTokens_.end()) {
+        if (!std::ranges::contains(serverExtensionMethodTokens_, token)) {
             serverExtensionMethodTokens_.push_back(token);
         }
     }

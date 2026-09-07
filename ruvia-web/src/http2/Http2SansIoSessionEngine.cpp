@@ -488,7 +488,7 @@ void Http2SansIoSessionEngine::drainEvents() {
     std::size_t copiedBodyStreamCount = 0;
     const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
         const auto copied = std::span(copiedBodyStreams).first(copiedBodyStreamCount);
-        if (std::ranges::find(copied, streamId) == copied.end()) {
+        if (!std::ranges::contains(copied, streamId)) {
             if (copiedBodyStreamCount == copiedBodyStreams.size()) {
                 return false;
             }

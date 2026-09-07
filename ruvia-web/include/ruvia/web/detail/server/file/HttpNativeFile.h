@@ -17,7 +17,7 @@
 #include <filesystem>
 #include <utility>
 
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__unix__)
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -43,7 +43,7 @@ struct ResponseFileSnapshot final {
     std::time_t modifiedSeconds{0};
 };
 
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__unix__)
 class NativeFileHandle final {
 public:
     explicit NativeFileHandle(int fd = -1) noexcept
@@ -97,17 +97,10 @@ private:
         ec = std::make_error_code(std::errc::not_supported);
         return {};
     }
-#if defined(__APPLE__)
-    const auto modifiedSeconds = status.st_mtimespec.tv_sec;
-    const auto modifiedNanoseconds = status.st_mtimespec.tv_nsec;
-    const auto changedSeconds = status.st_ctimespec.tv_sec;
-    const auto changedNanoseconds = status.st_ctimespec.tv_nsec;
-#else
     const auto modifiedSeconds = status.st_mtim.tv_sec;
     const auto modifiedNanoseconds = status.st_mtim.tv_nsec;
     const auto changedSeconds = status.st_ctim.tv_sec;
     const auto changedNanoseconds = status.st_ctim.tv_nsec;
-#endif
     const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(status.st_dev),
         static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changedSeconds),
         static_cast<std::uint64_t>(changedNanoseconds)};

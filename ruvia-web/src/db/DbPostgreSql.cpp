@@ -66,7 +66,7 @@ PostgreSqlParams encodePostgreSqlParams(
                 output.lengths.push_back(0);
                 continue;
             case DbValueType::kString:
-                if (DbValueAccess::text(param).find('\0') != std::string_view::npos) {
+                if (DbValueAccess::text(param).contains('\0')) {
                     throw std::invalid_argument(
                         "PostgreSQL string parameter must not contain NUL bytes");
                 }

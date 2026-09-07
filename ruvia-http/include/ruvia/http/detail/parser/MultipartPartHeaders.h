@@ -48,7 +48,7 @@ std::optional<std::string_view> httpHeaderValueInBlock(Headers&&, std::string_vi
     // "boundary" parameter. Match "name"/"filename" the same way so a part using
     // e.g. `Name=` or `FileName=` is not spuriously rejected.
     const auto value = httpFindSemicolonParameterQuotedIgnoreCase(disposition, name);
-    return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
+    return value.transform([](std::string_view input) noexcept { return httpTrimQuotes(input); });
 }
 
 template <HttpTemporaryOwningCharString Disposition>

@@ -213,7 +213,7 @@ void detail::RouterImpl::validateRouteTarget(
     if (!methodToken.empty() && RouteTable::isDynamicPath(path)) {
         throw std::invalid_argument("extension method routes must use a static path");
     }
-    if (path.find('?') != std::string_view::npos || !ruvia::detail::isValidOriginFormTarget(path)) {
+    if (path.contains('?') || !ruvia::detail::isValidOriginFormTarget(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
     }
 

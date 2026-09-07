@@ -38,7 +38,7 @@ Task<std::error_code> writeFileFallback(
 
 #if defined(ASIO_HAS_FILE)
     asio::stream_file input(stream.get_executor());
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#if defined(__unix__) || defined(_WIN32)
     auto nativeInput = openNativeFileForRead(fileBody, error,
         NativeFileOpenOptions{
 #if defined(_WIN32)

@@ -757,8 +757,8 @@ RUVIA_TEST(redis_transaction_errors_preserve_server_diagnostics) {
         ruvia::detail::throwIfRedisTransactionReplyError(reply, 3);
     } catch (const ruvia::RedisError& error) {
         preserved = error.code() == ruvia::RedisError::Code::kCommandError &&
-                    std::string_view(error.what()).find("reply 3") != std::string_view::npos &&
-                    std::string_view(error.what()).find("EXECABORT") != std::string_view::npos;
+                    std::string_view(error.what()).contains("reply 3") &&
+                    std::string_view(error.what()).contains("EXECABORT");
     }
     RUVIA_CHECK(preserved);
 }

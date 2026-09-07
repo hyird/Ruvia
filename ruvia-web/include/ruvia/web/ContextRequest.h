@@ -369,7 +369,7 @@ public:
             }
 
             [[nodiscard]] static bool hasNestedName(std::string_view name) noexcept {
-                return name.find('.') != std::string_view::npos;
+                return name.contains('.');
             }
 
             [[nodiscard]] const Group* findEntry(std::string_view name) const noexcept {
@@ -446,7 +446,7 @@ public:
         }
 
         [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
-            return name.find('.') != std::string_view::npos;
+            return name.contains('.');
         }
 
         [[nodiscard]] static bool consumePath(

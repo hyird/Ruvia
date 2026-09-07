@@ -33,7 +33,7 @@ int main() {
                 const auto token = filters.substr(
                     begin, end == std::string_view::npos ? filters.size() - begin : end - begin);
                 if (!token.empty() &&
-                    std::string_view(c.name).find(token) != std::string_view::npos) {
+                    std::string_view(c.name).contains(token)) {
                     matched = true;
                     break;
                 }

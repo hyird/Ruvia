@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -163,7 +164,7 @@ private:
     }
 };
 
-static_assert(static_cast<std::size_t>(RequestKnownHeader::kUserAgent) + 1 ==
+static_assert(std::to_underlying(RequestKnownHeader::kUserAgent) + 1 ==
               HttpRequestAccess::kCachedHeaderSlots);
 
 [[nodiscard]] inline std::string_view requestKnownHeader(

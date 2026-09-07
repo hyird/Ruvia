@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <expected>
 #include <memory_resource>
 #include <string>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/HttpContentCodec.h"
 
@@ -15,8 +15,8 @@
 
 namespace ruvia::detail {
 
-using ContentEncodeAttempt = std::variant<std::pmr::string, HttpContentEncodeError>;
-using ContentDecodeAttempt = std::variant<std::pmr::string, HttpContentDecodeError>;
+using ContentEncodeAttempt = std::expected<std::pmr::string, HttpContentEncodeError>;
+using ContentDecodeAttempt = std::expected<std::pmr::string, HttpContentDecodeError>;
 
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.

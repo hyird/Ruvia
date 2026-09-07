@@ -43,7 +43,7 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 // leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
 // under a document root.
 [[nodiscard]] bool hasHiddenPathSegment(std::string_view relativeGeneric) noexcept {
-    return relativeGeneric.starts_with('.') || relativeGeneric.find("/.") != std::string_view::npos;
+    return relativeGeneric.starts_with('.') || relativeGeneric.contains("/.");
 }
 
 [[nodiscard]] detail::StaticRootState* makeStaticRootState(detail::StaticRootConfigStorage config) {
@@ -89,9 +89,9 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 [[nodiscard]] bool containsStaticDirectory(
     const std::pmr::vector<std::pmr::string>& directories, std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        return std::ranges::find(directories, relativePath, [](const auto& directory) noexcept {
+        return std::ranges::contains(directories, relativePath, [](const auto& directory) noexcept {
             return std::string_view(directory);
-        }) != directories.end();
+        });
     }
 
     return std::ranges::binary_search(
