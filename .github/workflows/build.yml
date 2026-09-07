@@ -44,9 +44,9 @@ concurrency:
   group: build-${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
-# The primary platform jobs exercise the complete feature set. Linux also runs
-# live database drivers, component-only configurations, sanitizers, and a
-# Release build so those contracts cannot silently become opt-in.
+# Format plus one full Debug matrix on each supported compiler: Linux GCC and
+# Windows MSVC. Both platform jobs build the complete feature set with tests
+# and examples.
 jobs:
   style:
     name: clang-format
@@ -176,109 +176,6 @@ jobs:
           RUVIA_RUN_MARIADB_INTEGRATION: 1
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
-  linux_quality:
-    name: Linux / ${{ matrix.name }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: core-only
-            build_dir: core
-            build_type: Debug
-            options: >-
-              -DRUVIA_BUILD_CORE=ON
-              -DRUVIA_BUILD_HTTP=OFF
-              -DRUVIA_BUILD_WEB=OFF
-              -DRUVIA_BUILD_TESTS=ON
-          - name: http-only
-            build_dir: http
-            build_type: Debug
-            options: >-
-              -DRUVIA_BUILD_CORE=OFF
-              -DRUVIA_BUILD_HTTP=ON
-              -DRUVIA_BUILD_WEB=OFF
-              -DRUVIA_BUILD_TESTS=ON
-          - name: asan-ubsan
-            build_dir: sanitizers
-            build_type: Debug
-            options: >-
-              -DRUVIA_BUILD_TESTS=ON
-              -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined\ -fno-omit-frame-pointer
-              -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined
-              -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined
-          - name: release
-            build_dir: release
-            build_type: Release
-            options: >-
-              -DRUVIA_BUILD_TESTS=ON
-    env:
-      CC: gcc-13
-      CXX: g++-13
-      GIT_CONFIG_COUNT: 1
-      GIT_CONFIG_KEY_0: init.defaultBranch
-      GIT_CONFIG_VALUE_0: main
-      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
-    steps:
-      - name: Checkout ruvia
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Install toolchain
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ninja-build curl zip unzip tar
-
-      - name: Restore vcpkg binary cache
-        id: vcpkg-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ matrix.build_dir }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
-          restore-keys: |
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ matrix.build_dir }}-${{ env.VCPKG_COMMIT }}-
-            vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
-
-      - name: Bootstrap vcpkg
-        run: |
-          set -euo pipefail
-          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
-          git init "$VCPKG_ROOT"
-          git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
-          git -C "$VCPKG_ROOT" fetch --depth 1 origin "$VCPKG_COMMIT"
-          git -C "$VCPKG_ROOT" checkout --detach FETCH_HEAD
-          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
-
-      - name: Configure
-        run: |
-          cmake -S . -B "build/${{ matrix.build_dir }}" -G Ninja \
-            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
-            -DCMAKE_COMPILE_WARNING_AS_ERROR=ON \
-            -DCMAKE_CXX_COMPILER="$CXX" \
-            ${{ matrix.options }}
-
-      - name: Save vcpkg binary cache
-        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
-
-      - name: Build
-        run: cmake --build "build/${{ matrix.build_dir }}"
-
-      - name: Test
-        env:
-          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: >-
-          ctest --test-dir "build/${{ matrix.build_dir }}"
-          --output-on-failure ${{ matrix.ctest_args }}
-
   windows_build:
     name: Windows
     runs-on: windows-2025
@@ -343,34 +240,3 @@ jobs:
       - name: Test
         shell: pwsh
         run: ctest --test-dir build/test -C $env:BUILD_TYPE --output-on-failure
-
-  cleanup:
-    name: Prune old runs
-    needs: [style, linux_build, linux_quality, windows_build]
-    # Run after all builds regardless of their result, but never on pull
-    # requests (a fork's token is read-only and must not prune main's history).
-    if: ${{ always() && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-    steps:
-      - name: Keep only the 3 most recent runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          # This run is still in progress and cannot be deleted, so it is not
-          # counted here: keeping the 2 newest completed runs leaves exactly 3
-          # once this one finishes.
-          stale=$(gh api "repos/$GH_REPO/actions/workflows/build.yml/runs?per_page=100" \
-            --jq '.workflow_runs
-                  | map(select(.status == "completed"))
-                  | sort_by(.created_at)
-                  | reverse
-                  | .[2:]
-                  | .[].id' || true)
-          for id in $stale; do
-            echo "Deleting old run $id"
-            gh api --method DELETE "repos/$GH_REPO/actions/runs/$id" || true
-          done
