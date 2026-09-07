@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
@@ -11,10 +11,15 @@
 // Reading the client's address and scheme out of forwarding headers, for a
 // request whose peer the deployment has already declared trusted.
 //
-// RFC 7239's `Forwarded` is preferred when present; X-Forwarded-For and
-// X-Forwarded-Proto are the de-facto fields every proxy still emits, and are
-// read only when Forwarded is absent so a proxy sending both cannot have the
-// two disagree behind the caller's back.
+// Reverse proxies rewrite X-Forwarded-For / X-Forwarded-Proto and commonly
+// forward a client `Forwarded` field unchanged. Preferring RFC 7239 when both
+// are present would let the caller pick ConnInfo while the proxy-written
+// X- headers name the real hop. X-Forwarded-* therefore win when present;
+// `Forwarded` is the fallback when the proxy speaks only RFC 7239.
+//
+// Same-name list fields are one chain (RFC 9110 §5.2). A client line followed
+// by a proxy-appended line is walked together; taking only the first line
+// would let the caller pick the client and claim TLS.
 //
 // A client can prepend hops to these lists. The trusted peer is the hop that
 // delivered the request, so the client is the last untrusted address. Scheme is
@@ -61,22 +66,31 @@ struct ForwardedClient final {
 
 template <typename Fn>
 inline void visitCommaSeparated(std::string_view value, Fn&& fn) {
-    std::size_t offset = 0;
-    while (offset <= value.size()) {
-        const auto comma = value.find(',', offset);
-        const auto end = comma == std::string_view::npos ? value.size() : comma;
-        fn(value.substr(offset, end - offset));
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        offset = comma + 1;
-    }
+    // RFC 7239 quoted-string values may contain commas; a quote-blind split
+    // would invent hops from inside a single `for="..."` element.
+    httpVisitCommaSeparatedQuotedItems(value, [&](std::string_view item) {
+        fn(item);
+        return true;
+    });
 }
 
-[[nodiscard]] inline std::string_view forwardedChainClient(
-    std::string_view value, const TrustedProxySet& trusted) noexcept {
-    std::string_view leftmost{};
-    std::string_view client{};
+inline void parseForwardedElement(std::string_view element, ForwardedClient& hop) noexcept {
+    hop = {};
+    // RFC 7239 values are token / quoted-string; a ';' inside quotes is data.
+    httpVisitSemicolonParametersQuoted(
+        element, [&](std::string_view name, std::string_view value) {
+            value = httpTrimQuotes(value);
+            if (httpAsciiEqualsIgnoreCase(name, "for") && hop.address.empty()) {
+                hop.address = forwardedNodeAddress(value);
+            } else if (httpAsciiEqualsIgnoreCase(name, "proto") && hop.scheme.empty()) {
+                hop.scheme = forwardedHttpSchemeToken(value);
+            }
+            return true;
+        });
+}
+
+inline void accumulateForwardedForAddresses(std::string_view value, const TrustedProxySet& trusted,
+    std::string_view& leftmost, std::string_view& client) noexcept {
     visitCommaSeparated(value, [&](std::string_view element) {
         const auto address = forwardedNodeAddress(element);
         if (address.empty()) {
@@ -89,52 +103,19 @@ inline void visitCommaSeparated(std::string_view value, Fn&& fn) {
             client = address;
         }
     });
-    return client.empty() ? leftmost : client;
 }
 
-[[nodiscard]] inline std::string_view forwardedChainScheme(std::string_view value) noexcept {
-    std::string_view scheme{};
+inline void accumulateForwardedScheme(std::string_view value, std::string_view& scheme) noexcept {
     visitCommaSeparated(value, [&](std::string_view element) {
         const auto token = forwardedHttpSchemeToken(element);
         if (!token.empty()) {
             scheme = token;
         }
     });
-    return scheme;
 }
 
-inline void parseForwardedElement(std::string_view element, ForwardedClient& hop) noexcept {
-    hop = {};
-    std::size_t offset = 0;
-    while (offset < element.size()) {
-        auto end = element.find(';', offset);
-        if (end == std::string_view::npos) {
-            end = element.size();
-        }
-        const auto pair = httpTrimOws(element.substr(offset, end - offset));
-        offset = end + 1;
-
-        const auto equals = pair.find('=');
-        if (equals == std::string_view::npos) {
-            continue;
-        }
-        const auto name = httpTrimOws(pair.substr(0, equals));
-        auto value = httpTrimOws(pair.substr(equals + 1));
-        if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-            value = value.substr(1, value.size() - 2);
-        }
-        if (httpAsciiEqualsIgnoreCase(name, "for") && hop.address.empty()) {
-            hop.address = forwardedNodeAddress(value);
-        } else if (httpAsciiEqualsIgnoreCase(name, "proto") && hop.scheme.empty()) {
-            hop.scheme = forwardedHttpSchemeToken(value);
-        }
-    }
-}
-
-[[nodiscard]] inline ForwardedClient resolveForwardedChain(
-    std::string_view value, const TrustedProxySet& trusted) noexcept {
-    ForwardedClient leftmost{};
-    ForwardedClient client{};
+inline void accumulateForwardedChain(std::string_view value, const TrustedProxySet& trusted,
+    ForwardedClient& leftmost, ForwardedClient& client) noexcept {
     visitCommaSeparated(value, [&](std::string_view element) {
         ForwardedClient hop;
         parseForwardedElement(element, hop);
@@ -153,35 +134,33 @@ inline void parseForwardedElement(std::string_view element, ForwardedClient& hop
             client.scheme = hop.scheme;
         }
     });
-    if (client.address.empty()) {
-        return leftmost;
-    }
-    return client;
 }
 
 // Resolves what a trusted proxy says about the client. Fields it did not send
 // stay empty and the caller keeps what the transport already knows.
 [[nodiscard]] inline ForwardedClient resolveForwardedClient(
     const HttpRequest& request, const TrustedProxySet& trusted) noexcept {
-    ForwardedClient result;
+    ForwardedClient forwardedLeftmost;
+    ForwardedClient forwardedClient;
+    std::string_view xForLeftmost{};
+    std::string_view xForClient{};
+    std::string_view xProto{};
 
     for (const auto& header : request.headers()) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Forwarded")) {
-            result = resolveForwardedChain(header.value(), trusted);
-            if (!result.address.empty() || !result.scheme.empty()) {
-                return result;
-            }
+            accumulateForwardedChain(header.value(), trusted, forwardedLeftmost, forwardedClient);
+        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
+            accumulateForwardedForAddresses(header.value(), trusted, xForLeftmost, xForClient);
+        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
+            accumulateForwardedScheme(header.value(), xProto);
         }
     }
 
-    for (const auto& header : request.headers()) {
-        if (result.address.empty() && httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
-            result.address = forwardedChainClient(header.value(), trusted);
-        } else if (result.scheme.empty() &&
-                   httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
-            result.scheme = forwardedChainScheme(header.value());
-        }
-    }
+    const auto forwarded = forwardedClient.address.empty() ? forwardedLeftmost : forwardedClient;
+    const auto xAddress = xForClient.empty() ? xForLeftmost : xForClient;
+    ForwardedClient result;
+    result.address = !xAddress.empty() ? xAddress : forwarded.address;
+    result.scheme = !xProto.empty() ? xProto : forwarded.scheme;
     return result;
 }
 

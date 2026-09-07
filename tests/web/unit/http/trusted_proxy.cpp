@@ -125,13 +125,12 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     RUVIA_CHECK(info.tls() == nullptr);
 }
 
-RUVIA_TEST(conn_info_prefers_rfc7239_forwarded_over_the_x_headers) {
+RUVIA_TEST(conn_info_reads_rfc7239_forwarded_when_x_headers_are_absent) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     (void)HttpRequestAccess::addHeader(request,
         HttpHeaderView{"Forwarded", R"(for="[2001:db8::1]:4711";proto=https, for=10.0.0.5)"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "198.51.100.99"});
 
     RequestMemory memory(worker);
     HttpRequestAccess::setResource(request, memory.resource());
@@ -143,9 +142,121 @@ RUVIA_TEST(conn_info_prefers_rfc7239_forwarded_over_the_x_headers) {
             .withTrustedProxies(trusted));
     const auto info = ruvia::getConnInfo(context);
 
-    // Bracketed IPv6 with a port, unwrapped, and the X- header not consulted.
+    // Bracketed IPv6 with a port, unwrapped. No X- header to consult.
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("2001:db8::1"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
+}
+
+RUVIA_TEST(conn_info_prefers_proxy_written_x_headers_over_client_forwarded) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // nginx rewrites X-Forwarded-* and forwards a client Forwarded field
+    // unchanged. Believing Forwarded here would let the caller spoof ConnInfo.
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"});
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "http"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
+}
+
+RUVIA_TEST(conn_info_forwarded_quoted_comma_does_not_invent_a_hop) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // RFC 7239 quoted-string may contain commas. A quote-blind split of
+    // for="_x,203.0.113.9" would invent a last hop and let it win as client.
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x,203.0.113.9")"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("_x,203.0.113.9"));
+}
+
+RUVIA_TEST(conn_info_forwarded_quoted_semicolon_stays_one_parameter) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // A quote-blind ';' split of for="_x;203.0.113.9" would drop the identifier
+    // and invent a second pair from inside the quotes.
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x;203.0.113.9")"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("_x;203.0.113.9"));
+}
+
+RUVIA_TEST(conn_info_walks_same_name_forwarding_fields_as_one_chain) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    // RFC 9110 §5.2: multiple list-field lines combine. A client-injected
+    // first line must not win over the proxy-appended line that follows.
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "198.51.100.1"});
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "https"});
+    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "http"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
+}
+
+RUVIA_TEST(conn_info_walks_same_name_rfc7239_fields_as_one_chain) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"});
+    (void)HttpRequestAccess::addHeader(
+        request, HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=http"});
+
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+
+    const auto trusted = setOf({"10.0.0.0/8"});
+    const auto context = ContextAccess::make(memory, request,
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted));
+    const auto info = ruvia::getConnInfo(context);
+    RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
+    RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
 
 RUVIA_TEST(conn_info_forwarded_skips_client_prepended_hops) {
