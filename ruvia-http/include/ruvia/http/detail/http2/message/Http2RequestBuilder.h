@@ -175,8 +175,7 @@ public:
         HttpRequestAccess::setProtocolVersion(request, HttpProtocolVersion::kHttp2);
         HttpRequestAccess::setTarget(request, target);
         HttpRequestAccess::setScheme(request, stream.requestScheme());
-        HttpRequestAccess::setAuthority(
-            request, stream.hasAuthority() ? stream.requestAuthority() : std::string_view{});
+        HttpRequestAccess::setAuthority(request, http2EffectiveRequestAuthority(stream));
         HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kHttp2);
         HttpRequestAccess::setPath(request, targetParts.path);
         HttpRequestAccess::setQueryString(request, targetParts.queryString);

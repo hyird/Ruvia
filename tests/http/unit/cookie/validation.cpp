@@ -320,3 +320,15 @@ RUVIA_TEST(cookie_max_age_capped_at_400_days) {
     negative.maxAge = std::chrono::seconds(-1);
     RUVIA_CHECK(rejects(negative));
 }
+
+RUVIA_TEST(cookie_request_pair_keeps_equals_for_empty_names) {
+    std::string header;
+    ruvia::detail::appendCookieRequestPair(header, "sid", "abc");
+    RUVIA_CHECK_EQ(header, std::string("sid=abc"));
+    ruvia::detail::appendCookieRequestPair(header, "", "session=forged");
+    // A nameless value that looks like a cookie-pair must stay behind '='.
+    RUVIA_CHECK_EQ(header, std::string("sid=abc; =session=forged"));
+    std::string nameless;
+    ruvia::detail::appendCookieRequestPair(nameless, "", "sid");
+    RUVIA_CHECK_EQ(nameless, std::string("=sid"));
+}

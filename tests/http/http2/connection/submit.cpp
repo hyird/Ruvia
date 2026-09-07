@@ -256,7 +256,9 @@ RUVIA_TEST(http2_connection_feed_accepts_non_http_request_scheme) {
     }
 }
 
-RUVIA_TEST(http2_connection_rejects_http_request_without_authority) {
+RUVIA_TEST(http2_connection_accepts_http_request_with_host_instead_of_authority) {
+    // RFC 9113 §8.3.1: translating HTTP/1.1 origin-form MUST omit :authority
+    // and keep Host. Host is the target-URI authority in that case.
     std::pmr::monotonic_buffer_resource resource;
     constexpr std::string_view schemes[] = {"http", "HTTPS"};
     for (const auto scheme : schemes) {
@@ -264,9 +266,32 @@ RUVIA_TEST(http2_connection_rejects_http_request_without_authority) {
         handshake(server);
         std::pmr::string block(&resource);
         encodeRequest(block, "GET", scheme, "/resource", std::nullopt);
-        // A retained Host field is not a substitute for mandatory HTTP/2
-        // control data when the target URI itself has an authority.
         HpackEncoder::encodeHeader(block, "host", "example.com");
+        const auto request = headersFrame(&resource, 1,
+            ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+
+        RUVIA_CHECK(server.feed(std::string_view(request.data(), request.size())) ==
+                    Http2FeedResult::kAccepted);
+        RUVIA_CHECK(!server.connectionError().has_value());
+        RUVIA_CHECK(server.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+        auto* stream = server.stream(1);
+        RUVIA_CHECK(stream != nullptr);
+        if (stream != nullptr) {
+            RUVIA_CHECK(stream->hasHost());
+            RUVIA_CHECK(!stream->hasAuthority());
+        }
+    }
+}
+
+RUVIA_TEST(http2_connection_rejects_http_request_without_authority_or_host) {
+    std::pmr::monotonic_buffer_resource resource;
+    constexpr std::string_view schemes[] = {"http", "HTTPS"};
+    for (const auto scheme : schemes) {
+        Http2Connection server(&resource);
+        handshake(server);
+        std::pmr::string block(&resource);
+        encodeRequest(block, "GET", scheme, "/resource", std::nullopt);
         const auto request = headersFrame(&resource, 1,
             ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
             std::string_view(block.data(), block.size()));

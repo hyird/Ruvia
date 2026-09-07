@@ -70,8 +70,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream,
                                              stream.requestScheme(), stream.requestAuthority())) ||
                !http2IsValidRegularRequestPath(
                    stream.requestKnownMethod(), stream.requestScheme(), stream.requestPath()) ||
-               (!stream.hasAuthority() && http2RegularRequestRequiresAuthority(
-                                              stream.requestScheme(), stream.requestPath()))) {
+               !http2HasRequiredRequestAuthority(stream)) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (role_ == Http2Role::kServer && stream.requestKnownMethod() != HttpKnownMethod::kConnect) {
