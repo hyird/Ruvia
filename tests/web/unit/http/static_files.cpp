@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <filesystem>
 #include <fstream>
 #include <string_view>
@@ -7,6 +5,8 @@
 
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
+
+#include "test_harness.h"
 
 namespace {
 

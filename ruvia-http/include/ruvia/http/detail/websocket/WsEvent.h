@@ -163,7 +163,7 @@ private:
         WsProtocolErrorEvent, WsTransportEndEvent>;
 
     static_assert(
-        static_cast<std::size_t>(WsEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
+        std::to_underlying(WsEventKind::kTransportEnd) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit WsEvent(Event event) noexcept

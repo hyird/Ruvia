@@ -1,8 +1,8 @@
 #pragma once
 
 #include <chrono>
-#include <optional>
 #include <cstdint>
+#include <optional>
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"

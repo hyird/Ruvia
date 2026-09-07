@@ -9,11 +9,11 @@
 
 #if !defined(RUVIA_ENABLE_MARIADB) && !defined(RUVIA_ENABLE_POSTGRESQL)
 
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-
 #include <memory_resource>
 #include <span>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 
 namespace ruvia::detail {
 
@@ -38,8 +38,6 @@ public:
 
 #else
 
-#include <asio/io_context.hpp>
-
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -51,6 +49,8 @@ public:
 #include <string_view>
 #include <variant>
 #include <vector>
+
+#include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"

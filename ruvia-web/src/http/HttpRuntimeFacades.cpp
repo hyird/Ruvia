@@ -1,11 +1,11 @@
-#include "ruvia/web/Context.h"
-
-#include <stdexcept>
-
-#include "ruvia/core/Task.h"
 #include <memory_resource>
+#include <stdexcept>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
 
 namespace {
 
@@ -159,7 +159,7 @@ void SseWriter::expireCapability(detail::ScopedCapabilityNode& capability) noexc
 }
 
 WebSocket& Context::webSocket() const {
-    const auto* output = responseOutput_.webSocket();
+    const auto* output = responseOutput().webSocket();
     if (output == nullptr) {
         throw std::logic_error("websocket is not available");
     }
@@ -167,7 +167,7 @@ WebSocket& Context::webSocket() const {
 }
 
 ResponseStreamWriter& Context::stream() {
-    const auto* output = responseOutput_.responseStream();
+    const auto* output = responseOutput().responseStream();
     if (output == nullptr) {
         throw std::logic_error("response body is not streamable");
     }

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/detail/util/PmrString.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
+
+#include "ruvia/http/detail/util/PmrString.h"
 
 namespace ruvia::detail {
 

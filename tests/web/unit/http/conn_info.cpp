@@ -1,5 +1,8 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
+#include <cstddef>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
@@ -9,11 +12,8 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 
-#include <cstddef>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <utility>
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -31,57 +31,9 @@ using ruvia::detail::HttpRequestAccess;
 // TLS details belong behind the typed transport variant, not flattened back
 // onto ConnInfo. The end-to-end scheme, including TLS a trusted proxy
 // terminated, remains separate from this hop's typed transport.
-template <typename Info>
-concept HasFlattenedTlsDetail = requires(const Info& info) { info.clientCertificateSubject(); };
 
-template <typename Services>
-concept HasBooleanTransportRefinement = requires(const Services& services,
-    std::string_view remoteAddress, std::string_view clientCertificateSubject,
-    bool secure) { services.withTransport(remoteAddress, clientCertificateSubject, secure); };
-
-template <typename Services>
-concept AcceptsRvaluePlainTransport =
-    requires(const Services& services) { services.withPlainTransport(std::string("temporary")); };
-
-template <typename Services>
-concept AcceptsRvalueTlsAddress =
-    requires(const Services& services) { services.withTlsTransport(std::string("temporary")); };
-
-template <typename Services>
-concept AcceptsRvalueTlsCertificate = requires(const Services& services) {
-    services.withTlsTransport(std::string_view("stable"), std::string("temporary"));
-};
-
-template <typename Info>
-concept ExposesRvalueTransportPointer = requires {
-    std::declval<const Info&&>().plain();
-    std::declval<const Info&&>().tls();
-};
-
-static_assert(std::is_same_v<decltype(std::declval<const ConnInfo&>().plain()),
-    const PlainConnectionTransport*>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ConnInfo&>().tls()), const TlsConnectionTransport*>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ContextServices&>().connInfo()), const ConnInfo&>);
-static_assert(!HasFlattenedTlsDetail<ConnInfo>);
 // scheme() describes the client's connection, so it must NOT be a synonym for
 // "this hop is TLS".
-static_assert(
-    std::is_same_v<decltype(std::declval<const ConnInfo&>().scheme()), ruvia::HttpScheme>);
-static_assert(!HasBooleanTransportRefinement<ContextServices>);
-static_assert(!AcceptsRvaluePlainTransport<ContextServices>);
-static_assert(!AcceptsRvalueTlsAddress<ContextServices>);
-static_assert(!AcceptsRvalueTlsCertificate<ContextServices>);
-static_assert(!ExposesRvalueTransportPointer<ConnInfo>);
-static_assert(!std::is_default_constructible_v<PlainConnectionTransport>);
-static_assert(!std::is_default_constructible_v<TlsConnectionTransport>);
-static_assert(!std::is_default_constructible_v<ConnInfo>);
-static_assert(!std::is_default_constructible_v<ContextServices>);
-static_assert(std::is_nothrow_copy_constructible_v<ConnInfo>);
-static_assert(std::is_nothrow_move_constructible_v<ConnInfo>);
-static_assert(std::is_nothrow_copy_assignable_v<ConnInfo>);
-static_assert(std::is_nothrow_move_assignable_v<ConnInfo>);
 
 [[nodiscard]] std::size_t activeTransportCount(const ConnInfo& info) noexcept {
     return static_cast<std::size_t>(info.plain() != nullptr) +

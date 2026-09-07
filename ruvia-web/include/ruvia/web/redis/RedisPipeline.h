@@ -1,12 +1,5 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-#include "ruvia/core/OperationOptions.h"
-#include "ruvia/web/redis/RedisTypes.h"
-#include "ruvia/core/ScopedOperation.h"
-#include "ruvia/web/detail/redis/RedisArgumentPack.h"
-#include "ruvia/web/detail/redis/RedisCommandBatchMixin.h"
-
 #include <functional>
 #include <initializer_list>
 #include <memory_resource>
@@ -15,6 +8,13 @@
 #include <string_view>
 #include <variant>
 #include <vector>
+
+#include "ruvia/core/OperationOptions.h"
+#include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
+#include "ruvia/web/detail/redis/RedisCommandBatchMixin.h"
+#include "ruvia/web/redis/RedisTypes.h"
 
 namespace ruvia {
 

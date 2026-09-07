@@ -1,6 +1,6 @@
-#include "http_client_response_fixture.h"
-
 #include <cstdint>
+
+#include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: reading a response head off the wire.
 
@@ -18,7 +18,8 @@ RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
             byte = static_cast<char>(next());
         }
 
-        const auto result = parseWire(sample % 3 == 0 ? "GET" : sample % 3 == 1 ? "HEAD" : "CONNECT",
+        const auto result = parseWire(sample % 3 == 0 ? "GET" : sample % 3 == 1 ? "HEAD"
+                                                                                : "CONNECT",
             input);
         const auto alternatives = static_cast<unsigned int>(result.needMore() != nullptr) +
                                   static_cast<unsigned int>(result.parsed() != nullptr) +

@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string_view>
 
 #include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
+
+#include "test_harness.h"
 
 namespace {
 

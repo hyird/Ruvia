@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/core/StopToken.h"
-
 #include <chrono>
 #include <optional>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/core/StopToken.h"
 
 namespace ruvia {
 

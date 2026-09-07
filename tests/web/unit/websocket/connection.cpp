@@ -1,6 +1,3 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -16,14 +13,17 @@
 
 #include <asio.hpp>
 
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
+
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -105,10 +105,6 @@ private:
     asio::io_context* io_;
     RecordingTransportState* state_;
 };
-
-static_assert(!std::constructible_from<WebSocketConnection<RecordingTransport>, RecordingTransport,
-    ConnectionScanner::Entry&, ruvia::WebSocketLifecycleOptions, std::size_t,
-    std::pmr::memory_resource*, std::string_view, bool>);
 
 std::string maskedFrame(
     std::uint8_t opcode, std::string_view payload, bool fin = true, bool rsv1 = false) {

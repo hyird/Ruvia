@@ -1,12 +1,11 @@
-#include "ruvia/http/HttpResponse.h"
-
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
-
 #include <cstdint>
 #include <cstring>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
 
 namespace ruvia {
 namespace {

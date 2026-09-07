@@ -1,6 +1,9 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "http2_sansio_session_fixture.h"
+#include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <span>
+#include <string>
+#include <string_view>
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -12,29 +15,25 @@
 #include <asio/ssl.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
-
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
-#include <cstdint>
-#include <memory>
-#include <memory_resource>
-#include <span>
-#include <string>
-#include <string_view>
-
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/Context.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
+
+#include "http2_sansio_session_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 

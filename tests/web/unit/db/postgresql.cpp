@@ -1,9 +1,3 @@
-#include "test_harness.h"
-
-#include "ruvia/web/detail/db/DbConfigValidation.h"
-#include "ruvia/web/detail/db/DbMigrationValidation.h"
-#include "ruvia/web/detail/db/DbPostgreSql.h"
-
 #include <array>
 #include <cmath>
 #include <limits>
@@ -13,6 +7,12 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+#include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationValidation.h"
+#include "ruvia/web/detail/db/DbPostgreSql.h"
+
+#include "test_harness.h"
 
 namespace {
 

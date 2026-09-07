@@ -1,5 +1,8 @@
 #include "ruvia/http/detail/coding/HttpContentEncoder.h"
 
+#include <brotli/encode.h>
+#include <zlib.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -8,9 +11,6 @@
 #include <new>
 #include <stdexcept>
 #include <utility>
-
-#include <brotli/encode.h>
-#include <zlib.h>
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #undef ZSTD_STATIC_LINKING_ONLY

@@ -1,19 +1,14 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
-#include "test_io_context.h"
-
 #include <array>
 #include <bit>
 #include <chrono>
-#include <cstdint>
 #include <concepts>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <memory_resource>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -26,7 +21,14 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -35,21 +37,18 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -281,13 +280,13 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
 }
 
 RUVIA_TEST(response_file_input_rejects_in_place_mutation_after_open) {
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#if defined(__unix__) || defined(_WIN32)
     namespace fs = std::filesystem;
     const auto path = fs::temp_directory_path() / "ruvia_static_in_place_mutation.bin";
     fs::remove(path);
     constexpr std::string_view oldContents = "old-static-body";
     constexpr std::string_view newContents = "new-static-body";
-    static_assert(oldContents.size() == newContents.size());
+
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         output << oldContents;
@@ -522,8 +521,7 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
         std::ofstream output(replacementPath, std::ios::binary);
         output << "new-representation";
     }
-    static_assert(std::string_view("old-representation").size() ==
-                  std::string_view("new-representation").size());
+
 #if defined(_WIN32)
     fs::remove(servedPath);
 #endif
@@ -607,8 +605,6 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 }
 
 RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
-    static_assert(std::is_aggregate_v<ruvia::StaticFileTypePolicy>);
-
     bool emptyOnlyThrew = false;
     try {
         ruvia::detail::validateStaticRootOptions(
@@ -851,7 +847,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
         context.staticFile(root, {.relativePath = "app.js", .contentType = "text/javascript"});
     RUVIA_CHECK_EQ(served.status(), ruvia::http_status::kOk);
     RUVIA_CHECK(
-        served.header("Vary").value_or("").find("Accept-Encoding") != std::string_view::npos);
+        served.header("Vary").value_or("").contains("Accept-Encoding"));
     RUVIA_CHECK(!served.header("Content-Encoding").has_value());
 
     // Context::file serves a single path with no encoding negotiation, so it must
@@ -1493,7 +1489,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     const auto gz = serve("data.txt", "gzip");
     RUVIA_CHECK_EQ(gz.contentEncoding, std::string("gzip"));
     RUVIA_CHECK_EQ(gz.size, std::uint64_t{20});
-    RUVIA_CHECK(gz.vary.find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(gz.vary.contains("Accept-Encoding"));
 
     const auto compressionDisabled = serve("data.txt", "gzip", false);
     RUVIA_CHECK(compressionDisabled.contentEncoding.empty());

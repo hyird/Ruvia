@@ -6,10 +6,10 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
 #include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 
 namespace ruvia::detail {
 
@@ -426,7 +426,7 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
-        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
+        header.type != std::to_underlying(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
     }

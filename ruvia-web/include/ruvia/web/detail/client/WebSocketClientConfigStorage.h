@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/web/WebSocketClient.h"
-
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigValidation.h"
 

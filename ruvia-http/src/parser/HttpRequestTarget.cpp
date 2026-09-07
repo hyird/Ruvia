@@ -1,15 +1,14 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/util/Hex.h"
-
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
-
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <system_error>
+
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace ruvia::detail {
 namespace {
@@ -125,7 +124,7 @@ bool isValidHttpHost(std::string_view value) noexcept {
         const auto literal = value.substr(1, value.size() - 2);
         return isValidIpv6Literal(literal) || isValidIpvFuture(literal);
     }
-    return value.find(':') == std::string_view::npos && isValidRegName(value);
+    return !value.contains(':') && isValidRegName(value);
 }
 
 std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noexcept {
@@ -235,7 +234,7 @@ bool isValidUriAuthority(std::string_view value) noexcept {
         if (delimiter != std::string_view::npos) {
             hasPort = true;
             port = hostAndPort.substr(delimiter + 1);
-            if (port.find(':') != std::string_view::npos) {
+            if (port.contains(':')) {
                 return false;
             }
         }

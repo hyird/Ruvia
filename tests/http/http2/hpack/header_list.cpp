@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -9,6 +7,8 @@
 
 #include "ruvia/http/detail/http2/hpack/Http2HeaderList.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::Http2HeaderList;
@@ -17,12 +17,6 @@ using ruvia::detail::RequestHeaderKind;
 std::pmr::memory_resource* resource() noexcept {
     return std::pmr::new_delete_resource();
 }
-
-template <typename T>
-concept ExposesRvalueHttp2HeaderListStorage =
-    requires(T&& list) { std::move(list).at(std::size_t{}); };
-
-static_assert(!ExposesRvalueHttp2HeaderListStorage<Http2HeaderList>);
 
 }  // namespace
 

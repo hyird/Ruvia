@@ -125,8 +125,8 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     RUVIA_CHECK(generic.connection.empty());
     // The unexpected exception's message must NOT leak into the response body: a
     // library error (SQL text, paths) could otherwise be disclosed to the client.
-    RUVIA_CHECK(generic.body.find("boom") == std::string_view::npos);
-    RUVIA_CHECK(generic.body.find("Internal Server Error") != std::string_view::npos);
+    RUVIA_CHECK(!generic.body.contains("boom"));
+    RUVIA_CHECK(generic.body.contains("Internal Server Error"));
 
     // std::invalid_argument is not a request-validation protocol. Application
     // code can throw it for programming errors (for example, a bad route
@@ -134,7 +134,7 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     const auto invalidArgument = dispatchOne(
         RouteHandler(nullptr, &throwsInvalidArgumentHandler), HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(invalidArgument.status, std::uint16_t{500});
-    RUVIA_CHECK(invalidArgument.body.find("application bug") == std::string_view::npos);
+    RUVIA_CHECK(!invalidArgument.body.contains("application bug"));
 }
 
 RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisement) {
@@ -142,7 +142,7 @@ RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisemen
         RouteHandler(nullptr, &readsRequestBodyHandler), "GET", "/x", "deflate", "encoded");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
     RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
-    RUVIA_CHECK(result.body.find("unsupported_content_coding") != std::string_view::npos);
+    RUVIA_CHECK(result.body.contains("unsupported_content_coding"));
 }
 
 RUVIA_TEST(dispatch_defensively_rejects_malformed_request_content_coding) {
@@ -161,7 +161,7 @@ RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     const auto notAllowed =
         dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kPost, "/x");
     RUVIA_CHECK_EQ(notAllowed.status, std::uint16_t{405});
-    RUVIA_CHECK(notAllowed.allow.find("GET") != std::string_view::npos);
+    RUVIA_CHECK(notAllowed.allow.contains("GET"));
     // The registered method still works.
     RUVIA_CHECK_EQ(
         dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kGet, "/x").status,
@@ -374,7 +374,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
 
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNoContent);
     const auto allow = response.header("Allow").value_or(std::string_view{});
-    RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
-    RUVIA_CHECK(allow.find("POST") != std::string_view::npos);
-    RUVIA_CHECK(allow.find("PROPFIND") != std::string_view::npos);
+    RUVIA_CHECK(allow.contains("GET"));
+    RUVIA_CHECK(allow.contains("POST"));
+    RUVIA_CHECK(allow.contains("PROPFIND"));
 }

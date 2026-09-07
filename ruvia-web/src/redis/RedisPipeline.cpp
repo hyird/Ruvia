@@ -1,11 +1,10 @@
-#include "ruvia/web/redis/Redis.h"
-
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisUtils.h"
-
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/detail/redis/RedisUtils.h"
+#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia {
 

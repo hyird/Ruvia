@@ -3,13 +3,14 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
+#include <expected>
 #include <memory_resource>
 #include <utility>
 #include <variant>
 
-#include <ruvia/core/StopToken.h>
-#include <ruvia/core/Task.h>
-#include <ruvia/core/WorkerHandle.h>
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 
 namespace ruvia {
 
@@ -117,7 +118,7 @@ private:
 
     using Lifecycle = std::variant<TaskScopeEmpty, TaskScopeOpen, TaskScopeJoinReserved,
         TaskScopeJoining, TaskScopeJoined>;
-    using Outcome = std::variant<TaskScopeSuccess, TaskScopeFailure>;
+    using Outcome = std::expected<TaskScopeSuccess, TaskScopeFailure>;
 
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;

@@ -1,15 +1,15 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstdint>
-#include <memory_resource>
 #include <limits>
+#include <memory_resource>
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/app/AppState.h"
-
 #include <exception>
 #include <mutex>
 #include <string_view>
@@ -11,6 +9,7 @@
 #include "ruvia/core/detail/worker/WorkerSelection.h"
 #include "ruvia/web/detail/app/AppRunCoordinator.h"
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
+#include "ruvia/web/detail/app/AppState.h"
 
 namespace ruvia::detail {
 

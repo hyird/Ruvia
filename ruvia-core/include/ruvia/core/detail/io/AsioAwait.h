@@ -1,20 +1,21 @@
 #pragma once
 
-#include <asio/associated_executor.hpp>
-#include <asio/associated_allocator.hpp>
-#include <asio/async_result.hpp>
-#include <asio/awaitable.hpp>
-#include <asio/bind_allocator.hpp>
-#include <asio/post.hpp>
-#include <asio/use_awaitable.hpp>
-
 #include <coroutine>
 #include <exception>
+#include <expected>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <utility>
+
+#include <asio/associated_allocator.hpp>
+#include <asio/associated_executor.hpp>
+#include <asio/async_result.hpp>
+#include <asio/awaitable.hpp>
+#include <asio/bind_allocator.hpp>
+#include <asio/post.hpp>
+#include <asio/use_awaitable.hpp>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/SuspendRaceState.h"
@@ -73,12 +74,12 @@ template <typename T>
 class TaskCompletionResult final {
 public:
     [[nodiscard]] TaskCompletionSuccess<T>* success() & noexcept {
-        return std::get_if<TaskCompletionSuccess<T>>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     TaskCompletionSuccess<T>* success() && = delete;
 
     [[nodiscard]] const TaskCompletionFailure* failure() const& noexcept {
-        return std::get_if<TaskCompletionFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const TaskCompletionFailure* failure() const&& = delete;
 
@@ -86,11 +87,13 @@ private:
     template <typename, typename>
     friend class TaskCompletionState;
 
-    using Value = std::variant<TaskCompletionSuccess<T>, TaskCompletionFailure>;
+    using Value = std::expected<TaskCompletionSuccess<T>, TaskCompletionFailure>;
 
-    template <typename Alternative>
-    explicit TaskCompletionResult(Alternative alternative)
-        : value_(std::move(alternative)) {}
+    explicit TaskCompletionResult(TaskCompletionSuccess<T> success)
+        : value_(std::move(success)) {}
+
+    explicit TaskCompletionResult(TaskCompletionFailure failure) noexcept
+        : value_(std::unexpected(std::move(failure))) {}
 
     [[nodiscard]] static TaskCompletionResult makeSuccess(T value) {
         return TaskCompletionResult(TaskCompletionSuccess<T>(std::move(value)));
@@ -107,12 +110,12 @@ template <>
 class TaskCompletionResult<void> final {
 public:
     [[nodiscard]] const TaskCompletionSuccess<void>* success() const& noexcept {
-        return std::get_if<TaskCompletionSuccess<void>>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const TaskCompletionSuccess<void>* success() const&& = delete;
 
     [[nodiscard]] const TaskCompletionFailure* failure() const& noexcept {
-        return std::get_if<TaskCompletionFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const TaskCompletionFailure* failure() const&& = delete;
 
@@ -120,11 +123,13 @@ private:
     template <typename, typename>
     friend class TaskCompletionState;
 
-    using Value = std::variant<TaskCompletionSuccess<void>, TaskCompletionFailure>;
+    using Value = std::expected<TaskCompletionSuccess<void>, TaskCompletionFailure>;
 
-    template <typename Alternative>
-    explicit TaskCompletionResult(Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
+    explicit TaskCompletionResult(TaskCompletionSuccess<void> success) noexcept
+        : value_(std::move(success)) {}
+
+    explicit TaskCompletionResult(TaskCompletionFailure failure) noexcept
+        : value_(std::unexpected(std::move(failure))) {}
 
     [[nodiscard]] static TaskCompletionResult makeSuccess() noexcept {
         return TaskCompletionResult(TaskCompletionSuccess<void>());

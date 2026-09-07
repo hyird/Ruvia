@@ -1,14 +1,13 @@
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
-
-#include "ruvia/core/detail/util/ConstantTime.h"
-
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-
 #include <array>
 #include <cstddef>
 #include <limits>
 #include <stdexcept>
+
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
+#include "ruvia/core/detail/util/ConstantTime.h"
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
 namespace {

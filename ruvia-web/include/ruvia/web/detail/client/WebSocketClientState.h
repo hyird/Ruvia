@@ -102,9 +102,35 @@ private:
         WritePhase phase_;
     };
 
+    class ActivityLease final {
+    public:
+        explicit ActivityLease(bool& active, const char* message)
+            : active_(&active) {
+            if (*active_) {
+                active_ = nullptr;
+                throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, message);
+            }
+            *active_ = true;
+        }
+
+        ActivityLease(const ActivityLease&) = delete;
+        ActivityLease& operator=(const ActivityLease&) = delete;
+        ActivityLease(ActivityLease&& other) noexcept
+            : active_(std::exchange(other.active_, nullptr)) {}
+        ActivityLease& operator=(ActivityLease&&) = delete;
+
+        ~ActivityLease() {
+            if (active_ != nullptr) {
+                *active_ = false;
+            }
+        }
+
+    private:
+        bool* active_;
+    };
+
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
     [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state);
-    class ActivityLease;
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
         std::shared_ptr<WebSocketClientState> state, OperationOptions options,
         ActivityLease activity);

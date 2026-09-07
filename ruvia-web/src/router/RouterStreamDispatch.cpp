@@ -1,12 +1,11 @@
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/RouteStreamState.h"
-
 #include <optional>
 #include <utility>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 
 // Running a route that streams its response: binding the writer to the Context

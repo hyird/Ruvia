@@ -1,12 +1,12 @@
 #pragma once
 
-#include <memory_resource>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 

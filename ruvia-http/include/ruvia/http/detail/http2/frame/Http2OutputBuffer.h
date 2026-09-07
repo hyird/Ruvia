@@ -9,16 +9,12 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/Http2Types.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 
 namespace ruvia::detail {
 
-// Output acknowledgement is transactional. A transport can distinguish a valid
-// partial write from a complete drain, while an impossible over-consumption leaves
-// both the pending view and its cursor unchanged.
-enum class Http2OutputConsumeStatus : std::uint8_t { kPending,
-    kDrained,
-    kOutOfRange };
+using ruvia::Http2OutputConsumeStatus;
 
 // Sole owner of HTTP/2 outbound bytes and their consumed prefix. Connection logic
 // selects protocol actions; this component owns contiguous frame serialization and

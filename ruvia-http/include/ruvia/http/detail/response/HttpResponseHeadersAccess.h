@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ruvia/http/HttpResponse.h"
-
 #include <cstddef>
 #include <string_view>
+
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

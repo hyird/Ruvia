@@ -1,11 +1,11 @@
 #pragma once
 
-#include <asio/ip/address.hpp>
-#include <asio/ip/address_v6.hpp>
-
 #include <cstddef>
 #include <string_view>
 #include <system_error>
+
+#include <asio/ip/address.hpp>
+#include <asio/ip/address_v6.hpp>
 
 namespace ruvia::detail {
 
@@ -24,7 +24,7 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
 // so that lightweight, widely-included header does not gain an asio dependency.
 [[nodiscard]] inline std::string_view rateLimitKeyFor(
     std::string_view remoteAddress, char (&buffer)[kRateLimitKeyBufferBytes]) noexcept {
-    if (remoteAddress.find(':') == std::string_view::npos) {
+    if (!remoteAddress.contains(':')) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }
     std::error_code ec;

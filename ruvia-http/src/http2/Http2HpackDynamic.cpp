@@ -1,8 +1,8 @@
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/frame/Http2OffsetVector.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
-
 #include <exception>
+
+#include "ruvia/http/detail/http2/frame/Http2OffsetVector.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
 
 namespace ruvia::detail {
 

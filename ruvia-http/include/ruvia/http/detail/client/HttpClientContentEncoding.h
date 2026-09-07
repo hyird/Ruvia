@@ -4,9 +4,9 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {
 

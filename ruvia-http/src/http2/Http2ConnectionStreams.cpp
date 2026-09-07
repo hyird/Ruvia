@@ -1,10 +1,9 @@
-#include "ruvia/http/detail/http2/Http2Connection.h"
-
 #include <utility>
 
+#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 
@@ -30,7 +29,7 @@ constexpr std::size_t kHttp2RapidResetGoawayBytes =
 }  // namespace
 
 bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
-    return std::ranges::find(pinnedStreams_, streamId) != pinnedStreams_.end();
+    return std::ranges::contains(pinnedStreams_, streamId);
 }
 
 void Http2Connection::pinStream(std::uint32_t streamId) {

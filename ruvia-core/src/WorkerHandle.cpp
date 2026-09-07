@@ -1,9 +1,9 @@
-#include <ruvia/core/WorkerHandle.h>
-
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-#include <ruvia/core/detail/worker/WorkerTimer.h>
+#include "ruvia/core/WorkerHandle.h"
 
 #include <stdexcept>
+
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia {
 

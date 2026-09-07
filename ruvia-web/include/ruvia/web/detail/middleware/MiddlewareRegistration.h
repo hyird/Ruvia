@@ -6,13 +6,18 @@
 #include <utility>
 
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/web/Context.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Middleware.h"
-#include "ruvia/web/detail/util/RegistrationResource.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 namespace ruvia::detail {
+
+// Context::respond() needs a complete Context. This header is included by
+// App.h and by Session.h while Context is still incomplete, so the call lives
+// in a .cpp that already has the class definition.
+void applyMiddlewareResponse(Context& context, HttpResponse&& response);
 
 template <typename MiddlewareT>
 concept VoidHandleMiddleware =
@@ -27,7 +32,7 @@ template <typename MiddlewareT>
 [[nodiscard]] Task<void> invokeResponseMiddleware(void* target, Context& context, Next& next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
     auto response = co_await middleware->handle(context, next);
-    context.respond(std::move(response));
+    applyMiddlewareResponse(context, std::move(response));
 }
 
 template <typename MiddlewareT>
@@ -129,18 +134,6 @@ template <typename MiddlewareT>
 // stay readable for the process lifetime rather than the caller's scope.
 // Registering without arguments is the zero-argument case of this, so there is
 // one descriptor shape and one construction path.
-// Copies text onto the process registration resource so a descriptor can hold a
-// view of it. The caller's argument may be a temporary; the descriptor outlives
-// every route table built from it.
-[[nodiscard]] inline std::string_view retainRegistrationText(std::string_view text) {
-    if (text.empty()) {
-        return {};
-    }
-    const auto* stored =
-        constructPmrObject<std::pmr::string>(registrationResource(), text, registrationResource());
-    return std::string_view(*stored);
-}
-
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
     static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,

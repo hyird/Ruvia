@@ -1,6 +1,6 @@
 BasedOnStyle: Google
 Language: Cpp
-Standard: c++20
+Standard: Latest
 
 IndentWidth: 4
 ContinuationIndentWidth: 4
@@ -17,6 +17,7 @@ AlignAfterOpenBracket: DontAlign
 BinPackArguments: true
 BinPackParameters: true
 AllowShortFunctionsOnASingleLine: Empty
+AllowShortEnumsOnASingleLine: true
 InsertBraces: true
 BreakBeforeBraces: Attach
 BreakTemplateDeclarations: Yes
@@ -26,7 +27,23 @@ ReflowComments: false
 DerivePointerAlignment: false
 PointerAlignment: Left
 
-IncludeBlocks: Preserve
-SortIncludes: Never
+IncludeBlocks: Regroup
+SortIncludes: CaseSensitive
+IncludeCategories:
+  - Regex: '^<(asio|openssl)(/|\.hpp>|\.h>)'
+    Priority: 3
+    SortPriority: 3
+  - Regex: '^<.+\.h>'
+    Priority: 1
+    SortPriority: 1
+  - Regex: '^<'
+    Priority: 2
+    SortPriority: 2
+  - Regex: '^"ruvia/'
+    Priority: 4
+    SortPriority: 4
+  - Regex: '.*'
+    Priority: 5
+    SortPriority: 5
 FixNamespaceComments: true
 SpacesBeforeTrailingComments: 2

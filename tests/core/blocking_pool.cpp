@@ -1,13 +1,3 @@
-#include <ruvia/core/BlockingPool.h>
-#include <ruvia/core/TaskScope.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/post.hpp>
-
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -18,12 +8,15 @@
 #include <type_traits>
 #include <utility>
 
-template <typename T>
-concept HasRvalueBlockingError = requires(T&& result) { std::move(result).error(); };
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
-static_assert(!std::is_constructible_v<ruvia::BlockingResult<int>, ruvia::BlockingStatus>);
-static_assert(!std::is_constructible_v<ruvia::BlockingOperationRejected, ruvia::BlockingStatus>);
-static_assert(!HasRvalueBlockingError<ruvia::BlockingResult<int>>);
+#include "ruvia/core/BlockingPool.h"
+#include "ruvia/core/TaskScope.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

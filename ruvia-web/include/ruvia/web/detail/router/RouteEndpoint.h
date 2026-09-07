@@ -8,13 +8,13 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/util/CallableRef.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/router/RouteModes.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 #include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler shape together with the route metadata only

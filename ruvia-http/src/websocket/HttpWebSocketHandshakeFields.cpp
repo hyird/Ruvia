@@ -1,19 +1,18 @@
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
-#include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
-
 #include <algorithm>
 #include <span>
 
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 namespace ruvia::detail {
 namespace {

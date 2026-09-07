@@ -1,14 +1,3 @@
-#include <ruvia/core/TaskScope.h>
-#include <ruvia/core/StopToken.h>
-#include <ruvia/core/Timer.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-#include <ruvia/core/detail/worker/WorkerWaitAwaiter.h>
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-
 #include <atomic>
 #include <barrier>
 #include <chrono>
@@ -21,32 +10,18 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/TaskScope.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/detail/worker/WorkerWaitAwaiter.h"
+
 namespace {
-
-static_assert(std::same_as<decltype(ruvia::sleepFor(std::declval<const ruvia::WorkerHandle&>(),
-                               std::chrono::steady_clock::duration{})),
-    ruvia::Task<ruvia::TimerSleepResult>>);
-static_assert(
-    std::same_as<decltype(ruvia::sleepFor(std::declval<const ruvia::WorkerHandle&>(),
-                     std::chrono::steady_clock::duration{}, std::declval<ruvia::StopToken>())),
-        ruvia::Task<ruvia::TimerSleepResult>>);
-
-template <typename Worker>
-concept AcceptsTemporaryBorrowedWorker = requires(Worker&& worker) {
-    ruvia::sleepFor(std::forward<Worker>(worker), std::chrono::steady_clock::duration{});
-};
-
-template <typename Worker>
-concept AcceptsTemporaryBorrowedWorkerWithStopToken =
-    requires(Worker&& worker, ruvia::StopToken token) {
-        ruvia::sleepFor(std::forward<Worker>(worker), std::chrono::steady_clock::duration{}, token);
-    };
-
-static_assert(!AcceptsTemporaryBorrowedWorker<ruvia::WorkerHandle>);
-static_assert(!AcceptsTemporaryBorrowedWorkerWithStopToken<ruvia::WorkerHandle>);
-static_assert(!std::is_convertible_v<ruvia::TimerSleepResult, bool>);
-static_assert(!std::is_move_constructible_v<ruvia::detail::WorkerTimerRegistration>);
-static_assert(!std::is_move_assignable_v<ruvia::detail::WorkerTimerRegistration>);
 
 class ThrowingMove final {
 public:

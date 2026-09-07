@@ -4,7 +4,8 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
-#include <ruvia/core/EventLoop.h>
+
+#include "ruvia/core/EventLoop.h"
 
 namespace ruvia {
 

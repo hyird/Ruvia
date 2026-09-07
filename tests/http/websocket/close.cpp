@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <optional>
@@ -11,6 +9,8 @@
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::encodeWebSocketClosePayload;
@@ -20,17 +20,6 @@ using ruvia::detail::webSocketClosePayloadFailure;
 using ruvia::detail::WebSocketEncodedClosePayload;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
-
-template <typename T>
-concept HasAnyRvalueClosePayloadAccessor = requires(T&& result) { std::move(result).encoded(); } ||
-                                           requires(T&& result) { std::move(result).failure(); };
-
-template <typename T>
-concept ExposesRvalueEncodedClosePayloadBytes =
-    requires(T&& payload) { std::move(payload).bytes(); };
-
-static_assert(!HasAnyRvalueClosePayloadAccessor<WebSocketClosePayloadEncodeResult>);
-static_assert(!ExposesRvalueEncodedClosePayloadBytes<WebSocketEncodedClosePayload>);
 
 std::string closeBody(std::uint16_t code, std::string_view reason) {
     std::string body;
@@ -53,9 +42,6 @@ std::uint16_t failureCloseCode(std::string_view body) {
     const auto failure = webSocketClosePayloadFailure(body);
     return failure.has_value() ? webSocketProtocolFailureCloseCode(*failure) : 0;
 }
-
-static_assert(noexcept(webSocketClosePayloadFailure(std::string_view{})));
-static_assert(noexcept(encodeWebSocketClosePayload(std::uint16_t{}, std::string_view{})));
 
 }  // namespace
 

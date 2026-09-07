@@ -7,11 +7,11 @@
 #include <utility>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
 
@@ -181,7 +181,7 @@ struct HttpUpgradeProtocol final {
         slash == std::string_view::npos ? std::string_view{} : value.substr(slash + 1);
     if (!isValidHttpHeaderName(name) ||
         (slash != std::string_view::npos &&
-            (!isValidHttpHeaderName(version) || version.find('/') != std::string_view::npos))) {
+            (!isValidHttpHeaderName(version) || version.contains('/')))) {
         return false;
     }
     output = HttpUpgradeProtocol{.name = name, .version = version};

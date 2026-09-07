@@ -1,10 +1,10 @@
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-
-#include <asio/io_context.hpp>
-
 #include <cstdlib>
 #include <exception>
 #include <memory>
+
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

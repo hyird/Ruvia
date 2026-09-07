@@ -20,10 +20,10 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {

@@ -1,10 +1,10 @@
 // Middleware Next: the value Next and one-shot co_await next() signatures.
 
-#include "ruvia/web/App.h"
-#include "ruvia/web/Controller.h"
-
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 template <typename T>
 concept HasStorableNextAwaiter = requires(

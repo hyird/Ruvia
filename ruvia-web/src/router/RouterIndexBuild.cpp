@@ -1,9 +1,9 @@
-#include "ruvia/web/detail/router/RouteTable.h"
-
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {
 

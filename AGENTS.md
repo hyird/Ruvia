@@ -6,7 +6,7 @@ README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡
 
 ## 项目定位
 
-Ruvia 是 C++20 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
+Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
 
 ```text
 ruvia-core  -> ruvia::core
@@ -32,6 +32,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
+- 机械代码风格（include 形状、错误返回层、命名）见 `STYLE.md`，不要把那些规则再抄进本文件。
 
 ## 目录规则
 
@@ -65,8 +66,10 @@ tests/support/
 
 不要把 HTTP/1、HTTP/2 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
 target 专属的支撑代码跟随所属 target，只有跨 target 的通用支撑保留在
-独立目录。测试只保留可直接验证功能行为的单元测试，不新增 guards、
-server/integration、conformance、benchmark 或故意失败的 probe target。
+独立目录。测试只保留可直接验证被测单元正确性的功能单测；不得为历史缺陷、
+目录/target/依赖边界、安装消费或编译 API 表面保留防回归测试或门禁。需要时可为
+当次变更临时生成上述验证，完成后必须立即删除临时文件、target 和 CTest 注册。
+不新增长期 guards、server/integration、conformance、benchmark 或故意失败的 probe target。
 
 仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/` 或 `web/`。
 

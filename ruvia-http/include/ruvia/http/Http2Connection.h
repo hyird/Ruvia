@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -13,6 +14,7 @@
 
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/Http2Framing.h"
+#include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpExpectations.h"
 #include "ruvia/http/HttpHeader.h"
@@ -28,45 +30,9 @@ class Http2ConnectionOwnerEndpoint;
 class Http2RequestHeadSubmitResult;
 }  // namespace detail
 
-enum class Http2Role : std::uint8_t { kServer,
-    kClient };
-enum class Http2FeedResult : std::uint8_t {
-    kEventsPending,
-    kAccepted,
-    kNeedInput,
-    kProtocolFailure
-};
-enum class Http2EndStream : std::uint8_t { kKeepOpen,
-    kEndStream };
-enum class Http2OutputConsumeStatus : std::uint8_t { kPending,
-    kDrained,
-    kOutOfRange };
-enum class Http2SubmitStatus : std::uint8_t {
-    kAccepted,
-    kClosed,
-    kInvalidState,
-    kInvalidMessage,
-    kPeerCapabilityUnavailable
-};
-enum class Http2DataSubmitStatus : std::uint8_t {
-    kAccepted,
-    kQueued,
-    kBackpressured,
-    kExpectationPending,
-    kClosed,
-    kInvalidState,
-    kContentLengthExceeded,
-    kContentLengthIncomplete
-};
-enum class Http2RequestContentReleaseStatus : std::uint8_t { kReleased,
-    kNotPending,
-    kClosed };
 enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased,
     kClosed,
     kInvalidLease };
-enum class Http2StreamCloseSource : std::uint8_t { kLocal,
-    kPeer,
-    kPeerGoaway };
 
 struct Http2ConnectionOptions final {
     std::pmr::memory_resource* resource{nullptr};
@@ -159,15 +125,6 @@ struct Http2ExtendedConnectRequestHeadView final {
     std::span<const HttpHeaderView> headers{};
 };
 
-enum class Http2RequestHeadSubmitError : std::uint8_t {
-    kInvalidState,
-    kConnectionUnavailable,
-    kPeerStreamLimitReached,
-    kLocalStreamCapacityReached,
-    kPeerCapabilityUnavailable,
-    kInvalidMessage
-};
-
 class Http2SubmittedRequestHead final {
 public:
     [[nodiscard]] constexpr std::uint32_t streamId() const noexcept {
@@ -197,21 +154,21 @@ private:
 class Http2RequestHeadSubmitResult final {
 public:
     [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return std::get_if<Http2SubmittedRequestHead>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const Http2SubmittedRequestHead* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const Http2RequestHeadSubmitFailure* failure() const&& = delete;
 
 private:
     friend class Http2Connection;
-    using Value = std::variant<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
+    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
     explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead value) noexcept
         : value_(value) {}
     explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure value) noexcept
-        : value_(value) {}
+        : value_(std::unexpected(value)) {}
     [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
         std::uint32_t streamId) noexcept {
         return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));

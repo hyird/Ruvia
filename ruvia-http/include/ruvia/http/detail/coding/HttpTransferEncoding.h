@@ -1,14 +1,14 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/coding/HttpTransferCoding.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string_view>
 #include <variant>
+
+#include "ruvia/http/detail/coding/HttpTransferCoding.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 

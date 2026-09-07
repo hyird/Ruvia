@@ -1,12 +1,5 @@
 #pragma once
 
-#include "ruvia/core/detail/util/NativePath.h"
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -17,6 +10,13 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 
 namespace ruvia::detail {
 

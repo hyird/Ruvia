@@ -1,25 +1,10 @@
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
-#include "ruvia/core/detail/util/FailureReport.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/web/detail/app/WebWorkerDispatch.h"
 
-#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
-
-#include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/post.hpp>
-#include <asio/recycling_allocator.hpp>
-#include <asio/ssl/context.hpp>
-#include <asio/ssl/error.hpp>
-#include <asio/system_error.hpp>
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <memory>
 #include <optional>
-#include <openssl/err.h>
-#include <openssl/ssl.h>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -29,13 +14,28 @@
 #include <sys/socket.h>
 #endif
 
+#include <asio/bind_allocator.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/post.hpp>
+#include <asio/recycling_allocator.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/error.hpp>
+#include <asio/system_error.hpp>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/detail/util/FailureReport.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/web/detail/app/WebWorkerDispatch.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
 
 namespace ruvia::detail {
 

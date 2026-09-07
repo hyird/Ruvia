@@ -104,7 +104,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                         break;
                     }
                     if (header.streamId == 1 &&
-                        fields.joined.find(":status=100;") != std::string_view::npos) {
+                        fields.joined.contains(":status=100;")) {
                         gotContinue = true;
                         continueEndedStream =
                             (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
@@ -117,10 +117,10 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                             }
                         }
                     } else if (header.streamId == 1 &&
-                               fields.joined.find(":status=200;") != std::string::npos) {
+                               fields.joined.contains(":status=200;")) {
                         gotSupportedFinal = true;
                     } else if (header.streamId == 3 &&
-                               fields.joined.find(":status=417;") != std::string::npos) {
+                               fields.joined.contains(":status=417;")) {
                         gotUnsupportedFinal = true;
                     }
                 } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
@@ -234,7 +234,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                     const auto decoded = decoder.decode(payload, &fields, &HpackCollect::onHeader);
                     RUVIA_CHECK(decoded.decoded() != nullptr);
                     gotStatus = decoded.decoded() != nullptr &&
-                                fields.joined.find(":status=207;") != std::string::npos;
+                                fields.joined.contains(":status=207;");
                 } else if (header.streamId == 1 &&
                            header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     gotBodyEnd = (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
@@ -435,7 +435,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
 
     io.run();
     RUVIA_CHECK(body == "body-part");
-    RUVIA_CHECK(headFields.find(":status=207;") != std::string_view::npos);
+    RUVIA_CHECK(headFields.contains(":status=207;"));
     RUVIA_CHECK(trailerFields == "x-checksum=abc123;");
     RUVIA_CHECK(trailerEndStream);
     RUVIA_CHECK_EQ(accessObservation.calls, std::size_t{1});

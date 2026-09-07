@@ -1,6 +1,12 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "http2_sansio_session_fixture.h"
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory_resource>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -13,29 +19,23 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include <chrono>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <memory_resource>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+
+#include "http2_sansio_session_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 // The production session header owns every declaration needed by its templates;
 // this test intentionally must not rely on a server-wide include-order umbrella.
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace {
 

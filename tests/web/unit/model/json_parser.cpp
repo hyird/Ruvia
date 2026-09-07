@@ -1,10 +1,10 @@
-#include "model_field_fixture.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
 #include "ruvia/web/Validation.h"
+
+#include "model_field_fixture.h"
 
 RUVIA_TEST(model_json_parser_dispatches_decoded_keys) {
     std::pmr::monotonic_buffer_resource resource;

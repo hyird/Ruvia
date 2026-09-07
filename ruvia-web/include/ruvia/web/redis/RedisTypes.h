@@ -12,9 +12,9 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/core/TcpSocketOptions.h"
 
 namespace ruvia {
 

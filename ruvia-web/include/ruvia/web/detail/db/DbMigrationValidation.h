@@ -1,14 +1,14 @@
 #pragma once
 
-#include "ruvia/web/db/DbMigration.h"
-#include "ruvia/web/detail/db/DbSqlScan.h"
-
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
 #include <string_view>
+
+#include "ruvia/web/db/DbMigration.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
 
 namespace ruvia::detail {
 

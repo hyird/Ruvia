@@ -1,11 +1,11 @@
-#include "ruvia/web/detail/http/SessionAccess.h"
-
 #include "ruvia/web/Session.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/web/Next.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
 #include <stdexcept>
+
+#include "ruvia/web/Context.h"
+#include "ruvia/web/Next.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 
 namespace ruvia {
 
@@ -26,31 +26,31 @@ void Session::regenerate() {
 }
 
 Session Context::session() {
-    if (!sessionState_.available()) {
+    if (!sessionState().available()) {
         throw std::logic_error("session capability is not bound for this request");
     }
-    return Session(sessionState_);
+    return Session(sessionState());
 }
 
 std::optional<Session> Context::trySession() noexcept {
-    if (!sessionState_.available()) {
+    if (!sessionState().available()) {
         return std::nullopt;
     }
-    return Session(sessionState_);
+    return Session(sessionState());
 }
 
 }  // namespace ruvia
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/util/RegistrationResource.h"
-#include "ruvia/web/redis/RedisHandle.h"
-#include "ruvia/http/HttpHeader.h"
-
 #include <array>
 #include <chrono>
 #include <memory_resource>
+
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
+#include "ruvia/web/redis/RedisHandle.h"
 
 namespace ruvia {
 

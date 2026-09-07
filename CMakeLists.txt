@@ -71,7 +71,7 @@ if(WIN32 AND NOT MSVC)
     message(FATAL_ERROR "Ruvia Windows builds require MSVC")
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL ON)
@@ -107,7 +107,7 @@ function(ruvia_deduplicate_link_interface target)
 endfunction()
 
 function(ruvia_configure_library target)
-    target_compile_features(${target} PUBLIC cxx_std_20)
+    target_compile_features(${target} PUBLIC cxx_std_23)
 
     target_include_directories(${target}
         PUBLIC
@@ -137,10 +137,6 @@ function(ruvia_configure_library target)
         endif()
     endif()
 
-    target_link_options(${target}
-        INTERFACE
-            $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
-    )
 endfunction()
 
 function(ruvia_configure_runtime_library target)

@@ -7,11 +7,11 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
+#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 
 // What every HTTP/1 route dispatch needs from the session that owns the
 // request: the transport, the worker's memory and scanner entry, the parsed

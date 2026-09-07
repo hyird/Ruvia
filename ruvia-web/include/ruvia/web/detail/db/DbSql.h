@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/web/db/Db.h"
-
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+#include "ruvia/web/db/Db.h"
 
 struct st_mysql;
 struct st_mysql_res;

@@ -1,19 +1,19 @@
 #pragma once
 
-#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/web/detail/http/HttpCors.h"
-#include "ruvia/web/Error.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpResponse.h"
-
 #include <exception>
 #include <optional>
 #include <variant>
+
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/web/Error.h"
+#include "ruvia/web/detail/http/HttpCors.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 
 namespace ruvia::detail {
 

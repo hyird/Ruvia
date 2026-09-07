@@ -3,8 +3,6 @@
 // statement syntax from data. Nothing here needs a driver's client library, so
 // it is compiled for either of them rather than only alongside MariaDB.
 
-#include "test_harness.h"
-
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -18,6 +16,8 @@
 #include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
+
+#include "test_harness.h"
 
 using ruvia::testing::throwsOn;
 

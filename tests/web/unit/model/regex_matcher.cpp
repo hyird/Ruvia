@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <string>
 
 #include "ruvia/web/detail/model/pattern/RegexMatcher.h"
+
+#include "test_harness.h"
 
 namespace {
 

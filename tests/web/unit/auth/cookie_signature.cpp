@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -8,6 +6,8 @@
 #include <string_view>
 
 #include "ruvia/web/detail/auth/CookieSignature.h"
+
+#include "test_harness.h"
 
 namespace {
 

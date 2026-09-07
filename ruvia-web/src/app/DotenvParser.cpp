@@ -1,10 +1,10 @@
-#include "ruvia/web/detail/app/EnvState.h"
-
 #include <algorithm>
 #include <fstream>
 #include <ranges>
 #include <stdexcept>
 #include <string>
+
+#include "ruvia/web/detail/app/EnvState.h"
 
 namespace ruvia::detail {
 namespace {

@@ -1,10 +1,10 @@
-#include "test_harness.h"
-
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+
+#include "test_harness.h"
 
 namespace {
 

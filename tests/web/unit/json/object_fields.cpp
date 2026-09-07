@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -7,6 +5,8 @@
 #include <vector>
 
 #include "ruvia/web/detail/json/JsonObjectFields.h"
+
+#include "test_harness.h"
 
 namespace {
 

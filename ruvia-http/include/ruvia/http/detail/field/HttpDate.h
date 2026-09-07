@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -12,6 +10,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include "ruvia/http/detail/field/HttpImfFixdate.h"
 
 namespace ruvia::detail {
 
@@ -39,13 +39,13 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool httpIsShortWeekday(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 7> weekdays{
         "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    return std::ranges::find(weekdays, value) != weekdays.end();
+    return std::ranges::contains(weekdays, value);
 }
 
 [[nodiscard]] inline bool httpIsLongWeekday(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 7> weekdays{
         "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
-    return std::ranges::find(weekdays, value) != weekdays.end();
+    return std::ranges::contains(weekdays, value);
 }
 
 [[nodiscard]] inline std::optional<int> httpParseFixedDigits(std::string_view value) noexcept {

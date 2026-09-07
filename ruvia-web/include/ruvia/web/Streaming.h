@@ -1,13 +1,5 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-#include "ruvia/core/StopToken.h"
-#include "ruvia/core/Timer.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/Sse.h"
-#include "ruvia/core/ScopedOperation.h"
-#include "ruvia/web/detail/util/CallableRef.h"
-
 #include <chrono>
 #include <concepts>
 #include <memory_resource>
@@ -17,6 +9,14 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/Sse.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 
 namespace ruvia {
 

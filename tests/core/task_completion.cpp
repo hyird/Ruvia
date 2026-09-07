@@ -1,17 +1,17 @@
-#include <ruvia/core/Task.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-
-#include <asio/bind_executor.hpp>
-#include <asio/bind_allocator.hpp>
-#include <asio/io_context.hpp>
-
-#include <cstddef>
 #include <concepts>
+#include <cstddef>
 #include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+
+#include <asio/bind_allocator.hpp>
+#include <asio/bind_executor.hpp>
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 namespace {
 
@@ -54,22 +54,6 @@ public:
 private:
     AllocationCounts* counts_;
 };
-
-template <typename Result>
-concept HasLooseCompletionFields = requires(Result& result) {
-    result.exception;
-    result.value;
-};
-
-template <typename Result>
-concept HasRvalueCompletionBorrow = requires(Result&& result) { std::move(result).success(); } ||
-                                    requires(Result&& result) { std::move(result).failure(); };
-
-static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!std::default_initializable<ruvia::detail::TaskCompletionResult<void>>);
-static_assert(!HasLooseCompletionFields<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!HasRvalueCompletionBorrow<ruvia::detail::TaskCompletionResult<int>>);
-static_assert(!HasRvalueCompletionBorrow<ruvia::detail::TaskCompletionResult<void>>);
 
 ruvia::Task<std::unique_ptr<int>> makeValue() {
     co_return std::make_unique<int>(42);

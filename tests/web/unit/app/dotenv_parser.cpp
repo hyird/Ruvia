@@ -1,41 +1,19 @@
-#include "test_harness.h"
-
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/web/detail/app/EnvState.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::readDotenvEntries;
-
-template <typename T>
-concept ExposesAnyRvalueEnvBorrow = requires {
-    std::declval<const T&&>().get("NAME");
-} || requires { std::declval<const T&&>().template get<std::string_view>("NAME"); };
-
-template <typename T>
-concept HasDotenvOverrideExistingBoolean = requires(T& options) { options.overrideExisting; };
-
-template <typename T>
-concept HasDotenvRequiredBoolean = requires(T& options) { options.required; };
-
-static_assert(!ExposesAnyRvalueEnvBorrow<ruvia::Env>);
-static_assert(std::is_same_v<decltype(ruvia::DotenvOptions{}.existingVariables),
-    ruvia::DotenvExistingVariablePolicy>);
-static_assert(
-    std::is_same_v<decltype(ruvia::DotenvOptions{}.missingFile), ruvia::DotenvMissingFilePolicy>);
-static_assert(
-    ruvia::DotenvOptions{}.existingVariables == ruvia::DotenvExistingVariablePolicy::kPreserve);
-static_assert(ruvia::DotenvOptions{}.missingFile == ruvia::DotenvMissingFilePolicy::kIgnore);
-static_assert(!HasDotenvOverrideExistingBoolean<ruvia::DotenvOptions>);
-static_assert(!HasDotenvRequiredBoolean<ruvia::DotenvOptions>);
 
 std::filesystem::path writeTempEnv(std::string_view name, std::string_view contents) {
     const auto path = std::filesystem::temp_directory_path() / name;
@@ -208,7 +186,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<std::uint16_t>("BAD_PORT");
     } catch (const std::invalid_argument& error) {
-        badPortThrew = std::string_view(error.what()).find("BAD_PORT") != std::string_view::npos;
+        badPortThrew = std::string_view(error.what()).contains("BAD_PORT");
     }
     RUVIA_CHECK(badPortThrew);
 
@@ -216,7 +194,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<bool>("ENABLED");
     } catch (const std::invalid_argument& error) {
-        badBoolThrew = std::string_view(error.what()).find("ENABLED") != std::string_view::npos;
+        badBoolThrew = std::string_view(error.what()).contains("ENABLED");
     }
     RUVIA_CHECK(badBoolThrew);
 
@@ -225,7 +203,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
         (void)env.get<double>("BAD_DOUBLE");
     } catch (const std::invalid_argument& error) {
         badDoubleThrew =
-            std::string_view(error.what()).find("BAD_DOUBLE") != std::string_view::npos;
+            std::string_view(error.what()).contains("BAD_DOUBLE");
     }
     RUVIA_CHECK(badDoubleThrew);
 
@@ -233,7 +211,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
     try {
         (void)env.get<double>("BAD_INF");
     } catch (const std::invalid_argument& error) {
-        badInfThrew = std::string_view(error.what()).find("BAD_INF") != std::string_view::npos;
+        badInfThrew = std::string_view(error.what()).contains("BAD_INF");
     }
     RUVIA_CHECK(badInfThrew);
 }

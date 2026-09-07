@@ -1,8 +1,8 @@
 #pragma once
 
+#include <expected>
 #include <span>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/core/detail/util/ConstantTime.h"
 
@@ -28,12 +28,12 @@ struct SecureTokenFailure final {};
 class SecureTokenResult final {
 public:
     [[nodiscard]] const SecureTokenReady* ready() const& noexcept {
-        return std::get_if<SecureTokenReady>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     [[nodiscard]] const SecureTokenReady* ready() const&& = delete;
 
     [[nodiscard]] const SecureTokenFailure* failure() const& noexcept {
-        return std::get_if<SecureTokenFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     [[nodiscard]] const SecureTokenFailure* failure() const&& = delete;
 
@@ -50,8 +50,8 @@ private:
     explicit SecureTokenResult(SecureTokenReady value) noexcept
         : value_(value) {}
     explicit SecureTokenResult(SecureTokenFailure value) noexcept
-        : value_(value) {}
-    std::variant<SecureTokenReady, SecureTokenFailure> value_;
+        : value_(std::unexpected(value)) {}
+    std::expected<SecureTokenReady, SecureTokenFailure> value_;
 };
 
 // Fills `buffer` (which must hold at least 48 bytes) with a cryptographically

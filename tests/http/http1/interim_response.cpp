@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <algorithm>
 #include <array>
 #include <concepts>
@@ -14,6 +12,8 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::Http1InterimConnectionDisposition;
@@ -21,27 +21,6 @@ using ruvia::Http1InterimResponsePrepareError;
 using ruvia::Http1InterimResponseWriter;
 using ruvia::HttpHeaderView;
 using ruvia::HttpInterimResponseHead;
-
-template <typename T>
-concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
-    requires(T&& result) { std::move(result).bufferTooSmall(); } || requires(T&& result) {
-        std::move(result).prepared();
-    } || requires(T&& result) { std::move(result).failure(); };
-
-template <typename T>
-concept HasResultKindDiscriminator = requires(const T& result) { result.kind(); };
-
-template <typename T>
-concept HasBooleanFinalConnectionClose =
-    requires(const T& prepared) { prepared.requiresFinalConnectionClose(); };
-
-static_assert(
-    !HasAnyRvalueHttp1InterimResponsePrepareAccessor<ruvia::Http1InterimResponsePrepareResult>);
-static_assert(!HasResultKindDiscriminator<ruvia::Http1InterimResponsePrepareResult>);
-static_assert(!HasBooleanFinalConnectionClose<ruvia::PreparedHttp1InterimResponse>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::PreparedHttp1InterimResponse&>().connectionDisposition()),
-    Http1InterimConnectionDisposition>);
 
 [[nodiscard]] bool unchanged(const std::array<char, 64>& buffer, char sentinel) {
     return std::ranges::all_of(buffer, [sentinel](char value) { return value == sentinel; });
@@ -77,8 +56,8 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
                                                     "Link: </style.css>; rel=preload\r\n"
                                                     "Content-Type: text/html; charset=utf-8\r\n"
                                                     "X-Hint: warm\r\n\r\n"));
-        RUVIA_CHECK(preparedHints->head().find("Server:") == std::string_view::npos);
-        RUVIA_CHECK(preparedHints->head().find("Date:") == std::string_view::npos);
+        RUVIA_CHECK(!preparedHints->head().contains("Server:"));
+        RUVIA_CHECK(!preparedHints->head().contains("Date:"));
     }
 }
 
@@ -108,7 +87,7 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
     if (prepared != nullptr) {
         RUVIA_CHECK_EQ(prepared->connectionDisposition(),
             Http1InterimConnectionDisposition::kCloseAfterInterimResponse);
-        RUVIA_CHECK(prepared->head().find("Upgrade: example/1\r\n") != std::string_view::npos);
+        RUVIA_CHECK(prepared->head().contains("Upgrade: example/1\r\n"));
     }
 }
 

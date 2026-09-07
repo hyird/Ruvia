@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/HttpResponse.h"
-
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

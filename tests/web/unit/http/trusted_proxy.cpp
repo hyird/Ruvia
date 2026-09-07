@@ -1,9 +1,11 @@
-#include "test_harness.h"
 #include "context_services_fixture.h"
+#include "test_harness.h"
 
 // Who the client is behind a reverse proxy. The header is attacker-controlled,
 // so the whole contract turns on the peer being one the deployment declared
 // trustworthy; the default of trusting nobody must never read it.
+
+#include <string_view>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
@@ -13,8 +15,6 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
-
-#include <string_view>
 
 namespace {
 

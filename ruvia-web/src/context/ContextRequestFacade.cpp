@@ -1,7 +1,7 @@
+#include <stdexcept>
+
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/request/RequestQueryValues.h"
-
-#include <stdexcept>
 
 namespace ruvia {
 
@@ -160,7 +160,7 @@ std::pmr::memory_resource* ContextRequest::resource() const noexcept {
 }
 
 const detail::RequestBindings& ContextRequest::requestBindings() const noexcept {
-    return context_->requestBindings_;
+    return context_->requestBindings();
 }
 
 }  // namespace ruvia

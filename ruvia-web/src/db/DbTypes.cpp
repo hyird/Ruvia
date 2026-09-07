@@ -1,8 +1,7 @@
-#include "ruvia/web/db/Db.h"
-
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <utility>
+
+#include "ruvia/web/db/Db.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia {
 

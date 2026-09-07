@@ -42,6 +42,7 @@ private:
 
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Middleware.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
 namespace ruvia {
 

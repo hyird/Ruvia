@@ -1,8 +1,5 @@
 #pragma once
 
-#include "ruvia/web/detail/json/JsonEscape.h"
-#include "ruvia/web/detail/model/Traits.h"
-
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -13,6 +10,9 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+
+#include "ruvia/web/detail/json/JsonEscape.h"
+#include "ruvia/web/detail/model/Traits.h"
 
 namespace ruvia::detail {
 

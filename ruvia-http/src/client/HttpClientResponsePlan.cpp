@@ -1,10 +1,10 @@
-#include "ruvia/http/detail/client/HttpClientResponseHead.h"
-
+#include <expected>
 #include <optional>
 
+#include "ruvia/http/detail/client/HttpClientResponseHead.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
 // protocols given what the request offered, does the body have a length, and
@@ -211,7 +211,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
             response.contentLengthFieldPresent || response.sawTransferEncoding ||
             !requestAllowsProtocolSwitch(exchangeState, response, requestContentPhase)) {
-            return Http1ClientResponseParseError::kInvalidProtocolSwitch;
+            return std::unexpected(Http1ClientResponseParseError::kInvalidProtocolSwitch);
         }
         return Http1ClientResponsePlanAccess::protocolUpgrade(std::nullopt);
     }
@@ -228,7 +228,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const bool resetContentRequiresEmpty = response.statusCode == http_status::kResetContent;
     const auto contentLength = response.contentLength.value();
     if (resetContentRequiresEmpty && contentLength.has_value() && *contentLength != 0) {
-        return Http1ClientResponseParseError::kInvalidContentLength;
+        return std::unexpected(Http1ClientResponseParseError::kInvalidContentLength);
     }
 
     const auto persistence = finalResponsePersistence(exchangeState, response);
@@ -241,10 +241,11 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const auto transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
-            return Http1ClientResponseParseError::kContentLengthAndTransferEncoding;
+            return std::unexpected(
+                Http1ClientResponseParseError::kContentLengthAndTransferEncoding);
         }
         if (!transferEncoding.has_value()) {
-            return Http1ClientResponseParseError::kInvalidTransferEncoding;
+            return std::unexpected(Http1ClientResponseParseError::kInvalidTransferEncoding);
         }
         if (const auto* finalChunked = transferEncoding->finalChunked()) {
             if (resetContentRequiresEmpty) {

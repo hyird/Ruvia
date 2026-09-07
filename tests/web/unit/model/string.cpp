@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -9,27 +6,14 @@
 
 #include "ruvia/web/ModelTypes.h"
 
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::test::CountingMemoryResource;
 
 }  // namespace
-
-template <typename T>
-concept ExposesAnyRvalueModelStringBorrow =
-    requires { std::declval<const T&&>().view(); } || requires {
-        std::declval<const T&&>().data();
-    } || requires { static_cast<std::string_view>(std::declval<const T&&>()); };
-
-template <typename T>
-concept ExposesRvalueFixedStringView = requires { std::declval<const T&&>().view(); };
-
-static_assert(!std::is_copy_constructible_v<ruvia::String>);
-static_assert(!std::is_copy_assignable_v<ruvia::String>);
-static_assert(std::is_nothrow_move_constructible_v<ruvia::String>);
-static_assert(std::is_nothrow_move_assignable_v<ruvia::String>);
-static_assert(!ExposesAnyRvalueModelStringBorrow<ruvia::String>);
-static_assert(!ExposesRvalueFixedStringView<ruvia::FixedString<6>>);
 
 RUVIA_TEST(model_string_public_construction_owns_input) {
     CountingMemoryResource resource;

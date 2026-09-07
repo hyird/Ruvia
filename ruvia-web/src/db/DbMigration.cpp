@@ -1,18 +1,3 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
-#include "ruvia/web/detail/db/DbMigrationChecksum.h"
-#include "ruvia/web/detail/db/DbMigrationValidation.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/integration/NamedCapability.h"
-#include "ruvia/web/db/Db.h"
-
-#include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/memory/PmrObject.h"
-
-#include <asio/io_context.hpp>
-
-#include <openssl/evp.h>
-
 #include <array>
 #include <chrono>
 #include <exception>
@@ -20,6 +5,19 @@
 #include <optional>
 #include <stdexcept>
 #include <utility>
+
+#include <asio/io_context.hpp>
+#include <openssl/evp.h>
+
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/web/db/Db.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationChecksum.h"
+#include "ruvia/web/detail/db/DbMigrationValidation.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbUtils.h"
+#include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia {
 namespace {

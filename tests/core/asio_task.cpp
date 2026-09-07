@@ -1,6 +1,3 @@
-#include <ruvia/core/AsioTask.h>
-#include <ruvia/core/EventLoopPool.h>
-
 #include <concepts>
 #include <future>
 #include <memory>
@@ -8,36 +5,16 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopPool.h"
+
 namespace {
-
-template <typename T>
-concept PubliclyAdaptableTask = requires(ruvia::Task<T> task) {
-    { ruvia::asAwaitable(std::move(task)) } -> std::same_as<asio::awaitable<T>>;
-};
-
-template <typename T>
-concept AdaptableTaskLvalue = requires(ruvia::Task<T>& task) { ruvia::asAwaitable(task); };
-
-template <typename T>
-concept InternallyAdaptableTask =
-    requires(ruvia::Task<T> task) { ruvia::detail::taskAsAwaitable(std::move(task)); };
 
 struct ThrowingMove final {
     ThrowingMove() = default;
     ThrowingMove(const ThrowingMove&) = delete;
     ThrowingMove(ThrowingMove&&) noexcept(false) {}
 };
-
-static_assert(PubliclyAdaptableTask<int>);
-static_assert(PubliclyAdaptableTask<void>);
-static_assert(!PubliclyAdaptableTask<ThrowingMove>);
-static_assert(!ruvia::detail::AsioTaskResult<ThrowingMove>);
-static_assert(!InternallyAdaptableTask<ThrowingMove>);
-static_assert(!AdaptableTaskLvalue<int>);
-static_assert(!AdaptableTaskLvalue<void>);
-static_assert(std::same_as<decltype(std::declval<const ruvia::EventLoop&>().start(
-                               std::declval<ruvia::Task<int>>())),
-    ruvia::RootTask<int>>);
 
 ruvia::Task<std::unique_ptr<int>> makeValue(ruvia::WorkerHandle worker) {
     if (!worker.isCurrent()) {

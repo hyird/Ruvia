@@ -1,10 +1,9 @@
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
-
-#include "ruvia/core/detail/util/Base64Url.h"
-
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+
+#include "ruvia/core/detail/util/Base64Url.h"
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
 

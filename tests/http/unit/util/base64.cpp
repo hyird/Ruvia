@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/util/HttpBase64.h"
+
+#include "test_harness.h"
 
 namespace {
 

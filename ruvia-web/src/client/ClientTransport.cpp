@@ -95,7 +95,7 @@ void validateClientOriginHost(
     std::string_view host, const char* emptyMessage, const char* invalidMessage) {
     ensureConfigHost(host, emptyMessage, invalidMessage, kSeparatedPortHostRules);
     std::string wireHost;
-    if (host.find(':') != std::string_view::npos) {
+    if (host.contains(':')) {
         wireHost.reserve(host.size() + 2);
         wireHost.push_back('[');
         wireHost.append(host);

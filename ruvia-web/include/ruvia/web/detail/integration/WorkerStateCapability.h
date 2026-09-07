@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/integration/WorkerStateKey.h"
 
 namespace ruvia::detail {
 

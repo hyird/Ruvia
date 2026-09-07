@@ -1,8 +1,8 @@
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
-
 #include <array>
 #include <cstddef>
+
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
 
 namespace ruvia::detail {
 

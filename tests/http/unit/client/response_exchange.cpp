@@ -1,6 +1,6 @@
-#include "http_client_response_fixture.h"
-
 #include <optional>
+
+#include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: the exchange around it: interim responses, Expect, upgrades and tunnels.
 

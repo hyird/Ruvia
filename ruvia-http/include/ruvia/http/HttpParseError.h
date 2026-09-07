@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ruvia/http/HttpProtocolError.h"
-
 #include <cstdint>
+
+#include "ruvia/http/HttpProtocolError.h"
 
 namespace ruvia {
 

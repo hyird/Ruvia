@@ -1,13 +1,12 @@
 #pragma once
 
-#include "ruvia/web/redis/Redis.h"
-
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-
 #include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia::detail {
 

@@ -4,9 +4,9 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/detail/app/AppAccess.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 

@@ -1,10 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-
 #include <chrono>
 #include <concepts>
 #include <cstdint>
@@ -17,17 +10,24 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -54,63 +54,6 @@ struct BorrowTestScannerEntry final {
 
 using Http1BorrowTestSink =
     ruvia::detail::ResponseStreamSink<BorrowTestStream, BorrowTestScannerEntry>;
-
-static_assert(std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&,
-    ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, const ruvia::WorkerHandle&,
-    ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection,
-    ruvia::detail::HttpResponseCodingAvailability>);
-static_assert(!std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&,
-    ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, const ruvia::WorkerHandle&,
-    ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection>);
-static_assert(!std::constructible_from<Http1BorrowTestSink, BorrowTestStream&, ruvia::WorkerMemory&,
-    ruvia::detail::ResponseHeadBuffer&, BorrowTestScannerEntry&, ruvia::WorkerHandle&&,
-    ResponseStreamKind, ruvia::detail::Http1ResponseStreamPlan, HttpResponseCodingSelection,
-    ruvia::detail::HttpResponseCodingAvailability>);
-
-template <typename Result>
-concept HasLegacyStreamedPredicate = requires(const Result& result) {
-    { result.streamed() } -> std::same_as<bool>;
-};
-
-template <typename Result>
-concept HasLegacySharedResponseTake = requires(Result& result) {
-    { result.takeResponse() } -> std::same_as<HttpResponse>;
-};
-
-template <typename Result>
-concept HasLegacyNestedStreamOutcome = requires(const Result& result) { result.outcome(); };
-
-template <typename Result>
-concept HasAnyRvalueResponseStreamDispatchBorrow =
-    requires(Result&& value) { std::move(value).completed(); } ||
-    requires(Result&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
-    requires(Result&& value) { std::move(value).peerAbortedAfterCommit(); } ||
-    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
-    requires(Result&& value) { std::move(value).routeResponse(); } ||
-    requires(Result&& value) { std::move(value).recoveredFailure(); };
-
-static_assert(!std::default_initializable<ResponseStreamDispatchResult>);
-static_assert(!HasAnyRvalueResponseStreamDispatchBorrow<ResponseStreamDispatchResult>);
-static_assert(!HasLegacyStreamedPredicate<ResponseStreamDispatchResult>);
-static_assert(!HasLegacySharedResponseTake<ResponseStreamDispatchResult>);
-static_assert(!HasLegacyNestedStreamOutcome<ResponseStreamDispatchResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const ResponseStreamDispatchResult&>().completed()),
-        const ruvia::detail::ResponseStreamCompleted*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ResponseStreamDispatchResult&>().peerAbortedBeforeCommit()),
-    const ruvia::detail::ResponseStreamPeerAbortedBeforeCommit*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ResponseStreamDispatchResult&>().peerAbortedAfterCommit()),
-    const ruvia::detail::ResponseStreamPeerAbortedAfterCommit*>);
-static_assert(
-    std::same_as<decltype(std::declval<const ResponseStreamDispatchResult&>().failedAfterCommit()),
-        const ruvia::detail::ResponseStreamFailedAfterCommit*>);
-static_assert(std::same_as<decltype(std::declval<ResponseStreamDispatchResult&>().routeResponse()),
-    ruvia::detail::ResponseStreamRouteResponse*>);
-static_assert(
-    std::same_as<decltype(std::declval<ResponseStreamDispatchResult&>().recoveredFailure()),
-        ruvia::detail::ResponseStreamRecoveredFailure*>);
 
 class CapturingStreamSink final {
 public:

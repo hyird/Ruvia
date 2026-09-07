@@ -3,9 +3,9 @@
 [![Build](https://github.com/hyird/Ruvia/actions/workflows/build.yml/badge.svg)](https://github.com/hyird/Ruvia/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/hyird/Ruvia)](https://github.com/hyird/Ruvia/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
+![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)
 
-Ruvia is a C++20 HTTP/Web framework built as three independently consumable
+Ruvia is a C++23 HTTP/Web framework built as three independently consumable
 CMake targets. The repository is a monorepo, but its runtime foundation and
 protocol library do not require the full Web framework.
 
@@ -726,11 +726,10 @@ upgrade routes reject before committing their response head.
 ## Requirements
 
 - CMake 3.24 or newer.
-- A C++20 compiler. CI builds with GCC 13 on Ubuntu 24.04, the stock Apple
-  Clang on macOS 26, and MSVC on Windows.
+- A C++23 compiler. CI builds with GCC 13 on Ubuntu 24.04 and MSVC on Windows.
 - vcpkg.
-- Supported build platforms: Linux, macOS, and Windows 10 or newer. Windows
-  builds require MSVC.
+- Supported build platforms: Linux and Windows 10 or newer. Windows builds
+  require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
   Web adds OpenSSL.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
@@ -748,7 +747,7 @@ options in the parent manifest. On MSVC, select the static runtime before
 creating parent targets that link Ruvia; Ruvia applies `/MT` or `/MTd` only to
 targets in its own directory tree.
 
-Linux / macOS:
+Linux:
 
 ```bash
 cmake -S . -B build -G Ninja \
@@ -936,8 +935,8 @@ controller list or `useController()` step. Every controller translation unit
 retained in the final executable contributes to this process-wide registry.
 Controller static or object libraries are linked with
 `ruvia_link_controllers(application controllers)`, which preserves every
-controller object across GNU, Apple, and MSVC linkers without a manual
-controller list. Dynamically loaded modules must be present before `run()`.
+controller object across GNU and MSVC linkers without a manual controller list.
+Dynamically loaded modules must be present before `run()`.
 The first `App::run()` or `TestApp::request()` seals and deduplicates that
 registry. Loading a controller-bearing module after sealing is a startup error,
 so every worker observes the same controller set.

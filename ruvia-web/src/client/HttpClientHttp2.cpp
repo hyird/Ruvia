@@ -1,13 +1,14 @@
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
-
-#include <array>
 #include <algorithm>
+#include <array>
 
 #include <asio/write.hpp>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
+#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/HttpClientRegistry.h"
+
 #include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
@@ -149,7 +150,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 const auto retained =
                     state.buffered.size() - state.offset + state.pending.size();
                 if (state.collectAll && chunk->bytes().size() >
-                    config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
+                                            config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
                     pending->error = HttpClientError::Code::kResponseTooLarge;
                     submitHttp2Reset(connection, chunk->streamId());
                     pending->signal.notify();

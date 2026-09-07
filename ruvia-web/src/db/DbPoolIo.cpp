@@ -1,10 +1,3 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/detail/db/DbMysqlRuntime.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
-#include "ruvia/web/detail/db/DbSql.h"
-
 #include <mysql/mysql.h>
 
 #include <array>
@@ -18,6 +11,13 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/db/DbMysqlRuntime.h"
+#include "ruvia/web/detail/db/DbPoolOperations.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbSlotSocket.h"
+#include "ruvia/web/detail/db/DbSql.h"
 
 namespace ruvia {
 

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
+
+#include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
 

@@ -8,7 +8,7 @@
 #include <stop_token>
 #include <utility>
 
-#include <ruvia/core/MoveOnlyFunction.h>
+#include "ruvia/core/MoveOnlyFunction.h"
 
 namespace ruvia {
 

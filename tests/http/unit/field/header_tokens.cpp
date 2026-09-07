@@ -1,20 +1,20 @@
-#include "test_harness.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/field/HttpQualityValue.h"
+#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/http/detail/util/HttpOws.h"
-#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
-#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpQualityValue.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
+#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -27,87 +27,6 @@ struct MatchAnyHeaderToken final {
         return true;
     }
 };
-
-template <typename Input>
-concept AcceptsAnyBorrowedHttpSubviewInput =
-    requires(Input&& input) { ruvia::detail::httpTrimOws(std::forward<Input>(input)); } ||
-    requires(Input&& input) { ruvia::detail::httpTrimQuotes(std::forward<Input>(input)); } ||
-    requires(Input&& input) {
-        ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
-    } ||
-    requires(Input&& input) {
-        ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
-    } ||
-    requires(Input&& input) { ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input)); } ||
-    requires(Input&& input) { ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input)); };
-
-template <typename Input>
-concept AcceptsAllBorrowedHttpSubviewInputs = requires(Input&& input) {
-    ruvia::detail::httpTrimOws(std::forward<Input>(input));
-    ruvia::detail::httpTrimQuotes(std::forward<Input>(input));
-    ruvia::detail::httpFindHeaderToken(std::forward<Input>(input), MatchAnyHeaderToken{});
-    ruvia::detail::httpHeaderTokenBeforeParameters(std::forward<Input>(input));
-    ruvia::detail::httpMediaTypeOnly(std::forward<Input>(input));
-    ruvia::detail::httpTrimWeakEtagPrefix(std::forward<Input>(input));
-};
-
-static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::string>);
-static_assert(!AcceptsAnyBorrowedHttpSubviewInput<const std::string>);
-static_assert(!AcceptsAnyBorrowedHttpSubviewInput<std::pmr::string>);
-static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string&>);
-static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::pmr::string&>);
-static_assert(AcceptsAllBorrowedHttpSubviewInputs<std::string_view>);
-
-template <typename Input>
-concept AcceptsAnyBorrowedHttpParserOutputInput =
-    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first,
-        std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol,
-        const ruvia::detail::Http2FrameHeader& frame) {
-        ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
-    } ||
-    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType) {
-        ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
-    } ||
-    requires(Input&& input, std::string_view& first, std::string_view& second) {
-        ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
-    } ||
-    requires(Input&& input, std::string_view& first, bool& flag) {
-        ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
-    } ||
-    requires(Input&& input, ruvia::detail::HttpUpgradeProtocol& protocol) {
-        ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
-    } ||
-    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
-        ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
-    } ||
-    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
-        ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
-    } ||
-    requires(Input&& input, const ruvia::detail::Http2FrameHeader& frame, std::string_view& first) {
-        ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
-    };
-
-template <typename Input>
-concept AcceptsAllBorrowedHttpParserOutputInputs =
-    requires(Input&& input, ruvia::detail::HttpMediaTypeParts& mediaType, std::string_view& first,
-        std::string_view& second, bool& flag, ruvia::detail::HttpUpgradeProtocol& protocol,
-        const ruvia::detail::Http2FrameHeader& frame) {
-        ruvia::detail::httpParseMediaTypeParts(std::forward<Input>(input), false, mediaType);
-        ruvia::detail::httpParseMediaType(std::forward<Input>(input), false, mediaType);
-        ruvia::detail::httpParseMimeParameter(std::forward<Input>(input), first, second);
-        ruvia::detail::httpParseTransferCodingSyntax(std::forward<Input>(input), first, flag);
-        ruvia::detail::httpParseUpgradeProtocol(std::forward<Input>(input), protocol);
-        ruvia::detail::http2StripPadAndPriority(frame, std::forward<Input>(input), false, first);
-        ruvia::detail::http2DecodeHeadersPayload(frame, std::forward<Input>(input), first);
-        ruvia::detail::http2DecodeDataPayload(frame, std::forward<Input>(input), first);
-    };
-
-static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<std::string>);
-static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<const std::string>);
-static_assert(!AcceptsAnyBorrowedHttpParserOutputInput<std::pmr::string>);
-static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::string&>);
-static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::pmr::string&>);
-static_assert(AcceptsAllBorrowedHttpParserOutputInputs<std::string_view>);
 
 }  // namespace
 

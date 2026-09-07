@@ -1,25 +1,3 @@
-#include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
-
-#include "ruvia/web/detail/auth/CookieSignature.h"
-#include "ruvia/web/ModelJson.h"
-#include "ruvia/web/ModelObject.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/field/HttpAcceptToken.h"
-#include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/http/request/RequestFormAccess.h"
-#include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
-#include "ruvia/web/detail/http/request/RequestQueryValues.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
-#include "ruvia/web/detail/http/request/RequestBodyLoader.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/UrlEncoding.h"
-#include "ruvia/web/detail/http/request/RequestFieldParsing.h"
-#include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
-#include "ruvia/web/detail/model/parse/Parser.h"
-
 #include <algorithm>
 #include <memory>
 #include <memory_resource>
@@ -28,6 +6,28 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/UrlEncoding.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
+#include "ruvia/http/detail/field/HttpAcceptToken.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/ModelJson.h"
+#include "ruvia/web/ModelObject.h"
+#include "ruvia/web/detail/auth/CookieSignature.h"
+#include "ruvia/web/detail/http/context/ContextRequestStorage.h"
+#include "ruvia/web/detail/http/request/RequestBodyLoader.h"
+#include "ruvia/web/detail/http/request/RequestFieldParsing.h"
+#include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
+#include "ruvia/web/detail/http/request/RequestFormAccess.h"
+#include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
+#include "ruvia/web/detail/http/request/RequestQueryValues.h"
+#include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
+#include "ruvia/web/detail/model/parse/Parser.h"
 
 namespace ruvia {
 
@@ -452,9 +452,9 @@ Task<std::string_view> Context::requestBody() const {
     }
 
     std::string_view raw;
-    if (const auto* lazy = requestBodySource_.lazy()) {
+    if (const auto* lazy = requestBodySource().lazy()) {
         raw = co_await lazy->loader().readAll();
-    } else if (requestBodySource_.streaming() != nullptr) {
+    } else if (requestBodySource().streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
         raw = detail::requestBodyBytes(request_);
@@ -533,18 +533,18 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
 }
 
 Task<void> Context::requestDiscardBody() const {
-    if (const auto* lazy = requestBodySource_.lazy()) {
+    if (const auto* lazy = requestBodySource().lazy()) {
         co_await lazy->loader().discard();
         co_return;
     }
-    if (const auto* streaming = requestBodySource_.streaming()) {
+    if (const auto* streaming = requestBodySource().streaming()) {
         while (co_await streaming->reader().read()) {
         }
     }
 }
 
 BodyReader& Context::requestBodyReader() const {
-    const auto* streaming = requestBodySource_.streaming();
+    const auto* streaming = requestBodySource().streaming();
     if (streaming == nullptr) {
         throw std::logic_error("request body is not streamable");
     }

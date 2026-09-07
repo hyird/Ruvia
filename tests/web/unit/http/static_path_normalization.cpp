@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
+
+#include "test_harness.h"
 
 namespace {
 

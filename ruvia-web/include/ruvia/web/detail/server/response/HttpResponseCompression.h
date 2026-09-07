@@ -6,6 +6,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
@@ -13,7 +14,6 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/ServerConfig.h"
-#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

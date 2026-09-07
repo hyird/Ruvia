@@ -1,16 +1,15 @@
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
-
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/core/detail/number/DecimalNumber.h"
-#include "ruvia/web/detail/json/JsonObjectFields.h"
-#include "ruvia/web/detail/json/JsonString.h"
-
 #include <charconv>
 #include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/detail/number/DecimalNumber.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
+#include "ruvia/web/detail/json/JsonObjectFields.h"
+#include "ruvia/web/detail/json/JsonString.h"
 
 namespace ruvia {
 namespace detail {

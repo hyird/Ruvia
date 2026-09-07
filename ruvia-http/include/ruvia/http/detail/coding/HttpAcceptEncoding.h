@@ -1,11 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <string_view>
-#include <variant>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
@@ -298,12 +298,12 @@ private:
 class HttpResponseCodingSelectionResult final {
 public:
     [[nodiscard]] const HttpResponseCodingSelection* selected() const& noexcept {
-        return std::get_if<HttpResponseCodingSelection>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const HttpResponseCodingSelection* selected() const&& = delete;
 
     [[nodiscard]] const HttpResponseCodingSelectionFailure* failure() const& noexcept {
-        return std::get_if<HttpResponseCodingSelectionFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const HttpResponseCodingSelectionFailure* failure() const&& = delete;
 
@@ -314,9 +314,9 @@ private:
         : value_(selection) {}
 
     explicit HttpResponseCodingSelectionResult(HttpResponseCodingSelectionFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
-    using Value = std::variant<HttpResponseCodingSelection, HttpResponseCodingSelectionFailure>;
+    using Value = std::expected<HttpResponseCodingSelection, HttpResponseCodingSelectionFailure>;
     Value value_;
 };
 

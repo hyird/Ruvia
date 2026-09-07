@@ -1,18 +1,18 @@
 #pragma once
 
-#include "ruvia/web/detail/controller/ControllerDescriptors.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/web/Model.h"
-#include "ruvia/http/UrlEncoding.h"
-#include "ruvia/web/Validation.h"
-
 #include <memory_resource>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "ruvia/http/UrlEncoding.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/Model.h"
+#include "ruvia/web/Validation.h"
+#include "ruvia/web/detail/controller/ControllerDescriptors.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
 namespace ruvia {
 

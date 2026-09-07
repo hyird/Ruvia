@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
 

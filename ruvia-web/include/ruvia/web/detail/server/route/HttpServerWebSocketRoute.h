@@ -1,26 +1,26 @@
 #pragma once
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
-#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
-#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
-#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
-#include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/core/memory/MemoryPool.h"
-
 #include <exception>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
+#include "ruvia/web/detail/server/response/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 
 namespace ruvia::detail {
 

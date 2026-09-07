@@ -8,8 +8,8 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
 
 namespace ruvia::detail {
 

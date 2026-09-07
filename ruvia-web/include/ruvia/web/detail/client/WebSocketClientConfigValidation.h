@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/web/WebSocketClient.h"
-
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -14,6 +12,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
+#include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 

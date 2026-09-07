@@ -10,8 +10,8 @@
 #include <type_traits>
 #include <utility>
 
-#include <ruvia/core/WorkerHandle.h>
-#include <ruvia/core/detail/util/FailureReport.h>
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/util/FailureReport.h"
 
 namespace ruvia {
 

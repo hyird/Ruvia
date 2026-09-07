@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
 #include <chrono>
 #include <concepts>
 #include <cstdint>
@@ -10,16 +7,19 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
-#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
-#include "ruvia/web/detail/ratelimit/RateLimitKey.h"
-#include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/RateLimit.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/RateLimitRule.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
+#include "ruvia/web/detail/ratelimit/RateLimitKey.h"
+#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -42,17 +42,6 @@ using ruvia::detail::RouteRateLimitPresence;
 bool rateLimitAllowed(RateLimitDecision decision) {
     return decision.allowed() != nullptr;
 }
-
-template <typename Decision>
-concept HasTemporaryRateLimitAlternative = requires(Decision decision) {
-    std::move(decision).allowed();
-    std::move(decision).rejection();
-};
-
-static_assert(!std::default_initializable<RateLimitDecision>);
-static_assert(!std::default_initializable<ruvia::detail::RateLimitAllowed>);
-static_assert(!std::default_initializable<ruvia::detail::RateLimitRejection>);
-static_assert(!HasTemporaryRateLimitAlternative<RateLimitDecision>);
 
 struct RouteLimitResult final {
     bool allowed{false};

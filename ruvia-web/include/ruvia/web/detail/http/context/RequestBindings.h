@@ -191,13 +191,3 @@ RequestBindingHandle<T>::~RequestBindingHandle() noexcept {
 }
 
 }  // namespace ruvia::detail
-
-namespace ruvia {
-
-// The handle a middleware holds to keep a request-scoped value visible to
-// everything it calls through next(). Neither copyable nor movable; its scope is
-// the binding's lifetime.
-template <typename T>
-using RequestStateBinding = detail::RequestBindingHandle<T>;
-
-}  // namespace ruvia

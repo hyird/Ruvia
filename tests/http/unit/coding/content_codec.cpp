@@ -1,8 +1,8 @@
-#include "content_decoding_fixture.h"
-
 #include <cstdint>
 
 #include "ruvia/http/detail/coding/HttpContentEncoder.h"
+
+#include "content_decoding_fixture.h"
 
 using ruvia::detail::HttpContentEncoder;
 using ruvia::detail::HttpContentEncodeStep;

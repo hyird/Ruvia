@@ -1,12 +1,10 @@
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -17,16 +15,17 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after
@@ -43,7 +42,7 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 // leaks .env, .git/config, .htpasswd and similar secrets that happen to sit
 // under a document root.
 [[nodiscard]] bool hasHiddenPathSegment(std::string_view relativeGeneric) noexcept {
-    return relativeGeneric.starts_with('.') || relativeGeneric.find("/.") != std::string_view::npos;
+    return relativeGeneric.starts_with('.') || relativeGeneric.contains("/.");
 }
 
 [[nodiscard]] detail::StaticRootState* makeStaticRootState(detail::StaticRootConfigStorage config) {
@@ -89,9 +88,9 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 [[nodiscard]] bool containsStaticDirectory(
     const std::pmr::vector<std::pmr::string>& directories, std::string_view relativePath) noexcept {
     if (directories.size() <= kStaticRootLinearLookupLimit) {
-        return std::ranges::find(directories, relativePath, [](const auto& directory) noexcept {
+        return std::ranges::contains(directories, relativePath, [](const auto& directory) noexcept {
             return std::string_view(directory);
-        }) != directories.end();
+        });
     }
 
     return std::ranges::binary_search(
