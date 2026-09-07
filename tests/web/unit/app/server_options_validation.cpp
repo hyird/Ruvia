@@ -335,8 +335,6 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
 }
 
 RUVIA_TEST(validated_server_configuration_requires_complete_validation) {
-    using AppListener = decltype(std::declval<ruvia::detail::AppState&>().listeners)::value_type;
-
     RUVIA_CHECK(throwsInvalid([] { (void)validateHttpServerConfiguration({}, {}); }));
     const std::array listeners{
         makeListener(HttpServerListenerDefinition::PlainHttp{}),
