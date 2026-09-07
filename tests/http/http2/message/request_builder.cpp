@@ -119,6 +119,22 @@ RUVIA_TEST(h2_request_builder_preserves_explicit_empty_non_http_path) {
     RUVIA_CHECK(request.queryString().empty());
 }
 
+RUVIA_TEST(h2_request_builder_uses_host_as_authority_when_pseudo_header_omitted) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.assignRequestMethod("GET");
+    stream.assignRequestScheme("https");
+    stream.markScheme(443);
+    stream.assignRequestPath("/");
+    stream.markPath();
+    RUVIA_CHECK(stream.appendRemoteHeader("host", "example.com", RequestHeaderKind::kHost));
+    stream.markHost();
+
+    RUVIA_CHECK(buildRequest(stream, request));
+    RUVIA_CHECK_EQ(request.authority(), std::string_view("example.com"));
+    RUVIA_CHECK_EQ(request.header("host").value_or(""), std::string_view("example.com"));
+}
+
 RUVIA_TEST(h2_request_builder_does_not_forge_host_when_authority_absent) {
     auto request = HttpRequestAccess::make();
     auto stream = makeStream();
