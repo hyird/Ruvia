@@ -1,8 +1,7 @@
-#include "ruvia/http/HttpClient.h"
-
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-
 #include <stdexcept>
+
+#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
 namespace {

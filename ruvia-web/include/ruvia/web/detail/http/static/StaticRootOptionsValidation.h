@@ -104,8 +104,7 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
         default:
             throw std::invalid_argument("invalid static file type mode");
     }
-    if (options.indexFile.find('/') != std::string_view::npos ||
-        options.indexFile.find('\\') != std::string_view::npos || options.indexFile == "." ||
+    if (options.indexFile.contains('/') || options.indexFile.contains('\\') || options.indexFile == "." ||
         options.indexFile == "..") {
         throw std::invalid_argument("invalid static file index name");
     }

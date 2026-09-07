@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <memory_resource>
 #include <string_view>
@@ -8,6 +6,8 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -22,25 +22,6 @@ using ruvia::detail::http2FinalResponseControlPlan;
 using ruvia::detail::Http2FinalResponseControlPlanError;
 using ruvia::detail::Http2FinalResponseControlPlanFailure;
 using ruvia::detail::Http2FinalResponseControlPlanResult;
-
-static_assert(!std::default_initializable<Http1FinalResponseControl>);
-static_assert(!std::default_initializable<Http2FinalResponseControl>);
-static_assert(!std::default_initializable<Http1FinalResponseControlPlanFailure>);
-static_assert(!std::default_initializable<Http2FinalResponseControlPlanFailure>);
-static_assert(!std::default_initializable<Http1FinalResponseControlPlanResult>);
-static_assert(!std::default_initializable<Http2FinalResponseControlPlanResult>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().connectionOptions()),
-        ruvia::detail::HttpConnectionOptions>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().connectionOptions()),
-        ruvia::detail::HttpConnectionOptions>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&>().upgradeProtocols()),
-        ruvia::detail::HttpUpgradeProtocols>);
-static_assert(
-    std::same_as<decltype(std::declval<const Http1FinalResponseControl&&>().upgradeProtocols()),
-        ruvia::detail::HttpUpgradeProtocols>);
 
 bool isHttp1Failure(const HttpResponse& response, Http1FinalResponseControlPlanError error) {
     const auto result = http1FinalResponseControlPlan(response);

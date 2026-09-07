@@ -1,8 +1,16 @@
 #pragma once
 
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "http2_sansio_session_fixture.h"
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <memory_resource>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -15,39 +23,30 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include <array>
-#include <chrono>
-#include <cstdint>
-#include <memory_resource>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <utility>
-#include <vector>
-
-#include <filesystem>
-#include <fstream>
-
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/io/SansIoDriver.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/SansIoDriver.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
+
+#include "http2_sansio_session_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace sansio_driver_test {
 

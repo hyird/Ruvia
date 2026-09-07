@@ -1,22 +1,21 @@
-#include "ruvia/http/HttpResponse.h"
-
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
-#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
-
 #include <charconv>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
+#include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
 
 namespace ruvia {
 namespace {

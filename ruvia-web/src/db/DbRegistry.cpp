@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbUtils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,6 +9,8 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia {
 namespace {

@@ -1,7 +1,5 @@
 #include "ruvia/web/detail/app/AppRunCoordinator.h"
 
-#include <asio/signal_set.hpp>
-
 #include <csignal>
 #include <exception>
 #include <memory>
@@ -13,6 +11,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <asio/signal_set.hpp>
 
 #include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/web/App.h"

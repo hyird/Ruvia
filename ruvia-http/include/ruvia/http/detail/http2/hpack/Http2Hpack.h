@@ -2,11 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpStatus.h"
@@ -54,12 +54,12 @@ private:
 class HpackDecodeResult final {
 public:
     [[nodiscard]] constexpr const HpackDecoded* decoded() const& noexcept {
-        return std::get_if<HpackDecoded>(&state_);
+        return state_ ? &*state_ : nullptr;
     }
     [[nodiscard]] constexpr const HpackDecoded* decoded() const&& = delete;
 
     [[nodiscard]] constexpr const HpackDecodeFailure* failure() const& noexcept {
-        return std::get_if<HpackDecodeFailure>(&state_);
+        return state_ ? nullptr : &state_.error();
     }
     [[nodiscard]] constexpr const HpackDecodeFailure* failure() const&& = delete;
 
@@ -70,9 +70,9 @@ private:
         : state_(HpackDecoded()) {}
 
     explicit constexpr HpackDecodeResult(HpackDecodeError error) noexcept
-        : state_(HpackDecodeFailure(error)) {}
+        : state_(std::unexpected(HpackDecodeFailure(error))) {}
 
-    std::variant<HpackDecoded, HpackDecodeFailure> state_;
+    std::expected<HpackDecoded, HpackDecodeFailure> state_;
 };
 
 struct HpackStaticIndex final {

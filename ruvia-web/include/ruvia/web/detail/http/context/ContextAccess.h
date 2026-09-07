@@ -1,25 +1,26 @@
 #pragma once
 
-#include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/static/StaticFileVariant.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/router/RouteLimits.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <utility>
 
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextRequestStorage.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/http/static/StaticFileVariant.h"
+#include "ruvia/web/detail/router/RouteLimits.h"
+
 namespace ruvia {
 
 inline Context::Context(
-    RequestMemory& memory, const HttpRequest& request, detail::ContextServices services) noexcept
+    RequestMemory& memory, const HttpRequest& request, detail::ContextServices services)
     : Context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
 
 inline Context::Context(RequestMemory& memory, const HttpRequest& request,
     std::string_view routePath, const std::string_view* paramNames,
     const std::string_view* paramValues, std::size_t paramCount, std::uintptr_t routeRateLimitScope,
-    detail::ContextServices services) noexcept
+    detail::ContextServices services)
     : memory_(memory),
       request_(request),
       connInfo_(services.resolveConnInfo(request)),
@@ -41,10 +42,8 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request,
       precompressedStaticFiles_(services.precompressedStaticFiles()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
-      requestBodySource_(services.requestBodySource()),
-      responseOutput_(services.responseOutput()),
-      responseState_(memory.resource()),
-      sessionState_(memory.resource()) {}
+      requestStorage_(detail::makePmrObject<detail::ContextRequestStorage>(memory.resource(),
+          services.requestBodySource(), services.responseOutput(), memory.resource())) {}
 
 }  // namespace ruvia
 
@@ -54,18 +53,18 @@ class ContextWebSocketBinding;
 
 struct ContextAccess final {
     [[nodiscard]] static Context make(
-        RequestMemory& memory, const HttpRequest& request, ContextServices services) noexcept {
+        RequestMemory& memory, const HttpRequest& request, ContextServices services) {
         return Context(memory, request, services);
     }
 
     [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
-        std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
+        std::uintptr_t routeRateLimitScope, ContextServices services) {
         return Context(memory, request, {}, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
     [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
         std::string_view routePath, std::uintptr_t routeRateLimitScope,
-        ContextServices services) noexcept {
+        ContextServices services) {
         return Context(
             memory, request, routePath, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
@@ -73,7 +72,7 @@ struct ContextAccess final {
     [[nodiscard]] static Context make(RequestMemory& memory, const HttpRequest& request,
         std::string_view routePath, const std::string_view* paramNames,
         const std::string_view* paramValues, std::size_t paramCount,
-        std::uintptr_t routeRateLimitScope, ContextServices services) noexcept {
+        std::uintptr_t routeRateLimitScope, ContextServices services) {
         return Context(memory, request, routePath, paramNames, paramValues, paramCount,
             routeRateLimitScope, services);
     }
@@ -96,15 +95,15 @@ struct ContextAccess final {
     }
 
     [[nodiscard]] static bool requestCookiesMaterialized(const Context& context) noexcept {
-        return context.requestStorage_ && context.requestStorage_->cookies;
+        return context.requestStorage_->cookies.has_value();
     }
 
     [[nodiscard]] static bool requestQueryMaterialized(const Context& context) noexcept {
-        return context.requestStorage_ && context.requestStorage_->query;
+        return context.requestStorage_->query.has_value();
     }
 
     [[nodiscard]] static bool routeParamsMaterialized(const Context& context) noexcept {
-        return context.requestStorage_ && context.requestStorage_->routeParams;
+        return context.requestStorage_->routeParams.has_value();
     }
 
     [[nodiscard]] static const ContextRequestStorage* requestStorage(
@@ -122,7 +121,7 @@ struct ContextAccess final {
 
     [[nodiscard]] static bool hasResponseHeader(
         const Context& context, std::string_view name) noexcept {
-        return context.responseState_.activeResponse().header(name).has_value();
+        return context.responseState().activeResponse().header(name).has_value();
     }
 
     static void setError(Context& context, std::exception_ptr exception) noexcept {
@@ -154,7 +153,7 @@ struct ContextAccess final {
     // Lets a test observe a cookie set by middleware before any response is built.
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context, std::string_view valuePrefix) noexcept {
-        return std::ranges::any_of(context.responseState_.activeResponse().headers(),
+        return std::ranges::any_of(context.responseState().activeResponse().headers(),
             [valuePrefix](const auto& header) noexcept {
                 return header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix);
             });
@@ -165,13 +164,13 @@ private:
 
     [[nodiscard]] static ContextResponseOutput bindWebSocket(
         Context& context, WebSocket& webSocket) noexcept {
-        auto previous = context.responseOutput_;
-        context.responseOutput_ = ContextResponseOutput::webSocket(webSocket);
+        auto previous = context.responseOutput();
+        context.responseOutput() = ContextResponseOutput::webSocket(webSocket);
         return previous;
     }
 
     static void restoreResponseOutput(Context& context, ContextResponseOutput output) noexcept {
-        context.responseOutput_ = output;
+        context.responseOutput() = output;
     }
 };
 

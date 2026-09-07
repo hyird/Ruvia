@@ -1,12 +1,11 @@
 #pragma once
 
-#include "ruvia/http/Cookies.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/Cookies.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {

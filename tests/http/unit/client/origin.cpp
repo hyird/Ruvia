@@ -1,14 +1,14 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/HttpClient.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
-#include "ruvia/http/HttpClient.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,19 +1,19 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/coding/HttpContentLength.h"
-#include "ruvia/http/detail/field/HttpExpectations.h"
-#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpParseError.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
+#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 

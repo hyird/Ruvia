@@ -27,8 +27,8 @@
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 
 namespace ruvia::detail {
 

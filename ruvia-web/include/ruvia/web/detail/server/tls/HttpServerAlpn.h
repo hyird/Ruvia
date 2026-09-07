@@ -1,8 +1,9 @@
 #pragma once
 
+#include <cstring>
+
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
-#include <cstring>
 
 namespace ruvia::detail {
 

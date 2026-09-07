@@ -14,10 +14,10 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
-#include "ruvia/web/detail/server/TrustedProxies.h"
 #include "ruvia/web/detail/http/CorsOptions.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/server/DocumentRootBinding.h"
+#include "ruvia/web/detail/server/TrustedProxies.h"
 
 namespace ruvia {
 class Env;

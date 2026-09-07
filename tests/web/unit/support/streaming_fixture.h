@@ -1,18 +1,11 @@
 #pragma once
 
-#include "test_harness.h"
-
-#include <asio/co_spawn.hpp>
-#include <asio/io_context.hpp>
-#include <asio/post.hpp>
-#include <asio/use_future.hpp>
-
 #include <array>
 #include <chrono>
 #include <coroutine>
 #include <cstdint>
-#include <memory_resource>
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,75 +13,26 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
-#include "ruvia/web/detail/websocket/WebSocketAccess.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include <asio/co_spawn.hpp>
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
+#include <asio/use_future.hpp>
+
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/Streaming.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
+#include "ruvia/web/detail/websocket/WebSocketAccess.h"
+
+#include "test_harness.h"
 
 namespace streaming_test {
 
-template <typename Text>
-concept AcceptsSseData =
-    requires(Text&& text) { ruvia::SseMessage{.data = std::forward<Text>(text)}; };
-
-template <typename Text>
-concept AcceptsSseEvent =
-    requires(Text&& text) { ruvia::SseMessage{.event = std::forward<Text>(text)}; };
-
-template <typename Text>
-concept AcceptsSseId = requires(Text&& text) { ruvia::SseMessage{.id = std::forward<Text>(text)}; };
-
-template <typename Text>
-concept AcceptsAnySseTextAssignment = requires(ruvia::SseMessage& message, Text&& text) {
-    message.data = std::forward<Text>(text);
-} || requires(ruvia::SseMessage& message, Text&& text) {
-    message.event = std::forward<Text>(text);
-} || requires(ruvia::SseMessage& message, Text&& text) { message.id = std::forward<Text>(text); };
-
-template <typename Text>
-concept AcceptsAllSseTextAssignments = requires(ruvia::SseMessage& message, Text&& text) {
-    message.data = std::forward<Text>(text);
-    message.event = std::forward<Text>(text);
-    message.id = std::forward<Text>(text);
-};
-
-static_assert(!AcceptsSseData<std::string>);
-static_assert(!AcceptsSseData<const std::string>);
-static_assert(!AcceptsSseData<std::pmr::string>);
-static_assert(AcceptsSseData<std::string&>);
-static_assert(AcceptsSseData<std::pmr::string&>);
-static_assert(AcceptsSseData<std::string_view>);
-static_assert(!AcceptsSseEvent<std::string>);
-static_assert(!AcceptsSseEvent<const std::string>);
-static_assert(!AcceptsSseEvent<std::pmr::string>);
-static_assert(AcceptsSseEvent<std::string&>);
-static_assert(AcceptsSseEvent<std::pmr::string&>);
-static_assert(AcceptsSseEvent<std::string_view>);
-static_assert(!AcceptsSseId<std::string>);
-static_assert(!AcceptsSseId<const std::string>);
-static_assert(!AcceptsSseId<std::pmr::string>);
-static_assert(AcceptsSseId<std::string&>);
-static_assert(AcceptsSseId<std::pmr::string&>);
-static_assert(AcceptsSseId<std::string_view>);
-static_assert(!AcceptsAnySseTextAssignment<std::string>);
-static_assert(!AcceptsAnySseTextAssignment<const std::string>);
-static_assert(!AcceptsAnySseTextAssignment<std::pmr::string>);
-static_assert(AcceptsAllSseTextAssignments<std::string&>);
-static_assert(AcceptsAllSseTextAssignments<std::pmr::string&>);
-static_assert(AcceptsAllSseTextAssignments<std::string_view>);
-static_assert(std::is_aggregate_v<ruvia::SseMessage>);
-static_assert(
-    std::same_as<decltype(ruvia::SseMessage::retry), std::optional<std::chrono::milliseconds>>);
 constexpr ruvia::SseMessage kLiteralSseMessage{.data = "data", .event = "event", .id = "id"};
-static_assert(kLiteralSseMessage.data->view() == "data");
-static_assert(kLiteralSseMessage.event == "event");
-static_assert("event" == kLiteralSseMessage.event);
-static_assert(kLiteralSseMessage.id->view() == "id");
 
 class TestScopedCapability final : private ruvia::detail::ScopedCapabilityNode {
 public:

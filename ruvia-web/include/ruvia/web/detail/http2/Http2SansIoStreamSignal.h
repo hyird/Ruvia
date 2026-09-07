@@ -1,8 +1,8 @@
 #pragma once
 
+#include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
-#include "ruvia/core/Task.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 
 namespace ruvia::detail {

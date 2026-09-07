@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <optional>
 #include <stdexcept>
@@ -8,6 +6,8 @@
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+
+#include "test_harness.h"
 
 namespace {
 

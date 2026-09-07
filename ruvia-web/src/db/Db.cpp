@@ -1,14 +1,14 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
-#include "ruvia/web/detail/db/DbSql.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/db/DbResultAccess.h"
-
 #include <mysql/mysql.h>
 
 #include <cstdint>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbResultAccess.h"
+#include "ruvia/web/detail/db/DbSql.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia {
 

@@ -1,10 +1,10 @@
 #pragma once
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <concepts>
 #include <exception>
 #include <filesystem>
 #include <initializer_list>
@@ -12,8 +12,8 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
@@ -21,15 +21,15 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"

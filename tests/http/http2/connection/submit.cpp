@@ -1,9 +1,9 @@
-#include "http2_connection_fixture.h"
-
 #include <array>
 #include <new>
 
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+
+#include "http2_connection_fixture.h"
 
 // Http2Connection: submitting request and response heads.
 

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -8,6 +6,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+
+#include "test_harness.h"
 
 namespace {
 

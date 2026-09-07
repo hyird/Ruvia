@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-
 #include <coroutine>
 #include <cstdint>
 #include <memory>
@@ -9,6 +7,8 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/core/Task.h"
 
 namespace ruvia {
 

@@ -1,10 +1,10 @@
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 
-#include "ruvia/web/db/DbTypes.h"
-
 #include <limits>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/db/DbTypes.h"
 
 namespace ruvia::detail {
 namespace {

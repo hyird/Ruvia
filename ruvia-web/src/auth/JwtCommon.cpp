@@ -1,8 +1,8 @@
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
-
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
+
+#include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
 

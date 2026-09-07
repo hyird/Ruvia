@@ -37,12 +37,12 @@
 #include <type_traits>
 #include <utility>
 
-#include <ruvia/core/MoveOnlyFunction.h>
-#include <ruvia/core/OneShot.h>
-#include <ruvia/core/Task.h>
-#include <ruvia/core/WorkerHandle.h>
-#include <ruvia/core/detail/worker/WorkerTimer.h>
-#include <ruvia/core/memory/ProcessResource.h>
+#include "ruvia/core/MoveOnlyFunction.h"
+#include "ruvia/core/OneShot.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia {
 

@@ -1,14 +1,14 @@
-#include "ruvia/web/Context.h"
-
 #include <chrono>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/detail/cookie/CookieValidation.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/web/detail/auth/CookieSignature.h"
+#include "ruvia/web/detail/http/context/ContextResponseState.h"
 
 // Setting response cookies, including the two rules that make a cookie's name on
 // the wire differ from the name the application used: a __Host-/__Secure- prefix
@@ -57,7 +57,7 @@ void writeCookie(HttpResponse& response, std::string_view name, std::string_view
 }  // namespace
 
 void Context::setCookie(SetCookieOptions options) {
-    writeCookie(responseState_.activeResponse(), options.name.view(), options.value.view(),
+    writeCookie(responseState().activeResponse(), options.name.view(), options.value.view(),
         options.attributes);
 }
 
@@ -66,7 +66,7 @@ void Context::setSignedCookie(SetSignedCookieOptions options) {
     const auto name = options.name.view();
     const auto value = options.value.view();
     const auto secret = options.secret.view();
-    writeCookie(responseState_.activeResponse(), name,
+    writeCookie(responseState().activeResponse(), name,
         composeSignedCookieValue(
             resource(), cookieWireName(wireName, name, options.attributes), value, secret),
         options.attributes);
@@ -74,7 +74,7 @@ void Context::setSignedCookie(SetSignedCookieOptions options) {
 
 void Context::deleteCookie(DeleteCookieOptions options) {
     options.attributes.maxAge = std::chrono::seconds(0);
-    writeCookie(responseState_.activeResponse(), options.name.view(), "", options.attributes);
+    writeCookie(responseState().activeResponse(), options.name.view(), "", options.attributes);
 }
 
 }  // namespace ruvia

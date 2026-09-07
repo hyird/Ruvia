@@ -192,7 +192,7 @@ std::optional<HttpSetCookieView> parseSetCookie(std::string_view value) noexcept
     const auto cookiePair = value.substr(0, firstEnd);
     std::string_view name;
     std::string_view cookieValue;
-    if (cookiePair.find('=') == std::string_view::npos) {
+    if (!cookiePair.contains('=')) {
         cookieValue = trimOws(cookiePair);
     } else {
         const auto fields = splitAttribute(cookiePair);

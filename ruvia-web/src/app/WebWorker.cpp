@@ -1,17 +1,17 @@
 #include "ruvia/web/WebWorker.h"
 
-#include <asio/bind_executor.hpp>
-#include <asio/post.hpp>
-
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
+#include <asio/bind_executor.hpp>
+#include <asio/post.hpp>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 
 namespace ruvia {
 

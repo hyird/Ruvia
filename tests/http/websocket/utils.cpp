@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -8,9 +6,11 @@
 #include <string_view>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
-#include "ruvia/http/WebSocketProtocol.h"
+
+#include "test_harness.h"
 
 namespace {
 

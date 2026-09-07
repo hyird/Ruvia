@@ -1,16 +1,17 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
+
 #include <asio/ip/tcp.hpp>
 
-#include <ruvia/core/WorkerHandle.h>
-#include <ruvia/core/detail/worker/WorkerTimer.h>
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
 

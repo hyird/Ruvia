@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/router/RouterImpl.h"
-
 #include "ruvia/web/detail/util/RegistrationResource.h"
 
 // The route-registration surface a controller sees. Every call forwards to the

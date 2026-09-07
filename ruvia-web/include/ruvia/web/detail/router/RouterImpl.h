@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/Router.h"
 
 namespace ruvia::detail {

@@ -1,5 +1,4 @@
-#include "test_io_context.h"
-#include "test_harness.h"
+#include <zlib.h>
 
 #include <array>
 #include <charconv>
@@ -15,14 +14,16 @@
 #include <vector>
 
 #include <asio.hpp>
-#include <zlib.h>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
+
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 

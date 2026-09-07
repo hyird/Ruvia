@@ -1,13 +1,14 @@
 #pragma once
 
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/HttpRequest.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
+#include <utility>
+
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 
@@ -163,7 +164,7 @@ private:
     }
 };
 
-static_assert(static_cast<std::size_t>(RequestKnownHeader::kUserAgent) + 1 ==
+static_assert(std::to_underlying(RequestKnownHeader::kUserAgent) + 1 ==
               HttpRequestAccess::kCachedHeaderSlots);
 
 [[nodiscard]] inline std::string_view requestKnownHeader(

@@ -28,8 +28,8 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/app/AppConfiguration.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
 namespace ruvia {

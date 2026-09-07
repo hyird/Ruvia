@@ -1,9 +1,10 @@
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include <hiredis/hiredis.h>
 
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 namespace {

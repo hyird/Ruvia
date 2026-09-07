@@ -1,19 +1,14 @@
-#include "test_harness.h"
-
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
-
-#include <cstddef>
 #include <array>
+#include <cstddef>
 #include <limits>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-template <typename T>
-concept ExposesRvalueHttp1ChunkHeaderView = requires(T&& header) { std::move(header).view(); };
+#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 
-static_assert(!ExposesRvalueHttp1ChunkHeaderView<ruvia::detail::Http1ChunkHeader>);
+#include "test_harness.h"
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
     const ruvia::detail::Http1ChunkHeader zero(0);

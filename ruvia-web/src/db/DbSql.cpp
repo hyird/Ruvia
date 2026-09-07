@@ -1,9 +1,5 @@
 #include "ruvia/web/detail/db/DbSql.h"
 
-#include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/db/DbSqlScan.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <mysql/mysql.h>
 
 #include <cstddef>
@@ -11,6 +7,10 @@
 #include <limits>
 #include <memory_resource>
 #include <stdexcept>
+
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/db/DbSqlScan.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia::detail {
 namespace {

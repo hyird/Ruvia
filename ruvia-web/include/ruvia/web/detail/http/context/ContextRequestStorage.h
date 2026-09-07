@@ -1,20 +1,20 @@
 #pragma once
 
-#include "ruvia/web/RequestFields.h"
-#include "ruvia/web/detail/http/request/RequestQueryValues.h"
-
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/RequestFields.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/http/context/ContextResponseState.h"
+#include "ruvia/web/detail/http/context/ContextSessionState.h"
+#include "ruvia/web/detail/http/context/RequestBindings.h"
+#include "ruvia/web/detail/http/request/RequestQueryValues.h"
+
 namespace ruvia::detail {
 
-// One typed owner for every lazily materialized Context request cache. Context
-// allocates this aggregate once from RequestMemory; individual values remain
-// explicit alternatives and require neither erased cleanup callbacks nor one
-// arena allocation per C++ object.
 struct RequestFieldCache final {
     RequestFieldCache(std::pmr::vector<std::pmr::string>&& ownedStorage,
         RequestNameValueList&& ownedFields) noexcept
@@ -25,20 +25,31 @@ struct RequestFieldCache final {
     RequestNameValueList fields;
 };
 
+// One arena object owns every request-local Context value that is not a
+// borrowed pointer: lazy caches, response/session machines, and typed bindings.
 class ContextRequestStorage final {
 public:
-    ContextRequestStorage() = default;
+    ContextRequestStorage(ContextRequestBodySource bodySource, ContextResponseOutput output,
+        std::pmr::memory_resource* resource)
+        : requestBodySource(bodySource),
+          responseOutput(output),
+          responseState(resource),
+          sessionState(resource) {}
 
     ContextRequestStorage(const ContextRequestStorage&) = delete;
     ContextRequestStorage& operator=(const ContextRequestStorage&) = delete;
+
+    ContextRequestBodySource requestBodySource;
+    ContextResponseOutput responseOutput;
+    ContextResponseState responseState;
+    ContextSessionState sessionState;
+    RequestBindings requestBindings;
 
     std::optional<std::pmr::string> decodedBody;
     std::optional<RequestFieldCache> headers;
     std::optional<RequestQueryCache> query;
     std::optional<RequestNameValueList> cookies;
     std::optional<RequestFieldCache> routeParams;
-    // Malformed percent encoding is terminal for the corresponding typed cache.
-    // Remember it so repeated API calls cannot rescan attacker-controlled input.
     bool queryInvalid{false};
     bool routeParamsInvalid{false};
 };

@@ -17,12 +17,12 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
-#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"
@@ -369,7 +369,7 @@ public:
             }
 
             [[nodiscard]] static bool hasNestedName(std::string_view name) noexcept {
-                return name.find('.') != std::string_view::npos;
+                return name.contains('.');
             }
 
             [[nodiscard]] const Group* findEntry(std::string_view name) const noexcept {
@@ -446,7 +446,7 @@ public:
         }
 
         [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
-            return name.find('.') != std::string_view::npos;
+            return name.contains('.');
         }
 
         [[nodiscard]] static bool consumePath(

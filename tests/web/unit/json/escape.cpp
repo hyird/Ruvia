@@ -1,8 +1,8 @@
-#include "test_harness.h"
-
 #include <cstdint>
 
 #include "ruvia/web/detail/json/JsonEscape.h"
+
+#include "test_harness.h"
 
 namespace {
 

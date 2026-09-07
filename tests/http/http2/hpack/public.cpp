@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <new>
@@ -7,6 +5,8 @@
 #include <string>
 
 #include "ruvia/http/Hpack.h"
+
+#include "test_harness.h"
 
 namespace {
 

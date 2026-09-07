@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HttpExpectations.h"
-#include "ruvia/http/detail/coding/HttpTransferCoding.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <variant>
+
+#include "ruvia/http/detail/coding/HttpTransferCoding.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
 
 namespace ruvia {
 

@@ -4,9 +4,6 @@
 // identity is checked on the same native handle that supplies response bytes,
 // closing the stat/open replacement window.
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
-
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -14,9 +11,12 @@
 #include <limits>
 #include <system_error>
 
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+
 namespace ruvia::detail {
 
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#if defined(__unix__) || defined(_WIN32)
 class ResponseFileInput final {
 public:
     explicit ResponseFileInput(ResponseFileBody file) noexcept {
@@ -37,7 +37,7 @@ public:
             error_ = std::make_error_code(std::errc::invalid_seek);
             return;
         }
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__unix__)
         if (::lseek(handle_.get(), static_cast<off_t>(offset), SEEK_SET) < 0) {
             error_ = std::error_code(errno, std::system_category());
         }
@@ -56,7 +56,7 @@ public:
             error_ = std::make_error_code(std::errc::io_error);
             return;
         }
-#if defined(__unix__) || defined(__APPLE__)
+#if defined(__unix__)
         const auto result = ::read(handle_.get(), output, static_cast<std::size_t>(size));
         if (result < 0) {
             error_ = std::error_code(errno, std::system_category());

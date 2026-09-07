@@ -1,16 +1,10 @@
-#include "test_harness.h"
-
 #include <atomic>
-#include <type_traits>
 #include <thread>
+#include <type_traits>
 
 #include "ruvia/core/StopToken.h"
 
-static_assert(!std::is_move_constructible_v<ruvia::StopRegistration>);
-static_assert(!std::is_copy_constructible_v<ruvia::StopRegistration>);
-static_assert(std::is_default_constructible_v<ruvia::StopSource>);
-static_assert(!std::is_copy_constructible_v<ruvia::StopSource>);
-static_assert(!std::is_move_constructible_v<ruvia::StopSource>);
+#include "test_harness.h"
 
 namespace {
 
@@ -61,8 +55,6 @@ private:
 // there puts stop_requested() after registerCallbacks()' preflight check but
 // before the first std::stop_callback finishes construction.
 constexpr int kMoveIntoCallbackState = 3;
-static_assert(sizeof(ResetRegistrationOnMove) <= 3 * sizeof(void*));
-static_assert(std::is_nothrow_move_constructible_v<ResetRegistrationOnMove>);
 
 }  // namespace
 

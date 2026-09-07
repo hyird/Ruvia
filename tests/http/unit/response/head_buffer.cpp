@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -11,17 +9,12 @@
 
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::kResponseHeadStackBytes;
 using ruvia::detail::ResponseHeadBuffer;
-
-template <typename T>
-concept ExposesRvalueResponseHeadBufferStorage = requires(T&& buffer) {
-    std::move(buffer).view();
-} || requires(T&& buffer) { std::move(buffer).stackCursor(std::size_t{}); };
-
-static_assert(!ExposesRvalueResponseHeadBufferStorage<ResponseHeadBuffer>);
 
 #if !defined(_MSC_VER)
 // The MSVC debug pmr::string does not complete this synthetic

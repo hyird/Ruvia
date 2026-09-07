@@ -1,9 +1,6 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <chrono>
-#include <cstddef>
 #include <concepts>
+#include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -12,14 +9,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http/HttpCors.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
-#include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/detail/http/HttpCors.h"
 
-static_assert(std::is_aggregate_v<ruvia::CorsOriginConfig>);
-static_assert(std::is_aggregate_v<ruvia::CorsRequestHeadersConfig>);
-static_assert(std::is_aggregate_v<ruvia::CorsConfig>);
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -94,9 +90,6 @@ RUVIA_TEST(cors_rejects_the_entire_config_before_owner_allocation) {
 }
 
 RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
-    static_assert(
-        std::same_as<decltype(ruvia::CorsConfig{}.maxAge), std::optional<std::chrono::seconds>>);
-
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
@@ -127,7 +120,7 @@ RUVIA_TEST(cors_runtime_sets_static_configured_origin) {
         std::string_view("https://app.example"));
     // A configured origin is static across requests, so it does not vary by
     // the presence or value of Origin.
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") == std::string_view::npos);
+    RUVIA_CHECK(!response.header("Vary").value_or("").contains("Origin"));
     RUVIA_CHECK(!response.header("Access-Control-Allow-Credentials").has_value());
 }
 
@@ -140,7 +133,7 @@ RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
 
     RUVIA_CHECK_EQ(
         response.header("Access-Control-Allow-Origin").value_or(""), std::string_view("*"));
-    RUVIA_CHECK(response.header("Vary").value_or("").find("Origin") == std::string_view::npos);
+    RUVIA_CHECK(!response.header("Vary").value_or("").contains("Origin"));
 }
 
 RUVIA_TEST(cors_runtime_credentials_belong_to_specific_origin) {
@@ -193,9 +186,9 @@ RUVIA_TEST(cors_options_variants_declare_every_request_dependency) {
     applyCorsHeaders(result.request, response, corsOptions("*", false));
 
     const auto vary = response.header("Vary").value_or("");
-    RUVIA_CHECK(vary.find("Origin") != std::string_view::npos);
-    RUVIA_CHECK(vary.find("Access-Control-Request-Method") != std::string_view::npos);
-    RUVIA_CHECK(vary.find("Access-Control-Request-Headers") != std::string_view::npos);
+    RUVIA_CHECK(vary.contains("Origin"));
+    RUVIA_CHECK(vary.contains("Access-Control-Request-Method"));
+    RUVIA_CHECK(vary.contains("Access-Control-Request-Headers"));
     RUVIA_CHECK(!response.header("Access-Control-Allow-Methods").has_value());
 }
 

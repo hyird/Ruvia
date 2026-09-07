@@ -5,8 +5,8 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/web/ModelTypes.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/ModelTypes.h"
 
 // Internal layer. Users should include ruvia/web/Model.h instead of this file.
 

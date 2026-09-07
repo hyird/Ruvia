@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -7,6 +5,8 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+
+#include "test_harness.h"
 
 namespace {
 

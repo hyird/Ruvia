@@ -1,9 +1,9 @@
-#include "ruvia/web/db/Db.h"
-
 #include <utility>
-#include "ruvia/web/detail/db/DbRegistry.h"
+
+#include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 

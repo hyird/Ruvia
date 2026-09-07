@@ -2,20 +2,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory_resource>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
 namespace ruvia::detail {
 
@@ -68,25 +68,25 @@ private:
 class Http2RequestBuildResult final {
 public:
     [[nodiscard]] constexpr const Http2RequestBuilt* built() const& noexcept {
-        return std::get_if<Http2RequestBuilt>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const Http2RequestBuilt* built() const&& = delete;
 
     [[nodiscard]] constexpr const Http2RequestBuildFailure* failure() const& noexcept {
-        return std::get_if<Http2RequestBuildFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const Http2RequestBuildFailure* failure() const&& = delete;
 
 private:
     friend class Http2RequestBuilder;
 
-    using Value = std::variant<Http2RequestBuilt, Http2RequestBuildFailure>;
+    using Value = std::expected<Http2RequestBuilt, Http2RequestBuildFailure>;
 
     explicit constexpr Http2RequestBuildResult(Http2RequestBuilt built) noexcept
         : value_(built) {}
 
     explicit constexpr Http2RequestBuildResult(Http2RequestBuildFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static constexpr Http2RequestBuildResult makeBuilt() noexcept {
         return Http2RequestBuildResult(Http2RequestBuilt());

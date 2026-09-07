@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <string_view>
 
 #include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
+
+#include "test_harness.h"
 
 namespace {
 

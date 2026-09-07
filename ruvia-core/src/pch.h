@@ -1,29 +1,20 @@
 #pragma once
 
-#include <asio.hpp>
-#include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/recycling_allocator.hpp>
-#include <asio/steady_timer.hpp>
-#include <asio/stream_file.hpp>
-#include <asio/write.hpp>
-
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <concepts>
 #include <condition_variable>
 #include <coroutine>
-#include <cctype>
-#include <cassert>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <exception>
@@ -47,3 +38,12 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include <asio.hpp>
+#include <asio/bind_allocator.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/recycling_allocator.hpp>
+#include <asio/steady_timer.hpp>
+#include <asio/stream_file.hpp>
+#include <asio/write.hpp>

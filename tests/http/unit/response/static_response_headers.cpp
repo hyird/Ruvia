@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,5 +1,3 @@
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
-
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -7,8 +5,9 @@
 #include <span>
 #include <stdexcept>
 
-#include "ruvia/http/detail/util/HttpBase64.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/util/HttpBase64.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
 
 namespace ruvia::detail {
 namespace {

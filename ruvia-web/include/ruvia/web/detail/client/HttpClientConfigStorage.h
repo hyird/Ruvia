@@ -109,7 +109,7 @@ private:
 [[nodiscard]] inline std::pmr::string httpClientWireHost(
     const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
     std::pmr::string host(pmrResourceOrDefault(resource));
-    if (config.host.find(':') != std::string_view::npos) {
+    if (config.host.contains(':')) {
         host.reserve(config.host.size() + 2);
         host.push_back('[');
         host.append(config.host);

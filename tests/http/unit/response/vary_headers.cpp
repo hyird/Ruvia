@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
+
+#include "test_harness.h"
 
 namespace {
 

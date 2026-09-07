@@ -1,7 +1,5 @@
-#include <ruvia/core/detail/worker/WorkerDispatcherImpl.h>
-
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <optional>
@@ -11,6 +9,8 @@
 
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
+
+#include "ruvia/core/detail/worker/WorkerDispatcherImpl.h"
 namespace ruvia::detail {
 namespace {
 

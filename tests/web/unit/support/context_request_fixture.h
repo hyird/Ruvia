@@ -1,28 +1,28 @@
 #pragma once
 
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
-#include <asio/co_spawn.hpp>
-#include <asio/use_future.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-
 #include <chrono>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/use_future.hpp>
+
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/Context.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace context_request_test {
 

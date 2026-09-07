@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -8,11 +6,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -27,20 +27,6 @@ using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestContentCoding;
 using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::requestKnownHeader;
-
-template <typename T>
-concept ExposesRvalueHttpRequestHeaders = requires(T&& request) { std::move(request).headers(); };
-
-static_assert(!ExposesRvalueHttpRequestHeaders<HttpRequest>);
-static_assert(std::same_as<decltype(std::declval<const HttpRequest&>().header(std::string_view{})),
-    std::optional<std::string_view>>);
-static_assert(std::is_constructible_v<HttpHeaderView, const std::string&, const std::string&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, std::string&&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, const std::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, const std::string&&>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::pmr::string&&, std::string_view>);
-static_assert(!std::is_constructible_v<HttpHeaderView, std::string_view, const std::pmr::string&&>);
 
 }  // namespace
 

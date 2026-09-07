@@ -1,15 +1,15 @@
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/HttpKnownMethod.h"
-
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+#include <utility>
 
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/util/HttpNumberFormat.h"
 // The two response fields Ruvia formats itself rather than taking as a value:
 // Allow, built from the method mask a route matched, and Content-Range in both
 // its satisfied and unsatisfied forms. Each writes straight into the response's
@@ -18,8 +18,7 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots =
-    static_cast<std::size_t>(HttpKnownMethod::kOptions) + 1;
+inline constexpr std::size_t kAllowHeaderMethodSlots = std::to_underlying(HttpKnownMethod::kOptions) + 1;
 
 void appendHeaderValueLiteral(char*& cursor, std::string_view value) noexcept {
     std::memcpy(cursor, value.data(), value.size());

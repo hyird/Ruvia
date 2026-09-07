@@ -1,6 +1,4 @@
-#include <ruvia/core/EventLoopAttachment.h>
-#include <ruvia/core/EventLoopPool.h>
-#include <ruvia/core/detail/RuntimeLifecycle.h>
+#include "ruvia/core/EventLoopPool.h"
 
 #include <algorithm>
 #include <atomic>
@@ -15,9 +13,11 @@
 #include <asio/execution_context.hpp>
 #include <asio/executor_work_guard.hpp>
 
-#include <ruvia/core/detail/util/FailureReport.h>
-#include <ruvia/core/detail/worker/WorkerRuntimeContext.h>
-#include <ruvia/core/detail/worker/WorkerSelection.h>
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/detail/RuntimeLifecycle.h"
+#include "ruvia/core/detail/util/FailureReport.h"
+#include "ruvia/core/detail/worker/WorkerRuntimeContext.h"
+#include "ruvia/core/detail/worker/WorkerSelection.h"
 
 namespace ruvia {
 namespace {

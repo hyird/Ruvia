@@ -86,7 +86,7 @@ RUVIA_TEST(sse_writer_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
     // two splits (an empty data line between), with no raw CR anywhere.
     RUVIA_CHECK_EQ(render("a\r\rb"), std::string("data: a\ndata: \ndata: b\n\n"));
     // No raw CR byte may appear in any rendered frame.
-    RUVIA_CHECK(render("x\ry\r\rz").find('\r') == std::string::npos);
+    RUVIA_CHECK(!render("x\ry\r\rz").contains('\r'));
 }
 
 RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {

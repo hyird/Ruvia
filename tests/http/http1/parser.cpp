@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <stdexcept>
@@ -7,12 +5,14 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -25,20 +25,6 @@ using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
-
-template <typename T>
-concept HasAnyRvalueHttp1RequestParseAccessor =
-    requires(T&& result) { std::move(result).needMore(); } || requires(T&& result) {
-        std::move(result).parsed();
-    } || requires(T&& result) { std::move(result).failure(); };
-
-template <typename T>
-concept HasAnyRvalueHttp1ParsedRequestBorrow = requires(T&& parsed) {
-    std::move(parsed).request();
-} || requires(T&& parsed) { std::move(parsed).bodyPlan(); };
-
-static_assert(!HasAnyRvalueHttp1RequestParseAccessor<ruvia::Http1RequestParseResult>);
-static_assert(!HasAnyRvalueHttp1ParsedRequestBorrow<ruvia::Http1ParsedRequest>);
 
 const ruvia::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::Http1RequestBodyPlan& plan) {

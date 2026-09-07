@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/HttpResponse.h"
-
 #include <cstdint>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 
 namespace ruvia::detail {
 

@@ -1,10 +1,10 @@
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 
-#include "ruvia/core/detail/io/SocketUtils.h"
-
 #include <chrono>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/core/detail/io/SocketUtils.h"
 
 namespace ruvia::detail {
 

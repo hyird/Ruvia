@@ -1,5 +1,4 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
-
 #include "ruvia/web/detail/server/ForwardedHeaders.h"
 
 namespace ruvia::detail {

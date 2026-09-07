@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/http/HttpStatus.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 

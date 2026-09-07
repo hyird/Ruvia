@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <future>
 #include <utility>
 
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
+
+#include "test_harness.h"
 
 namespace {
 

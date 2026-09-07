@@ -1,13 +1,13 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string_view>
 
-#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
+
+#include "test_harness.h"
 
 namespace {
 

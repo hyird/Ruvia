@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include "ruvia/web/Session.h"
 
 #include <memory_resource>
 #include <optional>
@@ -6,10 +6,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/Session.h"
+#include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
 #include <system_error>
+
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
 

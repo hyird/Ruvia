@@ -1,8 +1,8 @@
-#include "ruvia/web/redis/Redis.h"
-
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia {
 

@@ -1,16 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
-#include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/Task.h"
-
-#include <asio/buffer.hpp>
-#include <asio/ip/tcp.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +7,18 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include <asio/buffer.hpp>
+#include <asio/ip/tcp.hpp>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 

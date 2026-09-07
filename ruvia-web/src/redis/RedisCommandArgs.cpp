@@ -1,9 +1,8 @@
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include <stdexcept>
 
+#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
-
-#include <stdexcept>
 
 namespace ruvia::detail {
 

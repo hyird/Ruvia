@@ -1,20 +1,20 @@
 #pragma once
 
-#include "ruvia/web/ConnInfo.h"
-#include "ruvia/web/detail/server/TrustedProxies.h"
-#include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/http/context/ContextCapabilities.h"
-#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/StopToken.h"
-
 #include <cstddef>
 #include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/web/ConnInfo.h"
+#include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
+#include "ruvia/web/detail/server/TrustedProxies.h"
 
 namespace ruvia {
 

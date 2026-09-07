@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/web/detail/app/AppConfigGuards.h"
-#include "ruvia/web/detail/app/AppState.h"
-
 #include <mutex>
 #include <utility>
+
+#include "ruvia/web/detail/app/AppConfigGuards.h"
+#include "ruvia/web/detail/app/AppState.h"
 
 namespace ruvia::detail {
 

@@ -1,10 +1,5 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-#include "ruvia/http/WebSocketProtocol.h"
-#include "ruvia/core/ScopedOperation.h"
-#include "ruvia/http/BorrowedText.h"
-
 #include <chrono>
 #include <concepts>
 #include <cstdint>
@@ -15,6 +10,11 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/http/BorrowedText.h"
+#include "ruvia/http/WebSocketProtocol.h"
 
 namespace ruvia {
 

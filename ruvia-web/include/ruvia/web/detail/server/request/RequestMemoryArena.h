@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/core/memory/MemoryPool.h"
-
 #include <cstddef>
 #include <optional>
 #include <span>
+
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {
 

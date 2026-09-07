@@ -1,14 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-
-#include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/core/memory/MemoryPool.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +10,14 @@
 #include <utility>
 
 #include <asio.hpp>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 namespace ruvia::detail {
 
@@ -38,7 +37,7 @@ Task<std::error_code> writeFileFallback(
 
 #if defined(ASIO_HAS_FILE)
     asio::stream_file input(stream.get_executor());
-#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#if defined(__unix__) || defined(_WIN32)
     auto nativeInput = openNativeFileForRead(fileBody, error,
         NativeFileOpenOptions{
 #if defined(_WIN32)

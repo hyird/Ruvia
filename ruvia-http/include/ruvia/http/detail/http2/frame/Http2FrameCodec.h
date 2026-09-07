@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
-
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 
 namespace ruvia::detail {
 

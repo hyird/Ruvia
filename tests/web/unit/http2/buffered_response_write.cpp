@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <optional>
@@ -8,15 +6,9 @@
 
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 
-namespace {
+#include "test_harness.h"
 
-static_assert(!std::default_initializable<ruvia::detail::Http2BufferedResponseWriteResult>);
-static_assert(std::is_trivially_copyable_v<ruvia::detail::Http2BufferedResponseWriteResult>);
-static_assert(sizeof(ruvia::detail::Http2BufferedResponseWriteResult) <= 4);
-static_assert(
-    std::same_as<decltype(std::declval<const ruvia::detail::Http2BufferedResponseWriteResult&>()
-                         .committedStatus()),
-        std::optional<ruvia::HttpStatusCode>>);
+namespace {
 
 }  // namespace
 

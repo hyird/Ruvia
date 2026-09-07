@@ -1,8 +1,5 @@
 #pragma once
 
-#include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/db/DbTypes.h"
-
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -12,6 +9,9 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/db/DbTypes.h"
 
 namespace ruvia {
 

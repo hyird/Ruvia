@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <bit>
 #include <chrono>
 #include <cstdint>
@@ -12,14 +9,17 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/App.h"
 #include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 

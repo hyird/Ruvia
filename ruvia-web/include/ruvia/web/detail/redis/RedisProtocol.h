@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/web/redis/Redis.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
+
+#include "ruvia/web/redis/Redis.h"
 
 struct redisReader;
 struct redisReply;

@@ -3,12 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpProtocolError.h"
@@ -59,12 +59,12 @@ private:
 class WebSocketHandshakeValidationResult final {
 public:
     [[nodiscard]] constexpr const WebSocketHandshakeAccepted* accepted() const& noexcept {
-        return std::get_if<WebSocketHandshakeAccepted>(&value_);
+        return value_ ? &*value_ : nullptr;
     }
     const WebSocketHandshakeAccepted* accepted() const&& = delete;
 
     [[nodiscard]] constexpr const WebSocketHandshakeFailure* failure() const& noexcept {
-        return std::get_if<WebSocketHandshakeFailure>(&value_);
+        return value_ ? nullptr : &value_.error();
     }
     const WebSocketHandshakeFailure* failure() const&& = delete;
 
@@ -73,7 +73,7 @@ private:
     friend WebSocketHandshakeValidationResult validateWebSocketHandshake(
         const HttpRequest&, const Http1RequestBodyPlan&) noexcept;
 
-    using Value = std::variant<WebSocketHandshakeAccepted, WebSocketHandshakeFailure>;
+    using Value = std::expected<WebSocketHandshakeAccepted, WebSocketHandshakeFailure>;
 
     explicit constexpr WebSocketHandshakeValidationResult(
         WebSocketHandshakeAccepted accepted) noexcept
@@ -81,7 +81,7 @@ private:
 
     explicit constexpr WebSocketHandshakeValidationResult(
         WebSocketHandshakeFailure failure) noexcept
-        : value_(failure) {}
+        : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static constexpr WebSocketHandshakeValidationResult makeAccepted() noexcept {
         return WebSocketHandshakeValidationResult(WebSocketHandshakeAccepted());

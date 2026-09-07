@@ -1,8 +1,7 @@
-#include "ruvia/http/HttpHeader.h"
-
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-
 #include <algorithm>
+
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 // Whether a field name, field value or reason phrase is legal on the wire
 // (RFC 9110 section 5.1 and 5.5): the byte repertoire alone, with no field-

@@ -1,19 +1,18 @@
 #pragma once
 
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
-
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/HttpResponse.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 namespace ruvia::detail {
 

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -12,8 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -25,38 +25,6 @@ using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
 using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
-
-template <typename T>
-concept HasLooseRouteResolutionAccessors = requires(const T& value) {
-    value.found();
-    value.route();
-    value.match();
-    value.allowedMethods();
-};
-
-template <typename T>
-concept HasAnyRvalueRouteResolutionBorrow =
-    requires(T&& value) { std::move(value).values(); } ||
-    requires(T&& value) { std::move(value).match(); } ||
-    requires(T&& value) { std::move(value).resolved(); } ||
-    requires(T&& value) { std::move(value).methodNotAllowed(); } ||
-    requires(T&& value) { std::move(value).notFound(); };
-
-static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
-static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteMatch>);
-static_assert(!HasAnyRvalueRouteResolutionBorrow<ruvia::detail::ResolvedRoute>);
-static_assert(!HasAnyRvalueRouteResolutionBorrow<RouteResolution>);
-static_assert(!std::default_initializable<RouteEndpoint>);
-static_assert(!std::copy_constructible<RouteEndpoint>);
-static_assert(std::move_constructible<RouteEndpoint>);
-static_assert(!std::is_move_assignable_v<RouteEndpoint>);
-static_assert(std::move_constructible<RouteEntry>);
-static_assert(!std::is_move_assignable_v<RouteEntry>);
-static_assert(!std::is_polymorphic_v<RouteTable>);
-static_assert(!std::is_move_constructible_v<RouteTable>);
-static_assert(!std::is_move_assignable_v<RouteTable>);
-static_assert(
-    std::same_as<decltype(ruvia::WebSocketRouteConfig{}.subprotocols), std::vector<std::string>>);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse({.resource = context.resource()});

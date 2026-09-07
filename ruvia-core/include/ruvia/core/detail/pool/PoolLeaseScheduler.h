@@ -1,15 +1,8 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-#include "ruvia/core/StopToken.h"
-#include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
-#include "ruvia/core/memory/PmrResource.h"
-
 #include <chrono>
-#include <cstddef>
 #include <coroutine>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -18,6 +11,13 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

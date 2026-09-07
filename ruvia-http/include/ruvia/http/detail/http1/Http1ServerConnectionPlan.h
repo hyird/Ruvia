@@ -1,10 +1,10 @@
 #pragma once
 
+#include <cstdint>
+
 #include "ruvia/http/Http1ClosePolicy.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-
-#include <cstdint>
 
 namespace ruvia::detail {
 

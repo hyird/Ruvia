@@ -8,11 +8,11 @@
 
 #ifndef RUVIA_ENABLE_REDIS
 
-#include <asio/io_context.hpp>
-
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
+
+#include <asio/io_context.hpp>
 
 namespace ruvia::detail {
 
@@ -42,9 +42,6 @@ public:
 
 #else
 
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-
 #include <array>
 #include <chrono>
 #include <coroutine>
@@ -57,6 +54,9 @@ public:
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"

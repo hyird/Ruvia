@@ -46,7 +46,7 @@ std::pmr::string formatSseMessage(const SseMessage& message, SseFormatOptions op
             message.id->view().find_first_of("\r\n") != std::string_view::npos)) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
-    if (message.id.has_value() && message.id->view().find('\0') != std::string_view::npos) {
+    if (message.id.has_value() && message.id->view().contains('\0')) {
         throw std::invalid_argument("SSE id must not contain a NUL character");
     }
     if (message.retry.has_value() && message.retry->count() < 0) {

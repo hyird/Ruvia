@@ -1,10 +1,10 @@
-#include "test_harness.h"
-#include "ruvia/http/detail/util/Hex.h"
-
 #include <cstddef>
 #include <cstdint>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/util/Hex.h"
+
+#include "test_harness.h"
 
 namespace {
 

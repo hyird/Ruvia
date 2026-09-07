@@ -6,6 +6,7 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
 

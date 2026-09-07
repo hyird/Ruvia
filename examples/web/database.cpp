@@ -10,8 +10,8 @@
 #include <string_view>
 
 #include "ruvia/web/App.h"
-#include "ruvia/web/db/Db.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/db/Db.h"
 
 namespace {
 

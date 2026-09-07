@@ -1,11 +1,11 @@
-#include <ruvia/core/detail/worker/WorkerDispatcherImpl.h>
-
 #include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <utility>
 
 #include <asio/post.hpp>
+
+#include "ruvia/core/detail/worker/WorkerDispatcherImpl.h"
 
 // The dispatcher's timer heap: registering a deadline, cancelling one from any
 // thread, re-arming the single asio timer, and firing everything due on the

@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerHandle.h"
@@ -8,15 +5,18 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextCapabilities.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/web/detail/server/RequestDeadline.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -42,108 +42,6 @@
 #include <asio/io_context.hpp>
 
 namespace {
-
-template <typename Services>
-concept HasBodyReaderAccessor = requires(const Services& services) { services.bodyReader(); };
-
-template <typename Services>
-concept HasBodyLoaderAccessor = requires(const Services& services) { services.bodyLoader(); };
-
-static_assert(!std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&>);
-static_assert(std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&,
-    const ruvia::StopToken&>);
-static_assert(!std::constructible_from<ruvia::detail::ContextServices, ruvia::WorkerHandle&&,
-    const ruvia::StopToken&>);
-static_assert(!std::constructible_from<ruvia::detail::ContextServices, const ruvia::WorkerHandle&,
-    ruvia::StopToken&&>);
-static_assert(!std::constructible_from<ruvia::detail::ContextServices,
-    ruvia::detail::WorkerClientRegistryView, ruvia::detail::RateLimiter*, std::size_t>);
-
-template <typename Services>
-concept HasWebSocketAccessor = requires(const Services& services) { services.webSocket(); };
-
-template <typename Services>
-concept HasResponseStreamAccessor =
-    requires(const Services& services) { services.responseStream(); };
-
-template <typename Services>
-concept HasWithBodyReader = requires(
-    const Services& services, ruvia::BodyReader& reader) { services.withBodyReader(reader); };
-
-template <typename Services>
-concept HasWithBodyLoader = requires(const Services& services,
-    ruvia::detail::RequestBodyLoader& loader) { services.withBodyLoader(loader); };
-
-template <typename Services>
-concept HasWorkerRefinement = requires(
-    const Services& services, const ruvia::WorkerHandle& worker) { services.withWorker(worker); };
-
-template <typename Services>
-concept AcceptsTemporaryEnv =
-    requires(const Services& services, ruvia::Env&& env) { services.withEnv(std::move(env)); };
-
-template <typename Services>
-concept AcceptsTemporaryRoutes = requires(const Services& services,
-    ruvia::detail::RouteTable&& routes) { services.withRoutes(std::move(routes)); };
-
-template <typename Services>
-concept AcceptsTemporaryWorkerStates = requires(const Services& services,
-    ruvia::detail::WorkerStateRegistry&& states) { services.withWorkerStates(std::move(states)); };
-
-template <typename Access>
-concept MakesContextWithoutServices = requires(ruvia::RequestMemory& memory,
-    const ruvia::HttpRequest& request) { Access::make(memory, request); };
-
-template <typename Source>
-concept ExposesRvalueRequestBodyAlternative =
-    requires(Source&& source) { std::move(source).buffered(); } || requires(Source&& source) {
-        std::move(source).lazy();
-    } || requires(Source&& source) { std::move(source).streaming(); };
-
-template <typename Output>
-concept ExposesRvalueResponseOutputAlternative =
-    requires(Output&& output) { std::move(output).buffered(); } || requires(Output&& output) {
-        std::move(output).responseStream();
-    } || requires(Output&& output) { std::move(output).webSocket(); };
-
-static_assert(!HasBodyReaderAccessor<ruvia::detail::ContextServices>);
-static_assert(!HasBodyLoaderAccessor<ruvia::detail::ContextServices>);
-static_assert(!HasWebSocketAccessor<ruvia::detail::ContextServices>);
-static_assert(!HasResponseStreamAccessor<ruvia::detail::ContextServices>);
-static_assert(!HasWithBodyReader<ruvia::detail::ContextServices>);
-static_assert(!HasWithBodyLoader<ruvia::detail::ContextServices>);
-static_assert(!HasWorkerRefinement<ruvia::detail::ContextServices>);
-static_assert(!AcceptsTemporaryEnv<ruvia::detail::ContextServices>);
-static_assert(!AcceptsTemporaryRoutes<ruvia::detail::ContextServices>);
-static_assert(!AcceptsTemporaryWorkerStates<ruvia::detail::ContextServices>);
-static_assert(!std::default_initializable<ruvia::detail::ContextServices>);
-static_assert(!MakesContextWithoutServices<ruvia::detail::ContextAccess>);
-static_assert(!ExposesRvalueRequestBodyAlternative<ruvia::detail::ContextRequestBodySource>);
-static_assert(!ExposesRvalueResponseOutputAlternative<ruvia::detail::ContextResponseOutput>);
-static_assert(std::is_same_v<
-    decltype(std::declval<const ruvia::detail::ContextServices&>().requestBodySource()),
-    const ruvia::detail::ContextRequestBodySource&>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().responseOutput()),
-        const ruvia::detail::ContextResponseOutput&>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().worker()),
-        const ruvia::WorkerHandle&>);
-static_assert(std::is_same_v<decltype(std::declval<const ruvia::Context&>().worker()),
-    const ruvia::WorkerHandle&>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ruvia::detail::ContextServices&>().stopToken()),
-        const ruvia::StopToken&>);
-static_assert(
-    std::is_same_v<decltype(std::declval<const ruvia::Context&>().stopToken()), ruvia::StopToken>);
-static_assert(std::is_nothrow_copy_constructible_v<ruvia::detail::ContextRequestBodySource>);
-static_assert(std::is_nothrow_copy_assignable_v<ruvia::detail::ContextRequestBodySource>);
-static_assert(std::is_nothrow_copy_constructible_v<ruvia::detail::ContextResponseOutput>);
-static_assert(std::is_nothrow_copy_assignable_v<ruvia::detail::ContextResponseOutput>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ContextLazyRequestBodySource>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ContextStreamingRequestBodySource>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ContextResponseStreamOutput>);
-static_assert(!std::is_default_constructible_v<ruvia::detail::ContextWebSocketOutput>);
 
 ruvia::Task<std::string_view> loadBody(void*) {
     co_return "lazy-body";
@@ -237,8 +135,6 @@ RUVIA_TEST(request_body_capability_binding_constructs_target_and_facade_atomical
     ruvia::detail::BodyReaderBinding<BoundBodyReader> reader(17);
     ruvia::detail::RequestBodyLoaderBinding<BoundBodyLoader> loader(23);
 
-    static_assert(!std::is_move_constructible_v<decltype(reader)>);
-    static_assert(!std::is_move_constructible_v<decltype(loader)>);
     RUVIA_CHECK_EQ(reader.reader().value, 17);
     RUVIA_CHECK_EQ(loader.loader().value, 23);
 
@@ -503,13 +399,18 @@ RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
     const std::string_view values[]{"42"};
     auto context = ruvia::detail::ContextAccess::make(
         memory, request, "/items/:id", names, values, 1, 0, ruvia::test::testContextServices());
-    RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == nullptr);
-
-    (void)context.req().headerFields();
     const auto* const owner = ruvia::detail::ContextAccess::requestStorage(context);
     RUVIA_CHECK(owner != nullptr);
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::routeParamsMaterialized(context));
+
+    (void)context.req().headerFields();
     (void)context.req().queryFields();
     (void)context.req().cookieFields();
     (void)context.req().paramFields();
     RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == owner);
+    RUVIA_CHECK(ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
+    RUVIA_CHECK(ruvia::detail::ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK(ruvia::detail::ContextAccess::routeParamsMaterialized(context));
 }

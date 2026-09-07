@@ -1,15 +1,15 @@
 #pragma once
 
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/web/Middleware.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
-#include "ruvia/web/detail/controller/ControllerRuntime.h"
-
 #include <array>
 #include <concepts>
 #include <cstddef>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/web/Middleware.h"
+#include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 namespace ruvia::detail {
 

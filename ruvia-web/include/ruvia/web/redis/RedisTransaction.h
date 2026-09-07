@@ -1,8 +1,5 @@
 #pragma once
 
-#include "ruvia/web/redis/RedisPipeline.h"
-#include "ruvia/web/detail/redis/RedisArgumentPack.h"
-
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
@@ -10,6 +7,9 @@
 #include <span>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
+#include "ruvia/web/redis/RedisPipeline.h"
 
 namespace ruvia {
 

@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/web/redis/RedisTypes.h"
-
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "ruvia/web/redis/RedisTypes.h"
 
 namespace ruvia::detail {
 

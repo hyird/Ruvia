@@ -242,8 +242,8 @@ RUVIA_TEST(sansio_driver_h2_websocket_success_ignores_accept_encoding_rejection)
         asio::detached);
 
     io.run();
-    RUVIA_CHECK(handshakeFields.find(":status=200;") != std::string::npos);
-    RUVIA_CHECK(handshakeFields.find("content-encoding=") == std::string::npos);
+    RUVIA_CHECK(handshakeFields.contains(":status=200;"));
+    RUVIA_CHECK(!handshakeFields.contains("content-encoding="));
 }
 
 RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {

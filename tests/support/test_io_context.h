@@ -1,8 +1,8 @@
 #pragma once
 
-#include <asio/io_context.hpp>
-
 #include <deque>
+
+#include <asio/io_context.hpp>
 
 namespace ruvia::test {
 

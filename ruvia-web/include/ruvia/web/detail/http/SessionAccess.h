@@ -1,15 +1,16 @@
 #pragma once
 
-#include "ruvia/web/Context.h"
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
-
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <chrono>
 #include <memory_resource>
 #include <string_view>
+
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/cookie/SetCookiePlan.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextSessionState.h"
 
 namespace ruvia::detail {
 
@@ -17,19 +18,19 @@ namespace ruvia::detail {
 // to load the stored blob and read what the handler left behind.
 struct SessionAccess final {
     static void bind(Context& context) noexcept {
-        context.sessionState_.bind();
+        context.sessionState().bind();
     }
 
     static void observePresentedId(Context& context, std::string_view id) {
-        context.sessionState_.observePresentedId(id);
+        context.sessionState().observePresentedId(id);
     }
 
     static void load(Context& context, std::string_view data) {
-        context.sessionState_.loadRecognized(data);
+        context.sessionState().loadRecognized(data);
     }
 
     [[nodiscard]] static const ContextSessionState& state(const Context& context) noexcept {
-        return context.sessionState_;
+        return context.sessionState();
     }
 };
 

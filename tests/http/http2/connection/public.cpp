@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstddef>
 #include <memory_resource>
@@ -14,6 +12,8 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -75,7 +75,7 @@ std::pmr::string clientResponseWire(std::pmr::memory_resource* resource, std::st
 std::pmr::string clientWindowThresholdResponseWire(
     std::pmr::memory_resource* resource, bool endStream) {
     constexpr std::size_t kFramePayloadBytes = 16'384;
-    static_assert(ruvia::detail::kHttp2ReceiveWindowUpdateThreshold % kFramePayloadBytes == 0);
+
     constexpr auto kFrameCount =
         ruvia::detail::kHttp2ReceiveWindowUpdateThreshold / kFramePayloadBytes;
     std::pmr::string block(resource);

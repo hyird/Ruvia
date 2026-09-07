@@ -10,8 +10,8 @@
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameView.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
+#include "ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h"
 
 namespace ruvia::detail {
 

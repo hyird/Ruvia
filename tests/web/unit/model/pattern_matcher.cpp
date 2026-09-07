@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <string_view>
 
 #include "ruvia/web/detail/model/pattern/PatternMatcher.h"
+
+#include "test_harness.h"
 
 namespace {
 

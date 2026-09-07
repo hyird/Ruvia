@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/web/detail/util/CallableRef.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,21 +14,22 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/router/RouteEntry.h"
-#include "ruvia/web/detail/router/CompiledRoutePlan.h"
-#include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/http/static/StaticFileVariant.h"
-#include "ruvia/web/detail/server/DocumentRootBinding.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/http/static/StaticFileVariant.h"
+#include "ruvia/web/detail/router/CompiledRoutePlan.h"
+#include "ruvia/web/detail/router/RouteEntry.h"
+#include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/server/DocumentRootBinding.h"
+#include "ruvia/web/detail/util/CallableRef.h"
 
 namespace ruvia {
 class StaticRoot;

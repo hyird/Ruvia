@@ -1,12 +1,12 @@
 #pragma once
 
+#include <cstdint>
+#include <string_view>
+
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
-
-#include <cstdint>
-#include <string_view>
 
 namespace ruvia::detail {
 

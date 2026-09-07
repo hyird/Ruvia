@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <limits>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
+
+#include "test_harness.h"
 
 // Writing numbers into HTTP field values, including the finite check a
 // formatted double must pass.

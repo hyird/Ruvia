@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/router/RouteTable.h"
-
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -8,6 +6,7 @@
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 // Choosing what answers a request: the matched route, a 405 with Allow, the
 // document-root fallback, or nothing -- and running a buffered handler once one
