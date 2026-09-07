@@ -76,7 +76,32 @@ public:
     [[nodiscard]] RootTask<T> start(Task<T> task) const {
         auto completion = std::make_shared<detail::RootTaskState<T>>(handle(), failureSink());
         const auto boundExecutor = executor();
-        auto posted = post([task = std::move(task), completion, boundExecutor]() mutable {
+        // drain() destroys remaining mailbox closures without invoking them when
+        // a posted task throws. Own that destructor path so wait()/get() cannot
+        // hang and an unobserved failure still reaches the loop sink.
+        struct LaunchGuard final {
+            std::shared_ptr<detail::RootTaskState<T>> completion;
+
+            explicit LaunchGuard(std::shared_ptr<detail::RootTaskState<T>> state) noexcept
+                : completion(std::move(state)) {}
+            LaunchGuard(const LaunchGuard&) = delete;
+            LaunchGuard& operator=(const LaunchGuard&) = delete;
+            LaunchGuard(LaunchGuard&& other) noexcept
+                : completion(std::move(other.completion)) {}
+            LaunchGuard& operator=(LaunchGuard&&) = delete;
+            ~LaunchGuard() {
+                if (completion == nullptr) {
+                    return;
+                }
+                completion->completeFailure(
+                    std::make_exception_ptr(std::runtime_error("event loop is stopping")));
+            }
+            void release() noexcept {
+                completion.reset();
+            }
+        };
+        auto posted = post([task = std::move(task), completion, boundExecutor,
+                               launch = LaunchGuard(completion)]() mutable {
             try {
                 detail::asyncStartTask(std::move(task),
                     asio::bind_executor(boundExecutor,
@@ -91,7 +116,9 @@ public:
                                 completion->completeValue(std::move(*result.success()).takeValue());
                             }
                         }));
+                launch.release();
             } catch (...) {
+                launch.release();
                 completion->completeFailure(std::current_exception());
             }
         });

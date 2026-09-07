@@ -681,6 +681,37 @@ bool testFailureDestroysAbandonedMailboxTasks() {
     return queuedTaskDestroyed && !worker.valid();
 }
 
+bool testAbandonedRootTaskCompletesWhenMailboxDrainFails() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 8});
+    const auto loop = loops.loop(0);
+    if (loop.post([] { throw std::runtime_error("boom"); }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    auto root = loop.start([]() -> ruvia::Task<int> { co_return 42; }());
+    loops.start();
+
+    bool joinThrew = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        joinThrew = std::string_view(error.what()) == "boom";
+    } catch (...) {
+    }
+    if (!joinThrew) {
+        return false;
+    }
+
+    try {
+        static_cast<void>(root.get());
+        return false;
+    } catch (const std::runtime_error& error) {
+        return std::string_view(error.what()) == "event loop is stopping";
+    } catch (...) {
+        return false;
+    }
+}
+
 bool testDispatcherLifecycleHooksAreWorkerAffine() {
     asio::io_context ioContext;
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
@@ -844,6 +875,8 @@ int main() {
                        testEscapedWorkerHandleBecomesDetachedEndpoint) &&
                    run("failure_destroys_abandoned_mailbox_tasks",
                        testFailureDestroysAbandonedMailboxTasks) &&
+                   run("abandoned_root_task_completes_when_mailbox_drain_fails",
+                       testAbandonedRootTaskCompletesWhenMailboxDrainFails) &&
                    run("dispatcher_lifecycle_hooks_are_worker_affine",
                        testDispatcherLifecycleHooksAreWorkerAffine) &&
                    run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) &&
