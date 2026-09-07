@@ -1,13 +1,12 @@
 #include "ruvia/http/HttpClientRedirect.h"
 
-#include "ruvia/http/HttpClientRequestTarget.h"
-
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/client/HttpOriginView.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-
 #include <utility>
+
+#include "ruvia/http/HttpClientRequestTarget.h"
+#include "ruvia/http/detail/client/HttpOriginView.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
 namespace {

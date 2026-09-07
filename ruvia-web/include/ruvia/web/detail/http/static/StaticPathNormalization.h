@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/web/Error.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+
+#include "ruvia/web/Error.h"
 
 namespace ruvia::detail {
 

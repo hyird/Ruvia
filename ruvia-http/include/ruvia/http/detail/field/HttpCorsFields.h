@@ -3,9 +3,9 @@
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
 

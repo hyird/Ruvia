@@ -7,8 +7,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include <ruvia/core/Task.h>
-#include <ruvia/core/WorkerHandle.h>
+#include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 
 namespace ruvia::detail {
 

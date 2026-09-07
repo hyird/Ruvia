@@ -1,13 +1,13 @@
-#include "test_harness.h"
-
 #include <chrono>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 #include "ruvia/web/RateLimitRule.h"
+#include "ruvia/web/detail/ratelimit/RateLimiter.h"
+
+#include "test_harness.h"
 
 namespace {
 

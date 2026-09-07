@@ -1,11 +1,5 @@
 #include "ruvia/web/detail/auth/CookieSignature.h"
 
-#include "ruvia/core/detail/util/Base64.h"
-#include "ruvia/core/detail/util/ConstantTime.h"
-
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-
 #include <array>
 #include <cstdint>
 #include <limits>
@@ -13,6 +7,12 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
+#include "ruvia/core/detail/util/Base64.h"
+#include "ruvia/core/detail/util/ConstantTime.h"
 
 namespace ruvia::detail {
 

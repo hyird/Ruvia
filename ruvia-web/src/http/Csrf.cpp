@@ -1,16 +1,15 @@
 #include "ruvia/web/Csrf.h"
 
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/util/RegistrationResource.h"
-
 #include <array>
 #include <cstddef>
 #include <stdexcept>
 
 #include <openssl/rand.h>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 namespace ruvia::detail {
 

@@ -7,9 +7,9 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/HttpClient.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamCloseSource.h"
-#include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {
 

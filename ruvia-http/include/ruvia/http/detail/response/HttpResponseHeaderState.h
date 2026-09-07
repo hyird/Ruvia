@@ -1,12 +1,12 @@
 #pragma once
-#include <span>
-#include "ruvia/http/HttpResponse.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <span>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

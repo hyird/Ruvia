@@ -1,18 +1,19 @@
-#include "test_harness.h"
+#include "ruvia/web/auth/Jwt.h"
 
 #include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/auth/Jwt.h"
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -24,79 +25,6 @@ using ruvia::jwtSign;
 using ruvia::JwtSignOptions;
 using ruvia::JwtVerifyOptions;
 using ruvia::testing::throwsOn;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;

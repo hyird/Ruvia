@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/detail/util/NativePath.h"
-
+#include <array>
 #include <cstdint>
 #include <filesystem>
-#include <array>
+
+#include "ruvia/http/detail/util/NativePath.h"
 
 namespace ruvia::detail {
 

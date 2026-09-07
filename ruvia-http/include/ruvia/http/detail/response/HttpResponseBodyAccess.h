@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/HttpResponse.h"
-
 #include <memory_resource>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

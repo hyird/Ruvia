@@ -1,11 +1,10 @@
 #pragma once
 
-#include "ruvia/http/HttpHeader.h"
-
 #include <string_view>
 
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {
 

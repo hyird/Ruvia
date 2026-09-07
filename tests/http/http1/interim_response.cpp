@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <algorithm>
 #include <array>
 #include <concepts>
@@ -14,6 +12,8 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::Http1InterimConnectionDisposition;
@@ -21,17 +21,6 @@ using ruvia::Http1InterimResponsePrepareError;
 using ruvia::Http1InterimResponseWriter;
 using ruvia::HttpHeaderView;
 using ruvia::HttpInterimResponseHead;
-
-
-
-
-
-
-
-
-
-
-
 
 [[nodiscard]] bool unchanged(const std::array<char, 64>& buffer, char sentinel) {
     return std::ranges::all_of(buffer, [sentinel](char value) { return value == sentinel; });

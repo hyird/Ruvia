@@ -10,17 +10,15 @@
 #include <vector>
 
 #include "ruvia/core/BlockingPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
-#include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
-#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/app/AppConfiguration.h"
-#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"

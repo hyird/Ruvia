@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
@@ -11,14 +9,16 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
-#include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpResponse.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -30,10 +30,6 @@ using ruvia::detail::HpackDecoder;
 using ruvia::detail::Http2ResponseHeadPlan;
 using ruvia::detail::Http2ResponseHeadPlanResult;
 using ruvia::detail::Http2StreamState;
-
-
-
-
 
 enum class ResponseHeadMode : std::uint8_t { kBuffered,
     kStreaming };

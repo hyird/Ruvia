@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -8,26 +6,11 @@
 
 #include "ruvia/http/detail/http2/frame/Http2PayloadSlice.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::http2SliceTwoPartPayload;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // Virtual concatenation "ABCDE" + "12345" == "ABCDE12345".
 constexpr std::string_view kFirst = "ABCDE";

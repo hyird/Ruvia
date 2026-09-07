@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
@@ -7,9 +5,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpClientRedirect.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -24,28 +24,6 @@ using ruvia::isHttpClientRedirectStatus;
 using ruvia::lookupUniqueHttpClientResponseHeader;
 using ruvia::planHttpClientRedirectRequest;
 using ruvia::resolveHttpClientRedirectTarget;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 HttpOriginView originFor(
     std::string_view host, std::uint16_t port, HttpScheme scheme = HttpScheme::kHttp) {

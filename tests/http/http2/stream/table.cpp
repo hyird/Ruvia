@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
@@ -8,14 +6,12 @@
 
 #include "ruvia/http/detail/http2/stream/Http2StreamTable.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::Http2LocalSettings;
 using ruvia::detail::Http2StreamTable;
-
-
-
-
 
 }  // namespace
 

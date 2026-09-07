@@ -1,10 +1,5 @@
 #pragma once
 
-#include "ruvia/http/BorrowedText.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
-#include "ruvia/http/HttpStatus.h"
-#include "ruvia/web/ValidationIssue.h"
-
 #include <concepts>
 #include <cstdint>
 #include <exception>
@@ -14,6 +9,11 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+
+#include "ruvia/http/BorrowedText.h"
+#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/web/ValidationIssue.h"
 
 namespace ruvia {
 

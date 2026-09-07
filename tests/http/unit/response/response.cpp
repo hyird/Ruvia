@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -15,28 +13,14 @@
 
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+
+#include "test_harness.h"
 
 namespace {
 
 using ruvia::HttpResponse;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -96,10 +80,6 @@ private:
     std::optional<std::size_t> failAfter_;
     std::size_t liveAllocations_{0};
 };
-
-
-
-
 
 HttpResponse makeResponse() {
     return HttpResponse({.resource = std::pmr::new_delete_resource()});

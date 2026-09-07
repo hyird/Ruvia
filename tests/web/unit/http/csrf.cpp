@@ -1,6 +1,4 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "context_services_fixture.h"
+#include "ruvia/web/Csrf.h"
 
 #include <array>
 #include <cstddef>
@@ -16,16 +14,19 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/Context.h"
-#include "ruvia/web/Csrf.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/SecureToken.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -51,10 +52,6 @@ using ruvia::detail::RequestKnownHeader;
 #if defined(__GNUC__) && !defined(__clang__)
 
 #endif
-
-
-
-
 
 #if defined(__GNUC__) && !defined(__clang__)
 

@@ -1,12 +1,12 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <libpq-fe.h>
 
 #include <exception>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbSlotSocket.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia::detail {
 namespace {

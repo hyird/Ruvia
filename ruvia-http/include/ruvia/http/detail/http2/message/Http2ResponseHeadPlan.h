@@ -7,9 +7,9 @@
 #include <system_error>
 #include <type_traits>
 
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

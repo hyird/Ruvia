@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -7,6 +5,8 @@
 #include <type_traits>
 
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -40,7 +40,6 @@ WebSocketLivenessDecision decide(const WebSocketLifecycleOptions& opts, WsLivene
 }  // namespace
 
 RUVIA_TEST(ws_heartbeat_config_is_a_plain_optional_value) {
-
     const ruvia::WebSocketHeartbeatConfig disabled;
     RUVIA_CHECK(!disabled.pingInterval.has_value());
 }

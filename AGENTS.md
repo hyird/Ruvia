@@ -32,6 +32,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
+- 机械代码风格（include 形状、错误返回层、命名）见 `STYLE.md`，不要把那些规则再抄进本文件。
 
 ## 目录规则
 

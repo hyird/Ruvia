@@ -1,6 +1,7 @@
-#include "routing_fixture.h"
 #include "ruvia/web/BodyLimit.h"
 #include "ruvia/web/Deadline.h"
+
+#include "routing_fixture.h"
 
 // Routing: registering routes and matching a request to one.
 
@@ -267,7 +268,7 @@ RUVIA_TEST(routing_deep_wildcard_with_static_prefix_allowed) {
     RUVIA_CHECK(
         finalizeConflicts({"/a/*", "/a/:x"}));          // wildcard vs param sibling at a shared node
     RUVIA_CHECK(finalizeConflicts({"/a/*", "/:x/b"}));  // after a static/param fork, the wildcard
-        // steals the other route's direct-match path
+    // steals the other route's direct-match path
     RUVIA_CHECK(finalizeConflicts({"/*", "/:x"}));                   // root wildcard vs param
     RUVIA_CHECK(finalizeConflicts({"/users/:id", "/users/:name"}));  // two params at one position
 }

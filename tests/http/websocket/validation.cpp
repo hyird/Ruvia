@@ -1,10 +1,10 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <initializer_list>
 #include <string>
 
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
+
+#include "test_harness.h"
 
 namespace {
 

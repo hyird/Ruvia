@@ -1,14 +1,14 @@
 #include "ruvia/web/detail/db/DbPostgreSql.h"
 
-#include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <libpq-fe.h>
 
 #include <charconv>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia::detail {
 

@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include <hiredis/hiredis.h>
 
 #include <array>
 #include <chrono>
@@ -13,13 +13,13 @@
 #include <string_view>
 #include <vector>
 
-#include <hiredis/hiredis.h>
-
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/RedisTypes.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -372,11 +372,6 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     using ruvia::RedisConfig;
     using ruvia::detail::validateRedisConfig;
     using std::chrono::milliseconds;
-
-
-
-
-
 
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));

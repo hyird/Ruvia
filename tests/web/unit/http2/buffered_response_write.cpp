@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <optional>
@@ -8,12 +6,9 @@
 
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 
+#include "test_harness.h"
+
 namespace {
-
-
-
-
-
 
 }  // namespace
 

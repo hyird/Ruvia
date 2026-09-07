@@ -1,9 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/response/HttpResponseBody.h"
-#include "ruvia/http/HttpStatus.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -16,6 +12,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/response/HttpResponseBody.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
 

@@ -4,12 +4,13 @@
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
 
+#include "ruvia/web/Testing.h"
+
 #include <cstdio>
 #include <string_view>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
-#include "ruvia/web/Testing.h"
 
 RUVIA_REQUEST_MODEL(NoteRequest, RUVIA_OPTIONAL_FIELD(text, ruvia::String));
 

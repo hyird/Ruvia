@@ -1,8 +1,8 @@
-#include "test_harness.h"
-
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
+
+#include "test_harness.h"
 
 int main() {
     using namespace ruvia::testing;

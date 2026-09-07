@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -8,8 +6,10 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -20,10 +20,6 @@ using ruvia::detail::HttpContentLengthParseStatus;
 using ruvia::detail::HttpContentLengthState;
 using ruvia::detail::HttpTransferEncodingParseStatus;
 using ruvia::detail::HttpTransferEncodingState;
-
-
-
-
 
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
@@ -133,7 +129,7 @@ RUVIA_TEST(header_block_parser_handles_deterministic_arbitrary_header_bytes) {
         const auto randomBytes = static_cast<std::size_t>(static_cast<unsigned char>(nextByte())) +
                                  (static_cast<std::size_t>(
                                       static_cast<unsigned char>(nextByte()) & 1U)
-                                  << 8U);
+                                     << 8U);
         for (std::size_t i = 0; i < randomBytes; ++i) {
             buffer.push_back(nextByte());
         }

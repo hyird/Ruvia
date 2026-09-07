@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -12,6 +10,8 @@
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+
+#include "test_harness.h"
 
 namespace {
 

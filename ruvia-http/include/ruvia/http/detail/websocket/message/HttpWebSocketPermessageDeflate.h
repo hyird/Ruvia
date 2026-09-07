@@ -1,5 +1,7 @@
 #pragma once
 
+#include <zlib.h>
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -9,13 +11,11 @@
 #include <string>
 #include <string_view>
 
-#include <zlib.h>
-
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 

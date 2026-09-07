@@ -1,14 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-
-#include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
-#include "ruvia/core/Task.h"
-#include "ruvia/core/memory/MemoryPool.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +10,14 @@
 #include <utility>
 
 #include <asio.hpp>
+
+#include "ruvia/core/Task.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 namespace ruvia::detail {
 

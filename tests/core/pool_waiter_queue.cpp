@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -9,6 +7,8 @@
 #include <utility>
 
 #include "ruvia/core/detail/pool/PoolWaiterQueue.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -24,18 +24,6 @@ using Clock = std::chrono::steady_clock;
 
 // A far-future deadline so a waiter never expires during a resume/close test.
 constexpr Clock::time_point kNever = Clock::time_point::max();
-
-
-
-
-
-
-
-
-
-
-
-
 
 class WaiterProbeTask final {
 public:

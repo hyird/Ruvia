@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <concepts>
 #include <exception>
@@ -8,13 +6,15 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
+#include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::httpResponseTrailerSection;
 using ruvia::detail::httpResponseTrailerBlockValid;
+using ruvia::detail::httpResponseTrailerSection;
 using ruvia::detail::HttpResponseTrailerSectionError;
 using ruvia::detail::HttpResponseTrailerSectionFailure;
 using ruvia::detail::HttpResponseTrailerSectionResult;
@@ -23,17 +23,6 @@ using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
 using ruvia::detail::visitHttpResponseTrailerFields;
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

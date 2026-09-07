@@ -1,13 +1,13 @@
 #pragma once
 
-#include <asio/any_io_executor.hpp>
-#include "ruvia/core/detail/worker/WorkerPostCounters.h"
-
 #include <atomic>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
 
+#include <asio/any_io_executor.hpp>
+
+#include "ruvia/core/detail/worker/WorkerPostCounters.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 

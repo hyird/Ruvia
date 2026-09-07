@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerHandle.h"
@@ -8,15 +5,18 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextCapabilities.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/web/detail/server/RequestDeadline.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -42,67 +42,6 @@
 #include <asio/io_context.hpp>
 
 namespace {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ruvia::Task<std::string_view> loadBody(void*) {
     co_return "lazy-body";
@@ -195,8 +134,6 @@ struct BoundBodyLoader final {
 RUVIA_TEST(request_body_capability_binding_constructs_target_and_facade_atomically) {
     ruvia::detail::BodyReaderBinding<BoundBodyReader> reader(17);
     ruvia::detail::RequestBodyLoaderBinding<BoundBodyLoader> loader(23);
-
-
 
     RUVIA_CHECK_EQ(reader.reader().value, 17);
     RUVIA_CHECK_EQ(loader.loader().value, 23);
@@ -462,13 +399,18 @@ RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
     const std::string_view values[]{"42"};
     auto context = ruvia::detail::ContextAccess::make(
         memory, request, "/items/:id", names, values, 1, 0, ruvia::test::testContextServices());
-    RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == nullptr);
-
-    (void)context.req().headerFields();
     const auto* const owner = ruvia::detail::ContextAccess::requestStorage(context);
     RUVIA_CHECK(owner != nullptr);
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK(!ruvia::detail::ContextAccess::routeParamsMaterialized(context));
+
+    (void)context.req().headerFields();
     (void)context.req().queryFields();
     (void)context.req().cookieFields();
     (void)context.req().paramFields();
     RUVIA_CHECK(ruvia::detail::ContextAccess::requestStorage(context) == owner);
+    RUVIA_CHECK(ruvia::detail::ContextAccess::requestCookiesMaterialized(context));
+    RUVIA_CHECK(ruvia::detail::ContextAccess::requestQueryMaterialized(context));
+    RUVIA_CHECK(ruvia::detail::ContextAccess::routeParamsMaterialized(context));
 }

@@ -10,12 +10,12 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
 namespace ruvia::detail {
 

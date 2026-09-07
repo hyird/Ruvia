@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -9,6 +7,8 @@
 #include <utility>
 
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -25,20 +25,6 @@ using ruvia::detail::Http2StreamState;
 std::pmr::memory_resource* res() noexcept {
     return std::pmr::new_delete_resource();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

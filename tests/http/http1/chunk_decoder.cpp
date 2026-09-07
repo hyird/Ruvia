@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +11,8 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::ProtocolByteLimit;
@@ -20,45 +20,10 @@ using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
 using ruvia::detail::Http1ChunkDecodeFailure;
 
-
 using ruvia::detail::Http1ChunkDecodeNeedMore;
 using ruvia::detail::Http1ChunkDecodeResult;
-using ruvia::detail::Http1ChunkTrailerRole;
 using ruvia::detail::Http1ChunkedBodyDecoder;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+using ruvia::detail::Http1ChunkTrailerRole;
 
 }  // namespace
 

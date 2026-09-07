@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
@@ -13,6 +10,9 @@
 
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -35,13 +35,6 @@ struct ConfigStorage final {
 };
 
 using Definition = ruvia::detail::NamedCapabilityDefinition<ConfigStorage>;
-
-
-
-
-
-
-
 
 [[nodiscard]] std::string validationFailure(const std::vector<Entry>& entries) {
     try {

@@ -1,18 +1,14 @@
-#include "test_harness.h"
-
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
-
-#include <cstddef>
 #include <array>
+#include <cstddef>
 #include <limits>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 
-
-
+#include "test_harness.h"
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
     const ruvia::detail::Http1ChunkHeader zero(0);

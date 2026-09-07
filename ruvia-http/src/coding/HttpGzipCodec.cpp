@@ -1,12 +1,11 @@
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
+#include <zlib.h>
 
 #include <cstddef>
 #include <limits>
 #include <new>
 #include <utility>
 
-#include <zlib.h>
-
+#include "ruvia/http/detail/coding/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 

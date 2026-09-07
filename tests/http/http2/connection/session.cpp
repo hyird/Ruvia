@@ -1,6 +1,6 @@
-#include "http2_connection_fixture.h"
-
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
+
+#include "http2_connection_fixture.h"
 
 // Http2Connection: the connection preface, SETTINGS, PING and the frame loop.
 

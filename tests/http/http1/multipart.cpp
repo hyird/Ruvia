@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -9,106 +7,15 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/parser/MultipartPartAccess.h"
+#include "ruvia/http/MultipartParser.h"
 #include "ruvia/http/detail/parser/MultipartDelimiter.h"
+#include "ruvia/http/detail/parser/MultipartPartAccess.h"
 #include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 #include "ruvia/http/detail/parser/MultipartStreamPartAccess.h"
-#include "ruvia/http/MultipartParser.h"
+
+#include "test_harness.h"
 
 namespace {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

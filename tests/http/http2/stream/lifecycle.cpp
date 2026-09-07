@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -32,65 +32,6 @@ using ruvia::detail::Http2StreamAborted;
 using ruvia::detail::Http2StreamCloseSource;
 using ruvia::detail::Http2StreamLifecycle;
 using ruvia::detail::Http2StreamState;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

@@ -1,4 +1,4 @@
-#include "test_harness.h"
+#include "ruvia/web/Error.h"
 
 #include <memory_resource>
 #include <ranges>
@@ -8,8 +8,9 @@
 #include <utility>
 
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -18,27 +19,7 @@ using ruvia::HttpError;
 
 }  // namespace
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 using ValidationIssuesOwningView = std::ranges::owning_view<ruvia::ValidationError::IssueList>;
-
-
 
 RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(

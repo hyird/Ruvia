@@ -6,22 +6,23 @@
 // owns the ResponseFileBody DESCRIPTOR (path + size/offset) used to frame
 // Content-Length/Range; opening the file is a runtime driver concern.
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-
-#include <system_error>
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <ctime>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
+#include <system_error>
 #include <utility>
 
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+
 #if defined(__unix__)
-#include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <cerrno>
 #elif defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX

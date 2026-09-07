@@ -17,9 +17,12 @@
 #include <vector>
 
 #include "ruvia/core/BlockingPool.h"
-#include "ruvia/core/Task.h"
+#include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
@@ -35,22 +38,10 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/http/context/RequestBindings.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
-#include "ruvia/web/detail/http/context/ContextCapabilities.h"
-#include "ruvia/web/detail/http/context/ContextResponseState.h"
-#include "ruvia/web/detail/http/context/ContextRequestStorage.h"
-#include "ruvia/web/detail/http/context/ContextSessionState.h"
 #include "ruvia/web/detail/model/Traits.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/memory/PmrObject.h"
-
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/Redis.h"
-#endif
 
 namespace ruvia {
 
@@ -69,12 +60,24 @@ namespace detail {
 class RateLimiter;
 class RouteTable;
 class WorkerStateRegistry;
+class ContextRequestStorage;
+class ContextRequestBodySource;
+class ContextResponseOutput;
+class ContextResponseState;
+class ContextSessionState;
+class RequestBindings;
+template <typename T>
+class RequestBindingHandle;
+class RequestQueryValues;
 enum class StaticFileSelectionMode : std::uint8_t;
 struct ContextAccess;
 class ContextServices;
 class RequestDeadline;
 struct SessionAccess;
 }  // namespace detail
+
+template <typename T>
+using RequestStateBinding = detail::RequestBindingHandle<T>;
 
 struct RedirectResponseOptions final {
     BorrowedText location{};
@@ -123,13 +126,12 @@ private:
     friend detail::RequestBindingHandle<T> detail::bindValidatedJsonModel(
         Context& context, const T& model, std::string_view rawJson);
 
-    Context(RequestMemory& memory, const HttpRequest& request,
-        detail::ContextServices services) noexcept;
+    Context(RequestMemory& memory, const HttpRequest& request, detail::ContextServices services);
 
     Context(RequestMemory& memory, const HttpRequest& request, std::string_view routePath,
         const std::string_view* paramNames, const std::string_view* paramValues,
         std::size_t paramCount, std::uintptr_t routeRateLimitScope,
-        detail::ContextServices services) noexcept;
+        detail::ContextServices services);
 
     [[nodiscard]] HttpResponse staticFile(const StaticRoot& root, StaticFileResponseOptions options,
         detail::StaticFileSelectionMode mode) const;
@@ -137,7 +139,7 @@ private:
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
 
-    ~Context() = default;
+    ~Context();
 
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
@@ -218,9 +220,7 @@ public:
     // produced and checked this", and hand-bound state must never be able to
     // impersonate it.
     template <typename T>
-    [[nodiscard]] RequestStateBinding<T> bindRequestState(const T& value) {
-        return requestBindings_.bindState(value);
-    }
+    [[nodiscard]] RequestStateBinding<T> bindRequestState(const T& value);
 
     template <typename T>
         requires(!std::is_lvalue_reference_v<T>)
@@ -230,14 +230,10 @@ public:
     // tryRequestState<T>() where absence is a normal outcome -- an optional
     // auth middleware, say.
     template <typename T>
-    [[nodiscard]] const std::remove_cvref_t<T>& requestState() const {
-        return requestBindings_.getState<T>();
-    }
+    [[nodiscard]] const std::remove_cvref_t<T>& requestState() const;
 
     template <typename T>
-    [[nodiscard]] const std::remove_cvref_t<T>* tryRequestState() const noexcept {
-        return requestBindings_.tryGetState<T>();
-    }
+    [[nodiscard]] const std::remove_cvref_t<T>* tryRequestState() const noexcept;
 
     [[nodiscard]] const Env& env() const noexcept;
 
@@ -394,9 +390,7 @@ private:
     void storeError(std::exception_ptr exception) noexcept {
         error_ = std::move(exception);
     }
-    [[nodiscard]] bool hasResponse() const noexcept {
-        return responseState_.final() != nullptr;
-    }
+    [[nodiscard]] bool hasResponse() const noexcept;
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<Context>;
@@ -432,20 +426,26 @@ private:
     bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
-    detail::ContextRequestBodySource requestBodySource_;
     using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage,
         detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
-    // One typed arena allocation owns all lazy request caches. It is destroyed
-    // after response/session state borrowers but before RequestMemory releases
-    // their backing arena.
+    // One typed arena allocation owns request caches, response/session state,
+    // and bindings. Destroyed after operationScope_ so outstanding operations
+    // still see request-owned objects.
     mutable RequestStorageOwner requestStorage_;
-    detail::ContextResponseOutput responseOutput_;
-    detail::ContextResponseState responseState_;
-    detail::ContextSessionState sessionState_;
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
 
-    detail::RequestBindings requestBindings_;
+    [[nodiscard]] detail::ContextRequestBodySource& requestBodySource() noexcept;
+    [[nodiscard]] const detail::ContextRequestBodySource& requestBodySource() const noexcept;
+    [[nodiscard]] detail::ContextResponseOutput& responseOutput() noexcept;
+    [[nodiscard]] const detail::ContextResponseOutput& responseOutput() const noexcept;
+    [[nodiscard]] detail::ContextResponseState& responseState() noexcept;
+    [[nodiscard]] const detail::ContextResponseState& responseState() const noexcept;
+    [[nodiscard]] detail::ContextSessionState& sessionState() noexcept;
+    [[nodiscard]] const detail::ContextSessionState& sessionState() const noexcept;
+    [[nodiscard]] detail::RequestBindings& requestBindings() noexcept;
+    [[nodiscard]] const detail::RequestBindings& requestBindings() const noexcept;
+
     // Declared last so it closes first, while every request-owned object and its
     // memory resource are still alive.
     mutable detail::ScopedOperationScope operationScope_;
@@ -454,15 +454,11 @@ private:
 namespace detail {
 
 template <typename T>
-RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model) {
-    return context.requestBindings_.bindValidated(model);
-}
+RequestBindingHandle<T> bindValidatedModel(Context& context, const T& model);
 
 template <typename T>
 RequestBindingHandle<T> bindValidatedJsonModel(
-    Context& context, const T& model, std::string_view rawJson) {
-    return context.requestBindings_.bindValidated(model, rawJson);
-}
+    Context& context, const T& model, std::string_view rawJson);
 
 }  // namespace detail
 

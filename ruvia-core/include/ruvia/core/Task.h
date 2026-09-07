@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/core/detail/task/TaskPromise.h"
-
 #include <coroutine>
 #include <exception>
 #include <utility>
+
+#include "ruvia/core/detail/task/TaskPromise.h"
 
 namespace ruvia {
 

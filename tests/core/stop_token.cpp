@@ -1,16 +1,10 @@
-#include "test_harness.h"
-
 #include <atomic>
-#include <type_traits>
 #include <thread>
+#include <type_traits>
 
 #include "ruvia/core/StopToken.h"
 
-
-
-
-
-
+#include "test_harness.h"
 
 namespace {
 
@@ -61,8 +55,6 @@ private:
 // there puts stop_requested() after registerCallbacks()' preflight check but
 // before the first std::stop_callback finishes construction.
 constexpr int kMoveIntoCallbackState = 3;
-
-
 
 }  // namespace
 

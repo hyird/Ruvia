@@ -1,4 +1,4 @@
-#include "ruvia/web/redis/Redis.h"
+#include <hiredis/hiredis.h>
 
 #include <array>
 #include <charconv>
@@ -9,13 +9,13 @@
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
-#include <hiredis/hiredis.h>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
+#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia::detail {
 

@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -9,22 +6,14 @@
 
 #include "ruvia/web/ModelTypes.h"
 
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::test::CountingMemoryResource;
 
 }  // namespace
-
-
-
-
-
-
-
-
-
-
-
 
 RUVIA_TEST(model_string_public_construction_owns_input) {
     CountingMemoryResource resource;

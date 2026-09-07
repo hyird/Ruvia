@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <optional>
@@ -11,6 +9,8 @@
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::encodeWebSocketClosePayload;
@@ -20,13 +20,6 @@ using ruvia::detail::webSocketClosePayloadFailure;
 using ruvia::detail::WebSocketEncodedClosePayload;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
-
-
-
-
-
-
-
 
 std::string closeBody(std::uint16_t code, std::string_view reason) {
     std::string body;
@@ -49,9 +42,6 @@ std::uint16_t failureCloseCode(std::string_view body) {
     const auto failure = webSocketClosePayloadFailure(body);
     return failure.has_value() ? webSocketProtocolFailureCloseCode(*failure) : 0;
 }
-
-
-
 
 }  // namespace
 

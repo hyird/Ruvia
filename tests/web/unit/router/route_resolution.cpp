@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -12,8 +10,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -25,25 +25,6 @@ using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
 using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse({.resource = context.resource()});

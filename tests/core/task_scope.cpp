@@ -1,12 +1,3 @@
-#include <ruvia/core/TaskScope.h>
-#include <ruvia/core/Timer.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-
 #include <chrono>
 #include <concepts>
 #include <memory>
@@ -15,36 +6,14 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#include "ruvia/core/TaskScope.h"
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

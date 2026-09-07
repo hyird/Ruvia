@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ruvia/http/HttpContentCoding.h"
-
 #include <exception>
+
+#include "ruvia/http/HttpContentCoding.h"
 
 namespace ruvia::detail {
 

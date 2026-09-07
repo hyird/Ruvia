@@ -1,33 +1,19 @@
-#include "test_harness.h"
-
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/web/detail/app/EnvState.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::readDotenvEntries;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 std::filesystem::path writeTempEnv(std::string_view name, std::string_view contents) {
     const auto path = std::filesystem::temp_directory_path() / name;

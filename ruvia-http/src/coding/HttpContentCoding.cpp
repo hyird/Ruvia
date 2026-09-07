@@ -1,13 +1,13 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/HttpContentCodec.h"
 
 #include <memory_resource>
 #include <string_view>
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/HttpContentCodec.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token

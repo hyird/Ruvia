@@ -1,7 +1,5 @@
 #pragma once
 
-#include "test_harness.h"
-
 #include <algorithm>
 #include <array>
 #include <concepts>
@@ -16,15 +14,17 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
-#include "ruvia/http/HttpLimits.h"
+
+#include "test_harness.h"
 
 namespace http2_connection_test {
 
@@ -71,107 +71,6 @@ inline ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     }
     return *result.section();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 inline const Http2LocalContentKnownLength& requireLocalKnownLength(const Http2StreamState& stream) {
     if (const auto* knownLength = stream.localContent().knownLength()) {

@@ -5,11 +5,11 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia::detail {
 

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
@@ -13,17 +11,9 @@
 #include "ruvia/web/detail/json/JsonString.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
 
+#include "test_harness.h"
+
 namespace {
-
-
-
-
-
-
-
-
-
-
 
 std::optional<std::pmr::string> decodeJson(std::string_view raw) {
     return ruvia::detail::decodeJsonString(raw, std::pmr::get_default_resource());

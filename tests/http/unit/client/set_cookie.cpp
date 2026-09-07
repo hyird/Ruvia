@@ -12,26 +12,10 @@
 
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpSetCookie.h"
+
 #include "test_harness.h"
 
 namespace {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

@@ -1,10 +1,10 @@
 #include "ruvia/web/detail/db/DbHostResolution.h"
 
-#include "ruvia/core/memory/PmrResource.h"
-
 #include <algorithm>
 #include <stdexcept>
 #include <system_error>
+
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 namespace {

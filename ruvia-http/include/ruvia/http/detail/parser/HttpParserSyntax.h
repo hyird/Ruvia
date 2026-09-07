@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ruvia/http/HttpHeader.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/HttpHeader.h"
 namespace ruvia::detail {
 
 enum class RequestHeaderKind : std::uint8_t {

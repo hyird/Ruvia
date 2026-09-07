@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/web/db/DbTypes.h"
-
 #include <memory_resource>
 #include <string>
 #include <utility>
+
+#include "ruvia/web/db/DbTypes.h"
 
 namespace ruvia::detail {
 

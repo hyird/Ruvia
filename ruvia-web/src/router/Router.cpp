@@ -1,11 +1,10 @@
-#include "ruvia/web/detail/router/RouterImpl.h"
-
-#include "ruvia/web/detail/util/RegistrationResource.h"
-#include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-
 #include <algorithm>
 #include <stdexcept>
+
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 namespace ruvia {
 

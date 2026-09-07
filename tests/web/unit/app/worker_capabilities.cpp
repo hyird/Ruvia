@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <memory>
 #include <type_traits>
@@ -13,14 +11,7 @@
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
-
-
-
-
-
-
-
-
+#include "test_harness.h"
 
 RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     asio::io_context ioContext;

@@ -1,8 +1,8 @@
-#include "test_harness.h"
-
 #include <string_view>
 
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
+
+#include "test_harness.h"
 
 namespace {
 

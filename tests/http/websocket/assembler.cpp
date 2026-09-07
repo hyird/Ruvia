@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -11,10 +9,12 @@
 #include <utility>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameView.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketInboundAssembler.h"
-#include "ruvia/http/WebSocketProtocol.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -28,15 +28,6 @@ using ruvia::detail::WebSocketInboundResult;
 using ruvia::detail::WebSocketMessageAccess;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketProtocolFailureCloseCode;
-
-
-
-
-
-
-
-
-
 
 WebSocketFrameView frame(WebSocketOpcode opcode, std::string_view payload, bool fin,
     bool continuation = false, bool rsv1 = false) {
@@ -95,36 +86,6 @@ std::uint16_t acceptCloseCode(WebSocketInboundAssembler& assembler, const WebSoc
     const auto* failure = result.failure();
     return failure != nullptr ? webSocketProtocolFailureCloseCode(failure->error()) : 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

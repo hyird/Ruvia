@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -8,11 +6,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -27,18 +27,6 @@ using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestContentCoding;
 using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::requestKnownHeader;
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

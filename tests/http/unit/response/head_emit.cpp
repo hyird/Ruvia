@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -11,12 +9,14 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/server/HttpResponseHead.h"
-#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/server/HttpResponseHead.h"
+#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -34,15 +34,6 @@ using ruvia::detail::Http1ResponseHeadPlan;
 using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::httpResponseBodyPlan;
 using ruvia::detail::ResponseHeadBuffer;
-
-
-
-
-
-
-
-
-
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {

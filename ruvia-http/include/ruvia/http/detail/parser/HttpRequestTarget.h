@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
 

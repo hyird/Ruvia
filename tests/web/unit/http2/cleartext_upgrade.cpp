@@ -1,8 +1,8 @@
-#include "test_harness.h"
-
 #include <string_view>
 
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
+
+#include "test_harness.h"
 
 namespace {
 

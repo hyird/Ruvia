@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory_resource>
 #include <string_view>
+
 #include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 
 // Which files a static root may serve and what Content-Type each gets: the

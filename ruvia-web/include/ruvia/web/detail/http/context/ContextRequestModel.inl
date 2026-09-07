@@ -4,11 +4,11 @@
 // on ContextRequest's narrow bridge, so ContextRequest.h is self-contained and
 // does not require the complete response/state Context definition.
 
-#include "ruvia/web/ModelJson.h"
-#include "ruvia/web/ModelObject.h"
-
 #include <optional>
 #include <utility>
+
+#include "ruvia/web/ModelJson.h"
+#include "ruvia/web/ModelObject.h"
 
 namespace ruvia {
 

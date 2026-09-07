@@ -1,12 +1,10 @@
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -17,16 +15,17 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after

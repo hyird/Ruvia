@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
@@ -10,11 +8,13 @@
 #include <type_traits>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/stream/Http2TunnelState.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
+#include "ruvia/http/detail/http2/stream/Http2TunnelState.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -39,22 +39,6 @@ using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2SubmitStatus;
 using ruvia::detail::Http2TunnelOpen;
 using ruvia::detail::Http2TunnelState;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 std::uint32_t submittedRequestStreamId(const Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {

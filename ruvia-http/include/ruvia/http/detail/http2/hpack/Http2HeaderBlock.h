@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/util/PmrString.h"
 
 namespace ruvia::detail {

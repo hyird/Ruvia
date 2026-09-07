@@ -1,5 +1,8 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
+#include <cstddef>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
@@ -9,11 +12,8 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 
-#include <cstddef>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <utility>
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -32,37 +32,8 @@ using ruvia::detail::HttpRequestAccess;
 // onto ConnInfo. The end-to-end scheme, including TLS a trusted proxy
 // terminated, remains separate from this hop's typed transport.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // scheme() describes the client's connection, so it must NOT be a synonym for
 // "this hop is TLS".
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 [[nodiscard]] std::size_t activeTransportCount(const ConnInfo& info) noexcept {
     return static_cast<std::size_t>(info.plain() != nullptr) +

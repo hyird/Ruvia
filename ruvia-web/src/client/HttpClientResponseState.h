@@ -1,7 +1,7 @@
 #pragma once
 
-#include <memory_resource>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <vector>
 
@@ -10,8 +10,8 @@
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 

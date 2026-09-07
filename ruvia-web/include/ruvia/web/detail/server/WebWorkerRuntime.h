@@ -1,7 +1,5 @@
 #pragma once
 
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -9,6 +7,9 @@
 #include <string_view>
 #include <thread>
 #include <vector>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"

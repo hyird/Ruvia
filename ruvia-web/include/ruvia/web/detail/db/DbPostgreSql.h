@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ruvia/web/db/DbTypes.h"
-
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/web/db/DbTypes.h"
 
 struct pg_conn;
 struct pg_result;

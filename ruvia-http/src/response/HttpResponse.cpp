@@ -1,11 +1,5 @@
 #include "ruvia/http/HttpResponse.h"
 
-#include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
-#include "ruvia/http/detail/util/PmrResource.h"
-
 #include <array>
 #include <charconv>
 #include <memory>
@@ -13,6 +7,12 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+
+#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
 

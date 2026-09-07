@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/web/db/DbRows.h"
-
 #include <exception>
 #include <memory_resource>
 #include <string_view>
+
+#include "ruvia/web/db/DbRows.h"
 
 namespace ruvia::detail {
 

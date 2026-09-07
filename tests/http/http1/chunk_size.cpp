@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+
+#include "test_harness.h"
 
 namespace {
 

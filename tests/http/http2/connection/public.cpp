@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <cstddef>
 #include <memory_resource>
@@ -14,6 +12,8 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
+
+#include "test_harness.h"
 
 namespace {
 

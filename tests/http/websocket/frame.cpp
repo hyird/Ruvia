@@ -1,8 +1,6 @@
-#include "test_harness.h"
-
 #include <array>
-#include <cstddef>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
@@ -13,10 +11,12 @@
 #include <vector>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameView.h"
-#include "ruvia/http/WebSocketProtocol.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -34,50 +34,6 @@ using ruvia::detail::WebSocketFrameStart;
 using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketTryReadFrame;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 std::pmr::string maskedFrame(unsigned char first, std::string_view payload) {
     constexpr std::array<unsigned char, 4> mask{0x12, 0x34, 0x56, 0x78};

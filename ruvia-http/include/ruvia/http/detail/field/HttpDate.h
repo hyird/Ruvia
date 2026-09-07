@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -12,6 +10,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include "ruvia/http/detail/field/HttpImfFixdate.h"
 
 namespace ruvia::detail {
 

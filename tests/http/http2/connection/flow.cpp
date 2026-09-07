@@ -1,6 +1,6 @@
-#include "http2_connection_fixture.h"
-
 #include <new>
+
+#include "http2_connection_fixture.h"
 
 namespace {
 

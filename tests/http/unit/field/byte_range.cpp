@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <string_view>
@@ -8,6 +6,8 @@
 
 #include "ruvia/http/detail/field/HttpByteRange.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::HttpByteRangeIgnored;
@@ -15,16 +15,6 @@ using ruvia::detail::HttpByteRangeResolution;
 using ruvia::detail::HttpByteRangeUnsatisfiable;
 using ruvia::detail::HttpResolvedByteRange;
 using ruvia::detail::resolveHttpByteRange;
-
-
-
-
-
-
-
-
-
-
 
 [[nodiscard]] bool isIgnoredRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);
@@ -36,26 +26,6 @@ using ruvia::detail::resolveHttpByteRange;
     const auto resolution = resolveHttpByteRange(value, representationLength);
     return resolution.unsatisfiable() != nullptr;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

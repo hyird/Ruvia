@@ -1,8 +1,5 @@
 #pragma once
 
-#include "ruvia/http/BorrowedText.h"
-#include "ruvia/core/OperationOptions.h"
-
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -15,9 +12,12 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
-#include <utility>
+
+#include "ruvia/core/OperationOptions.h"
+#include "ruvia/http/BorrowedText.h"
 
 namespace ruvia {
 

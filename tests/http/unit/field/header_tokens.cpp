@@ -1,20 +1,20 @@
-#include "test_harness.h"
-
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/field/HttpQualityValue.h"
+#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/http/detail/util/HttpOws.h"
-#include "ruvia/http/detail/coding/HttpTransferEncoding.h"
-#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpQualityValue.h"
 #include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
+#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -27,28 +27,6 @@ struct MatchAnyHeaderToken final {
         return true;
     }
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

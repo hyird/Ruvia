@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -28,13 +25,16 @@
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbOperationState.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 #ifdef RUVIA_ENABLE_MARIADB
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 #endif
@@ -44,10 +44,6 @@ namespace {
 using ruvia::test::RejectingMemoryResource;
 using ruvia::test::TrackingResource;
 using ruvia::testing::throwsOn;
-
-
-
-
 
 [[nodiscard]] ruvia::DbConfig testDbConfig() {
 #ifdef RUVIA_ENABLE_MARIADB
@@ -136,125 +132,16 @@ public:
     ruvia::WorkerHandle worker;
 };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Bound parameters passed as ordinary arguments.
-
 
 // A prepared sequence must keep selecting the span overload rather than being
 // absorbed as a single bound parameter, which would send the wrong argument.
 
-
 // Variadic calls clone an owning-string temporary before returning, while the
 // storable DbValue type above continues to reject the same temporary.
 
-
-
-
-
-
-
-
-
 // An lvalue string is fine: it outlives the call, which is all the synchronous
 // parameter cloning requires.
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 
@@ -553,7 +440,6 @@ RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) 
     };
     using State = ruvia::detail::DbOperationState<Payload>;
     using Guard = ruvia::detail::DbOperationGuard<Payload>;
-
 
     struct ResumeGate final {
         [[nodiscard]] bool await_ready() const noexcept {

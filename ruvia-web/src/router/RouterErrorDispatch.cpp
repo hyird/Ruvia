@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/router/RouteTable.h"
-
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -17,6 +15,7 @@
 #include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /

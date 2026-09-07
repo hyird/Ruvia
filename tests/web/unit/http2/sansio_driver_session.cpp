@@ -1,5 +1,3 @@
-#include "sansio_driver_fixture.h"
-
 #include <concepts>
 #include <memory>
 #include <stdexcept>
@@ -8,11 +6,9 @@
 
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
+#include "sansio_driver_fixture.h"
+
 // Sans-I/O HTTP/2 driver: connection setup, round trips, multiplexing and teardown.
-
-
-
-
 
 RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
     using Phase = ruvia::detail::ConnectionScanner::Phase;

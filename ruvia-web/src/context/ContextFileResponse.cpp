@@ -1,22 +1,3 @@
-#include "ruvia/web/Context.h"
-
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
-#include "ruvia/http/detail/field/HttpByteRange.h"
-#include "ruvia/http/detail/field/HttpConditionalRequest.h"
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/http/static/FileConditionalRequest.h"
-#include "ruvia/web/detail/http/static/StaticFileVariant.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
-#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
-#include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/UrlEncoding.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -29,6 +10,24 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+
+#include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/UrlEncoding.h"
+#include "ruvia/http/detail/field/HttpByteRange.h"
+#include "ruvia/http/detail/field/HttpConditionalRequest.h"
+#include "ruvia/http/detail/field/HttpDate.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/static/FileConditionalRequest.h"
+#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "ruvia/web/detail/http/static/StaticFileVariant.h"
+#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
+#include "ruvia/web/detail/http/static/StaticRootIndex.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 namespace ruvia {
 namespace {

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -15,11 +13,13 @@
 #include <vector>
 
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/http/CorsOptions.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/app/AppState.h"
+#include "ruvia/web/detail/http/CorsOptions.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -87,15 +87,6 @@ ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile,
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
-
-
-
-
-
-
-
-
-
     RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
     RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
@@ -344,9 +335,7 @@ RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
 }
 
 RUVIA_TEST(validated_server_configuration_requires_complete_validation) {
-
     using AppListener = decltype(std::declval<ruvia::detail::AppState&>().listeners)::value_type;
-
 
     RUVIA_CHECK(throwsInvalid([] { (void)validateHttpServerConfiguration({}, {}); }));
     const std::array listeners{
@@ -392,11 +381,6 @@ RUVIA_TEST(validate_server_options_requires_redirect_https_port) {
 }
 
 RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
-
-
-
-
-
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = {}, .http = 8080}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "localhost", .http = 8080}); }));

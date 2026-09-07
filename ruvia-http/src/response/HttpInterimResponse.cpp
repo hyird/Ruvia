@@ -1,8 +1,8 @@
 #include "ruvia/http/HttpInterimResponse.h"
 
-#include "ruvia/http/HttpStatus.h"
-
 #include <stdexcept>
+
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia {
 

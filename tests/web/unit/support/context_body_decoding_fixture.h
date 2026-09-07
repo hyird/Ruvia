@@ -1,18 +1,14 @@
 #pragma once
 
-#include "content_decoding_fixture.h"
-#include "context_services_fixture.h"
-#include "test_harness.h"
-
-#include <asio/co_spawn.hpp>
-#include <asio/io_context.hpp>
-#include <asio/use_future.hpp>
-
 #include <cstddef>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+
+#include <asio/co_spawn.hpp>
+#include <asio/io_context.hpp>
+#include <asio/use_future.hpp>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -21,6 +17,10 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
+
+#include "content_decoding_fixture.h"
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace context_body_decoding_test {
 

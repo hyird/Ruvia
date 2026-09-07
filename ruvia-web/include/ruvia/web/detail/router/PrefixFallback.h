@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-
 #include <stdexcept>
 #include <string_view>
+
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 

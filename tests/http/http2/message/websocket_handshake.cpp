@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <concepts>
 #include <memory_resource>
@@ -8,10 +6,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -22,12 +22,6 @@ using ruvia::detail::http2EncodeWebSocketHandshakeHeaders;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::makeWebSocketServerNegotiation;
 using ruvia::detail::validateHttp2WebSocketHandshake;
-
-
-
-
-
-
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;

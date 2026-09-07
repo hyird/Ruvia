@@ -1,6 +1,8 @@
 #pragma once
 
-#include "test_harness.h"
+#include <brotli/encode.h>
+#include <zlib.h>
+#include <zstd.h>
 
 #include <algorithm>
 #include <array>
@@ -18,18 +20,16 @@
 #include <type_traits>
 #include <utility>
 
-#include <brotli/encode.h>
-#include <zlib.h>
-#include <zstd.h>
-
-#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
-#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/detail/request/RequestBodyDecoding.h"
+
+#include "test_harness.h"
 
 namespace content_decoding_test {
 
@@ -90,22 +90,6 @@ private:
 
     std::size_t maximumBlockBytes_;
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 inline std::string gzipCompress(std::string_view data) {
     z_stream stream{};
@@ -238,70 +222,6 @@ inline std::string chunked(std::string_view body) {
     wire.append("\r\n0\r\n\r\n");
     return wire;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 inline std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());

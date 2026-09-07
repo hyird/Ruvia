@@ -26,26 +26,6 @@ RUVIA_REQUEST_MODEL(
 
 namespace {
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 }  // namespace
 
 RUVIA_TEST(model_wrapper_scalar_fields_parse_json_and_forms) {

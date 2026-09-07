@@ -1,9 +1,9 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
+#include <array>
+
 #include "ruvia/core/detail/task/TaskPromise.h"
 #include "ruvia/core/memory/ProcessResource.h"
-
-#include <array>
 
 namespace ruvia {
 

@@ -4,8 +4,8 @@
 #include <expected>
 #include <string_view>
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a

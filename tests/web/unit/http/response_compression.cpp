@@ -1,5 +1,6 @@
-#include "test_harness.h"
-#include "test_io_context.h"
+#include <brotli/decode.h>
+#include <zlib.h>
+#include <zstd.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -13,20 +14,19 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include <brotli/decode.h>
-#include <zlib.h>
-#include <zstd.h>
-
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
-#include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 

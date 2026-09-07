@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
 #include <concepts>
 #include <cstdint>
 #include <exception>
@@ -11,15 +8,18 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/web/Context.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/web/Model.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 RUVIA_RESPONSE_MODEL(ContextJsonResponse, RUVIA_REQUIRED_FIELD(number, ruvia::Int64),
     RUVIA_REQUIRED_FIELD(boolean, ruvia::Bool), RUVIA_REQUIRED_FIELD(real, ruvia::Double));
@@ -248,7 +248,6 @@ RUVIA_TEST(context_error_normalizes_non_error_status_before_response_state) {
 }
 
 RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
-
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
     bool threw = false;

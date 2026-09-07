@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/detail/body/HttpStreamBodyReaderErrors.h"
+
 namespace ruvia::detail {
 
 template <typename Stream>

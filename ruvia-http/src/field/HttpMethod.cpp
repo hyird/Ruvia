@@ -1,8 +1,7 @@
-#include "ruvia/http/HttpKnownMethod.h"
-
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-
 #include <algorithm>
+
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 // The method vocabulary: recognising the standard tokens, spelling them back,
 // validating an unknown one, and the two properties -- safe and idempotent --

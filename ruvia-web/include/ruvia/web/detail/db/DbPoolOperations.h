@@ -15,8 +15,8 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"

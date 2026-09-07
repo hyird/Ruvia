@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -7,6 +5,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
+
+#include "test_harness.h"
 
 namespace {
 

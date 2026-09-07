@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include <chrono>
 #include <initializer_list>
 #include <memory_resource>
@@ -8,6 +7,8 @@
 #include <span>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

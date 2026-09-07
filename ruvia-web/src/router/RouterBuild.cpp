@@ -1,7 +1,3 @@
-#include "ruvia/web/detail/router/PrefixFallback.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/router/PathSegments.h"
-
 #include <memory>
 #include <span>
 #include <stdexcept>
@@ -9,6 +5,9 @@
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/router/PathSegments.h"
+#include "ruvia/web/detail/router/PrefixFallback.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 
 namespace ruvia {
 namespace {

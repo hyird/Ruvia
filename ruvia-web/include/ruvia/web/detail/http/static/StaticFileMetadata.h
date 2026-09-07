@@ -1,8 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/http/detail/util/NativePath.h"
-
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -12,6 +9,9 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/detail/util/NativePath.h"
 
 namespace ruvia::detail {
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-
 #include <utility>
+
+#include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
 

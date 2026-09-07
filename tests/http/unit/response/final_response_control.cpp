@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <memory_resource>
 #include <string_view>
@@ -8,6 +6,8 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -22,17 +22,6 @@ using ruvia::detail::http2FinalResponseControlPlan;
 using ruvia::detail::Http2FinalResponseControlPlanError;
 using ruvia::detail::Http2FinalResponseControlPlanFailure;
 using ruvia::detail::Http2FinalResponseControlPlanResult;
-
-
-
-
-
-
-
-
-
-
-
 
 bool isHttp1Failure(const HttpResponse& response, Http1FinalResponseControlPlanError error) {
     const auto result = http1FinalResponseControlPlan(response);

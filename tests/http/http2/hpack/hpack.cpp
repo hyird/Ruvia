@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <initializer_list>
@@ -15,6 +13,8 @@
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::HpackDecodeError;
@@ -25,11 +25,6 @@ using ruvia::detail::Http2HeaderDecodeContext;
 using ruvia::detail::http2OnDecodedInitialHeader;
 using ruvia::detail::Http2StreamHeaderDecodeTransaction;
 using ruvia::detail::Http2StreamState;
-
-
-
-
-
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;

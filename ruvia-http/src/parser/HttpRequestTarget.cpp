@@ -1,15 +1,14 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/util/Hex.h"
-
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
-
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <system_error>
+
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "ruvia/http/detail/util/Hex.h"
 
 namespace ruvia::detail {
 namespace {

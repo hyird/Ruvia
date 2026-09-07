@@ -1,11 +1,11 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <limits>
 #include <type_traits>
 
 #include "ruvia/http/detail/http2/message/Http2RemoteContentState.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -15,32 +15,6 @@ using ruvia::detail::Http2RemoteContentAllowedWithoutLength;
 using ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength;
 using ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength;
 using ruvia::detail::Http2RemoteContentState;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

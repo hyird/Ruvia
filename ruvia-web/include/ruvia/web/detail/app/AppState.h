@@ -1,9 +1,7 @@
 #pragma once
 
-#include "ruvia/web/App.h"
-
-#include <cstddef>
 #include <condition_variable>
+#include <cstddef>
 #include <exception>
 #include <mutex>
 #include <optional>
@@ -11,21 +9,22 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/AppLifecycle.h"
 #include "ruvia/web/detail/app/AppResource.h"
-#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/web/detail/router/Router.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #endif
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 

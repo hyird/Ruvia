@@ -1,8 +1,8 @@
 #include "ruvia/web/Health.h"
 
-#include "ruvia/web/Model.h"
-
 #include <stdexcept>
+
+#include "ruvia/web/Model.h"
 
 namespace ruvia {
 namespace {

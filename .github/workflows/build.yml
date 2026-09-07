@@ -16,6 +16,8 @@ on:
       - "scripts/**"
       - "README.md"
       - "AGENTS.md"
+      - "STYLE.md"
+      - ".clang-format"
       - ".github/workflows/build.yml"
   pull_request:
     branches: [main]
@@ -31,6 +33,8 @@ on:
       - "scripts/**"
       - "README.md"
       - "AGENTS.md"
+      - "STYLE.md"
+      - ".clang-format"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -44,6 +48,28 @@ concurrency:
 # live database drivers, component-only configurations, sanitizers, and a
 # Release build so those contracts cannot silently become opt-in.
 jobs:
+  style:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install clang-format 21
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user clang-format==21.1.2
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          clang-format --version
+          mapfile -t files < <(git ls-files '*.h' '*.hpp' '*.inl' '*.cpp')
+          printf '%s\0' "${files[@]}" | xargs -0 -n 80 clang-format --dry-run --Werror
+
   linux_build:
     name: Linux
     runs-on: ubuntu-24.04
@@ -320,7 +346,7 @@ jobs:
 
   cleanup:
     name: Prune old runs
-    needs: [linux_build, linux_quality, windows_build]
+    needs: [style, linux_build, linux_quality, windows_build]
     # Run after all builds regardless of their result, but never on pull
     # requests (a fork's token is read-only and must not prune main's history).
     if: ${{ always() && github.event_name != 'pull_request' }}

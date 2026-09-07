@@ -1,10 +1,10 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <cstddef>
 #include <utility>
 
 #include "ruvia/web/ModelTypes.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -46,10 +46,6 @@ private:
 };
 
 }  // namespace
-
-
-
-
 
 RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     CountingMemoryResource resource;

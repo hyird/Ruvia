@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <cstddef>
 #include <stdexcept>
 #include <string_view>
@@ -8,6 +5,9 @@
 #include <vector>
 
 #include "ruvia/web/detail/integration/WorkerState.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 

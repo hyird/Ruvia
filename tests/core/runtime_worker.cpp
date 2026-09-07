@@ -1,20 +1,5 @@
-#include <ruvia/core/EventLoopAttachment.h>
-#include <ruvia/core/EventLoopPool.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-#include <ruvia/core/detail/RuntimeLifecycle.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-#include <ruvia/core/detail/worker/WorkerSelection.h>
-#include <ruvia/core/detail/worker/WorkerSignal.h>
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/ip/udp.hpp>
-#include <asio/steady_timer.hpp>
-
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdio>
 #include <future>
@@ -26,13 +11,22 @@
 #include <utility>
 #include <vector>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
+#include <asio/steady_timer.hpp>
+
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/detail/RuntimeLifecycle.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/detail/worker/WorkerSelection.h"
+#include "ruvia/core/detail/worker/WorkerSignal.h"
+
 namespace {
-
-
-
-
-
-
 
 bool testPostOutcomeInvariantsAndEmptyCallbacks() {
     bool acceptedTakeRejected = false;

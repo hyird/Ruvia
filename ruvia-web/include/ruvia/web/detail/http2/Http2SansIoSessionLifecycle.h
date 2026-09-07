@@ -1,7 +1,7 @@
 #pragma once
 
-#include <exception>
 #include <cstdint>
+#include <exception>
 #include <utility>
 
 namespace ruvia::detail {

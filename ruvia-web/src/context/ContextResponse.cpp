@@ -1,16 +1,18 @@
-#include "ruvia/web/Context.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
-
 #include <algorithm>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextResponseState.h"
+#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
+#include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {
 
@@ -130,7 +132,7 @@ void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&&
 }  // namespace
 
 void Context::status(HttpStatusCode statusCode) {
-    responseState_.activeResponse().status(statusCode);
+    responseState().activeResponse().status(statusCode);
 }
 
 void* Context::workerStateInstance(const void* typeKey) const {
@@ -159,25 +161,25 @@ std::pmr::string Context::urlFor(
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
-    responseState_.activeResponse().removeHeader(name);
+    responseState().activeResponse().removeHeader(name);
     return *this;
 }
 
 void Context::removeHeader(std::string_view name) {
-    responseState_.activeResponse().removeHeader(name);
+    responseState().activeResponse().removeHeader(name);
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    responseState_.activeResponse().header(
+    responseState().activeResponse().header(
         name, value, HttpResponse::HeaderOptions{.mode = options.mode});
 }
 
 void Context::storeResponse(HttpResponse&& response) {
-    finalizeContextResponse<mergeActiveResponseHeaders>(responseState_, std::move(response));
+    finalizeContextResponse<mergeActiveResponseHeaders>(responseState(), std::move(response));
 }
 
 void Context::storeAssignedResponse(HttpResponse&& response) {
-    finalizeContextResponse<assignActiveResponseHeaders>(responseState_, std::move(response));
+    finalizeContextResponse<assignActiveResponseHeaders>(responseState(), std::move(response));
 }
 
 HttpResponse Context::body(std::string_view body) const {
@@ -301,13 +303,13 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
 }
 
 Context& Context::setStableResponseHeader(std::string_view name, std::string_view value) {
-    detail::setResponseHeaderStableView(responseState_.activeResponse(), name, value);
+    detail::setResponseHeaderStableView(responseState().activeResponse(), name, value);
     return *this;
 }
 
 void Context::applyResponseState(
     HttpResponse& response, std::optional<HttpStatusCode> statusCode) const {
-    const auto& activeResponse = responseState_.activeResponse();
+    const auto& activeResponse = responseState().activeResponse();
     const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);
     const auto contextHeaderCount = activeResponse.headers().size();

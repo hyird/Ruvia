@@ -9,9 +9,9 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 // The two steps between an HTTP/1 client response head on the wire and the plan
 // the parser acts on: reading the status line and header fields into borrowed
 // values, then deciding from them (and the request that produced them) how the

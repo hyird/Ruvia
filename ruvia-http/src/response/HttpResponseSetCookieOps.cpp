@@ -1,12 +1,11 @@
-#include "ruvia/http/HttpResponse.h"
-
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 

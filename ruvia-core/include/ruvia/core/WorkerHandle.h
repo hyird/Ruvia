@@ -1,13 +1,13 @@
 #pragma once
 
-#include <concepts>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
-#include <ruvia/core/MoveOnlyFunction.h>
+#include "ruvia/core/MoveOnlyFunction.h"
 
 namespace ruvia {
 

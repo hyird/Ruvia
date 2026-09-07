@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-
 #include <cstddef>
 #include <exception>
 #include <optional>
 #include <stdexcept>
+
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 
 namespace ruvia::detail {
 

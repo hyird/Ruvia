@@ -1,7 +1,5 @@
 #pragma once
 
-#include "test_harness.h"
-
 #include <array>
 #include <concepts>
 #include <memory_resource>
@@ -20,6 +18,8 @@
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
 #include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 
+#include "test_harness.h"
+
 namespace http_client_response_test {
 
 using ruvia::Http1ClientRequestContentCompletionStatus;
@@ -32,21 +32,6 @@ using ruvia::Http1ParsedClientResponseHead;
 using ruvia::HttpClientRequestContentSignal;
 using ruvia::HttpClientResponseHead;
 using ruvia::HttpProtocolVersion;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 inline Http1ClientResponseParseResult parseWire(std::string_view method, std::string_view wire,
     Http1ClosePolicy closePolicy = Http1ClosePolicy::kAllowReuse,
@@ -200,54 +185,6 @@ private:
     std::pmr::memory_resource* upstream_;
     std::size_t allocationCount_{0};
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace http_client_response_test
 

@@ -8,17 +8,17 @@
 #include <utility>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/message/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/message/Http2RemoteContentState.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamFlowControl.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamHeaderBlocks.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamLifecycle.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamRequestData.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamRequestState.h"
 #include "ruvia/http/detail/http2/stream/Http2TunnelState.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpExpectations.h"
 
 namespace ruvia::detail {
 

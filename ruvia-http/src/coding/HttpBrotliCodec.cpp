@@ -1,11 +1,10 @@
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
+#include <brotli/decode.h>
+#include <brotli/encode.h>
 
 #include <cstddef>
 #include <utility>
 
-#include <brotli/decode.h>
-#include <brotli/encode.h>
-
+#include "ruvia/http/detail/coding/HttpContentCodec.h"
 #include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 

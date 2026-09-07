@@ -1,6 +1,6 @@
-#include "test_harness.h"
-
 #include "ruvia/web/detail/model/pattern/PatternTypes.h"
+
+#include "test_harness.h"
 
 namespace {
 

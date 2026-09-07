@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <memory_resource>
 #include <string>
@@ -7,6 +5,8 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -26,15 +26,6 @@ using ruvia::detail::isValidUriScheme;
 using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::RequestTargetView;
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

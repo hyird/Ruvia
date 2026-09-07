@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <stdexcept>
@@ -7,12 +5,14 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -25,13 +25,6 @@ using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::detail::Http1ServerRequestParseFailureSource;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
-
-
-
-
-
-
-
 
 const ruvia::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::Http1RequestBodyPlan& plan) {

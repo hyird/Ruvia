@@ -1,13 +1,8 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-#include "http2_connection_fixture.h"
-#include "context_services_fixture.h"
-
 #include <chrono>
 #include <concepts>
 #include <cstddef>
-#include <memory_resource>
 #include <memory>
+#include <memory_resource>
 #include <new>
 #include <optional>
 #include <string>
@@ -21,22 +16,27 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
-#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
+#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/web/detail/router/RouteModes.h"
-#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+
+#include "context_services_fixture.h"
+#include "http2_connection_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -101,31 +101,6 @@ ruvia::HttpResponse okStreamingHead(ruvia::Context&) {
     }
     return *selected.selected();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 Http2SansIoStreamRuntime& ensureAcceptedRuntime(Http2SansIoStreamRuntimeTable& table,
     std::uint32_t streamId, std::pmr::memory_resource* resource) {

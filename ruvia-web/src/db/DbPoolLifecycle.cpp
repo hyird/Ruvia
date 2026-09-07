@@ -1,12 +1,12 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <mysql/mysql.h>
 
 #include <exception>
 #include <memory_resource>
 #include <utility>
+
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbSlotSocket.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia {
 namespace {

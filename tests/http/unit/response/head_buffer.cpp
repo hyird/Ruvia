@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -11,14 +9,12 @@
 
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::kResponseHeadStackBytes;
 using ruvia::detail::ResponseHeadBuffer;
-
-
-
-
 
 #if !defined(_MSC_VER)
 // The MSVC debug pmr::string does not complete this synthetic

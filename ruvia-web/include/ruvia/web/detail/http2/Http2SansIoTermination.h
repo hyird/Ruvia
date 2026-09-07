@@ -6,8 +6,8 @@
 #include <utility>
 
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {

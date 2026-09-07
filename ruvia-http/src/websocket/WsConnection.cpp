@@ -1,10 +1,10 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
 
 #include <cstdint>
 #include <stdexcept>
 
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
+#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameReader.h"
 
 namespace ruvia::detail {
 

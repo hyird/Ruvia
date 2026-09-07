@@ -1,16 +1,15 @@
-#include "ruvia/http/detail/http2/Http2Connection.h"
-
 #include <algorithm>
 #include <memory_resource>
 #include <utility>
 
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"

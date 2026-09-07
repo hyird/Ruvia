@@ -1,9 +1,9 @@
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 
+#include <stdexcept>
+
 #include "ruvia/web/detail/db/DbSqlScan.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-
-#include <stdexcept>
 
 namespace ruvia {
 

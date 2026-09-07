@@ -4,10 +4,10 @@
 #include <type_traits>
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 
 namespace ruvia::detail {
 

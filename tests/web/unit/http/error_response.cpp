@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
@@ -10,6 +8,8 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
+
+#include "test_harness.h"
 
 namespace {
 

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <asio/ip/address.hpp>
-#include <asio/ip/address_v6.hpp>
-
 #include <cstddef>
 #include <string_view>
 #include <system_error>
+
+#include <asio/ip/address.hpp>
+#include <asio/ip/address_v6.hpp>
 
 namespace ruvia::detail {
 

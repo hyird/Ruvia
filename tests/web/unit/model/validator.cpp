@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -12,6 +10,8 @@
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::Validator;
@@ -20,22 +20,6 @@ RUVIA_REQUEST_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, r
     RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
 
 }  // namespace
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
     auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredOptionalModel>(

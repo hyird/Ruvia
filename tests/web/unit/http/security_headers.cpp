@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
 #include <array>
 #include <bit>
 #include <concepts>
@@ -13,13 +10,16 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/SecurityHeaders.h"
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -36,31 +36,6 @@ using ruvia::XssProtectionHeaderPolicy;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 class SecurityContextFixture final {
 public:
@@ -130,8 +105,6 @@ RUVIA_TEST(security_headers_emit_hsts_only_for_tls_contexts) {
 }
 
 RUVIA_TEST(security_headers_xss_protection_header_policy_is_explicit) {
-
-
     SecurityContextFixture fixture;
     const SecurityHeadersConfig options{
         .xssProtectionHeader = XssProtectionHeaderPolicy::kOmit,

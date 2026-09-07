@@ -1,7 +1,5 @@
 #pragma once
 
-#include "test_harness.h"
-
 #include <concepts>
 #include <memory_resource>
 #include <optional>
@@ -13,27 +11,9 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Model.h"
 
+#include "test_harness.h"
+
 namespace model_field_test {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 RUVIA_REQUEST_MODEL(AccessorSurfaceRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
@@ -78,15 +58,6 @@ RUVIA_RESPONSE_MODEL(UnlimitedFieldCountResponse, RUVIA_TEST_BOOL_FIELD(f01),
     RUVIA_TEST_BOOL_FIELD(f62), RUVIA_TEST_BOOL_FIELD(f63), RUVIA_TEST_BOOL_FIELD(f64),
     RUVIA_TEST_BOOL_FIELD(f65));
 #undef RUVIA_TEST_BOOL_FIELD
-
-
-
-
-
-
-
-
-
 
 }  // namespace model_field_test
 

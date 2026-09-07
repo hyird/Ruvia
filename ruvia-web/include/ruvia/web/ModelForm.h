@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/web/ModelObject.h"
-
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/web/ModelObject.h"
 
 namespace ruvia {
 

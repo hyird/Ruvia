@@ -1,11 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/core/memory/MemoryPool.h"
-
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -15,6 +9,12 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace ruvia::detail {
 

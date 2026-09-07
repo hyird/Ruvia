@@ -1,6 +1,3 @@
-#include <ruvia/core/AsioTask.h>
-#include <ruvia/core/EventLoopPool.h>
-
 #include <concepts>
 #include <future>
 #include <memory>
@@ -8,28 +5,16 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopPool.h"
+
 namespace {
-
-
-
-
-
-
 
 struct ThrowingMove final {
     ThrowingMove() = default;
     ThrowingMove(const ThrowingMove&) = delete;
     ThrowingMove(ThrowingMove&&) noexcept(false) {}
 };
-
-
-
-
-
-
-
-
-
 
 ruvia::Task<std::unique_ptr<int>> makeValue(ruvia::WorkerHandle worker) {
     if (!worker.isCurrent()) {

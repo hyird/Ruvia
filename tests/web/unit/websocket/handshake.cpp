@@ -1,11 +1,8 @@
-#include "test_io_context.h"
-#include "test_harness.h"
-
 #include <array>
 #include <concepts>
-#include <system_error>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <asio/co_spawn.hpp>
@@ -13,12 +10,15 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
+
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -27,12 +27,6 @@ using ruvia::validateWebSocketHandshake;
 using ruvia::detail::chooseWebSocketSubprotocol;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::webSocketProtocolOffered;
-
-
-
-
-
-
 
 class FailingHandshakeWriteStream final {
 public:

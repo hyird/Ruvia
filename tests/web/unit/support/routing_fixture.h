@@ -1,14 +1,5 @@
 #pragma once
 
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
-#include <asio/awaitable.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/use_future.hpp>
-
 #include <array>
 #include <chrono>
 #include <exception>
@@ -20,25 +11,34 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include <asio/awaitable.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/use_future.hpp>
+
+#include "ruvia/core/Timer.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
-#include "ruvia/web/Streaming.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/Timer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
-#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/RateLimit.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/Streaming.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 #include "ruvia/web/detail/websocket/WebSocketAccess.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
 
 RUVIA_REQUEST_MODEL(ScopedValidationRequest, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 
@@ -49,16 +49,6 @@ using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
-
-
-
-
-
-
-
-
-
-
 
 class FirstIntValidator final : public ruvia::Middleware<FirstIntValidator> {
 public:

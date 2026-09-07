@@ -1,13 +1,13 @@
-#include "test_harness.h"
-
 #include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http2/stream/Http2StreamRequestData.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/detail/http2/stream/Http2StreamRequestData.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -17,10 +17,6 @@ using ruvia::detail::Http2StreamRequestData;
 Http2StreamRequestData makeData() {
     return Http2StreamRequestData(std::pmr::new_delete_resource());
 }
-
-
-
-
 
 }  // namespace
 

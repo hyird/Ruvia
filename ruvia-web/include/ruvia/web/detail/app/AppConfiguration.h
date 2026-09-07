@@ -1,14 +1,15 @@
 #pragma once
 
-#include <string_view>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/web/Middleware.h"
-#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
+#include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
+#include "ruvia/web/detail/util/RegistrationResource.h"
 
 namespace ruvia::detail {
 
@@ -30,7 +31,9 @@ public:
     // and every instance is constructed from them, so a configured middleware
     // does not need to be default constructible. Route- and controller-level
     // middleware lists (the trailing arguments of RUVIA_GET and friends) name
-    // types only, so a configured middleware is registered here.
+    // types only, so a configured middleware is registered here. Instantiation
+    // needs the middleware type header (built-in middleware) or Controller.h /
+    // Testing.h so the descriptor templates are visible.
     template <typename MiddlewareT, typename... Args>
     Derived& use(Args&&... args) {
         return self().useMiddleware(

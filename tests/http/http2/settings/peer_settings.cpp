@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <limits>
@@ -7,9 +5,11 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -30,38 +30,6 @@ using ruvia::detail::http2WriteSettingsEntry;
 using ruvia::detail::kHttp2DefaultInitialWindowSize;
 using ruvia::detail::kHttp2DefaultMaxFrameSize;
 using ruvia::detail::kHttp2MaxFrameSizeLimit;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 constexpr std::uint32_t kInt32Max =
     static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)());

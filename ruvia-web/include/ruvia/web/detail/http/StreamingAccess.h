@@ -1,13 +1,12 @@
 #pragma once
 
-#include "ruvia/core/StopToken.h"
-
-#include "ruvia/web/Streaming.h"
-
 #include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/core/StopToken.h"
+#include "ruvia/web/Streaming.h"
 
 namespace ruvia::detail {
 

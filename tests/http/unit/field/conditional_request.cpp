@@ -1,9 +1,9 @@
-#include "test_harness.h"
-
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpConditionalRequest.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
+
+#include "test_harness.h"
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
 // (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.

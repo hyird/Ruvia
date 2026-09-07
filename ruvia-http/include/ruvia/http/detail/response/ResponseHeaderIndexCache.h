@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string_view>
+
+#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 
 namespace ruvia::detail {
 

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +10,8 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -56,64 +56,6 @@ private:
 
     bool reject_{false};
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // Build a masked client->server frame (RFC 6455 §5.1): FIN/opcode byte, MASK bit + a
 // short length (<=125 for tests), a 4-byte mask, then the masked payload.

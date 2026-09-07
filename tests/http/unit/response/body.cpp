@@ -1,11 +1,3 @@
-#include "test_harness.h"
-
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseBody.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -15,6 +7,14 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/response/HttpResponseBody.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -27,30 +27,6 @@ using ruvia::detail::setResponseBodyOwned;
 using ruvia::detail::setResponseBodyStaticView;
 using ruvia::detail::setResponseBorrowedFileBody;
 using ruvia::detail::setResponseFileBody;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 [[nodiscard]] std::size_t activeAlternativeCount(const HttpResponseBody& body) noexcept {
     return static_cast<std::size_t>(body.empty() != nullptr) +

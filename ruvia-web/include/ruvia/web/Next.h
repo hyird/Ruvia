@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
-
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <utility>
+
+#include "ruvia/core/Task.h"
 
 namespace ruvia {
 

@@ -1,12 +1,4 @@
-#include <ruvia/core/Channel.h>
-#include <ruvia/core/TaskScope.h>
-#include <ruvia/core/detail/io/AsioAwait.h>
-#include <ruvia/core/detail/worker/WorkerDispatcher.h>
-
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/io_context.hpp>
-#include <asio/post.hpp>
+#include "ruvia/core/Channel.h"
 
 #include <atomic>
 #include <chrono>
@@ -18,35 +10,14 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#include "ruvia/core/TaskScope.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
 

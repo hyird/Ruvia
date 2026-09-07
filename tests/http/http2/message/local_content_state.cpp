@@ -1,33 +1,16 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 
 #include "ruvia/http/detail/http2/message/Http2LocalContentState.h"
 
+#include "test_harness.h"
+
 namespace {
 
 using ruvia::detail::Http2LocalContentCheck;
 using ruvia::detail::Http2LocalContentKnownLength;
 using ruvia::detail::Http2LocalContentState;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

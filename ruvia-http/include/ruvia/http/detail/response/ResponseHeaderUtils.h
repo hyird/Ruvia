@@ -1,17 +1,17 @@
 #pragma once
 
 #include <algorithm>
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

@@ -1,14 +1,13 @@
-#include "test_harness.h"
-
-#include "ruvia/http/Http1RequestParser.h"
-
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpStatus.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -20,20 +19,6 @@ using ruvia::httpReasonPhrase;
 inline constexpr auto kOkStatusToken = ruvia::detail::httpStatusCodeToken(ruvia::http_status::kOk);
 
 }  // namespace
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
     RUVIA_CHECK(ruvia::HttpStatusCode::tryFromValue(100) == ruvia::http_status::kContinue);

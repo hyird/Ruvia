@@ -1,10 +1,9 @@
-#include "ruvia/web/Context.h"
-
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/util/Hex.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/web/Context.h"
 
 // A redirect target the application supplies may contain bytes that are not
 // legal in a URI-reference carried by Location. Percent-encode exactly those,

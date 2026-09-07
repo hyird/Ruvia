@@ -9,11 +9,11 @@
 #include <type_traits>
 #include <utility>
 
-#include <ruvia/core/StopToken.h>
-#include <ruvia/core/WorkerHandle.h>
-#include <ruvia/core/WorkerWaitResult.h>
-#include <ruvia/core/detail/SuspendRaceState.h>
-#include <ruvia/core/detail/worker/WorkerTimer.h>
+#include "ruvia/core/StopToken.h"
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/WorkerWaitResult.h"
+#include "ruvia/core/detail/SuspendRaceState.h"
+#include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
 

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <array>
 #include <optional>
 #include <stdexcept>
@@ -8,6 +6,8 @@
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -63,8 +63,6 @@ RUVIA_TEST(connection_options_parse_tokens_case_insensitively) {
 }
 
 RUVIA_TEST(connection_options_commit_presence_and_tokens_in_one_byte) {
-
-
     HttpConnectionOptions options;
     RUVIA_CHECK(!options.hasField());
     RUVIA_CHECK(

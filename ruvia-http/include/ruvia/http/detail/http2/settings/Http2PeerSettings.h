@@ -7,8 +7,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
+#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 
 namespace ruvia::detail {
 

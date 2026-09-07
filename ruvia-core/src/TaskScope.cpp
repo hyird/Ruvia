@@ -1,9 +1,10 @@
-#include <ruvia/core/TaskScope.h>
-#include <ruvia/core/memory/PmrResource.h>
+#include "ruvia/core/TaskScope.h"
 
 #include <cstdlib>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia {
 

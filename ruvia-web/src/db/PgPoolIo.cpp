@@ -1,11 +1,3 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
-
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
-#include "ruvia/web/detail/db/DbPostgreSql.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
-#include "ruvia/web/detail/db/DbUtils.h"
-
 #include <libpq-fe.h>
 
 #include <array>
@@ -15,6 +7,13 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/db/DbPoolOperations.h"
+#include "ruvia/web/detail/db/DbPostgreSql.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbSlotSocket.h"
+#include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia::detail {
 

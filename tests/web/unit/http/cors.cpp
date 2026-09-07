@@ -1,9 +1,6 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <chrono>
-#include <cstddef>
 #include <concepts>
+#include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -12,14 +9,13 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http/HttpCors.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
-#include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/detail/http/HttpCors.h"
 
-
-
-
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -94,8 +90,6 @@ RUVIA_TEST(cors_rejects_the_entire_config_before_owner_allocation) {
 }
 
 RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
-
-
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"

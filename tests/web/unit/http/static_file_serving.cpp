@@ -1,19 +1,14 @@
-#include "test_harness.h"
-#include "context_services_fixture.h"
-
-#include "test_io_context.h"
-
 #include <array>
 #include <bit>
 #include <chrono>
-#include <cstdint>
 #include <concepts>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <memory_resource>
 #include <limits>
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -26,7 +21,14 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -35,21 +37,18 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/file/HttpFileOpen.h"
+
+#include "context_services_fixture.h"
+#include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -606,8 +605,6 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 }
 
 RUVIA_TEST(static_file_type_policy_has_closed_exact_alternatives) {
-
-
     bool emptyOnlyThrew = false;
     try {
         ruvia::detail::validateStaticRootOptions(

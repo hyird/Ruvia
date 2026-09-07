@@ -1,9 +1,9 @@
 #pragma once
 
+#include <zlib.h>
+
 #include <cstddef>
 #include <memory_resource>
-
-#include <zlib.h>
 
 // zlib asks its caller for memory through two C callbacks. Both zlib users in
 // this library route them to a PMR resource, which means every block must carry

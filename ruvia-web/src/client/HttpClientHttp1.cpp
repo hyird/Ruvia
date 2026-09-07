@@ -1,5 +1,3 @@
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
-
 #include <array>
 #include <exception>
 
@@ -10,6 +8,8 @@
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/HttpClientRegistry.h"
+
 #include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {

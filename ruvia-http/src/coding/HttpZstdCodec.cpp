@@ -1,7 +1,7 @@
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
-
 #include <cstddef>
 #include <utility>
+
+#include "ruvia/http/detail/coding/HttpContentCodec.h"
 
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>

@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <chrono>
 #include <concepts>
 #include <limits>
@@ -14,6 +12,8 @@
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
+#include "test_harness.h"
+
 namespace {
 
 // True if validateCookie rejects the options (throws invalid_argument).
@@ -26,41 +26,7 @@ bool rejects(const ruvia::CookieOptions& options) {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 }  // namespace
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // Naming only the two attributes under test is the point of a designated
 // initializer, and every other CookieOptions member has a default member
@@ -75,15 +41,6 @@ constexpr ruvia::CookieOptions kLiteralCookieOptions{.path = "/app", .domain = "
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
-
-
-
-
-
-
-
-
-
 
 RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const std::string path = "/account";

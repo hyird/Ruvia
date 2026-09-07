@@ -1,5 +1,3 @@
-#include "test_harness.h"
-
 #include <mysql/mysql.h>
 
 #include <concepts>
@@ -16,12 +14,14 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbMigrationChecksum.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
-#include "ruvia/web/db/DbTypes.h"
+
+#include "test_harness.h"
 
 namespace {
 
@@ -226,13 +226,6 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::DbDriver;
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
-
-
-
-
-
-
-
 
     RUVIA_CHECK(throwsOn([] { validateDbConfig(DbConfig{}); }));
 

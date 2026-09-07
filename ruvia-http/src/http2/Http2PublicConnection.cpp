@@ -1,81 +1,17 @@
-#include "ruvia/http/Http2Connection.h"
-
 #include <array>
 #include <exception>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/PmrResource.h"
-
-namespace ruvia::detail {
-
-// Events retain this endpoint intrusively, so its address cannot be recycled while
-// a stale lease/credit still exists. Detaching the target makes destruction safe
-// when an event outlives its connection. The endpoint also retains the connection
-// storage after owner destruction because request and body views can still refer to it.
-class Http2ConnectionOwnerEndpoint final {
-public:
-    using AbandonRequest = void (*)(void*, std::uint32_t) noexcept;
-    using AbandonCredit = void (*)(void*, std::uint32_t, std::uint32_t) noexcept;
-    using DestroyStorage = void (*)(void*) noexcept;
-
-    Http2ConnectionOwnerEndpoint(
-        void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept
-        : target_(target),
-          abandonRequest_(abandonRequest),
-          abandonCredit_(abandonCredit) {}
-
-    void retain() noexcept {
-        ++references_;
-    }
-    void retainStorage(void* storage, DestroyStorage destroyStorage) noexcept {
-        if (retainedStorage_ != nullptr || storage == nullptr || destroyStorage == nullptr) {
-            std::terminate();
-        }
-        retainedStorage_ = storage;
-        destroyStorage_ = destroyStorage;
-    }
-    void release() noexcept {
-        if (references_ == 0) {
-            std::terminate();
-        }
-        if (--references_ == 0) {
-            if (retainedStorage_ != nullptr) {
-                destroyStorage_(retainedStorage_);
-            }
-            delete this;
-        }
-    }
-    void detach() noexcept {
-        target_ = nullptr;
-    }
-    void abandonRequest(std::uint32_t streamId) noexcept {
-        if (target_ != nullptr) {
-            abandonRequest_(target_, streamId);
-        }
-    }
-    void abandonCredit(std::uint32_t streamId, std::uint32_t bytes) noexcept {
-        if (target_ != nullptr) {
-            abandonCredit_(target_, streamId, bytes);
-        }
-    }
-
-private:
-    std::size_t references_{1};
-    void* target_;
-    AbandonRequest abandonRequest_;
-    AbandonCredit abandonCredit_;
-    void* retainedStorage_{nullptr};
-    DestroyStorage destroyStorage_{nullptr};
-};
-
-}  // namespace ruvia::detail
 
 namespace ruvia {
 namespace {
@@ -88,190 +24,6 @@ namespace {
         return detail::Http2RequestContent::knownLength(known->length());
     }
     return detail::Http2RequestContent::streaming();
-}
-
-[[nodiscard]] detail::Http2Role toInternal(Http2Role role) {
-    switch (role) {
-        case Http2Role::kServer:
-            return detail::Http2Role::kServer;
-        case Http2Role::kClient:
-            return detail::Http2Role::kClient;
-    }
-    throw std::invalid_argument("invalid HTTP/2 role");
-}
-
-[[nodiscard]] detail::Http2EndStream toInternal(Http2EndStream endStream) {
-    switch (endStream) {
-        case Http2EndStream::kKeepOpen:
-            return detail::Http2EndStream::kKeepOpen;
-        case Http2EndStream::kEndStream:
-            return detail::Http2EndStream::kEndStream;
-    }
-    throw std::invalid_argument("invalid HTTP/2 end-stream value");
-}
-
-[[nodiscard]] detail::Http2ErrorCode toInternal(Http2ErrorCode error) {
-    switch (error) {
-        case Http2ErrorCode::kNoError:
-            return detail::Http2ErrorCode::kNoError;
-        case Http2ErrorCode::kProtocolError:
-            return detail::Http2ErrorCode::kProtocolError;
-        case Http2ErrorCode::kInternalError:
-            return detail::Http2ErrorCode::kInternalError;
-        case Http2ErrorCode::kFlowControlError:
-            return detail::Http2ErrorCode::kFlowControlError;
-        case Http2ErrorCode::kSettingsTimeout:
-            return detail::Http2ErrorCode::kSettingsTimeout;
-        case Http2ErrorCode::kStreamClosed:
-            return detail::Http2ErrorCode::kStreamClosed;
-        case Http2ErrorCode::kFrameSizeError:
-            return detail::Http2ErrorCode::kFrameSizeError;
-        case Http2ErrorCode::kRefusedStream:
-            return detail::Http2ErrorCode::kRefusedStream;
-        case Http2ErrorCode::kCancel:
-            return detail::Http2ErrorCode::kCancel;
-        case Http2ErrorCode::kCompressionError:
-            return detail::Http2ErrorCode::kCompressionError;
-        case Http2ErrorCode::kConnectError:
-            return detail::Http2ErrorCode::kConnectError;
-        case Http2ErrorCode::kEnhanceYourCalm:
-            return detail::Http2ErrorCode::kEnhanceYourCalm;
-        case Http2ErrorCode::kInadequateSecurity:
-            return detail::Http2ErrorCode::kInadequateSecurity;
-        case Http2ErrorCode::kHttp11Required:
-            return detail::Http2ErrorCode::kHttp11Required;
-    }
-    throw std::invalid_argument("invalid HTTP/2 error code");
-}
-
-[[nodiscard]] Http2ErrorCode toPublic(detail::Http2ErrorCode error) noexcept {
-    switch (error) {
-        case detail::Http2ErrorCode::kNoError:
-            return Http2ErrorCode::kNoError;
-        case detail::Http2ErrorCode::kProtocolError:
-            return Http2ErrorCode::kProtocolError;
-        case detail::Http2ErrorCode::kInternalError:
-            return Http2ErrorCode::kInternalError;
-        case detail::Http2ErrorCode::kFlowControlError:
-            return Http2ErrorCode::kFlowControlError;
-        case detail::Http2ErrorCode::kSettingsTimeout:
-            return Http2ErrorCode::kSettingsTimeout;
-        case detail::Http2ErrorCode::kStreamClosed:
-            return Http2ErrorCode::kStreamClosed;
-        case detail::Http2ErrorCode::kFrameSizeError:
-            return Http2ErrorCode::kFrameSizeError;
-        case detail::Http2ErrorCode::kRefusedStream:
-            return Http2ErrorCode::kRefusedStream;
-        case detail::Http2ErrorCode::kCancel:
-            return Http2ErrorCode::kCancel;
-        case detail::Http2ErrorCode::kCompressionError:
-            return Http2ErrorCode::kCompressionError;
-        case detail::Http2ErrorCode::kConnectError:
-            return Http2ErrorCode::kConnectError;
-        case detail::Http2ErrorCode::kEnhanceYourCalm:
-            return Http2ErrorCode::kEnhanceYourCalm;
-        case detail::Http2ErrorCode::kInadequateSecurity:
-            return Http2ErrorCode::kInadequateSecurity;
-        case detail::Http2ErrorCode::kHttp11Required:
-            return Http2ErrorCode::kHttp11Required;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2StreamCloseSource toPublic(detail::Http2StreamCloseSource source) noexcept {
-    switch (source) {
-        case detail::Http2StreamCloseSource::kLocal:
-            return Http2StreamCloseSource::kLocal;
-        case detail::Http2StreamCloseSource::kPeer:
-            return Http2StreamCloseSource::kPeer;
-        case detail::Http2StreamCloseSource::kPeerGoaway:
-            return Http2StreamCloseSource::kPeerGoaway;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2OutputConsumeStatus toPublic(detail::Http2OutputConsumeStatus status) noexcept {
-    switch (status) {
-        case detail::Http2OutputConsumeStatus::kPending:
-            return Http2OutputConsumeStatus::kPending;
-        case detail::Http2OutputConsumeStatus::kDrained:
-            return Http2OutputConsumeStatus::kDrained;
-        case detail::Http2OutputConsumeStatus::kOutOfRange:
-            return Http2OutputConsumeStatus::kOutOfRange;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2SubmitStatus toPublic(detail::Http2SubmitStatus status) noexcept {
-    switch (status) {
-        case detail::Http2SubmitStatus::kAccepted:
-            return Http2SubmitStatus::kAccepted;
-        case detail::Http2SubmitStatus::kClosed:
-            return Http2SubmitStatus::kClosed;
-        case detail::Http2SubmitStatus::kInvalidState:
-            return Http2SubmitStatus::kInvalidState;
-        case detail::Http2SubmitStatus::kInvalidMessage:
-            return Http2SubmitStatus::kInvalidMessage;
-        case detail::Http2SubmitStatus::kPeerCapabilityUnavailable:
-            return Http2SubmitStatus::kPeerCapabilityUnavailable;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2DataSubmitStatus toPublic(detail::Http2DataSubmitStatus status) noexcept {
-    switch (status) {
-        case detail::Http2DataSubmitStatus::kAccepted:
-            return Http2DataSubmitStatus::kAccepted;
-        case detail::Http2DataSubmitStatus::kQueued:
-            return Http2DataSubmitStatus::kQueued;
-        case detail::Http2DataSubmitStatus::kBackpressured:
-            return Http2DataSubmitStatus::kBackpressured;
-        case detail::Http2DataSubmitStatus::kExpectationPending:
-            return Http2DataSubmitStatus::kExpectationPending;
-        case detail::Http2DataSubmitStatus::kClosed:
-            return Http2DataSubmitStatus::kClosed;
-        case detail::Http2DataSubmitStatus::kInvalidState:
-            return Http2DataSubmitStatus::kInvalidState;
-        case detail::Http2DataSubmitStatus::kContentLengthExceeded:
-            return Http2DataSubmitStatus::kContentLengthExceeded;
-        case detail::Http2DataSubmitStatus::kContentLengthIncomplete:
-            return Http2DataSubmitStatus::kContentLengthIncomplete;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2RequestContentReleaseStatus toPublic(
-    detail::Http2RequestContentReleaseStatus status) noexcept {
-    switch (status) {
-        case detail::Http2RequestContentReleaseStatus::kReleased:
-            return Http2RequestContentReleaseStatus::kReleased;
-        case detail::Http2RequestContentReleaseStatus::kNotPending:
-            return Http2RequestContentReleaseStatus::kNotPending;
-        case detail::Http2RequestContentReleaseStatus::kClosed:
-            return Http2RequestContentReleaseStatus::kClosed;
-    }
-    std::terminate();
-}
-
-[[nodiscard]] Http2RequestHeadSubmitError toPublic(
-    detail::Http2RequestHeadSubmitError error) noexcept {
-    switch (error) {
-        case detail::Http2RequestHeadSubmitError::kInvalidState:
-            return Http2RequestHeadSubmitError::kInvalidState;
-        case detail::Http2RequestHeadSubmitError::kConnectionNotStarted:
-            std::terminate();
-        case detail::Http2RequestHeadSubmitError::kConnectionUnavailable:
-            return Http2RequestHeadSubmitError::kConnectionUnavailable;
-        case detail::Http2RequestHeadSubmitError::kPeerStreamLimitReached:
-            return Http2RequestHeadSubmitError::kPeerStreamLimitReached;
-        case detail::Http2RequestHeadSubmitError::kLocalStreamCapacityReached:
-            return Http2RequestHeadSubmitError::kLocalStreamCapacityReached;
-        case detail::Http2RequestHeadSubmitError::kPeerCapabilityUnavailable:
-            return Http2RequestHeadSubmitError::kPeerCapabilityUnavailable;
-        case detail::Http2RequestHeadSubmitError::kInvalidMessage:
-            return Http2RequestHeadSubmitError::kInvalidMessage;
-    }
-    std::terminate();
 }
 
 }  // namespace
@@ -294,7 +46,11 @@ Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
         }
         return Http2RequestHeadSubmitResult::makeSubmitted(submitted->streamId());
     }
-    return Http2RequestHeadSubmitResult::makeFailure(toPublic(result.failure()->error()));
+    const auto error = result.failure()->error();
+    if (error == Http2RequestHeadSubmitError::kConnectionNotStarted) {
+        std::terminate();
+    }
+    return Http2RequestHeadSubmitResult::makeFailure(error);
 }
 
 namespace {
@@ -326,7 +82,7 @@ public:
         Storage(std::pmr::memory_resource* requested, Http2Role publicRole)
             : resource(detail::httpPmrResourceOrDefault(requested)),
               role(publicRole),
-              connection(resource, toInternal(publicRole)) {}
+              connection(resource, publicRole) {}
 
         std::pmr::memory_resource* resource;
         Http2Role role;
@@ -610,19 +366,11 @@ Http2Role Http2Connection::role() const noexcept {
 }
 Http2FeedResult Http2Connection::feed(std::string_view input) {
     impl_->retryDeferred();
-    switch (impl_->connection.feed(input)) {
-        case detail::Http2FeedResult::kConnectionNotStarted:
-            std::terminate();
-        case detail::Http2FeedResult::kEventsPending:
-            return Http2FeedResult::kEventsPending;
-        case detail::Http2FeedResult::kAccepted:
-            return Http2FeedResult::kAccepted;
-        case detail::Http2FeedResult::kNeedInput:
-            return Http2FeedResult::kNeedInput;
-        case detail::Http2FeedResult::kProtocolFailure:
-            return Http2FeedResult::kProtocolFailure;
+    const auto result = impl_->connection.feed(input);
+    if (result == Http2FeedResult::kConnectionNotStarted) {
+        std::terminate();
     }
-    std::terminate();
+    return result;
 }
 
 std::optional<Http2Event> Http2Connection::nextEvent() {
@@ -698,8 +446,8 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
         return std::optional<Http2Event>(std::move(result));
     }
     if (const auto* value = event->streamClosed()) {
-        auto result = Http2Event::streamClosed(
-            value->streamId(), toPublic(value->source()), toPublic(value->error()));
+        auto result =
+            Http2Event::streamClosed(value->streamId(), value->source(), value->error());
         if (impl_->role == Http2Role::kClient) {
             impl_->releaseOwnerAfterCredits(value->streamId());
         }
@@ -715,7 +463,7 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
         return std::optional<Http2Event>(std::move(result));
     }
     const auto* value = event->goaway();
-    auto result = Http2Event::goaway(value->lastStreamId(), toPublic(value->error()));
+    auto result = Http2Event::goaway(value->lastStreamId(), value->error());
     impl_->connection.consumeEvent();
     return std::optional<Http2Event>(std::move(result));
 }
@@ -726,7 +474,7 @@ std::string_view Http2Connection::pendingOutput() const& noexcept {
 }
 Http2OutputConsumeStatus Http2Connection::consumeOutput(std::size_t bytes) noexcept {
     impl_->retryDeferred();
-    return toPublic(impl_->connection.consumeOutput(bytes));
+    return impl_->connection.consumeOutput(bytes);
 }
 void Http2Connection::takeOutput(std::pmr::string& output) {
     impl_->retryDeferred();
@@ -767,15 +515,15 @@ Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
 
 Http2DataSubmitStatus Http2Connection::submitData(
     std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream) {
-    return toPublic(impl_->connection.submitData(streamId, bytes, toInternal(endStream)));
+    return impl_->connection.submitData(streamId, bytes, endStream);
 }
 Http2RequestContentReleaseStatus Http2Connection::releaseRequestContent(
     std::uint32_t streamId) noexcept {
-    return toPublic(impl_->connection.releaseRequestContent(streamId));
+    return impl_->connection.releaseRequestContent(streamId);
 }
 Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     std::uint32_t streamId, const HttpInterimResponseHead& response) {
-    return toPublic(impl_->connection.submitInterimResponseHead(streamId, response));
+    return impl_->connection.submitInterimResponseHead(streamId, response);
 }
 
 Http2SubmitStatus Http2Connection::submitBufferedResponse(
@@ -831,14 +579,14 @@ Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
 }
 
 Http2SubmitStatus Http2Connection::submitReset(std::uint32_t streamId, Http2ErrorCode error) {
-    const auto status = impl_->connection.submitReset(streamId, toInternal(error));
-    if (status == detail::Http2SubmitStatus::kAccepted && impl_->role == Http2Role::kClient) {
+    const auto status = impl_->connection.submitReset(streamId, error);
+    if (status == Http2SubmitStatus::kAccepted && impl_->role == Http2Role::kClient) {
         // Owner-originated resets deliberately produce no terminal event. The
         // public client facade must therefore release the pin established by
         // submitRequestHead() here rather than waiting for nextEvent().
         impl_->releaseOwnerAfterCredits(streamId);
     }
-    return toPublic(status);
+    return status;
 }
 Http2ReceivedDataAcknowledgeStatus Http2Connection::acknowledge(Http2ReceivedDataCredit&& credit) {
     if (!credit.valid() || credit.endpoint_ != impl_->endpoint) {
@@ -889,8 +637,7 @@ bool Http2Connection::draining() const noexcept {
     return impl_->connection.draining();
 }
 std::optional<Http2ErrorCode> Http2Connection::connectionError() const noexcept {
-    return impl_->connection.connectionError().transform(
-        [](detail::Http2ErrorCode error) noexcept { return toPublic(error); });
+    return impl_->connection.connectionError();
 }
 
 }  // namespace ruvia

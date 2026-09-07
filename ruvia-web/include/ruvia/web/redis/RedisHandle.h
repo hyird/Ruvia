@@ -1,9 +1,5 @@
 #pragma once
 
-#include "ruvia/web/redis/RedisTransaction.h"
-#include "ruvia/core/ScopedOperation.h"
-#include "ruvia/web/detail/redis/RedisArgumentPack.h"
-
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -16,6 +12,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "ruvia/core/ScopedOperation.h"
+#include "ruvia/web/detail/redis/RedisArgumentPack.h"
+#include "ruvia/web/redis/RedisTransaction.h"
 
 namespace ruvia {
 

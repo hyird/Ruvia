@@ -1,7 +1,7 @@
+#include <vector>
+
 #include "context_request_fixture.h"
 #include "model_field_fixture.h"
-
-#include <vector>
 
 // Reading a request through Context: cookies, query, route params and headers, and the caches each
 // lookup shares.

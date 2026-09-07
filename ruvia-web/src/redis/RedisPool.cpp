@@ -1,13 +1,12 @@
-#include "ruvia/web/redis/Redis.h"
-
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
-
 #include <limits>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/web/detail/redis/RedisProtocol.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia {
 namespace detail {

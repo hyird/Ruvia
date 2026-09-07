@@ -1,60 +1,19 @@
-#include "test_harness.h"
-
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+
+#include "test_harness.h"
 
 namespace {
 
 using ruvia::detail::responseWritePolicy;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

@@ -38,69 +38,42 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/util/BorrowedView.h"
-#include "ruvia/http/detail/http2/stream/Http2ClosedStreams.h"
+#include "ruvia/http/Http2Types.h"
+#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
+#include "ruvia/http/detail/http2/Http2Role.h"
+#include "ruvia/http/detail/http2/flow/Http2ReadyQueue.h"
+#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
-#include "ruvia/http/detail/http2/settings/Http2LocalConnectionState.h"
-#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
-#include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/http2/flow/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/message/Http2RequestContent.h"
-#include "ruvia/http/detail/http2/Http2Role.h"
+#include "ruvia/http/detail/http2/settings/Http2LocalConnectionState.h"
+#include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
+#include "ruvia/http/detail/http2/stream/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamTable.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
-#include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/HttpClient.h"
-#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 
-// feed() has all-or-nothing ownership for each supplied span; it never partially
-// consumes caller input. The result itself therefore carries the complete state
-// instead of pairing a status with a redundant byte count.
-enum class Http2FeedResult : std::uint8_t {
-    // The exact span remains caller-owned and retryable after beginConnection().
-    kConnectionNotStarted,
-    // The exact span remains caller-owned and retryable after nextEvent() drains.
-    kEventsPending,
-    // The whole span was accepted and no partial preface/frame remains buffered.
-    kAccepted,
-    // The whole span was accepted; a partial preface/frame awaits another span.
-    kNeedInput,
-    // The connection is terminal. The current span must be dropped, never retried;
-    // GOAWAY/other final bytes can still be present in pendingOutput().
-    kProtocolFailure,
-};
-
-enum class Http2EndStream : std::uint8_t { kKeepOpen,
-    kEndStream };
-
-[[nodiscard]] constexpr bool http2EndsStream(Http2EndStream value) noexcept {
-    return value == Http2EndStream::kEndStream;
-}
-
-// Initial-head/control submission status. kClosed is an expected race with a
-// reset peer; kInvalidState is a caller contract violation and emits no bytes.
-enum class Http2SubmitStatus : std::uint8_t {
-    kAccepted,
-    kClosed,
-    kInvalidState,
-    // The stream phase is valid, but the submitted HTTP message metadata cannot
-    // be serialized as a conformant message (currently an invalid content-length).
-    kInvalidMessage,
-    // Extended CONNECT was requested before the peer advertised RFC 8441 support.
-    kPeerCapabilityUnavailable
-};
+using ruvia::Http2DataSubmitStatus;
+using ruvia::http2EndsStream;
+using ruvia::Http2EndStream;
+using ruvia::Http2FeedResult;
+using ruvia::Http2OutputConsumeStatus;
+using ruvia::Http2RequestContentReleaseStatus;
+using ruvia::Http2RequestHeadSubmitError;
+using ruvia::Http2SubmitStatus;
 
 enum class Http2WebSocketHandshakeSubmitError : std::uint8_t {
     kClosed,
@@ -169,19 +142,6 @@ private:
     }
 
     Value value_;
-};
-
-// Opening a client request is one transaction: semantic validation and peer/local
-// capacity checks happen before the core allocates a stream ID or emits HPACK bytes.
-// Success is not an enum member because only success owns a real request stream.
-enum class Http2RequestHeadSubmitError : std::uint8_t {
-    kInvalidState,            // this connection is not in client role
-    kConnectionNotStarted,    // beginConnection() has not queued the client preface
-    kConnectionUnavailable,   // connection error, peer GOAWAY, or stream-ID exhaustion
-    kPeerStreamLimitReached,  // peer SETTINGS_MAX_CONCURRENT_STREAMS is exhausted
-    kLocalStreamCapacityReached,
-    kPeerCapabilityUnavailable,  // Extended CONNECT was not advertised by the peer
-    kInvalidMessage
 };
 
 class Http2RequestHeadSubmitResult;
@@ -259,35 +219,6 @@ private:
     }
 
     Value value_;
-};
-
-// DATA ownership is explicit:
-// - kAccepted: the whole input was accepted and no deferred remainder exists.
-// - kQueued: the whole input was accepted; the core copied the unsent suffix and
-//   will drain it automatically. The caller MUST NOT submit that input again.
-// - kBackpressured: an older queued submission still owns the stream; this call
-//   accepted zero bytes, so the caller retains and retries this input after drain.
-enum class Http2DataSubmitStatus : std::uint8_t {
-    kAccepted,
-    kQueued,
-    kBackpressured,
-    // Expect: 100-continue still gates this request body. The caller retains
-    // the complete input and retries after a Continue signal or explicit release.
-    kExpectationPending,
-    // The stream disappeared or was reset; the caller drops the input.
-    kClosed,
-    // The stream exists but its local message is not in the body-open phase.
-    kInvalidState,
-    // The whole input is rejected before any frame/window/counter mutation.
-    kContentLengthExceeded,
-    // END_STREAM was requested before the declared content length would be met.
-    kContentLengthIncomplete
-};
-
-enum class Http2RequestContentReleaseStatus : std::uint8_t {
-    kReleased,
-    kNotPending,
-    kClosed,
 };
 
 enum class Http2FinishSubmitStatus : std::uint8_t {

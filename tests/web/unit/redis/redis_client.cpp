@@ -1,6 +1,3 @@
-#include "test_harness.h"
-#include "memory_resource_fixture.h"
-
 #include <array>
 #include <chrono>
 #include <concepts>
@@ -26,10 +23,13 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/App.h"
-#include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
+#include "ruvia/web/redis/RedisHandle.h"
+
+#include "memory_resource_fixture.h"
+#include "test_harness.h"
 
 namespace {
 
@@ -37,13 +37,6 @@ using ruvia::test::RejectingMemoryResource;
 using ruvia::test::TrackingResource;
 
 using RedisDefinitions = std::span<const ruvia::detail::RedisDefinition>;
-
-
-
-
-
-
-
 
 class RedisTestWorker final {
 public:
@@ -146,190 +139,15 @@ bool throwsInvalidArgument(Fn&& fn) {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // Command arguments passed as ordinary arguments rather than a prepared span.
-
 
 // Alternating name/value commands need complete pairs.
 
-
 // Variadic commands synchronously clone owning-string temporaries.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
     .match = "session:*",
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 }  // namespace
 

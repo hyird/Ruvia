@@ -1,7 +1,7 @@
-#include "ruvia/web/detail/router/RouteTable.h"
-
 #include <algorithm>
 #include <bit>
+
+#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {
 namespace {
