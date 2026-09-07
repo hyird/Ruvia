@@ -7,7 +7,7 @@
 
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
-#include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 

@@ -24,6 +24,7 @@
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/web/db/DbRows.h"
+#include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
 

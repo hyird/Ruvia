@@ -328,4 +328,12 @@ void Context::applyResponseState(
     }
 }
 
+namespace detail {
+
+void applyMiddlewareResponse(Context& context, HttpResponse&& response) {
+    context.respond(std::move(response));
+}
+
+}  // namespace detail
+
 }  // namespace ruvia
