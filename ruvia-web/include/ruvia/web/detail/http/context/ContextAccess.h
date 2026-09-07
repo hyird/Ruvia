@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <exception>
 #include <utility>
@@ -153,10 +152,17 @@ struct ContextAccess final {
     // Lets a test observe a cookie set by middleware before any response is built.
     [[nodiscard]] static bool hasPendingSetCookie(
         const Context& context, std::string_view valuePrefix) noexcept {
-        return std::ranges::any_of(context.responseState().activeResponse().headers(),
-            [valuePrefix](const auto& header) noexcept {
-                return header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix);
-            });
+        return !pendingSetCookieValue(context, valuePrefix).empty();
+    }
+
+    [[nodiscard]] static std::string_view pendingSetCookieValue(
+        const Context& context, std::string_view valuePrefix) noexcept {
+        for (const auto& header : context.responseState().activeResponse().headers()) {
+            if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
+                return header.value();
+            }
+        }
+        return {};
     }
 
 private:

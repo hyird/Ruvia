@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,7 @@
 #include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/TrustedProxies.h"
 
 #include "context_services_fixture.h"
 #include "test_harness.h"
@@ -43,6 +46,8 @@ using ruvia::detail::generateSecureToken;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
+using ruvia::detail::TrustedProxyBlock;
+using ruvia::detail::TrustedProxySet;
 
 // Naming a private member inside a requires-expression is an unsatisfied
 // constraint on gcc but a hard error on clang, so this can only assert the
@@ -76,13 +81,31 @@ struct CsrfOutcome final {
     bool hasResponse{false};
     bool reseeded{false};
     std::uint16_t status{0};
+    std::string setCookie;
 };
+
+[[nodiscard]] bool setCookieHasSecure(std::string_view setCookie) noexcept {
+    return setCookie.find("; Secure") != std::string_view::npos;
+}
+
+TrustedProxySet trustedProxySetOf(std::initializer_list<std::string_view> cidrs) {
+    TrustedProxySet set;
+    for (const auto cidr : cidrs) {
+        TrustedProxyBlock block;
+        if (ruvia::detail::parseTrustedProxyBlock(cidr, block)) {
+            set.add(block);
+        }
+    }
+    return set;
+}
 
 // Runs CsrfProtection::handle over a synthesized request and reports whether the
 // chain continued (next called) or was short-circuited with a response.
 CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
     std::string_view headerName, HttpKnownMethod method, bool withCookie,
-    std::string_view cookieToken, bool withHeader, std::string_view headerToken) {
+    std::string_view cookieToken, bool withHeader, std::string_view headerToken,
+    ruvia::detail::ContextServices services = ruvia::test::testContextServices(),
+    std::optional<HttpHeaderView> extraHeader = {}) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -100,8 +123,11 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
     if (withHeader) {
         HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerToken});
     }
+    if (extraHeader.has_value()) {
+        (void)HttpRequestAccess::addHeader(request, *extraHeader);
+    }
     HttpRequestAccess::setResource(request, memory.resource());
-    auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    auto context = ContextAccess::make(memory, request, services);
 
     ruvia::detail::NextState::Control control;
     ruvia::detail::NextState state{};
@@ -118,7 +144,9 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
     out.nextInvoked = control.phase() == ruvia::detail::NextState::Control::Phase::kInvoked;
     std::string cookiePrefix(cookieName);
     cookiePrefix.push_back('=');
-    out.reseeded = ContextAccess::hasPendingSetCookie(context, cookiePrefix);
+    const auto setCookie = ContextAccess::pendingSetCookieValue(context, cookiePrefix);
+    out.reseeded = !setCookie.empty();
+    out.setCookie.assign(setCookie.data(), setCookie.size());
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
         out.status = ContextAccess::takeResponse(context).status().value();
@@ -289,4 +317,37 @@ RUVIA_TEST(csrf_safe_method_reseeds_absent_or_empty_cookie) {
     const auto present = runCsrf(HttpKnownMethod::kGet, true, "abcdef123456", false, {});
     RUVIA_CHECK(present.nextInvoked);
     RUVIA_CHECK(!present.reseeded);
+}
+
+RUVIA_TEST(csrf_reseed_cookie_omits_secure_on_plaintext) {
+    ruvia::CsrfProtection csrf;
+    const auto issued = runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", HttpKnownMethod::kGet, false, {},
+        false, {});
+    RUVIA_CHECK(issued.nextInvoked);
+    RUVIA_CHECK(issued.reseeded);
+    RUVIA_CHECK(!issued.setCookie.empty());
+    RUVIA_CHECK(!setCookieHasSecure(issued.setCookie));
+}
+
+RUVIA_TEST(csrf_reseed_cookie_sets_secure_on_tls_transport) {
+    ruvia::CsrfProtection csrf;
+    const auto issued = runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", HttpKnownMethod::kGet, false, {},
+        false, {}, ruvia::test::testContextServices().withTlsTransport("203.0.113.7"));
+    RUVIA_CHECK(issued.nextInvoked);
+    RUVIA_CHECK(issued.reseeded);
+    RUVIA_CHECK(setCookieHasSecure(issued.setCookie));
+}
+
+RUVIA_TEST(csrf_reseed_cookie_sets_secure_behind_tls_terminating_proxy) {
+    ruvia::CsrfProtection csrf;
+    const auto trusted = trustedProxySetOf({"10.0.0.0/8"});
+    const auto issued = runCsrf(csrf, "XSRF-TOKEN", "X-XSRF-TOKEN", HttpKnownMethod::kGet, false, {},
+        false, {},
+        ruvia::test::testContextServices()
+            .withPlainTransport("10.0.0.5")
+            .withTrustedProxies(trusted),
+        HttpHeaderView{"X-Forwarded-Proto", "https"});
+    RUVIA_CHECK(issued.nextInvoked);
+    RUVIA_CHECK(issued.reseeded);
+    RUVIA_CHECK(setCookieHasSecure(issued.setCookie));
 }

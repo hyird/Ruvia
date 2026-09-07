@@ -299,6 +299,11 @@ RUVIA_TEST(rate_limit_key_groups_ipv6_by_64_prefix) {
 
     // IPv4-mapped IPv6 must NOT collapse to one /64 -- each mapped host stays distinct.
     RUVIA_CHECK(rateLimitKey("::ffff:203.0.113.7") != rateLimitKey("::ffff:203.0.113.8"));
+    // A dual-stack listener presents the same IPv4 client as dotted form or as
+    // ::ffff:a.b.c.d; those spellings must share one slot or the client bypasses
+    // the limiter by connecting both ways.
+    RUVIA_CHECK_EQ(rateLimitKey("::ffff:203.0.113.7"), rateLimitKey("203.0.113.7"));
+    RUVIA_CHECK_EQ(rateLimitKey("::ffff:203.0.113.7"), std::string("203.0.113.7"));
 
     // Scoped IPv6 addresses carry an interface/zone identifier. That scope is
     // part of the peer identity for link-local addresses, so it must not be
