@@ -114,6 +114,19 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
+// Cookie request header pairs are `name=value` even when name is empty.
+// Dropping the '=' would turn a nameless Set-Cookie value into a new pair:
+// `=session=forged` would be sent as `session=forged`.
+template <typename String>
+inline void appendCookieRequestPair(String& header, std::string_view name, std::string_view value) {
+    if (!header.empty()) {
+        header.append("; ", 2);
+    }
+    header.append(name.data(), name.size());
+    header.push_back('=');
+    header.append(value.data(), value.size());
+}
+
 [[nodiscard]] inline bool cookieAttributeEmitted(CookieAttributePolicy policy) {
     switch (policy) {
         case CookieAttributePolicy::kOmit:

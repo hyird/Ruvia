@@ -1,5 +1,8 @@
 #include "http2_connection_fixture.h"
 
+#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
+
 // Http2Connection: HEADERS, CONTINUATION, HPACK and trailers.
 
 RUVIA_TEST(http2_connection_header_table_reduction_prefixes_next_field_block) {
@@ -172,6 +175,67 @@ RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
     auto* s = conn.stream(1);
     RUVIA_CHECK(s != nullptr && s->requestMethod() == "GET");
     RUVIA_CHECK(s != nullptr && s->requestKnownMethod() == ruvia::HttpKnownMethod::kGet);
+}
+
+// RFC 9113 §8.3.1: an intermediary translating HTTP/1.1 origin-form MUST omit
+// :authority and keep Host. That request is not malformed.
+
+RUVIA_TEST(http2_connection_accepts_host_without_authority_pseudo_header) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "GET", "https", "/", std::nullopt);
+    HpackEncoder::encodeHeader(block, "host", "example.com");
+    const auto request = headersFrame(&resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
+                Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    if (stream != nullptr) {
+        RUVIA_CHECK(stream->hasHost());
+        RUVIA_CHECK(!stream->hasAuthority());
+        auto httpRequest = ruvia::detail::HttpRequestAccess::make();
+        const auto built = ruvia::detail::Http2RequestBuilder::build(
+            *stream, httpRequest, &resource, {});
+        RUVIA_CHECK(built.built() != nullptr);
+        RUVIA_CHECK_EQ(httpRequest.authority(), std::string_view("example.com"));
+        RUVIA_CHECK_EQ(httpRequest.header("host").value_or(""), std::string_view("example.com"));
+    }
+}
+
+RUVIA_TEST(http2_connection_rejects_https_request_without_authority_or_host) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeRequest(block, "GET", "https", "/", std::nullopt);
+    const auto request = headersFrame(&resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(request.data(), request.size())) ==
+                Http2FeedResult::kAccepted);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+    const auto event = conn.nextEvent();
+    RUVIA_CHECK(event.has_value());
+    if (event.has_value()) {
+        RUVIA_CHECK(event->kind() == Http2EventKind::kStreamClosed);
+    }
+    const auto out = conn.pendingOutput();
+    RUVIA_CHECK(out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4);
+    if (out.size() >= ruvia::detail::kHttp2FrameHeaderBytes + 4) {
+        const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        RUVIA_CHECK_EQ(reset.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+        RUVIA_CHECK_EQ(
+            ruvia::detail::http2Read32(reinterpret_cast<const unsigned char*>(out.data() + 9)),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+    }
 }
 
 // RFC 9113 requires field blocks received after our RST_STREAM to be minimally

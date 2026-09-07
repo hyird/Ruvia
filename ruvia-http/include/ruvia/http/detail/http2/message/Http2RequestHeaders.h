@@ -48,9 +48,11 @@ struct Http2HeaderDecodeContext final {
 
 // RFC 9110 defines both http-URI and https-URI with a mandatory authority.
 // Asterisk-form OPTIONS is server-wide: the request target itself contains no
-// authority information (RFC 9113 section 8.3.1). A direct HTTP/2 sender may
-// still convey the target URI authority separately via :authority; when present,
-// callers validate it with http2IsValidRequestAuthority().
+// authority information (RFC 9113 section 8.3.1). A translated HTTP/1.1
+// origin-form request MUST omit :authority and carry Host instead; a direct
+// HTTP/2 sender SHOULD send :authority. The target-URI authority may therefore
+// be either field. When :authority is present, callers validate it with
+// http2IsValidRequestAuthority().
 [[nodiscard]] inline bool http2RegularRequestRequiresAuthority(
     std::string_view scheme, std::string_view path) noexcept {
     return path != "*" && http2IsHttpRequestScheme(scheme);
@@ -80,6 +82,36 @@ struct Http2HeaderDecodeContext final {
         return !authority.empty() && isValidHostHeader(authority);
     }
     return isValidUriAuthority(authority);
+}
+
+[[nodiscard]] inline std::string_view http2RequestHostField(const Http2StreamState& stream) noexcept {
+    if (!stream.hasHost()) {
+        return {};
+    }
+    for (std::size_t i = 0; i < stream.remoteHeaderCount(); ++i) {
+        const auto header = stream.remoteHeaderAt(i);
+        if (header.kind == RequestHeaderKind::kHost) {
+            return header.value;
+        }
+    }
+    return {};
+}
+
+// Wire :authority if present; otherwise the Host field of a translated
+// origin-form request (RFC 9113 §8.3.1).
+[[nodiscard]] inline std::string_view http2EffectiveRequestAuthority(
+    const Http2StreamState& stream) noexcept {
+    return stream.hasAuthority() ? stream.requestAuthority() : http2RequestHostField(stream);
+}
+
+[[nodiscard]] inline bool http2HasRequiredRequestAuthority(const Http2StreamState& stream) noexcept {
+    if (!http2RegularRequestRequiresAuthority(stream.requestScheme(), stream.requestPath())) {
+        return true;
+    }
+    if (stream.hasAuthority()) {
+        return true;
+    }
+    return http2IsValidRequestAuthority(stream.requestScheme(), http2RequestHostField(stream));
 }
 
 [[nodiscard]] inline bool http2AccumulateHeaderListBytes(
