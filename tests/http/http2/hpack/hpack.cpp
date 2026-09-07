@@ -30,6 +30,7 @@ using ruvia::detail::Http2StreamState;
 
 
 
+
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
 };
@@ -159,11 +160,11 @@ RUVIA_TEST(hpack_request_literal_no_huffman) {
                                 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d}),
         out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
-    RUVIA_CHECK_EQ(out.headers[0], std::make_pair(std::string(":method"), std::string("GET")));
-    RUVIA_CHECK_EQ(out.headers[1], std::make_pair(std::string(":scheme"), std::string("http")));
-    RUVIA_CHECK_EQ(out.headers[2], std::make_pair(std::string(":path"), std::string("/")));
+    RUVIA_CHECK_EQ(out.headers[0], (std::pair{std::string(":method"), std::string("GET")}));
+    RUVIA_CHECK_EQ(out.headers[1], (std::pair{std::string(":scheme"), std::string("http")}));
+    RUVIA_CHECK_EQ(out.headers[2], (std::pair{std::string(":path"), std::string("/")}));
     RUVIA_CHECK_EQ(
-        out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
+        out.headers[3], (std::pair{std::string(":authority"), std::string("www.example.com")}));
 }
 
 RUVIA_TEST(hpack_request_literal_huffman) {
@@ -175,7 +176,7 @@ RUVIA_TEST(hpack_request_literal_huffman) {
         out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{4});
     RUVIA_CHECK_EQ(
-        out.headers[3], std::make_pair(std::string(":authority"), std::string("www.example.com")));
+        out.headers[3], (std::pair{std::string(":authority"), std::string("www.example.com")}));
 }
 
 RUVIA_TEST(hpack_encode_decode_round_trip) {
@@ -185,7 +186,7 @@ RUVIA_TEST(hpack_encode_decode_round_trip) {
     RUVIA_CHECK(decodeBlock(std::string_view(encoded.data(), encoded.size()), out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
     RUVIA_CHECK_EQ(out.headers[0],
-        std::make_pair(std::string("x-custom-header"), std::string("custom value")));
+        (std::pair{std::string("x-custom-header"), std::string("custom value")}));
 }
 
 RUVIA_TEST(hpack_encoder_rejects_unrepresentable_string_length_without_partial_output) {
@@ -360,7 +361,7 @@ RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
     Collector out;
     RUVIA_CHECK(decodeBlock(block, out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{2});
-    const auto expected = std::make_pair(std::string("custom-key"), std::string("custom-value"));
+    const auto expected = std::pair{std::string("custom-key"), std::string("custom-value")};
     RUVIA_CHECK_EQ(out.headers[0], expected);
     RUVIA_CHECK_EQ(out.headers[1], expected);  // resolved via the dynamic table
 }
@@ -387,11 +388,11 @@ RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
     Collector out;
     RUVIA_CHECK(decodeBlock(block, out));
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{3});
-    RUVIA_CHECK_EQ(out.headers[0], std::make_pair(name, std::string("v")));
-    RUVIA_CHECK_EQ(out.headers[1], std::make_pair(name, std::string("w")));
+    RUVIA_CHECK_EQ(out.headers[0], (std::pair{name, std::string("v")}));
+    RUVIA_CHECK_EQ(out.headers[1], (std::pair{name, std::string("w")}));
     // The reference reads the STORED dynamic entry -- the byte the use-after-free
     // would corrupt. It must still be the full 20-byte name.
-    RUVIA_CHECK_EQ(out.headers[2], std::make_pair(name, std::string("w")));
+    RUVIA_CHECK_EQ(out.headers[2], (std::pair{name, std::string("w")}));
 }
 
 #if !defined(_MSC_VER)
@@ -429,7 +430,7 @@ RUVIA_TEST(hpack_dynamic_insert_allocation_failure_preserves_table) {
     RUVIA_CHECK(retainedResult.decoded() != nullptr);
     RUVIA_CHECK_EQ(retained.headers.size(), std::size_t{1});
     if (!retained.headers.empty()) {
-        RUVIA_CHECK_EQ(retained.headers[0], std::make_pair(std::string("a"), std::string("b")));
+        RUVIA_CHECK_EQ(retained.headers[0], (std::pair{std::string("a"), std::string("b")}));
     }
 }
 
