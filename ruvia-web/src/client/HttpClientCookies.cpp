@@ -183,14 +183,7 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& requ
             !cookiePathMatches(path, cookie.path)) {
             continue;
         }
-        if (!cookieHeader.empty()) {
-            cookieHeader.append("; ");
-        }
-        if (!cookie.name.empty()) {
-            cookieHeader.append(cookie.name);
-            cookieHeader.push_back('=');
-        }
-        cookieHeader.append(cookie.value);
+        appendCookieRequestPair(cookieHeader, cookie.name, cookie.value);
     }
     if (!cookieHeader.empty()) {
         headers.emplace_back("cookie", cookieHeader);
