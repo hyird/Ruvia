@@ -18,7 +18,7 @@ public:
 
     HttpClientRequestStorage(const HttpClientRequestStorage&) = delete;
     HttpClientRequestStorage& operator=(const HttpClientRequestStorage&) = delete;
-    HttpClientRequestStorage(HttpClientRequestStorage&&) noexcept = default;
+    HttpClientRequestStorage(HttpClientRequestStorage&& other);
     HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = delete;
 
     [[nodiscard]] HttpClientRequestStorage intoResource(

@@ -23,6 +23,10 @@ public:
     std::size_t attempts{0};
     std::size_t live{0};
 
+    void failAt(std::size_t allocation) noexcept {
+        failAt_ = allocation;
+    }
+
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         if (attempts++ == failAt_) {
@@ -43,8 +47,8 @@ private:
 };
 }  // namespace
 
-RUVIA_TEST(client_request_storage_same_resource_transfers_without_allocation) {
-    ruvia::test::RejectingMemoryResource resource;
+RUVIA_TEST(client_request_storage_same_resource_preserves_owned_storage) {
+    ruvia::test::CountingMemoryResource resource;
     const std::string target(200, 't');
     const std::string body(2048, 'b');
     const std::string value(300, 'v');
@@ -52,10 +56,13 @@ RUVIA_TEST(client_request_storage_same_resource_transfers_without_allocation) {
     request.appendHeader("X-Test", value).setBody(body);
     const auto* targetData = request.target().data();
     const auto* bodyData = request.body().data();
-    const auto allocations = resource.allocationCount();
-    resource.rejectAllocations();
+    std::pmr::vector<ruvia::HttpHeaderView> originalHeaders;
+    const auto original = HttpClientRequestStorageAccess::view(request, originalHeaders);
+    const auto* nameData = original.headers.front().name().data();
+    const auto* valueData = original.headers.front().value().data();
     auto transferred = std::move(request).intoResource(&resource);
-    RUVIA_CHECK(resource.allocationCount() == allocations);
+    // Moving STL containers may allocate debug iterator metadata. The request's
+    // target, body and header storage must still transfer without being copied.
     RUVIA_CHECK(transferred.target().data() == targetData);
     RUVIA_CHECK(transferred.body().data() == bodyData);
     std::pmr::vector<ruvia::HttpHeaderView> headers;
@@ -64,6 +71,8 @@ RUVIA_TEST(client_request_storage_same_resource_transfers_without_allocation) {
     RUVIA_CHECK(view.headers.size() == 1);
     RUVIA_CHECK(view.headers[0].name() == "x-test");
     RUVIA_CHECK(view.headers[0].value() == value);
+    RUVIA_CHECK(view.headers[0].name().data() == nameData);
+    RUVIA_CHECK(view.headers[0].value().data() == valueData);
     RUVIA_CHECK(view.content.borrowedBytes()->value() == body);
 }
 
@@ -96,6 +105,46 @@ RUVIA_TEST(client_request_storage_transfer_outlives_source_resource) {
         RUVIA_CHECK(destination.liveAllocations() > 0);
     }
     RUVIA_CHECK(destination.liveAllocations() == 0);
+}
+
+RUVIA_TEST(client_request_storage_failed_move_returns_partial_storage) {
+    const auto transfer = [](HttpClientRequestStorage& request,
+                              std::pmr::memory_resource* resource, bool throughBoundary) {
+        if (throughBoundary) {
+            return std::move(request).intoResource(resource);
+        }
+        return HttpClientRequestStorage(std::move(request));
+    };
+    const std::string text(256, 'x');
+    for (bool throughBoundary : {false, true}) {
+        FailingResource baseline((std::numeric_limits<std::size_t>::max)());
+        std::size_t moveAllocations = 0;
+        {
+            HttpClientRequestStorage request(text, text, &baseline);
+            request.appendHeader("X-Test", text).setBody(text);
+            const auto before = baseline.attempts;
+            auto moved = transfer(request, &baseline, throughBoundary);
+            moveAllocations = baseline.attempts - before;
+            RUVIA_CHECK(moved.body() == text);
+        }
+        RUVIA_CHECK(baseline.live == 0);
+        for (std::size_t failAt = 0; failAt < moveAllocations; ++failAt) {
+            FailingResource resource((std::numeric_limits<std::size_t>::max)());
+            {
+                HttpClientRequestStorage request(text, text, &resource);
+                request.appendHeader("X-Test", text).setBody(text);
+                resource.failAt(resource.attempts + failAt);
+                bool threw = false;
+                try {
+                    auto moved = transfer(request, &resource, throughBoundary);
+                } catch (const std::bad_alloc&) {
+                    threw = true;
+                }
+                RUVIA_CHECK(threw);
+            }
+            RUVIA_CHECK(resource.live == 0);
+        }
+    }
 }
 
 RUVIA_TEST(client_request_storage_failed_transfer_releases_partial_copy) {

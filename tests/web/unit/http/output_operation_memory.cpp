@@ -30,6 +30,8 @@ struct OutputSink final {
     bool suspendNext{false};
     bool failNext{false};
     bool failAfterSuspend{false};
+    const char* expectedStorage{nullptr};
+    bool retainedStorage{false};
     std::coroutine_handle<> continuation{};
 };
 
@@ -49,6 +51,7 @@ struct Suspend final {
 
 ruvia::Task<void> writeOutput(void* target, std::string_view value) {
     auto& sink = *static_cast<OutputSink*>(target);
+    sink.retainedStorage = value.data() == sink.expectedStorage;
     sink.writes.emplace_back(value);
     if (std::exchange(sink.failNext, false)) {
         throw std::runtime_error("output failed");
@@ -185,14 +188,16 @@ RUVIA_TEST(output_rvalue_move_reuses_compatible_owner_allocation) {
     ruvia::test::CountingMemoryResource owner;
     OutputSink sink;
     auto writer = makeWriter(sink, owner);
-    std::pmr::string payload(256, 'p', &owner);
-    const auto allocations = owner.allocationCount();
     asio::io_context context(1);
 
-    auto operation = writer.write(std::move(payload));
-    RUVIA_CHECK_EQ(owner.allocationCount(), allocations);
-    run(context, awaitOperation(operation));
-
+    {
+        std::pmr::string payload(256, 'p', &owner);
+        sink.expectedStorage = payload.data();
+        auto operation = writer.write(std::move(payload));
+        run(context, awaitOperation(operation));
+        RUVIA_CHECK(sink.retainedStorage);
+    }
+    // A moved-from string can retain Debug STL metadata until its destruction.
     RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(sink.writes[0], std::string(256, 'p'));
 }

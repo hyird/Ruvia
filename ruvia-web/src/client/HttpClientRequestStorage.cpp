@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 
+#include <initializer_list>
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -11,8 +12,15 @@ HttpClientRequestStorage::HttpClientRequestStorage(
     std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
     : method_(method, pmrResourceOrDefault(resource)),
       target_(target, method_.get_allocator().resource()),
-      headers_(method_.get_allocator().resource()),
-      body_(method_.get_allocator().resource()) {}
+      headers_(std::initializer_list<Header>{}, method_.get_allocator().resource()),
+      body_(std::string_view{}, method_.get_allocator().resource()) {}
+
+HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& other)
+    : method_(std::move(other.method_), other.method_.get_allocator()),
+      target_(std::move(other.target_), other.target_.get_allocator()),
+      headers_(std::move(other.headers_), other.headers_.get_allocator()),
+      body_(std::move(other.body_), other.body_.get_allocator()),
+      hasBody_(other.hasBody_) {}
 
 HttpClientRequestStorage HttpClientRequestStorage::intoResource(
     std::pmr::memory_resource* resource) && {
