@@ -9,9 +9,8 @@
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
-
-#include "client/WebSocketClientInternal.h"
 
 namespace ruvia::detail {
 

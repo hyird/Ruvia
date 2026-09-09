@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <condition_variable>
-#include <deque>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
@@ -12,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/core/detail/util/FailureReport.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia {
@@ -71,10 +71,18 @@ struct BlockingPool::ThreadState final {
 };
 
 struct BlockingPool::Impl final {
+    struct Node final {
+        explicit Node(MoveOnlyFunction<void()>&& value)
+            : task(std::move(value)) {}
+
+        MoveOnlyFunction<void()> task;
+        Node* next{nullptr};
+    };
+
     explicit Impl(const BlockingPoolOptions& options)
         : threadCount(resolveThreadCount(options.threadCount)),
           queueCapacity(resolveQueueCapacity(options.queueCapacity, threadCount)),
-          queue(detail::processResource()) {}
+          nodeResource(detail::processResource()) {}
 
     void start(const std::shared_ptr<Impl>& self, std::pmr::vector<std::thread>& threads) {
         threads.reserve(threadCount);
@@ -94,20 +102,28 @@ struct BlockingPool::Impl final {
 
     void run() noexcept {
         for (;;) {
-            MoveOnlyFunction<void()> task;
+            std::unique_ptr<Node, detail::PmrObjectDeleter<Node>> node(nullptr,
+                detail::PmrObjectDeleter<Node>{nodeResource});
             {
                 std::unique_lock lock(mutex);
-                condition.wait(lock, [this] { return stopping || !queue.empty(); });
-                if (queue.empty()) {
-                    // Only a stop empties the queue without work arriving.
+                condition.wait(lock, [this] { return stopping || queued != 0; });
+                if (stopping || queued == 0) {
+                    // Stopping discards every task that has not already been
+                    // picked up. A worker must never start queued work after
+                    // the stop request becomes visible.
                     return;
                 }
-                task = std::move(queue.front());
-                queue.pop_front();
+                node.reset(queueHead);
+                queueHead = node->next;
+                node->next = nullptr;
+                if (queueHead == nullptr) {
+                    queueTail = nullptr;
+                }
+                --queued;
                 ++running;
             }
             try {
-                task();
+                node->task();
             } catch (...) {
                 // The blocking wrapper catches the callable's exceptions and
                 // hands them back to the waiter, so reaching this is a raw
@@ -116,7 +132,7 @@ struct BlockingPool::Impl final {
             }
             // The task owns the completion it answered; destroy it here rather
             // than under the lock the next iteration takes.
-            task = nullptr;
+            node.reset();
             {
                 std::lock_guard lock(mutex);
                 --running;
@@ -126,23 +142,34 @@ struct BlockingPool::Impl final {
     }
 
     void stop() noexcept {
-        // Use the pool's own allocator and exchange the whole queue.  stop()
-        // is noexcept: moving tasks one by one into a default-constructed
-        // queue could allocate and terminate the process if that allocation
-        // failed.  The equal-resource swap only exchanges deque bookkeeping;
-        // task destruction still happens after the mutex is released.
-        std::pmr::deque<MoveOnlyFunction<void()>> dropped(queue.get_allocator().resource());
+        // Only the first stop caller owns the drain. In particular, a queued
+        // task's destructor may call stop() again; letting that call recurse
+        // into the drain would grow the stack once per queued task.
+        Node* dropped = nullptr;
         {
             std::lock_guard lock(mutex);
+            if (stopping) {
+                return;
+            }
             stopping = true;
-            discarded += queue.size();
-            // Dropped tasks answer their waiters from their own destructors,
-            // which must not run under this mutex: a waiter resumed on its
-            // worker may submit again.
-            queue.swap(dropped);
+            discarded += queued;
+            dropped = queueHead;
+            queueHead = nullptr;
+            queueTail = nullptr;
+            queued = 0;
         }
         condition.notify_all();
-        dropped.clear();
+
+        // The detached chain owns all queued callables. Destroy nodes
+        // iteratively outside the mutex so callable destructors may reenter
+        // stats(), stop(), or submit() safely without allocation or recursion.
+        std::unique_ptr<Node, detail::PmrObjectDeleter<Node>> node(
+            dropped, detail::PmrObjectDeleter<Node>{nodeResource});
+        while (node != nullptr) {
+            Node* next = node->next;
+            node->next = nullptr;
+            node.reset(next);
+        }
     }
 
     static void throwIfCurrent(const std::pmr::vector<std::thread>& threads) {
@@ -172,9 +199,12 @@ struct BlockingPool::Impl final {
 
     std::size_t threadCount;
     std::size_t queueCapacity;
+    std::pmr::memory_resource* nodeResource;
     mutable std::mutex mutex;
     std::condition_variable condition;
-    std::pmr::deque<MoveOnlyFunction<void()>> queue;
+    Node* queueHead{nullptr};
+    Node* queueTail{nullptr};
+    std::size_t queued{0};
     std::size_t running{0};
     std::uint64_t completed{0};
     std::uint64_t rejected{0};
@@ -204,7 +234,7 @@ std::size_t BlockingPool::queueCapacity() const noexcept {
 BlockingPoolStats BlockingPool::stats() const noexcept {
     std::lock_guard lock(impl_->mutex);
     return BlockingPoolStats{
-        .queued = impl_->queue.size(),
+        .queued = impl_->queued,
         .running = impl_->running,
         .completed = impl_->completed,
         .rejected = impl_->rejected,
@@ -222,11 +252,33 @@ BlockingSubmitStatus BlockingPool::submit(MoveOnlyFunction<void()> task) {
             ++impl_->discarded;
             return BlockingSubmitStatus::kPoolStopped;
         }
-        if (impl_->queue.size() >= impl_->queueCapacity) {
+        if (impl_->queued >= impl_->queueCapacity) {
             ++impl_->rejected;
             return BlockingSubmitStatus::kQueueFull;
         }
-        impl_->queue.push_back(std::move(task));
+    }
+    auto node = detail::makePmrObject<Impl::Node>(impl_->nodeResource, std::move(task));
+    BlockingSubmitStatus status = BlockingSubmitStatus::kAccepted;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->stopping) {
+            ++impl_->discarded;
+            status = BlockingSubmitStatus::kPoolStopped;
+        } else if (impl_->queued >= impl_->queueCapacity) {
+            ++impl_->rejected;
+            status = BlockingSubmitStatus::kQueueFull;
+        } else {
+            if (impl_->queueTail != nullptr) {
+                impl_->queueTail->next = node.get();
+            } else {
+                impl_->queueHead = node.get();
+            }
+            impl_->queueTail = node.release();
+            ++impl_->queued;
+        }
+    }
+    if (status != BlockingSubmitStatus::kAccepted) {
+        return status;
     }
     impl_->condition.notify_one();
     return BlockingSubmitStatus::kAccepted;

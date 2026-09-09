@@ -28,6 +28,147 @@
 
 namespace {
 
+struct MailboxDestructorState final {
+    const ruvia::WorkerHandle* worker{nullptr};
+    ruvia::EventLoopAttachment* attachment{nullptr};
+    int destroyed{0};
+    bool ran{false};
+};
+
+class MailboxDestructorCallback final {
+public:
+    explicit MailboxDestructorCallback(MailboxDestructorState& state) noexcept
+        : state_(&state) {}
+    MailboxDestructorCallback(const MailboxDestructorCallback&) = delete;
+    MailboxDestructorCallback(MailboxDestructorCallback&&) noexcept = default;
+
+    ~MailboxDestructorCallback() {
+        static_cast<void>(state_->worker->post([] {}));
+        ++state_->destroyed;
+    }
+
+    void operator()() const {
+        state_->ran = true;
+        state_->attachment->stop();
+    }
+
+private:
+    MailboxDestructorState* state_;
+};
+
+bool testMailboxCallableDestructionCanInspectWorker() {
+    asio::io_context context;
+    auto attachment = ruvia::attachEventLoop(context);
+    const auto worker = attachment.loop().handle();
+    MailboxDestructorState state{.worker = &worker, .attachment = &attachment};
+    const auto submitted = worker.post(MailboxDestructorCallback(state));
+    if (!submitted.accepted()) {
+        return false;
+    }
+    attachment.run();
+    return state.ran && state.destroyed > 0;
+}
+
+bool testMailboxFactoryRollbackAndDetach() {
+    asio::io_context context;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    bool thrown = false;
+    try {
+        static_cast<void>(ruvia::detail::WorkerHandleAccess::postFactory(
+            worker, []() -> ruvia::MoveOnlyFunction<void()> {
+                throw std::runtime_error("factory failed");
+            }));
+    } catch (const std::runtime_error&) {
+        thrown = true;
+    }
+    bool empty = false;
+    try {
+        static_cast<void>(ruvia::detail::WorkerHandleAccess::postFactory(
+            worker, [] { return ruvia::MoveOnlyFunction<void()>(); }));
+    } catch (const std::invalid_argument&) {
+        empty = true;
+    }
+    bool recovered = ruvia::detail::WorkerHandleAccess::postFactory(
+                         worker, [] { return ruvia::MoveOnlyFunction<void()>([] {}); }) ==
+                     ruvia::PostStatus::kAccepted;
+    context.run();
+
+    bool rawStackRejected = false;
+    ruvia::detail::WorkerDispatcher rawStack(context, 1);
+    try {
+        static_cast<void>(rawStack.post([] {}));
+    } catch (const std::bad_weak_ptr&) {
+        rawStackRejected = true;
+    }
+
+    bool abandonedRan = false;
+    bool abandonedDestroyed = false;
+    struct Probe final {
+        bool* ran;
+        bool* destroyed;
+        Probe(bool& ranValue, bool& destroyedValue)
+            : ran(&ranValue),
+              destroyed(&destroyedValue) {}
+        Probe(Probe&& other) noexcept
+            : ran(other.ran),
+              destroyed(std::exchange(other.destroyed, nullptr)) {}
+        ~Probe() {
+            if (destroyed != nullptr) {
+                *destroyed = true;
+            }
+        }
+        void operator()() {
+            *ran = true;
+        }
+    };
+    const auto detached = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
+    const auto detachedWorker = ruvia::detail::WorkerHandleAccess::make(detached);
+    const auto status = ruvia::detail::WorkerHandleAccess::postFactory(
+        detachedWorker, [detached, &abandonedRan, &abandonedDestroyed] {
+            detached->detachContext();
+            return ruvia::MoveOnlyFunction<void()>(
+                Probe{abandonedRan, abandonedDestroyed});
+        });
+    return thrown && empty && recovered && rawStackRejected &&
+           status == ruvia::PostStatus::kAccepted && !abandonedRan && abandonedDestroyed;
+}
+
+bool testMailboxFactoryCanFinishAfterDetach() {
+    asio::io_context context;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
+    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    std::promise<void> entered;
+    std::promise<void> resume;
+    auto resumed = resume.get_future();
+    std::atomic_int destroyed{0};
+    bool ran = false;
+    auto status = ruvia::PostStatus::kWorkerStopping;
+    struct Payload final {
+        std::atomic_int* destroyed;
+        ~Payload() {
+            destroyed->fetch_add(1);
+        }
+    };
+    std::jthread producer([&] {
+        status = ruvia::detail::WorkerHandleAccess::postFactory(worker, [&] {
+            auto payload = std::make_unique<Payload>(&destroyed);
+            entered.set_value();
+            resumed.wait();
+            return ruvia::MoveOnlyFunction<void()>(
+                [payload = std::move(payload), &ran] { ran = true; });
+        });
+    });
+    entered.get_future().wait();
+    dispatcher->detachContext();
+    const bool retainedWhileReserved = destroyed.load() == 0;
+    resume.set_value();
+    producer.join();
+    context.run();
+    return retainedWhileReserved && status == ruvia::PostStatus::kAccepted && !ran &&
+           destroyed.load() == 1;
+}
+
 bool testPostOutcomeInvariantsAndEmptyCallbacks() {
     bool acceptedTakeRejected = false;
     try {
@@ -850,6 +991,12 @@ int main() {
     };
     return run("post_outcome_invariants_and_empty_callbacks",
                testPostOutcomeInvariantsAndEmptyCallbacks) &&
+                   run("mailbox_callable_destruction_can_inspect_worker",
+                       testMailboxCallableDestructionCanInspectWorker) &&
+                   run("mailbox_factory_rollback_and_detach",
+                       testMailboxFactoryRollbackAndDetach) &&
+                   run("mailbox_factory_can_finish_after_detach",
+                       testMailboxFactoryCanFinishAfterDetach) &&
                    run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) &&
                    run("worker_signal_has_no_waiter_limit",
                        testWorkerSignalHasNoArbitraryWaiterLimit) &&

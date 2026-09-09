@@ -32,7 +32,6 @@ In a `.cpp` file, order groups as:
 2. C++ standard headers, then C system headers.
 3. Third-party headers (`asio/`, `openssl/`, …).
 4. Other `ruvia/` headers.
-5. Same-target private headers under `src/`.
 
 clang-format regroups these blocks and sorts within each group. Do not insert
 blank lines by hand inside a group.

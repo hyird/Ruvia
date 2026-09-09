@@ -54,6 +54,71 @@ struct ThreadGate final {
     }
 };
 
+struct ReentrantDiscardState final {
+    BlockingPool* pool{nullptr};
+    std::atomic_int destroyed{0};
+    std::atomic_int ran{0};
+    std::atomic_int rejected{0};
+};
+
+struct ReentrantDiscardedTask final {
+    ReentrantDiscardState* state{nullptr};
+
+    ReentrantDiscardedTask() = default;
+    explicit ReentrantDiscardedTask(ReentrantDiscardState& state)
+        : state(&state) {}
+    ReentrantDiscardedTask(const ReentrantDiscardedTask&) = delete;
+    ReentrantDiscardedTask& operator=(const ReentrantDiscardedTask&) = delete;
+    ReentrantDiscardedTask(ReentrantDiscardedTask&& other) noexcept
+        : state(std::exchange(other.state, nullptr)) {}
+
+    ~ReentrantDiscardedTask() {
+        if (state == nullptr) {
+            return;
+        }
+        state->destroyed.fetch_add(1, std::memory_order_relaxed);
+        static_cast<void>(state->pool->stats());
+        state->pool->stop();
+        if (state->pool->submit([] {}) == BlockingSubmitStatus::kPoolStopped) {
+            state->rejected.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void operator()() const noexcept {
+        state->ran.fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
+struct SboDestructorStatsState final {
+    BlockingPool* pool{nullptr};
+    std::atomic_int destroyed{0};
+    std::atomic_int ran{0};
+    std::binary_semaphore ranSignal{0};
+};
+
+struct SboDestructorStatsTask final {
+    SboDestructorStatsState* state{nullptr};
+
+    explicit SboDestructorStatsTask(SboDestructorStatsState& state)
+        : state(&state) {}
+    SboDestructorStatsTask(const SboDestructorStatsTask&) = delete;
+    SboDestructorStatsTask& operator=(const SboDestructorStatsTask&) = delete;
+    SboDestructorStatsTask(SboDestructorStatsTask&& other) noexcept
+        : state(other.state) {}
+
+    ~SboDestructorStatsTask() {
+        if (state != nullptr) {
+            state->destroyed.fetch_add(1, std::memory_order_relaxed);
+            static_cast<void>(state->pool->stats());
+        }
+    }
+
+    void operator()() const noexcept {
+        state->ran.fetch_add(1, std::memory_order_relaxed);
+        state->ranSignal.release();
+    }
+};
+
 class ThrowOnSecondMove final {
 public:
     ThrowOnSecondMove() = default;
@@ -380,6 +445,52 @@ bool testJoinRejectsPoolThreadBeforeStopping() {
     return rejected;
 }
 
+bool testStopDrainsWithoutRunningQueuedTasks() {
+    constexpr int queuedTaskCount = 3;
+    ThreadGate gate;
+    ReentrantDiscardState state;
+    BlockingPool pool(BlockingPoolOptions{.threadCount = 1, .queueCapacity = queuedTaskCount});
+    state.pool = &pool;
+    gate.occupy(pool);
+
+    for (int i = 0; i < queuedTaskCount; ++i) {
+        if (pool.submit(ReentrantDiscardedTask(state)) !=
+            BlockingSubmitStatus::kAccepted) {
+            gate.release.release();
+            pool.join();
+            return false;
+        }
+    }
+
+    pool.stop();
+    const auto stopped = pool.stats();
+    gate.release.release();
+    pool.join();
+    const auto finished = pool.stats();
+    return stopped.queued == 0 && stopped.running == 1 &&
+           stopped.discarded == queuedTaskCount * 2 &&
+           state.destroyed.load(std::memory_order_relaxed) == queuedTaskCount &&
+           state.rejected.load(std::memory_order_relaxed) == queuedTaskCount &&
+           state.ran.load(std::memory_order_relaxed) == 0 && finished.running == 0 &&
+           finished.completed == 1;
+}
+
+bool testSboMovedFromDestructorCanReadStats() {
+    ThreadGate gate;
+    SboDestructorStatsState state;
+    BlockingPool pool(BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
+    state.pool = &pool;
+    gate.occupy(pool);
+
+    const auto submitted = pool.submit(SboDestructorStatsTask(state));
+    gate.release.release();
+    state.ranSignal.acquire();
+    pool.join();
+    return submitted == BlockingSubmitStatus::kAccepted &&
+           state.ran.load(std::memory_order_relaxed) == 1 &&
+           state.destroyed.load(std::memory_order_relaxed) >= 3;
+}
+
 }  // namespace
 
 int main() {
@@ -559,9 +670,12 @@ int main() {
     const bool destructionDoesNotJoin = testDestructionDoesNotJoinRunningCallable();
     const bool joinStopsAndWaits = testJoinStopsAndWaitsForRunningCallable();
     const bool joinRejectsPoolThread = testJoinRejectsPoolThreadBeforeStopping();
+    const bool stopDrainsWithoutRunning = testStopDrainsWithoutRunningQueuedTasks();
+    const bool sboMovedFromDestructor = testSboMovedFromDestructorCanReadStats();
     const bool allPassed = defaultSizing && results && workerStaysFree && throwingMoveResult &&
                            cancelled && timeout && saturatingTimeout && stoppedPool && queueFull &&
                            workerStopping && stoppedWorker && rejectsEmptyTask &&
-                           destructionDoesNotJoin && joinStopsAndWaits && joinRejectsPoolThread;
+                           destructionDoesNotJoin && joinStopsAndWaits && joinRejectsPoolThread &&
+                           stopDrainsWithoutRunning && sboMovedFromDestructor;
     return allPassed ? 0 : 1;
 }
