@@ -13,6 +13,7 @@
 
 #include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include "ruvia/core/detail/util/DnsHost.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/parser/HttpUriGrammar.h"
 
@@ -94,11 +95,7 @@ void validateClientOriginHost(
     if (isClientIpAddress(host)) {
         return;
     }
-    auto sniHost = host;
-    if (sniHost.ends_with('.')) {
-        sniHost.remove_suffix(1);
-    }
-    if (!isValidSniHost(sniHost)) {
+    if (!isValidDnsHost(host)) {
         throw std::invalid_argument(invalidMessage);
     }
 }

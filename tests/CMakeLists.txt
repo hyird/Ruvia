@@ -56,6 +56,7 @@ endfunction()
 if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/base64.cpp
+        core/dns_host.cpp
         core/pool_waiter_queue.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp

@@ -41,9 +41,10 @@ ruvia_install_generated_public_header(
 
 ruvia_install_public_header_closure(core include/ruvia/core)
 
-# Compile-time contracts consumed by ruvia-web's installed template surface.
+# Cross-target compile-time contracts consumed by ruvia-web.
 ruvia_install_public_headers(core
-    include/ruvia/core/detail/number/DecimalNumber.h)
+    include/ruvia/core/detail/number/DecimalNumber.h
+    include/ruvia/core/detail/util/DnsHost.h)
 
 if(WIN32)
     target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
