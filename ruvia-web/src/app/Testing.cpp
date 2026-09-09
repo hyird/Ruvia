@@ -1,7 +1,6 @@
 #include "ruvia/web/Testing.h"
 
 #include <chrono>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -54,18 +53,6 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
     head.append("\r\n");
 }
 
-// Asio's Windows IOCP backend creates a timer thread for a context that owns a
-// steady_timer. Repeatedly destroying those contexts is not safe on all
-// supported Windows runners, so the in-memory facade keeps one fresh context
-// per TestApp until process exit. The workers and their Ruvia state remain
-// fully isolated; only the inert Asio context storage is retained. The context
-// still runs through EventLoopAttachment so timer cancellation and wakeups see
-// the same current-worker identity as normal workers.
-asio::io_context& testEventLoopContext() {
-    static std::deque<asio::io_context>& contexts = *new std::deque<asio::io_context>();
-    return contexts.emplace_back();
-}
-
 Task<void> startTestWorker(
     detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
     capabilities.initializeWorkerState();
@@ -108,7 +95,7 @@ struct TestApp::Impl final {
     std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
     HttpErrorHandler errorHandler{nullptr};
     HttpNotFoundHandler notFoundHandler{nullptr};
-    asio::io_context& eventLoopContext{testEventLoopContext()};
+    asio::io_context eventLoopContext{};
     EventLoopAttachment eventLoopAttachment{attachEventLoop(eventLoopContext)};
     EventLoop eventLoop{eventLoopAttachment.loop()};
     WorkerHandle worker{eventLoop.handle()};
