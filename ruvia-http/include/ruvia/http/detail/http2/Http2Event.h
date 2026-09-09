@@ -263,8 +263,9 @@ public:
             [streamId](const auto& event) noexcept {
                 if constexpr (requires { event.streamId(); }) {
                     return event.streamId() == streamId;
+                } else {
+                    return false;
                 }
-                return false;
             },
             value_);
     }
