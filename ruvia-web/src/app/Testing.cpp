@@ -55,9 +55,9 @@ void appendSyntheticHeaderLine(std::string& head, std::string_view name, std::st
 
 Task<void> startTestWorker(
     detail::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
-    capabilities.initializeWorkerState();
-    scanner.start();
     try {
+        capabilities.initializeWorkerState();
+        scanner.start();
         co_await capabilities.connect();
     } catch (...) {
         scanner.stop();
@@ -83,6 +83,11 @@ Task<void> stopTestWorker(
 }  // namespace
 
 struct TestApp::Impl final {
+    enum class Lifecycle { kConfiguring,
+        kInitializing,
+        kReady,
+        kFailed };
+
     detail::Router router;
     detail::ControllerStore controllers;
     WorkerMemory memory;
@@ -104,12 +109,12 @@ struct TestApp::Impl final {
     StopToken stopToken{stopSource.token()};
     std::optional<detail::ConnectionScanner> connectionScanner;
     std::optional<detail::WorkerCapabilities> capabilities;
-    bool finalized{false};
+    Lifecycle lifecycle{Lifecycle::kConfiguring};
+    std::exception_ptr startupFailure{};
     bool eventLoopStarted{false};
-    bool workerReady{false};
 
     ~Impl() {
-        if (workerReady) {
+        if (lifecycle == Lifecycle::kReady) {
             stopSource.requestStop();
             try {
                 eventLoop.start(stopTestWorker(*connectionScanner, *capabilities)).get();
@@ -126,64 +131,76 @@ struct TestApp::Impl final {
     }
 
     void requireConfigurable() const {
-        if (finalized) {
+        if (lifecycle != Lifecycle::kConfiguring) {
             throw std::logic_error("TestApp must be configured before its first request()");
         }
     }
 
     void finalize() {
-        if (finalized) {
+        if (lifecycle == Lifecycle::kReady) {
             return;
         }
-        finalized = true;
+        if (lifecycle == Lifecycle::kInitializing) {
+            throw std::logic_error("TestApp request() cannot be reentered during startup");
+        }
+        if (lifecycle == Lifecycle::kFailed) {
+            std::rethrow_exception(startupFailure);
+        }
+        lifecycle = Lifecycle::kInitializing;
 
-        const auto controllerRegistrars = detail::sealControllerRegistrars();
-        detail::registerControllers(router, controllers, controllerRegistrars);
-        auto& routes = detail::RouterImpl::from(router);
-        routes.setErrorHandler(detail::CallbackAccess::ref(errorHandler));
-        routes.setNotFoundHandler(detail::CallbackAccess::ref(notFoundHandler));
-        if (!prefixErrorHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
-            views.reserve(prefixErrorHandlers.size());
-            for (const auto& [prefix, handler] : prefixErrorHandlers) {
-                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
+        try {
+            const auto controllerRegistrars = detail::sealControllerRegistrars();
+            detail::registerControllers(router, controllers, controllerRegistrars);
+            auto& routes = detail::RouterImpl::from(router);
+            routes.setErrorHandler(detail::CallbackAccess::ref(errorHandler));
+            routes.setNotFoundHandler(detail::CallbackAccess::ref(notFoundHandler));
+            if (!prefixErrorHandlers.empty()) {
+                std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
+                views.reserve(prefixErrorHandlers.size());
+                for (const auto& [prefix, handler] : prefixErrorHandlers) {
+                    views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
+                }
+                routes.setPrefixErrorHandlers(views);
             }
-            routes.setPrefixErrorHandlers(views);
-        }
-        if (!prefixNotFoundHandlers.empty()) {
-            std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
-                detail::registrationResource());
-            views.reserve(prefixNotFoundHandlers.size());
-            for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
-                views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
+            if (!prefixNotFoundHandlers.empty()) {
+                std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
+                    detail::registrationResource());
+                views.reserve(prefixNotFoundHandlers.size());
+                for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
+                    views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
+                }
+                routes.setPrefixNotFoundHandlers(views);
             }
-            routes.setPrefixNotFoundHandlers(views);
-        }
-        if (!globalMiddlewares.empty()) {
-            routes.setGlobalMiddlewares(globalMiddlewares);
-        }
-        routes.finalize();
+            if (!globalMiddlewares.empty()) {
+                routes.setGlobalMiddlewares(globalMiddlewares);
+            }
+            routes.finalize();
 
-        connectionScanner.emplace(worker, detail::ConnectionScannerOptions{});
-        capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(),
-            detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
-            detail::WorkerCapabilityOptions{
-                .routeRateLimits = routes.routeTable().hasRouteRateLimit()
-                                       ? detail::RouteRateLimitPresence::kPresent
-                                       : detail::RouteRateLimitPresence::kAbsent,
-                .rateLimitCapacity = 1024,
-                .env = &env,
+            connectionScanner.emplace(worker, detail::ConnectionScannerOptions{});
+            capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(),
+                detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
+                detail::WorkerCapabilityOptions{
+                    .routeRateLimits = routes.routeTable().hasRouteRateLimit()
+                                           ? detail::RouteRateLimitPresence::kPresent
+                                           : detail::RouteRateLimitPresence::kAbsent,
+                    .rateLimitCapacity = 1024,
+                    .env = &env,
+                });
+            eventLoopThread = std::thread([this] {
+                try {
+                    eventLoopAttachment.run();
+                } catch (...) {
+                    std::terminate();
+                }
             });
-        eventLoopThread = std::thread([this] {
-            try {
-                eventLoopAttachment.run();
-            } catch (...) {
-                std::terminate();
-            }
-        });
-        eventLoopStarted = true;
-        eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
-        workerReady = true;
+            eventLoopStarted = true;
+            eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
+            lifecycle = Lifecycle::kReady;
+        } catch (...) {
+            startupFailure = std::current_exception();
+            lifecycle = Lifecycle::kFailed;
+            throw;
+        }
     }
 };
 

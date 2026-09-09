@@ -37,6 +37,26 @@ struct TestingFacadeCounter final {
     int count{0};
 };
 
+struct TestingFacadeStartupFailureState final {};
+
+class TestingFacadeStartupError final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class TestingFacadeThrowingMiddleware final
+    : public ruvia::Middleware<TestingFacadeThrowingMiddleware> {
+public:
+    explicit TestingFacadeThrowingMiddleware(int* attempts) {
+        ++*attempts;
+        throw TestingFacadeStartupError("testing facade middleware startup failed");
+    }
+
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
+        co_return;
+    }
+};
+
 class TestingFacadeStamp final : public ruvia::Middleware<TestingFacadeStamp> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
@@ -419,6 +439,64 @@ RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     RUVIA_CHECK(notAllowed.status() == ruvia::http_status::kMethodNotAllowed);
 
     // The route table is sealed after the first request.
+    bool sealed = false;
+    try {
+        app.use<TestingFacadeStamp>();
+    } catch (const std::logic_error&) {
+        sealed = true;
+    }
+    RUVIA_CHECK(sealed);
+}
+
+RUVIA_TEST(testing_facade_retains_startup_failure_without_retrying) {
+    ruvia::TestApp app;
+    int factoryCalls = 0;
+    app.useWorkerState<TestingFacadeStartupFailureState>([&]()
+                                                             -> TestingFacadeStartupFailureState {
+        ++factoryCalls;
+        throw std::runtime_error("testing facade startup failed");
+    });
+
+    for (int attempt = 0; attempt != 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)app.request(ruvia::TestRequest::get("/t/hello"));
+        } catch (const std::runtime_error& error) {
+            threw = true;
+            RUVIA_CHECK_EQ(std::string_view(error.what()),
+                std::string_view("testing facade startup failed"));
+        }
+        RUVIA_CHECK(threw);
+    }
+    RUVIA_CHECK_EQ(factoryCalls, 1);
+
+    bool sealed = false;
+    try {
+        app.use<TestingFacadeStamp>();
+    } catch (const std::logic_error&) {
+        sealed = true;
+    }
+    RUVIA_CHECK(sealed);
+}
+
+RUVIA_TEST(testing_facade_retains_pre_worker_startup_failure_without_retrying) {
+    ruvia::TestApp app;
+    int constructorCalls = 0;
+    app.use<TestingFacadeThrowingMiddleware>(&constructorCalls);
+
+    for (int attempt = 0; attempt != 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)app.request(ruvia::TestRequest::get("/t/hello"));
+        } catch (const TestingFacadeStartupError& error) {
+            threw = true;
+            RUVIA_CHECK_EQ(std::string_view(error.what()),
+                std::string_view("testing facade middleware startup failed"));
+        }
+        RUVIA_CHECK(threw);
+    }
+    RUVIA_CHECK_EQ(constructorCalls, 1);
+
     bool sealed = false;
     try {
         app.use<TestingFacadeStamp>();
