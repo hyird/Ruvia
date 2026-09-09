@@ -81,7 +81,7 @@ bool outputFalse(void*) noexcept {
 void releaseOutputContext(void*) noexcept {}
 
 ruvia::ResponseStreamWriter makeResponseStreamWriter(OutputSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeOutput, &endOutput,
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink, &writeOutput, &endOutput,
         &sleepOutput, &bindOutput, &releaseOutputContext, &outputFalse, &outputFalse);
 }
 
@@ -290,7 +290,7 @@ RUVIA_TEST(context_response_output_has_one_active_alternative) {
     OutputSink sink;
     auto writer = makeResponseStreamWriter(sink);
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     const auto base = ruvia::test::testContextServices();
     RUVIA_CHECK(base.responseOutput().buffered() != nullptr);
@@ -335,7 +335,7 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
     RUVIA_CHECK_EQ(sseHead.header("Cache-Control"), std::string_view("no-cache"));
 
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
     auto webSocketContext =
         ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     {
@@ -358,7 +358,7 @@ RUVIA_TEST(context_websocket_binding_restores_capability_during_unwind) {
     auto context =
         ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     try {
         ruvia::detail::ContextWebSocketBinding binding(context, webSocket);

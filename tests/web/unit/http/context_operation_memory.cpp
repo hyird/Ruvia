@@ -164,7 +164,7 @@ RUVIA_TEST(context_operation_clients_keep_parameters_out_of_request_arena) {
 #endif
     auto httpClient = context.httpClient();
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *context.operationResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     for (int index = 0; index != 2000; ++index) {
         const std::string value(2048, static_cast<char>('a' + index % 26));

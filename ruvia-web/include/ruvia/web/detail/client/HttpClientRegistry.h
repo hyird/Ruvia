@@ -301,10 +301,8 @@ public:
 
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
-    [[nodiscard]] HttpClientHandle get(
-        std::pmr::memory_resource* resource, ScopedOperationScope& scope) const;
-    [[nodiscard]] HttpClientHandle get(std::string_view alias, std::pmr::memory_resource* resource,
-        ScopedOperationScope& scope) const;
+    [[nodiscard]] HttpClientHandle get(ScopedOperationScope& scope) const;
+    [[nodiscard]] HttpClientHandle get(std::string_view alias, ScopedOperationScope& scope) const;
 
 private:
     using PoolOwner = std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>>;

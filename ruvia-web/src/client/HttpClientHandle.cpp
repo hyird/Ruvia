@@ -375,11 +375,11 @@ HttpScheme HttpClientHandle::scheme() const {
 }
 
 HttpClientHandle Context::httpClient() const {
-    return clientRegistries_.httpClient(operationResource(), operationScope_, stopToken_);
+    return clientRegistries_.httpClient(operationScope_, stopToken_);
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, operationResource(), operationScope_, stopToken_);
+    return clientRegistries_.httpClient(alias, operationScope_, stopToken_);
 }
 
 }  // namespace ruvia

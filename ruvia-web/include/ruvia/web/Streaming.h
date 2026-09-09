@@ -64,10 +64,7 @@ public:
     /// Writes one body chunk. write(), writeln(), and end() share one linear output lane.
     /// Each returned output operation reserves the lane immediately; creating another
     /// before it completes or is discarded throws std::logic_error. The string_view overload
-    /// copies the chunk into process-owned PMR storage before returning.
-    /// before returning. Hot-path producers that already hold a buffer in
-    /// request-owned storage can move it into the PMR-string overload to skip
-    /// that copy.
+    /// copies the chunk into owner-worker PMR storage before returning.
     ScopedOperation<void> write(std::string_view chunk) &;
     ScopedOperation<void> write(std::string_view) && = delete;
 
@@ -82,10 +79,10 @@ public:
                     std::constructible_from<std::string_view, Text &&>)
     ScopedOperation<void> write(Text&&) && = delete;
 
-    /// Zero-copy write: takes ownership of an already-allocated chunk and
-    /// transfers it into the output lane without copying. Build the chunk with
-    /// a worker operation allocator (c.operationResource()) so the chunk
-    /// returns to the worker pool after the result or operation completes.
+    /// Takes ownership of an already-allocated chunk and transfers it into the
+    /// output lane, rebinding it to owner storage when needed before returning.
+    /// Compatible allocators transfer the
+    /// existing allocation; incompatible allocators copy it before returning.
     ScopedOperation<void> write(std::pmr::string&& chunk) &;
     ScopedOperation<void> write(std::pmr::string&&) && = delete;
 
@@ -130,9 +127,10 @@ private:
     using Committed = bool (*)(void*) noexcept;
     using Aborted = bool (*)(void*) noexcept;
 
-    ResponseStreamWriter(void* target, Write write, End end, Sleep sleep, BindContext bindContext,
+    ResponseStreamWriter(std::pmr::memory_resource& resource, void* target, Write write, End end, Sleep sleep, BindContext bindContext,
         ReleaseContext releaseContext, Committed committed, Aborted aborted) noexcept
-        : target_(target),
+        : resource_(&resource),
+          target_(target),
           write_(write),
           end_(end),
           sleep_(sleep),
@@ -163,6 +161,7 @@ private:
         return committed_(target_);
     }
 
+    std::pmr::memory_resource* resource_;
     void* target_;
     Write write_;
     End end_;

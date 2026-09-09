@@ -963,23 +963,36 @@ and response-stream routes, that arena stays alive for the whole handler,
 including its handshake and middleware state. Destroying an arena-backed object
 does not reclaim its individual allocation.
 
-Use `c.operationResource()` for temporary PMR data produced repeatedly in a
-long-lived handler. It uses the owning worker's reclaimable pool: destroying
-each object returns its storage for reuse, while other live objects remain
-valid. `c.db()`, `c.redis()`, and `c.httpClient()` use this resource automatically
-for operation arguments and results, including handles obtained before an
-upgrade. Keep these objects on the owning worker and destroy them before the
-Context's scope ends. The pool may retain freed blocks for reuse; it does not
-promise an immediate drop in process RSS.
+DB, Redis, HTTP client, response-stream, SSE, and WebSocket operations select
+their owning worker's reclaimable pool automatically. Borrowed inputs are
+copied before the operation is returned, so the source only needs to survive
+the synchronous call. Stream and WebSocket writes can take an owned PMR string:
+compatible storage is moved without copying, while storage from another
+resource is copied into the writer's pool before the call returns.
 
-For example, a streaming loop can transfer a temporary chunk without retaining
-each allocation in the request arena:
+Operation arguments are released with their operation. Owned return values hold
+their storage independently and remain valid across later operations until
+they are destroyed. Keep operations and results on their owning worker and
+within their owner's scope; Context handles and results belong to the
+Context's scope. These rules also apply to handles obtained before an upgrade.
+Borrowed body chunks and WebSocket payload views retain their documented
+validity until the next read on the same stream or connection.
+
+Ordinary code does not need to select an allocator. For example, a handler can
+transfer an owned Redis value directly to its response stream:
 
 ```cpp
-std::pmr::string chunk(c.operationResource());
-chunk.append("heartbeat\n");
-co_await c.stream().write(std::move(chunk));
+auto value = co_await c.redis().get("status");
+if (value) {
+    co_await c.stream().write(std::move(*value));
+}
 ```
+
+When constructing temporary PMR data yourself, use `c.operationResource()`.
+It uses the same worker pool, so each object's destruction returns its storage
+for reuse without invalidating other live objects. The pool may cache freed
+blocks and does not promise an immediate drop in process RSS. Moving an object
+originally allocated in the request arena does not reclaim its arena storage.
 
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a

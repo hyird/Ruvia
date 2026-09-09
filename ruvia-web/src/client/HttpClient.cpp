@@ -53,28 +53,28 @@ HttpClientHandle HttpClientState::handle(OperationOptions options) {
     options = mergeOperationOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
         std::move(options));
-    return clients_.get(memory_.resource(), operationScope_).withOptions(std::move(options));
+    return clients_.get(operationScope_).withOptions(std::move(options));
 }
 
 HttpClientStats HttpClientState::stats() {
     requireOpenOnWorker();
-    return clients_.get(memory_.resource(), operationScope_).stats();
+    return clients_.get(operationScope_).stats();
 }
 
 std::string_view HttpClientState::host() {
     requireOpenOnWorker();
-    const auto client = clients_.get(memory_.resource(), operationScope_);
+    const auto client = clients_.get(operationScope_);
     return client.host();
 }
 
 std::uint16_t HttpClientState::port() {
     requireOpenOnWorker();
-    return clients_.get(memory_.resource(), operationScope_).port();
+    return clients_.get(operationScope_).port();
 }
 
 HttpScheme HttpClientState::scheme() {
     requireOpenOnWorker();
-    return clients_.get(memory_.resource(), operationScope_).scheme();
+    return clients_.get(operationScope_).scheme();
 }
 
 void HttpClientState::requireOpenOnWorker() const {

@@ -80,8 +80,7 @@ Task<void> HttpClientRegistry::join() {
     }
 }
 
-HttpClientHandle HttpClientRegistry::get(
-    std::pmr::memory_resource* resource, ScopedOperationScope& scope) const {
+HttpClientHandle HttpClientRegistry::get(ScopedOperationScope& scope) const {
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
@@ -90,11 +89,11 @@ HttpClientHandle HttpClientRegistry::get(
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "fixed HTTP client is not configured");
     }
-    return HttpClientHandle(*pools_[*defaultPoolIndex], resource, scope);
+    return HttpClientHandle(*pools_[*defaultPoolIndex], resource_, scope);
 }
 
-HttpClientHandle HttpClientRegistry::get(std::string_view alias,
-    std::pmr::memory_resource* resource, ScopedOperationScope& scope) const {
+HttpClientHandle HttpClientRegistry::get(
+    std::string_view alias, ScopedOperationScope& scope) const {
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
@@ -103,7 +102,7 @@ HttpClientHandle HttpClientRegistry::get(std::string_view alias,
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "named HTTP client is not configured");
     }
-    return HttpClientHandle(*pools_[*found], resource, scope);
+    return HttpClientHandle(*pools_[*found], resource_, scope);
 }
 
 }  // namespace ruvia::detail

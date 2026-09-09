@@ -161,7 +161,7 @@ RUVIA_TEST(
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope generalScope;
-    auto redis = registry.get(std::pmr::get_default_resource(), generalScope);
+    auto redis = registry.get(generalScope);
     const std::array<std::string_view, 1> keys{"queue"};
     const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
 
@@ -256,12 +256,12 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     bool defaultResolved = true;
     bool aliasResolved = true;
     try {
-        (void)registry.get(std::pmr::get_default_resource(), operationScope);
+        (void)registry.get(operationScope);
     } catch (...) {
         defaultResolved = false;
     }
     try {
-        (void)registry.get("cache", std::pmr::get_default_resource(), operationScope);
+        (void)registry.get("cache", operationScope);
     } catch (...) {
         aliasResolved = false;
     }
@@ -313,7 +313,7 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
-    auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
+    auto handle = registry.get(operationScope);
     auto copiedHandle = handle;
     auto pipeline = handle.pipeline();
     pipeline.get("key");
@@ -387,7 +387,7 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
-    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
+    auto redis = registry.get(operationScope);
 
     bool zeroRejected = false;
     try {
@@ -413,7 +413,7 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::detail::ScopedOperationScope operationScope;
-    auto redis = registry.get(std::pmr::get_default_resource(), operationScope);
+    auto redis = registry.get(operationScope);
     const std::span<const std::string_view> noKeys;
 
     RUVIA_CHECK(throwsInvalidArgument([&] { (void)redis.mget(noKeys); }));
@@ -475,11 +475,12 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
     asio::io_context ioContext;
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
-    ruvia::detail::RedisRegistry registry(
-        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
     ruvia::test::CountingMemoryResource operationMemory;
+    ruvia::detail::RedisRegistry registry(
+        ioContext, &operationMemory, definitions, worker.handle());
+    const auto registryLiveAllocations = operationMemory.liveAllocations();
     ruvia::detail::ScopedOperationScope operationScope;
-    auto redis = registry.get(&operationMemory, operationScope);
+    auto redis = registry.get(operationScope);
     ruvia::StopSource cancellation;
     cancellation.requestStop();
     auto cancelled = redis.withOptions({.stopToken = cancellation.token()});
@@ -494,7 +495,7 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
                 rejected = error.code() == ruvia::RedisError::Code::kCancelled;
             }
             RUVIA_CHECK(rejected);
-            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
         }
         registry.closeNow();
         for (int index = 0; index != 128; ++index) {
@@ -505,7 +506,7 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
                 rejected = error.code() == ruvia::RedisError::Code::kClosing;
             }
             RUVIA_CHECK(rejected);
-            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
         }
     };
     auto result =
@@ -514,7 +515,7 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
     result.get();
 
     RUVIA_CHECK(operationMemory.allocationCount() > 0);
-    RUVIA_CHECK_EQ(operationMemory.allocationCount(), operationMemory.deallocationCount());
+    RUVIA_CHECK_EQ(operationMemory.liveAllocations(), registryLiveAllocations);
 }
 
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {

@@ -27,63 +27,61 @@ namespace {
 }  // namespace
 
 #ifdef RUVIA_ENABLE_DATABASE
-DbHandle WorkerClientRegistryView::db(std::pmr::memory_resource* resource,
+DbHandle WorkerClientRegistryView::db(
     ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
-    return databases_->get(resource, operationScope)
+    return databases_->get(operationScope)
         .withOptions(contextOperationOptions(stopToken));
 }
 
-DbHandle WorkerClientRegistryView::db(std::string_view alias, std::pmr::memory_resource* resource,
+DbHandle WorkerClientRegistryView::db(std::string_view alias,
     ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
-    return databases_->get(alias, resource, operationScope)
+    return databases_->get(alias, operationScope)
         .withOptions(contextOperationOptions(stopToken));
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-RedisHandle WorkerClientRegistryView::redis(std::pmr::memory_resource* resource,
+RedisHandle WorkerClientRegistryView::redis(
     ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(resource, operationScope).withOptions(contextOperationOptions(stopToken));
+    return redis_->get(operationScope).withOptions(contextOperationOptions(stopToken));
 }
 
 RedisHandle WorkerClientRegistryView::redis(std::string_view alias,
-    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
-    const StopToken& stopToken) const {
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(alias, resource, operationScope)
+    return redis_->get(alias, operationScope)
         .withOptions(contextOperationOptions(stopToken));
 }
 #endif
 
-HttpClientHandle WorkerClientRegistryView::httpClient(std::pmr::memory_resource* resource,
+HttpClientHandle WorkerClientRegistryView::httpClient(
     ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
     }
-    return httpClients_->get(resource, operationScope)
+    return httpClients_->get(operationScope)
         .withOptions(contextOperationOptions(stopToken));
 }
 
 HttpClientHandle WorkerClientRegistryView::httpClient(std::string_view alias,
-    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
-    const StopToken& stopToken) const {
+    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
     }
-    return httpClients_->get(alias, resource, operationScope)
+    return httpClients_->get(alias, operationScope)
         .withOptions(contextOperationOptions(stopToken));
 }
 

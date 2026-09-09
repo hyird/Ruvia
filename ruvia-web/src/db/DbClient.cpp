@@ -103,7 +103,7 @@ DbHandle DbClientState::handle(OperationOptions options) {
     options = mergeOperationOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
         std::move(options));
-    return databases_.get(memory_.resource(), operationScope_).withOptions(std::move(options));
+    return databases_.get(operationScope_).withOptions(std::move(options));
 }
 
 void DbClientState::requireConnectedOnWorker() const {

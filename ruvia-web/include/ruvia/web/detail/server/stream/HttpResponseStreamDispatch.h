@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -61,8 +62,9 @@ bool responseStreamCommittedThunk(void* target) noexcept {
 }
 
 template <typename Sink>
-[[nodiscard]] ResponseStreamWriter makeResponseStreamWriter(Sink& sink) noexcept {
-    return StreamingAccess::makeResponseStreamWriter(&sink, &responseStreamWriteThunk<Sink>,
+[[nodiscard]] ResponseStreamWriter makeResponseStreamWriter(
+    Sink& sink, std::pmr::memory_resource& resource) noexcept {
+    return StreamingAccess::makeResponseStreamWriter(resource, &sink, &responseStreamWriteThunk<Sink>,
         &responseStreamEndThunk<Sink>, &responseStreamSleepThunk<Sink>,
         &responseStreamBindContextThunk<Sink>, &responseStreamReleaseContextThunk<Sink>,
         &responseStreamCommittedThunk<Sink>, &responseStreamAbortedThunk<Sink>);
@@ -275,7 +277,7 @@ template <typename Sink, typename PeerAborted>
 Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(Sink& sink, const RouteTable& routes,
     const HttpRequest& request, const ResolvedRoute& route, RequestMemory& requestMemory,
     ContextServices services, PeerAborted peerAborted) {
-    auto responseStream = makeResponseStreamWriter(sink);
+    auto responseStream = makeResponseStreamWriter(sink, *requestMemory.upstreamResource());
 
     std::exception_ptr exception;
     try {
