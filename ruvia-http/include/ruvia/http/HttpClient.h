@@ -27,7 +27,6 @@
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
-struct HttpClientResponseHeaderAccess;
 struct HttpClientResponseHeadAccess;
 }  // namespace ruvia::detail
 
@@ -90,34 +89,6 @@ private:
     std::string_view host_;
     std::uint16_t port_;
     HttpScheme scheme_;
-};
-
-class HttpClientResponseHeader final {
-public:
-    [[nodiscard]] std::string_view name() const& noexcept {
-        return name_;
-    }
-    [[nodiscard]] std::string_view name() const&& = delete;
-
-    [[nodiscard]] std::string_view value() const& noexcept {
-        return value_;
-    }
-    [[nodiscard]] std::string_view value() const&& = delete;
-
-private:
-    friend struct detail::HttpClientResponseHeaderAccess;
-
-    HttpClientResponseHeader(std::pmr::string name, std::pmr::string value)
-        : name_(std::move(name)),
-          value_(std::move(value)) {}
-
-    HttpClientResponseHeader(detail::HttpResolvedPmrResourceTag, std::string_view name,
-        std::string_view value, std::pmr::memory_resource* resource)
-        : name_(name.data(), name.size(), resource),
-          value_(value.data(), value.size(), resource) {}
-
-    std::pmr::string name_;
-    std::pmr::string value_;
 };
 
 class HttpClientRequestContentView;
@@ -221,10 +192,10 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept {
+    [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept {
         return headers_;
     }
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const&& = delete;
+    [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;
 
 private:
     friend struct detail::HttpClientResponseHeadAccess;
@@ -242,7 +213,7 @@ private:
 
     HttpStatusCode status_;
     HttpProtocolVersion protocolVersion_;
-    std::pmr::vector<HttpClientResponseHeader> headers_;
+    std::pmr::vector<HttpHeader> headers_;
 };
 
 }  // namespace ruvia

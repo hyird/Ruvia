@@ -85,6 +85,10 @@ using ClientPortTextBuffer = std::array<char, std::numeric_limits<std::uint16_t>
 
 void validateClientOriginHost(
     std::string_view host, const char* emptyMessage, const char* invalidMessage);
+// Converts a validated, unbracketed transport host to the uri-host expected by
+// HTTP origin/authority models. DNS and TLS continue to use the original host.
+[[nodiscard]] std::pmr::string clientUriHost(
+    std::string_view host, std::pmr::memory_resource* resource);
 [[nodiscard]] bool isClientIpAddress(std::string_view host) noexcept;
 [[nodiscard]] std::string_view formatClientPort(
     std::uint16_t port, ClientPortTextBuffer& buffer) noexcept;

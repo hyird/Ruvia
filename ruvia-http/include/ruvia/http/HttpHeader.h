@@ -1,14 +1,46 @@
 #pragma once
 
 #include <cstddef>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/detail/util/BorrowedView.h"
 
+namespace ruvia::detail {
+struct HttpHeaderAccess;
+}
+
 namespace ruvia {
 
 inline constexpr std::size_t kMaxHttpHeaderFields = 64;
+
+// An owned field returned by protocol parsers and events. The same value type
+// represents initial fields and trailers for requests and responses.
+class HttpHeader final {
+public:
+    [[nodiscard]] std::string_view name() const& noexcept {
+        return name_;
+    }
+    std::string_view name() const&& = delete;
+    [[nodiscard]] std::string_view value() const& noexcept {
+        return value_;
+    }
+    std::string_view value() const&& = delete;
+
+private:
+    friend struct detail::HttpHeaderAccess;
+    HttpHeader(std::pmr::string name, std::pmr::string value)
+        : name_(std::move(name)),
+          value_(std::move(value)) {}
+    HttpHeader(std::string_view name, std::string_view value,
+        std::pmr::memory_resource* resource)
+        : name_(name, resource),
+          value_(value, resource) {}
+    std::pmr::string name_;
+    std::pmr::string value_;
+};
 
 class HttpHeaderView final {
 public:

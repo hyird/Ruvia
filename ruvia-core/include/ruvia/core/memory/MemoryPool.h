@@ -69,6 +69,12 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const&& = delete;
 
+    // Reclaimable storage owned by the same worker, independent of this arena.
+    [[nodiscard]] std::pmr::memory_resource* upstreamResource() & noexcept;
+    [[nodiscard]] std::pmr::memory_resource* upstreamResource() const& noexcept;
+    [[nodiscard]] std::pmr::memory_resource* upstreamResource() && = delete;
+    [[nodiscard]] std::pmr::memory_resource* upstreamResource() const&& = delete;
+
 private:
     std::pmr::monotonic_buffer_resource arena_;
 };

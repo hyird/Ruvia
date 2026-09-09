@@ -4,9 +4,11 @@
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 
@@ -24,7 +26,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
     source.headers = std::span<const HttpHeaderView>(headers);
 
     connection.writeBuffer.resize(kMaxHttpHeaderBytes + 1024);
-    const auto wireHost = httpClientWireHost(config_, resource_);
+    const auto wireHost = clientUriHost(config_.host, resource_);
     const auto origin =
         config_.scheme == HttpScheme::kHttps
             ? HttpOriginView::https({.host = wireHost, .port = httpClientPort(config_)})
@@ -91,7 +93,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         response.state_->protocolVersion = parsed->head().protocolVersion();
         response.state_->headers.reserve(parsed->head().headers().size());
         for (const auto& header : parsed->head().headers()) {
-            response.state_->headers.push_back(HttpClientResponseHeaderAccess::make(
+            response.state_->headers.push_back(HttpHeaderAccess::make(
                 header.name(), header.value(), responseResource));
         }
         connection.readBuffer.erase(0, consumedHead);
@@ -180,7 +182,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         const auto retainTrailers = [&](std::string_view trailerBlock) {
             const auto ok = visitHttpResponseTrailerFields(
                 trailerBlock, [&](std::string_view name, std::string_view value) {
-                    response.state_->trailers.push_back(HttpClientResponseHeaderAccess::make(
+                    response.state_->trailers.push_back(HttpHeaderAccess::make(
                         name, value, responseResource));
                     return true;
                 });

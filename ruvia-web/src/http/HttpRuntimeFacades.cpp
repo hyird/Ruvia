@@ -204,20 +204,21 @@ ScopedOperation<std::optional<std::string_view>> BodyReader::read() & {
 
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {
     requireActive();
-    std::pmr::string owned(chunk, detail::processResource());
+    std::pmr::string owned(chunk, resource_);
     return write(std::move(owned));
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) & {
     requireActive();
     ResponseStreamOutputGuard guard(outputActive_);
+    std::pmr::string owned(std::move(chunk), resource_);
     return detail::makeScopedOperation(operationScope_,
-        writeTransferredChunk(target_, write_, std::move(chunk), std::move(guard)));
+        writeTransferredChunk(target_, write_, std::move(owned), std::move(guard)));
 }
 
 ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) & {
     requireActive();
-    std::pmr::string owned(chunk, detail::processResource());
+    std::pmr::string owned(chunk, resource_);
     owned.push_back('\n');
     return write(std::move(owned));
 }
@@ -230,7 +231,7 @@ ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(
 
 ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) & {
     requireActive();
-    auto ownedTrailers = OwnedTrailers(trailers, detail::processResource());
+    auto ownedTrailers = OwnedTrailers(trailers, resource_);
     ResponseStreamOutputGuard guard(outputActive_);
     return detail::makeScopedOperation(
         operationScope_, endOwned(target_, end_, std::move(ownedTrailers), std::move(guard)));
@@ -285,7 +286,7 @@ ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) & {
 
 ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) & {
     requireActive();
-    std::pmr::string owned(options.reason.view(), detail::processResource());
+    std::pmr::string owned(options.reason.view(), resource_);
     WebSocketActivityLease readActivity(readActive_, "websocket close cannot overlap a read");
     WebSocketActivityLease writeActivity(
         writeActive_, "websocket close cannot overlap an output operation");
@@ -304,7 +305,7 @@ void WebSocket::abort() noexcept {
 
 ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
     requireActive();
-    std::pmr::string owned(payload, detail::processResource());
+    std::pmr::string owned(payload, resource_);
     return write(opcode, std::move(owned));
 }
 
@@ -312,13 +313,14 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&
     requireActive();
     WebSocketActivityLease activity(
         writeActive_, "concurrent websocket output operations are not supported");
+    std::pmr::string owned(std::move(payload), resource_);
     return detail::makeScopedOperation(operationScope_,
-        writeWebSocketPayload(target_, write_, opcode, std::move(payload), std::move(activity)));
+        writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity)));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {
     auto& streamWriter = writer();
-    auto frame = formatSseMessage(message, {.resource = detail::processResource()});
+    auto frame = formatSseMessage(message, {.resource = streamWriter.resource_});
     return streamWriter.write(std::move(frame));
 }
 

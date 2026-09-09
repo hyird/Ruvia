@@ -216,10 +216,8 @@ public:
     void closeNow() noexcept;
 
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] RedisHandle get(
-        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
-    [[nodiscard]] RedisHandle get(std::string_view alias, std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope) const;
+    [[nodiscard]] RedisHandle get(ScopedOperationScope& operationScope) const;
+    [[nodiscard]] RedisHandle get(std::string_view alias, ScopedOperationScope& operationScope) const;
 
 private:
     using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;

@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/Http2Framing.h"
@@ -35,6 +36,8 @@ enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased,
     kInvalidLease };
 
 struct Http2ConnectionOptions final {
+    // The resource must outlive the connection and any escaped events or
+    // credits, including their owned heads and trailers.
     std::pmr::memory_resource* resource{nullptr};
 };
 
@@ -180,6 +183,13 @@ private:
     Value value_;
 };
 
+enum class Http2ReceivedDataCreditMergeStatus : std::uint8_t {
+    kMerged,
+    kInvalidCredit,
+    kDifferentStream,
+    kOverflow,
+};
+
 class Http2ReceivedDataCredit final {
 public:
     // A credit is linear. acknowledge() consumes it explicitly; destroying a
@@ -189,6 +199,10 @@ public:
     Http2ReceivedDataCredit& operator=(const Http2ReceivedDataCredit&) = delete;
     Http2ReceivedDataCredit(Http2ReceivedDataCredit&& other) noexcept;
     Http2ReceivedDataCredit& operator=(Http2ReceivedDataCredit&&) = delete;
+    // Combine credits from one stream without returning any bytes. Success
+    // consumes other; failure leaves both tokens unchanged.
+    [[nodiscard]] Http2ReceivedDataCreditMergeStatus merge(
+        Http2ReceivedDataCredit&& other) noexcept;
     [[nodiscard]] bool valid() const noexcept {
         return endpoint_ != nullptr && streamId_ != 0 && bytes_ != 0;
     }
@@ -280,6 +294,9 @@ public:
         return head_;
     }
     const HttpClientResponseHead& head() const&& = delete;
+    [[nodiscard]] HttpClientResponseHead takeHead() && noexcept {
+        return std::move(head_);
+    }
     [[nodiscard]] std::optional<HttpClientRequestContentSignal> requestContentSignal()
         const noexcept {
         return signal_;
@@ -321,17 +338,38 @@ private:
     Http2ReceivedDataCredit credit_;
 };
 
+enum class Http2MessageContentSemantics : std::uint8_t {
+    kContent,
+    kMetadataOnly,
+};
+
 class Http2MessageEndEvent final {
 public:
     [[nodiscard]] std::uint32_t streamId() const noexcept {
         return streamId_;
     }
+    [[nodiscard]] std::span<const HttpHeader> trailers() const& noexcept {
+        return trailers_;
+    }
+    std::span<const HttpHeader> trailers() const&& = delete;
+    [[nodiscard]] std::pmr::vector<HttpHeader> takeTrailers() && noexcept {
+        return std::move(trailers_);
+    }
+    [[nodiscard]] Http2MessageContentSemantics contentSemantics() const noexcept {
+        return contentSemantics_;
+    }
 
 private:
     friend class Http2Event;
-    explicit constexpr Http2MessageEndEvent(std::uint32_t streamId) noexcept
-        : streamId_(streamId) {}
-    std::uint32_t streamId_;
+    Http2MessageEndEvent(std::uint32_t streamId,
+        std::pmr::vector<HttpHeader> trailers,
+        Http2MessageContentSemantics contentSemantics) noexcept
+        : streamId_(streamId),
+          trailers_(std::move(trailers)),
+          contentSemantics_(contentSemantics) {}
+    std::uint32_t streamId_{0};
+    std::pmr::vector<HttpHeader> trailers_;
+    Http2MessageContentSemantics contentSemantics_{Http2MessageContentSemantics::kContent};
 };
 
 class Http2TunnelDataEvent final {
@@ -446,6 +484,9 @@ public:
     [[nodiscard]] const Http2ResponseHeadEvent* responseHead() const& noexcept {
         return std::get_if<Http2ResponseHeadEvent>(&value_);
     }
+    [[nodiscard]] Http2ResponseHeadEvent* responseHead() & noexcept {
+        return std::get_if<Http2ResponseHeadEvent>(&value_);
+    }
     const Http2ResponseHeadEvent* responseHead() const&& = delete;
     [[nodiscard]] Http2MessageBodyChunkEvent* messageBodyChunk() & noexcept {
         return std::get_if<Http2MessageBodyChunkEvent>(&value_);
@@ -455,6 +496,9 @@ public:
     }
     const Http2MessageBodyChunkEvent* messageBodyChunk() const&& = delete;
     [[nodiscard]] const Http2MessageEndEvent* messageEnd() const& noexcept {
+        return std::get_if<Http2MessageEndEvent>(&value_);
+    }
+    [[nodiscard]] Http2MessageEndEvent* messageEnd() & noexcept {
         return std::get_if<Http2MessageEndEvent>(&value_);
     }
     const Http2MessageEndEvent* messageEnd() const&& = delete;
@@ -509,8 +553,11 @@ private:
         std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
         return Http2Event(Http2MessageBodyChunkEvent(endpoint, id, bytes, credit));
     }
-    [[nodiscard]] static Http2Event messageEnd(std::uint32_t id) noexcept {
-        return Http2Event(Http2MessageEndEvent(id));
+    [[nodiscard]] static Http2Event messageEnd(std::uint32_t id,
+        std::pmr::vector<HttpHeader> trailers,
+        Http2MessageContentSemantics contentSemantics) noexcept {
+        return Http2Event(
+            Http2MessageEndEvent(id, std::move(trailers), contentSemantics));
     }
     [[nodiscard]] static Http2Event tunnelData(detail::Http2ConnectionOwnerEndpoint* endpoint,
         std::uint32_t id, std::string_view bytes, std::uint32_t credit) noexcept {
@@ -550,6 +597,7 @@ public:
     Http2Connection& operator=(Http2Connection&&) noexcept;
 
     [[nodiscard]] Http2Role role() const noexcept;
+    [[nodiscard]] bool receivedPeerSettings() const noexcept;
     [[nodiscard]] Http2FeedResult feed(std::string_view input);
     template <detail::HttpTemporaryOwningCharString Input>
     Http2FeedResult feed(Input&&) = delete;
@@ -597,7 +645,10 @@ private:
         detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result);
     explicit Http2Connection(std::pmr::memory_resource* resource, Http2Role role);
     class Impl;
-    std::unique_ptr<Impl> impl_;
+    struct ImplDeleter final {
+        void operator()(Impl* value) const noexcept;
+    };
+    std::unique_ptr<Impl, ImplDeleter> impl_;
 };
 
 }  // namespace ruvia

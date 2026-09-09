@@ -28,12 +28,12 @@ struct StreamingAccess final {
         return BodyReader(BodyReader::Token{}, target, read);
     }
 
-    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(void* target,
+    [[nodiscard]] static ResponseStreamWriter makeResponseStreamWriter(std::pmr::memory_resource& resource, void* target,
         StreamWrite write, StreamEnd end, StreamSleep sleep, StreamBindContext bindContext,
         StreamReleaseContext releaseContext, StreamCommitted committed,
         StreamAborted aborted) noexcept {
         return ResponseStreamWriter(
-            target, write, end, sleep, bindContext, releaseContext, committed, aborted);
+            resource, target, write, end, sleep, bindContext, releaseContext, committed, aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {

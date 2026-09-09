@@ -22,7 +22,7 @@ using ruvia::Http2OutputConsumeStatus;
 class Http2OutputBuffer final {
 public:
     explicit Http2OutputBuffer(std::pmr::memory_resource* resource)
-        : bytes_(resource) {}
+        : bytes_(std::string_view{}, resource) {}
 
     [[nodiscard]] std::string_view pending() const& noexcept {
         return std::string_view(bytes_).substr(consumed_);

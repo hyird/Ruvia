@@ -106,20 +106,6 @@ private:
     return config.port;
 }
 
-[[nodiscard]] inline std::pmr::string httpClientWireHost(
-    const HttpClientConfigStorage& config, std::pmr::memory_resource* resource) {
-    std::pmr::string host(pmrResourceOrDefault(resource));
-    if (config.host.contains(':')) {
-        host.reserve(config.host.size() + 2);
-        host.push_back('[');
-        host.append(config.host);
-        host.push_back(']');
-    } else {
-        host.assign(config.host);
-    }
-    return host;
-}
-
 using HttpClientDefinition = NamedCapabilityDefinition<HttpClientConfigStorage>;
 
 }  // namespace ruvia::detail

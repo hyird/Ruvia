@@ -12,21 +12,21 @@ namespace ruvia {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle Context::db() const {
-    return clientRegistries_.db(resource(), operationScope_, stopToken_);
+    return clientRegistries_.db(operationScope_, stopToken_);
 }
 
 DbHandle Context::db(std::string_view alias) const {
-    return clientRegistries_.db(alias, resource(), operationScope_, stopToken_);
+    return clientRegistries_.db(alias, operationScope_, stopToken_);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle Context::redis() const {
-    return clientRegistries_.redis(resource(), operationScope_, stopToken_);
+    return clientRegistries_.redis(operationScope_, stopToken_);
 }
 
 RedisHandle Context::redis(std::string_view alias) const {
-    return clientRegistries_.redis(alias, resource(), operationScope_, stopToken_);
+    return clientRegistries_.redis(alias, operationScope_, stopToken_);
 }
 #endif
 

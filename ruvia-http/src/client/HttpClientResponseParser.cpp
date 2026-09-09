@@ -1,6 +1,7 @@
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/client/HttpClientResponseHead.h"
 #include "ruvia/http/detail/client/HttpClientResponseLimits.h"
@@ -152,7 +153,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
     for (std::size_t i = 0; i < parsed.headerCount; ++i) {
         const auto& header = parsed.headers[i];
         headers.emplace_back(
-            detail::HttpClientResponseHeaderAccess::make(header.name(), header.value(), resource_));
+            detail::HttpHeaderAccess::make(header.name(), header.value(), resource_));
     }
 
     auto result = detail::Http1ClientResponseParseResultAccess::parsed(

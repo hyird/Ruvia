@@ -20,10 +20,6 @@
 namespace ruvia::detail {
 namespace {
 
-bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
-    return httpAsciiEqualsIgnoreCase(left, right);
-}
-
 bool cookieDomainMatches(std::string_view host, std::string_view domain) noexcept {
     if (domain.empty()) {
         return true;
@@ -143,13 +139,13 @@ void HttpClientPool::appendAutomaticHeaders(const HttpClientRequestStorage& requ
     std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader) {
     const auto hasHeader = [&headers](std::string_view name) {
         return std::ranges::any_of(headers,
-            [name](const HttpHeaderView& header) { return headerNameEquals(header.name(), name); });
+            [name](const HttpHeaderView& header) { return httpAsciiEqualsIgnoreCase(header.name(), name); });
     };
     if (!config_.userAgent.empty() && !hasHeader("user-agent")) {
         headers.emplace_back("user-agent", config_.userAgent);
     }
     std::erase_if(headers, [&cookieHeader](const HttpHeaderView& header) {
-        if (!headerNameEquals(header.name(), "cookie")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "cookie")) {
             return false;
         }
         if (!cookieHeader.empty()) {
@@ -197,7 +193,7 @@ void HttpClientPool::retainResponseCookies(
     }
     const auto now = std::chrono::system_clock::now();
     for (const auto& header : response.headers()) {
-        if (!headerNameEquals(header.name(), "set-cookie")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "set-cookie")) {
             continue;
         }
         const auto parsed = parseSetCookie(header.value());

@@ -56,29 +56,29 @@ StopToken WebWorkerContext::stopToken() const noexcept {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WebWorkerContext::db() const {
-    return clientRegistries_.db(resource_, operationScope_, stopToken_);
+    return clientRegistries_.db(operationScope_, stopToken_);
 }
 
 DbHandle WebWorkerContext::db(std::string_view alias) const {
-    return clientRegistries_.db(alias, resource_, operationScope_, stopToken_);
+    return clientRegistries_.db(alias, operationScope_, stopToken_);
 }
 #endif
 
 HttpClientHandle WebWorkerContext::httpClient() const {
-    return clientRegistries_.httpClient(resource_, operationScope_, stopToken_);
+    return clientRegistries_.httpClient(operationScope_, stopToken_);
 }
 
 HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, resource_, operationScope_, stopToken_);
+    return clientRegistries_.httpClient(alias, operationScope_, stopToken_);
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
-    return clientRegistries_.redis(resource_, operationScope_, stopToken_);
+    return clientRegistries_.redis(operationScope_, stopToken_);
 }
 
 RedisHandle WebWorkerContext::redis(std::string_view alias) const {
-    return clientRegistries_.redis(alias, resource_, operationScope_, stopToken_);
+    return clientRegistries_.redis(alias, operationScope_, stopToken_);
 }
 #endif
 

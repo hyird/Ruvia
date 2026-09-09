@@ -19,7 +19,7 @@ class Http2StreamTable final {
 public:
     explicit Http2StreamTable(std::pmr::memory_resource* resource)
         : resource_(httpPmrResourceOrDefault(resource)),
-          overflow_(resource_) {}
+          overflow_(std::size_t{0}, resource_) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;

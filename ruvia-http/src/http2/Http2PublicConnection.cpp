@@ -5,12 +5,14 @@
 #include <stdexcept>
 
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
@@ -64,14 +66,22 @@ namespace {
     auto result =
         detail::HttpClientResponseHeadAccess::make(*status, HttpProtocolVersion::kHttp2, resource);
     auto& headers = detail::HttpClientResponseHeadAccess::headers(result);
-    const auto count = stream.remoteInitialHeaderCount().value_or(stream.remoteHeaderCount());
-    headers.reserve(count);
-    for (std::size_t index = 0; index < count; ++index) {
+    headers.reserve(stream.remoteHeaderCount());
+    for (std::size_t index = 0; index < stream.remoteHeaderCount(); ++index) {
         const auto field = stream.remoteHeaderAt(index);
         headers.push_back(
-            detail::HttpClientResponseHeaderAccess::make(field.name, field.value, resource));
+            detail::HttpHeaderAccess::make(field.name, field.value, resource));
     }
     return result;
+}
+
+[[nodiscard]] Http2MessageContentSemantics messageContentSemantics(
+    const detail::Http2StreamState& stream) noexcept {
+    const auto& content = stream.remoteContent();
+    return content.metadataOnlyWithoutLength() != nullptr ||
+                   content.metadataOnlyKnownLength() != nullptr
+               ? Http2MessageContentSemantics::kMetadataOnly
+               : Http2MessageContentSemantics::kContent;
 }
 
 }  // namespace
@@ -90,12 +100,12 @@ public:
     };
 
     Impl(std::pmr::memory_resource* requested, Http2Role publicRole)
-        : storage(std::make_unique<Storage>(requested, publicRole)),
+        : storage(detail::makeHttpPmrObject<Storage>(requested, requested, publicRole)),
           resource(storage->resource),
           role(publicRole),
           connection(storage->connection),
-          endpoint(new detail::Http2ConnectionOwnerEndpoint(
-              this, &Impl::abandonRequestThunk, &Impl::abandonCreditThunk)) {}
+          endpoint(detail::constructHttpPmrObject<detail::Http2ConnectionOwnerEndpoint>(resource,
+              this, &Impl::abandonRequestThunk, &Impl::abandonCreditThunk, resource)) {}
 
     ~Impl() {
         endpoint->detach();
@@ -107,7 +117,9 @@ public:
     Impl& operator=(const Impl&) = delete;
 
     static void destroyStorage(void* raw) noexcept {
-        delete static_cast<Storage*>(raw);
+        auto* storage = static_cast<Storage*>(raw);
+        auto* resource = storage->resource;
+        detail::destroyHttpPmrObject(storage, resource);
     }
 
     enum class DeferredReleaseKind : std::uint8_t { kAfterCredits,
@@ -140,7 +152,9 @@ public:
 
     void defer(std::uint32_t streamId, DeferredReleaseKind kind) noexcept {
         if (auto* existing = deferred(streamId)) {
-            if (kind == DeferredReleaseKind::kAbandon) {
+            if (kind == DeferredReleaseKind::kAbandon ||
+                (existing->kind == DeferredReleaseKind::kAbandon &&
+                    kind == DeferredReleaseKind::kAfterCredits)) {
                 existing->kind = kind;
             }
             return;
@@ -196,7 +210,8 @@ public:
 
     void releaseOwnerAfterCredits(std::uint32_t streamId) {
         auto* stream = connection.stream(streamId);
-        if (stream != nullptr && stream->windowDebt() != 0) {
+        if ((stream != nullptr && stream->windowDebt() != 0) ||
+            connection.hasPendingEvents(streamId)) {
             defer(streamId, DeferredReleaseKind::kAfterCredits);
             return;
         }
@@ -232,7 +247,8 @@ public:
         }
         if (pending->kind == DeferredReleaseKind::kAfterCredits) {
             const auto* stream = connection.stream(streamId);
-            if (stream != nullptr && stream->windowDebt() != 0) {
+            if ((stream != nullptr && stream->windowDebt() != 0) ||
+                connection.hasPendingEvents(streamId)) {
                 return;
             }
         }
@@ -288,7 +304,7 @@ public:
         }
     }
 
-    std::unique_ptr<Storage> storage;
+    std::unique_ptr<Storage, detail::HttpPmrObjectDeleter<Storage>> storage;
     std::pmr::memory_resource* resource;
     Http2Role role;
     detail::Http2Connection& connection;
@@ -321,6 +337,25 @@ Http2ReceivedDataCredit::Http2ReceivedDataCredit(Http2ReceivedDataCredit&& other
       streamId_(std::exchange(other.streamId_, 0)),
       bytes_(std::exchange(other.bytes_, 0)) {}
 
+Http2ReceivedDataCreditMergeStatus Http2ReceivedDataCredit::merge(
+    Http2ReceivedDataCredit&& other) noexcept {
+    if (this == &other || !valid() || !other.valid()) {
+        return Http2ReceivedDataCreditMergeStatus::kInvalidCredit;
+    }
+    if (endpoint_ != other.endpoint_ || streamId_ != other.streamId_) {
+        return Http2ReceivedDataCreditMergeStatus::kDifferentStream;
+    }
+    if (bytes_ > (std::numeric_limits<std::uint32_t>::max)() - other.bytes_) {
+        return Http2ReceivedDataCreditMergeStatus::kOverflow;
+    }
+    bytes_ += other.bytes_;
+    auto* endpoint = std::exchange(other.endpoint_, nullptr);
+    other.streamId_ = 0;
+    other.bytes_ = 0;
+    endpoint->release();
+    return Http2ReceivedDataCreditMergeStatus::kMerged;
+}
+
 Http2RequestHeadEvent::Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint,
     std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations,
     HttpRequestContentIndication content) noexcept
@@ -347,8 +382,17 @@ Http2RequestHeadEvent::Http2RequestHeadEvent(Http2RequestHeadEvent&& other) noex
       content_(other.content_),
       endpoint_(std::exchange(other.endpoint_, nullptr)) {}
 
-Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role)
-    : impl_(std::make_unique<Impl>(resource, role)) {
+void Http2Connection::ImplDeleter::operator()(Impl* value) const noexcept {
+    if (value == nullptr) {
+        return;
+    }
+    auto* resource = value->resource;
+    detail::destroyHttpPmrObject(value, resource);
+}
+
+Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role) {
+    auto* resolved = detail::httpPmrResourceOrDefault(resource);
+    impl_.reset(detail::constructHttpPmrObject<Impl>(resolved, resolved, role));
     impl_->connection.beginConnection();
 }
 Http2Connection Http2Connection::server(Http2ConnectionOptions options) {
@@ -363,6 +407,9 @@ Http2Connection& Http2Connection::operator=(Http2Connection&&) noexcept = defaul
 
 Http2Role Http2Connection::role() const noexcept {
     return impl_->role;
+}
+bool Http2Connection::receivedPeerSettings() const noexcept {
+    return impl_->connection.receivedPeerSettings();
 }
 Http2FeedResult Http2Connection::feed(std::string_view input) {
     impl_->retryDeferred();
@@ -424,7 +471,13 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
         return std::optional<Http2Event>(std::move(result));
     }
     if (const auto* value = event->messageEnd()) {
-        auto result = Http2Event::messageEnd(value->streamId());
+        auto* stream = impl_->connection.stream(value->streamId());
+        if (stream == nullptr) {
+            throw std::logic_error("HTTP/2 message end event has no stream");
+        }
+        auto trailers = stream->takeRemoteTrailers();
+        auto result = Http2Event::messageEnd(
+            value->streamId(), std::move(trailers), messageContentSemantics(*stream));
         if (impl_->role == Http2Role::kClient) {
             impl_->releaseOwnerAfterCredits(value->streamId());
         }

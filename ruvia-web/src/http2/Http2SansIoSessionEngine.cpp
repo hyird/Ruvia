@@ -324,7 +324,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                             writeSignal_, executor_),
                         baseServices.worker(), scannerEntry, webSocketEndpoint->lifecycle(),
                         ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
-                        requestMemory.resource(), std::string_view{},
+                        context.operationResource(), std::string_view{},
                         submittedHandshake->compression());
                     co_await invokeWebSocketHandler(
                         *webSocketConnection, scannerEntry, webSocketEndpoint->handler(), context);

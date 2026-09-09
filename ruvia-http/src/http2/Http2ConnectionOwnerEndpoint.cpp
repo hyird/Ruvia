@@ -2,13 +2,17 @@
 
 #include <exception>
 
+#include "ruvia/http/detail/util/HttpPmrObject.h"
+
 namespace ruvia::detail {
 
 Http2ConnectionOwnerEndpoint::Http2ConnectionOwnerEndpoint(
-    void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept
+    void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit,
+    std::pmr::memory_resource* resource) noexcept
     : target_(target),
       abandonRequest_(abandonRequest),
-      abandonCredit_(abandonCredit) {}
+      abandonCredit_(abandonCredit),
+      resource_(resource) {}
 
 void Http2ConnectionOwnerEndpoint::retain() noexcept {
     ++references_;
@@ -31,7 +35,7 @@ void Http2ConnectionOwnerEndpoint::release() noexcept {
         if (retainedStorage_ != nullptr) {
             destroyStorage_(retainedStorage_);
         }
-        delete this;
+        destroyHttpPmrObject(this, resource_);
     }
 }
 

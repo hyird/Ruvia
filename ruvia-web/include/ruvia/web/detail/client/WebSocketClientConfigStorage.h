@@ -26,11 +26,6 @@ struct WebSocketClientStoredHeader final {
     std::pmr::string value;
 };
 
-struct WebSocketClientSubprotocolRange final {
-    std::size_t offset;
-    std::size_t length;
-};
-
 struct WebSocketClientConfigStorage final {
     WebSocketClientConfigStorage(
         const WebSocketClientConfig& source, std::pmr::memory_resource* resource)
@@ -42,8 +37,7 @@ struct WebSocketClientConfigStorage final {
     std::optional<std::uint16_t> port;
     std::pmr::string target;
     std::pmr::vector<WebSocketClientStoredHeader> headers;
-    std::pmr::string subprotocolHeader;
-    std::pmr::vector<WebSocketClientSubprotocolRange> subprotocolRanges;
+    std::pmr::vector<std::pmr::string> subprotocols;
     std::size_t maxMessageBytes;
     std::chrono::milliseconds connectTimeout;
     std::optional<std::chrono::milliseconds> readTimeout;
@@ -52,16 +46,6 @@ struct WebSocketClientConfigStorage final {
     WebSocketHeartbeatConfig heartbeat;
     ClientTransportConfigStorage transport;
     std::pmr::string userAgent;
-
-    [[nodiscard]] bool offersSubprotocol(std::string_view selected) const noexcept {
-        const std::string_view header = subprotocolHeader;
-        for (const auto range : subprotocolRanges) {
-            if (header.substr(range.offset, range.length) == selected) {
-                return true;
-            }
-        }
-        return false;
-    }
 
 private:
     struct ValidatedConfigTag final {};
@@ -79,8 +63,7 @@ private:
           port(source.port),
           target(source.target, resource),
           headers(resource),
-          subprotocolHeader(resource),
-          subprotocolRanges(resource),
+          subprotocols(resource),
           maxMessageBytes(source.maxMessageBytes),
           connectTimeout(source.connectTimeout),
           readTimeout(source.readTimeout),
@@ -93,14 +76,9 @@ private:
         for (const auto& [name, value] : source.headers) {
             headers.emplace_back(name, value, resource);
         }
-        subprotocolRanges.reserve(source.subprotocols.size());
+        subprotocols.reserve(source.subprotocols.size());
         for (const auto& subprotocol : source.subprotocols) {
-            if (!subprotocolHeader.empty()) {
-                subprotocolHeader.append(", ");
-            }
-            const auto offset = subprotocolHeader.size();
-            subprotocolHeader.append(subprotocol);
-            subprotocolRanges.push_back({.offset = offset, .length = subprotocol.size()});
+            subprotocols.emplace_back(subprotocol);
         }
     }
 };

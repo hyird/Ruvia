@@ -85,10 +85,10 @@ public:
 
     [[nodiscard]] HttpStatusCode status() const noexcept;
     [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept;
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const& noexcept;
-    [[nodiscard]] std::span<const HttpClientResponseHeader> headers() const&& = delete;
-    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const& noexcept;
-    [[nodiscard]] std::span<const HttpClientResponseHeader> trailers() const&& = delete;
+    [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept;
+    [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;
+    [[nodiscard]] std::span<const HttpHeader> trailers() const& noexcept;
+    [[nodiscard]] std::span<const HttpHeader> trailers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;

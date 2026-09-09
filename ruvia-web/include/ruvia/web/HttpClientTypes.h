@@ -33,6 +33,7 @@ enum class HttpClientReceivedCookiePolicy : std::uint8_t {
 // without exposing the App deployment model in the standalone API.
 struct HttpClientConfig final {
     HttpScheme scheme{HttpScheme::kHttps};
+    // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host{};
     std::optional<std::uint16_t> port{};
     std::size_t connectionCount{1};

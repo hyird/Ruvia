@@ -58,7 +58,7 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
 RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
     CaptureWebSocket capture;
     auto socket =
-        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+        ruvia::detail::WebSocketAccess::make(*ruvia::detail::processResource(), &capture, &readSocket, &writeSocket, &closeSocket);
 
     {
         auto cold = socket.read();
@@ -249,7 +249,7 @@ RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
 RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
     CaptureWebSocket capture;
     auto socket =
-        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+        ruvia::detail::WebSocketAccess::make(*ruvia::detail::processResource(), &capture, &readSocket, &writeSocket, &closeSocket);
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
         ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
@@ -277,7 +277,7 @@ RUVIA_TEST(response_stream_pmr_overload_transfers_prebuilt_chunk) {
 RUVIA_TEST(websocket_text_pmr_overload_transfers_prebuilt_payload) {
     CaptureWebSocket capture;
     auto socket =
-        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+        ruvia::detail::WebSocketAccess::make(*ruvia::detail::processResource(), &capture, &readSocket, &writeSocket, &closeSocket);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(

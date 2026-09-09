@@ -351,10 +351,8 @@ public:
     Task<void> connect();
     void closeNow() noexcept;
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] DbHandle get(
-        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const;
-    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::string_view alias, ScopedOperationScope& operationScope) const;
 
 #ifdef RUVIA_ENABLE_MARIADB
     using MariaDbPoolOwner = std::unique_ptr<MariaDbPool, PmrObjectDeleter<MariaDbPool>>;

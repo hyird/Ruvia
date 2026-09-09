@@ -45,7 +45,6 @@ class Http2StreamState final {
     Http2ReceiveWindowCredit receiveWindowCredit_;
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData messageData_;
-    std::optional<std::size_t> remoteInitialHeaderCount_;
     Http2LocalRequestContentGate localRequestContentGate_{Http2LocalRequestContentGate::kOpen};
 
 public:
@@ -434,17 +433,14 @@ public:
         std::string_view name, std::string_view value, RequestHeaderKind kind) {
         return messageData_.appendHeader(name, value, kind);
     }
-
-    [[nodiscard]] std::optional<std::size_t> remoteInitialHeaderCount() const noexcept {
-        return remoteInitialHeaderCount_;
+    [[nodiscard]] bool appendRemoteTrailer(std::string_view name, std::string_view value) {
+        return messageData_.appendTrailer(name, value);
     }
-
-    [[nodiscard]] bool setRemoteInitialHeaderCount(std::size_t count) noexcept {
-        if (remoteInitialHeaderCount_) {
-            return false;
-        }
-        remoteInitialHeaderCount_ = count;
-        return true;
+    [[nodiscard]] std::span<const HttpHeader> remoteTrailers() const& noexcept {
+        return messageData_.trailers();
+    }
+    [[nodiscard]] std::pmr::vector<HttpHeader> takeRemoteTrailers() & noexcept {
+        return messageData_.takeTrailers();
     }
 
     [[nodiscard]] bool hasMethod() const noexcept {
@@ -606,7 +602,6 @@ public:
           expectations_(stream.expectations_),
           requestState_(stream.requestState_),
           tunnelState_(stream.tunnelState_),
-          remoteInitialHeaderCount_(stream.remoteInitialHeaderCount_),
           localRequestContentGate_(stream.localRequestContentGate_),
           isolateRequestData_(isolateRequestData),
           remoteHeadersCheckpoint_(stream.messageData_.headerCheckpoint()) {
@@ -644,7 +639,6 @@ public:
         stream_->expectations_ = expectations_;
         stream_->requestState_ = requestState_;
         stream_->tunnelState_ = tunnelState_;
-        stream_->remoteInitialHeaderCount_ = remoteInitialHeaderCount_;
         stream_->localRequestContentGate_ = localRequestContentGate_;
         active_ = false;
     }
@@ -658,7 +652,6 @@ private:
     HttpRequestExpectations expectations_;
     Http2StreamRequestState requestState_;
     Http2TunnelState tunnelState_;
-    std::optional<std::size_t> remoteInitialHeaderCount_;
     Http2LocalRequestContentGate localRequestContentGate_;
     bool isolateRequestData_;
     Http2StreamRequestData::HeaderCheckpoint remoteHeadersCheckpoint_;
