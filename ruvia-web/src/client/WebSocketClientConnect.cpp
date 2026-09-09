@@ -17,9 +17,8 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
+#include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
-
-#include "client/WebSocketClientInternal.h"
 
 namespace ruvia::detail {
 
