@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <exception>
@@ -70,15 +71,27 @@ public:
         reject_ = value;
     }
 
+    [[nodiscard]] const std::vector<void*>& allocatedBlocks() const noexcept {
+        return blocks_;
+    }
+
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         if (reject_) {
             throw std::bad_alloc();
         }
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        auto* pointer = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        try {
+            blocks_.push_back(pointer);
+        } catch (...) {
+            std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+            throw;
+        }
+        return pointer;
     }
 
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::erase(blocks_, pointer);
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
 
@@ -87,6 +100,7 @@ private:
     }
 
     bool reject_{false};
+    std::vector<void*> blocks_;
 };
 
 void appendFrame(std::pmr::string& wire, ruvia::Http2FrameType type, std::uint8_t flags,
@@ -823,7 +837,7 @@ RUVIA_TEST(http2_public_message_end_reports_metadata_only_and_empty_trailers) {
                 ruvia::Http2MessageContentSemantics::kContent);
 }
 
-RUVIA_TEST(http2_public_trailer_decode_failure_is_retryable_and_event_transfer_does_not_allocate) {
+RUVIA_TEST(http2_public_trailer_decode_failure_is_retryable_and_event_retains_payload_storage) {
     ToggleAllocationResource resource;
     auto client = preparedClient(&resource);
     std::pmr::string wire(&resource);
@@ -834,7 +848,8 @@ RUVIA_TEST(http2_public_trailer_decode_failure_is_retryable_and_event_transfer_d
     RUVIA_CHECK(client.feed(wire) == ruvia::Http2FeedResult::kAccepted);
     RUVIA_CHECK(client.nextEvent().has_value());
     block.clear();
-    ruvia::HpackEncoder::encodeHeader(block, "x-trace", "done");
+    const std::string trailerValue(256, 't');
+    ruvia::HpackEncoder::encodeHeader(block, "x-trace", trailerValue);
     std::pmr::string trailers(&resource);
     appendFrame(trailers, ruvia::Http2FrameType::kHeaders, 0x5, 1, block);
     resource.reject();
@@ -847,12 +862,16 @@ RUVIA_TEST(http2_public_trailer_decode_failure_is_retryable_and_event_transfer_d
     RUVIA_CHECK(threw);
     resource.reject(false);
     RUVIA_CHECK(client.feed(trailers) == ruvia::Http2FeedResult::kAccepted);
-    resource.reject();
+    const auto storedBlocks = resource.allocatedBlocks();
     auto retried = client.nextEvent();
-    resource.reject(false);
     RUVIA_CHECK(retried && retried->messageEnd() != nullptr);
     RUVIA_CHECK(retried->messageEnd()->trailers().size() == 1);
-    RUVIA_CHECK(retried->messageEnd()->trailers().front().value() == "done");
+    const auto received = retried->messageEnd()->trailers();
+    RUVIA_CHECK(received.front().value() == trailerValue);
+    // Debug STL implementations may allocate iterator metadata while moving a
+    // container. The decoded header array and value must retain their storage.
+    RUVIA_CHECK(std::ranges::find(storedBlocks, received.data()) != storedBlocks.end());
+    RUVIA_CHECK(std::ranges::find(storedBlocks, received.front().value().data()) != storedBlocks.end());
 }
 
 RUVIA_TEST(http2_public_data_credit_merge_is_allocation_free_and_linear) {

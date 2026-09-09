@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -41,16 +42,17 @@ constexpr std::uint32_t kHttp2MaxUndrainedSettings = 1000;
 
 Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role)
     : resource_(resource),
-      input_(resource),
+      input_(std::string_view{}, resource),
       output_(resource),
       streams_(resource),
       decoder_({.resource = resource}),
       peerSettings_(role),
-      events_(resource),
-      pendingSends_(resource),
-      drainedDataStreams_(resource),
-      takenDrainedDataStreams_(resource),
-      pinnedStreams_(resource),
+      events_(std::make_move_iterator(static_cast<Http2Event*>(nullptr)),
+          std::make_move_iterator(static_cast<Http2Event*>(nullptr)), resource),
+      pendingSends_(std::size_t{0}, resource),
+      drainedDataStreams_(std::size_t{0}, resource),
+      takenDrainedDataStreams_(std::size_t{0}, resource),
+      pinnedStreams_(std::size_t{0}, resource),
       role_(role),
       connectionSendWindow_(kHttp2DefaultInitialWindowSize),
       connectionReceiveWindow_(static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)) {
