@@ -237,9 +237,10 @@ WebWorkerRuntime::~WebWorkerRuntime() {
     }
     // Retire the execution context first. Failure shutdown already releases
     // abandoned mailbox tasks on the worker; detach defensively releases any
-    // task left by a context that stopped outside the managed run loop. Each
-    // dropped WebWorker task reconciles its outstanding_ reservation before
-    // retire() checks it. Public handles may outlive this server, so detach also
+    // task left by a context that stopped outside the managed run loop. A post
+    // producer can still be inside core's factory at this point; retire waits
+    // only for started callbacks, while that producer later abandons its own
+    // reservation. Public handles may outlive this server, so detach also
     // leaves them a terminal endpoint before Asio objects are destroyed.
     workerRuntime_.detach();
     webWorkerDispatch_->retire();

@@ -59,6 +59,10 @@ private:
     StopSource stopSource_;
     StopToken stopToken_{stopSource_.token()};
     std::atomic_size_t outstanding_{0};
+    // Tasks which have entered start() and still may touch worker-owned state.
+    // Pending producers are intentionally excluded: their factory only uses the
+    // stable dispatch endpoint and can be abandoned after the worker detaches.
+    std::atomic_size_t activeStarted_{0};
     WorkerPostCounters postCounters_;
     std::atomic_uint64_t completed_{0};
     std::atomic_uint64_t failedCount_{0};

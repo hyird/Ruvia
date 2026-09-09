@@ -4,10 +4,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -63,24 +65,43 @@ struct WorkerDispatcher::Impl {
     explicit Impl(asio::io_context& context, std::size_t requestedCapacity)
         : ioContext(context),
           timer(std::make_unique<asio::steady_timer>(context)),
-          slots(requestedCapacity),
+          nodes(detail::processResource()),
           workerId(nextWorkerDispatcherId()),
           timers(detail::processResource()),
           timerSlots(detail::processResource()) {
         if (requestedCapacity == 0) {
             throw std::invalid_argument("worker mailbox capacity must be greater than zero");
         }
+        if (requestedCapacity == std::numeric_limits<std::size_t>::max()) {
+            throw std::invalid_argument("worker mailbox capacity is too large");
+        }
+        nodes.resize(requestedCapacity + 1);
+        for (std::size_t index = 0; index + 1 < nodes.size(); ++index) {
+            nodes[index].next = index + 1;
+        }
+        freeHead = 0;
         timers.reserve(requestedCapacity);
         timerSlots.reserve(requestedCapacity);
     }
 
     asio::io_context& ioContext;
     std::unique_ptr<asio::steady_timer> timer;
-    std::vector<std::optional<MoveOnlyFunction<void()>>> slots;
+    enum class NodeState : std::uint8_t { kFree,
+        kReserved,
+        kReady,
+        kActive,
+        kReleasing };
+    struct Node final {
+        MoveOnlyFunction<void()> task;
+        std::size_t next{kNoTimerSlot};
+        NodeState state{NodeState::kFree};
+    };
+    std::pmr::vector<Node> nodes;
     std::mutex mutex;
-    std::size_t head{0};
-    std::size_t tail{0};
-    std::size_t size{0};
+    std::size_t freeHead{kNoTimerSlot};
+    std::size_t readyHead{kNoTimerSlot};
+    std::size_t readyTail{kNoTimerSlot};
+    std::size_t pendingCount{0};
     WorkerId workerId{0};
     std::atomic_bool accepting{true};
     std::atomic_bool contextAttached{true};
