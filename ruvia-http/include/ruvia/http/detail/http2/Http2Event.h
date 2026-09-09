@@ -258,6 +258,17 @@ public:
     Http2Event(Http2Event&&) noexcept = default;
     Http2Event& operator=(Http2Event&&) = delete;
 
+    [[nodiscard]] bool referencesStream(std::uint32_t streamId) const noexcept {
+        return std::visit(
+            [streamId](const auto& event) noexcept {
+                if constexpr (requires { event.streamId(); }) {
+                    return event.streamId() == streamId;
+                }
+                return false;
+            },
+            value_);
+    }
+
     [[nodiscard]] Http2EventKind kind() const noexcept {
         return static_cast<Http2EventKind>(value_.index());
     }

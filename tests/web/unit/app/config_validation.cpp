@@ -125,6 +125,21 @@ RUVIA_TEST(config_ensure_host_throws_distinct_messages) {
         caughtMessage([] { ensureConfigHost("example.com", "was-empty", "was-invalid"); }).empty());
 }
 
+RUVIA_TEST(client_transport_uri_host_preserves_network_host) {
+    CountingMemoryResource resource;
+    for (const auto& [host, expected] : {
+             std::pair{"example.com", "example.com"},
+             std::pair{"192.0.2.1", "192.0.2.1"},
+             std::pair{"::1", "[::1]"},
+             std::pair{"2001:db8::1", "[2001:db8::1]"}}) {
+        std::string networkHost(host);
+        const auto wireHost = ruvia::detail::clientUriHost(networkHost, &resource);
+        RUVIA_CHECK_EQ(std::string_view(wireHost), std::string_view(expected));
+        RUVIA_CHECK_EQ(networkHost, std::string(host));
+        RUVIA_CHECK(wireHost.get_allocator().resource() == &resource);
+    }
+}
+
 RUVIA_TEST(client_transport_validation_uses_one_host_and_policy_contract) {
     RUVIA_CHECK(!throwsInvalid(
         [] { validateClientOriginHost("example.com", "host is empty", "host is invalid"); }));
@@ -267,19 +282,16 @@ RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
     RUVIA_CHECK(storage->headers.get_allocator().resource() == &resource);
     RUVIA_CHECK(storage->headers.front().name.get_allocator().resource() == &resource);
     RUVIA_CHECK(storage->headers.front().value.get_allocator().resource() == &resource);
-    RUVIA_CHECK(storage->subprotocolRanges.get_allocator().resource() == &resource);
-    RUVIA_CHECK(storage->subprotocolHeader.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->subprotocols.get_allocator().resource() == &resource);
+    RUVIA_CHECK(storage->subprotocols.front().get_allocator().resource() == &resource);
     RUVIA_CHECK(storage->userAgent.get_allocator().resource() == &resource);
     RUVIA_CHECK_EQ(std::string(storage->host), std::string(80, 'h'));
     RUVIA_CHECK_EQ(std::string(storage->target), "/" + std::string(80, 't'));
     RUVIA_CHECK_EQ(std::string(storage->headers.front().name), "X-Test");
     RUVIA_CHECK_EQ(std::string(storage->headers.front().value), std::string(80, 'v'));
-    RUVIA_CHECK_EQ(storage->subprotocolRanges.size(), std::size_t{2});
-    RUVIA_CHECK_EQ(std::string(storage->subprotocolHeader), "chat, superchat");
-    RUVIA_CHECK(storage->offersSubprotocol("chat"));
-    RUVIA_CHECK(storage->offersSubprotocol("superchat"));
-    RUVIA_CHECK(!storage->offersSubprotocol("Chat"));
-    RUVIA_CHECK(!storage->offersSubprotocol("super"));
+    RUVIA_CHECK_EQ(storage->subprotocols.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(std::string(storage->subprotocols[0]), "chat");
+    RUVIA_CHECK_EQ(std::string(storage->subprotocols[1]), "superchat");
     RUVIA_CHECK(!storage->heartbeat.pingInterval.has_value());
     RUVIA_CHECK(!storage->heartbeat.pongTimeout.has_value());
     RUVIA_CHECK_EQ(std::string(storage->userAgent), std::string(80, 'u'));

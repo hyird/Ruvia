@@ -1,37 +1,21 @@
 #pragma once
 
-#include <array>
 #include <chrono>
 #include <cstddef>
+#include <memory_resource>
 #include <optional>
-#include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
+#include "ruvia/http/Http1WebSocketClientHandshake.h"
 #include "ruvia/http/HttpClientRequestTarget.h"
-#include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
 #include "ruvia/web/WebSocketClient.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline bool isReservedWebSocketHandshakeHeader(std::string_view name) noexcept {
-    constexpr std::array<std::string_view, 8> reserved{
-        "host",
-        "connection",
-        "upgrade",
-        "sec-websocket-key",
-        "sec-websocket-version",
-        "sec-websocket-protocol",
-        "sec-websocket-extensions",
-        "content-length",
-    };
-    return std::ranges::any_of(reserved,
-        [name](std::string_view candidate) { return httpAsciiEqualsIgnoreCase(name, candidate); });
-}
 
 inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.scheme != WebSocketScheme::kWs && config.scheme != WebSocketScheme::kWss) {
@@ -60,20 +44,17 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     validateWebSocketHeartbeatConfig(config.heartbeat);
     validateClientTransportConfig(clientTransportConfigView(config));
 
+    std::pmr::vector<HttpHeaderView> headers(std::pmr::get_default_resource());
+    headers.reserve(config.headers.size());
     for (const auto& [name, value] : config.headers) {
-        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
-            isReservedWebSocketHandshakeHeader(name)) {
-            throw std::invalid_argument("invalid or reserved WebSocket client handshake header");
-        }
+        headers.emplace_back(name, value);
     }
-
-    WebSocketSubprotocolSet subprotocols;
+    std::pmr::vector<std::string_view> subprotocols(std::pmr::get_default_resource());
+    subprotocols.reserve(config.subprotocols.size());
     for (const auto& subprotocol : config.subprotocols) {
-        if (!subprotocols.append(subprotocol)) {
-            throw std::invalid_argument(
-                "WebSocket client subprotocols must contain at most 64 unique HTTP tokens");
-        }
+        subprotocols.push_back(subprotocol);
     }
+    Http1WebSocketClientHandshake::validateConfiguration(headers, subprotocols, config.userAgent);
 }
 
 }  // namespace ruvia::detail

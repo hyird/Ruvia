@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 
 namespace ruvia::detail {
 
@@ -17,7 +18,8 @@ public:
     using DestroyStorage = void (*)(void*) noexcept;
 
     Http2ConnectionOwnerEndpoint(
-        void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit) noexcept;
+        void* target, AbandonRequest abandonRequest, AbandonCredit abandonCredit,
+        std::pmr::memory_resource* resource) noexcept;
 
     void retain() noexcept;
     void retainStorage(void* storage, DestroyStorage destroyStorage) noexcept;
@@ -33,6 +35,7 @@ private:
     AbandonCredit abandonCredit_;
     void* retainedStorage_{nullptr};
     DestroyStorage destroyStorage_{nullptr};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 }  // namespace ruvia::detail

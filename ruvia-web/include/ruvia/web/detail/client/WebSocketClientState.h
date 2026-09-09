@@ -26,10 +26,6 @@
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
-namespace ruvia {
-class Http1ParsedClientResponseHead;
-}
-
 namespace ruvia::detail {
 
 class WebSocketClientState final : public std::enable_shared_from_this<WebSocketClientState> {
@@ -152,8 +148,6 @@ private:
     void requestAbort(AbortReason reason) noexcept;
     [[nodiscard]] Task<void> establishTransport();
     [[nodiscard]] Task<void> performTlsHandshake();
-    void validateHandshakeResponse(
-        const Http1ParsedClientResponseHead& response, std::string_view key);
     void finishWrite(WritePhase phase) noexcept;
     [[nodiscard]] Task<void> waitForWriteIdle();
     [[nodiscard]] static Task<void> heartbeatOwned(std::shared_ptr<WebSocketClientState> state);

@@ -11,15 +11,12 @@
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
-#include "ruvia/core/detail/util/Base64.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
+#include "ruvia/http/Http1ClosePolicy.h"
+#include "ruvia/http/Http1WebSocketClientHandshake.h"
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
@@ -130,91 +127,38 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
     }
 }
 
-void WebSocketClientState::validateHandshakeResponse(
-    const Http1ParsedClientResponseHead& response, std::string_view key) {
-    if (response.plan().protocolUpgrade() == nullptr ||
-        response.head().status() != http_status::kSwitchingProtocols) {
-        throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
-            "upstream rejected the WebSocket upgrade");
-    }
-
-    WebSocketAcceptKey expectedAccept{};
-    encodeWebSocketAccept(expectedAccept, key);
-
-    std::size_t acceptHeaderCount = 0;
-    std::size_t protocolHeaderCount = 0;
-    std::size_t extensionHeaderCount = 0;
-    bool acceptMatches = false;
-    bool hasUpgrade = false;
-    bool hasConnectionUpgrade = false;
-    std::string_view selectedSubprotocol;
-    for (const auto& header : response.head().headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Accept")) {
-            ++acceptHeaderCount;
-            acceptMatches = httpTrimOws(header.value()) ==
-                            std::string_view(expectedAccept.data(), expectedAccept.size());
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
-            hasUpgrade = hasUpgrade || httpHasToken(header.value(), "websocket");
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
-            hasConnectionUpgrade = hasConnectionUpgrade || httpHasToken(header.value(), "upgrade");
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Protocol")) {
-            ++protocolHeaderCount;
-            selectedSubprotocol = httpTrimOws(header.value());
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
-            ++extensionHeaderCount;
-        }
-    }
-
-    const bool valid = acceptHeaderCount == 1 && acceptMatches && hasUpgrade &&
-                       hasConnectionUpgrade && extensionHeaderCount == 0 &&
-                       protocolHeaderCount <= 1 &&
-                       (protocolHeaderCount == 0 || config_.offersSubprotocol(selectedSubprotocol));
-    if (!valid) {
-        throw WebSocketClientError(
-            WebSocketClientError::Code::kHandshakeRejected, "invalid WebSocket handshake response");
-    }
-    selectedSubprotocol_.assign(selectedSubprotocol);
-}
-
 Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
     std::array<std::uint8_t, kWebSocketClientHandshakeNonceBytes> nonce{};
     if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "failed to generate WebSocket handshake key");
     }
-    std::array<char, base64EncodedSize(nonce.size())> key{};
-    encodeBase64(key.data(), nonce);
-    const std::string_view keyView(key.data(), key.size());
 
     std::pmr::vector<HttpHeaderView> headers(memory_.resource());
-    headers.reserve(config_.headers.size() + kWebSocketClientHandshakeHeaderReserve);
+    headers.reserve(config_.headers.size());
     for (const auto& header : config_.headers) {
         headers.emplace_back(header.name, header.value);
     }
-    headers.emplace_back("Upgrade", "websocket");
-    headers.emplace_back("Connection", "Upgrade");
-    headers.emplace_back("Sec-WebSocket-Key", keyView);
-    headers.emplace_back("Sec-WebSocket-Version", "13");
-    if (!config_.subprotocolHeader.empty()) {
-        headers.emplace_back("Sec-WebSocket-Protocol", config_.subprotocolHeader);
+    std::pmr::vector<std::string_view> subprotocols(memory_.resource());
+    subprotocols.reserve(config_.subprotocols.size());
+    for (const auto& protocol : config_.subprotocols) {
+        subprotocols.push_back(protocol);
     }
-    if (!config_.userAgent.empty()) {
-        headers.emplace_back("User-Agent", config_.userAgent);
-    }
+    Http1WebSocketClientHandshake handshake(
+        {.nonce = nonce, .headers = headers, .subprotocols = subprotocols, .userAgent = config_.userAgent},
+        memory_.resource());
 
     std::array<char, kMaxHttpHeaderBytes + kWebSocketClientHandshakeRequestBufferExtraBytes>
         requestBuffer{};
+    const auto wireHost = clientUriHost(config_.host, memory_.resource());
     const auto origin = [&] {
-        const HttpOriginOptions originOptions{.host = config_.host, .port = port()};
+        const HttpOriginOptions originOptions{.host = wireHost, .port = port()};
         if (config_.scheme == WebSocketScheme::kWss) {
             return HttpOriginView::https(originOptions);
         }
         return HttpOriginView::http(originOptions);
     }();
-    auto preparedResult =
-        Http1ClientRequestWriter({.resource = memory_.resource()})
-            .prepare(origin, {.method = "GET", .target = config_.target, .headers = headers},
-                requestBuffer);
+    auto preparedResult = handshake.prepareRequest(origin, config_.target, requestBuffer);
     const auto* prepared = preparedResult.prepared();
     if (prepared == nullptr) {
         const auto message = preparedResult.failure()
@@ -253,7 +197,20 @@ Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
             throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
                 "upstream rejected the WebSocket upgrade");
         }
-        validateHandshakeResponse(*parsed, keyView);
+        if (const auto* informational = parsed->plan().informational()) {
+            if (informational->persistence() == Http1ClosePolicy::kCloseAfterResponse) {
+                throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
+                    "upstream closed the HTTP exchange before the WebSocket upgrade");
+            }
+            input_.erase(0, parsed->consumedBytes());
+            continue;
+        }
+        const auto validated = handshake.validateResponse(*parsed);
+        if (!validated) {
+            throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
+                "invalid WebSocket handshake response");
+        }
+        selectedSubprotocol_.assign(validated->selectedSubprotocol);
         input_.erase(0, parsed->consumedBytes());
         co_return;
     }

@@ -57,7 +57,7 @@ HttpClientPool::Connection::Connection(asio::io_context& ioContext, asio::ssl::c
       stream(ioContext, tlsContext),
       readBuffer(pmrResourceOrDefault(resource)),
       writeBuffer(pmrResourceOrDefault(resource)),
-      http2(nullptr, PmrObjectDeleter<Http2Connection>{pmrResourceOrDefault(resource)}),
+      http2(nullptr, PmrObjectDeleter<::ruvia::Http2Connection>{pmrResourceOrDefault(resource)}),
       http2Runtime(makePmrObject<Http2Runtime>(resource, worker, resource)),
       deadlineTimer(makePmrObject<WorkerTimerRegistration>(resource)) {
     readBuffer.reserve(kConnectionReadBufferInitialBytes);
@@ -558,7 +558,7 @@ Task<HttpClientResponse> HttpClientPool::execute(
     if (contentCoding.coding() == nullptr ||
         *contentCoding.coding() != HttpContentCoding::kIdentity) {
         state->collectAll = true;
-        if (state->http2DataPending) {
+        if (state->http2DataCredit) {
             releaseResponseData(*state);
         }
         state->spaceSignal.notify();
@@ -789,16 +789,15 @@ void HttpClientPool::abandonResponse(HttpClientResponseState& state) noexcept {
 }
 
 void HttpClientPool::releaseResponseData(HttpClientResponseState& state) noexcept {
-    if (!state.http2DataPending || state.connectionIndex >= connections_.size() ||
-        state.streamId == 0) {
+    if (!state.http2DataCredit) {
         return;
     }
-    auto& connection = connections_[state.connectionIndex];
-    if (connection.http2) {
-        connection.http2->releaseAllReceivedData(state.streamId);
-        connection.http2Runtime->writeSignal.notify();
+    // The token returns credit to its original connection even if that session
+    // has already retired. Its destructor also defers allocation failures.
+    state.http2DataCredit.reset();
+    if (state.connectionIndex < connections_.size()) {
+        connections_[state.connectionIndex].http2Runtime->writeSignal.notify();
     }
-    state.http2DataPending = false;
 }
 
 }  // namespace ruvia::detail

@@ -471,6 +471,52 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     runner.join();
 }
 
+RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failure) {
+    asio::io_context ioContext;
+    RedisTestWorker worker(ioContext);
+    const std::array definitions{redisDefinition("default")};
+    ruvia::detail::RedisRegistry registry(
+        ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
+    ruvia::test::CountingMemoryResource operationMemory;
+    ruvia::detail::ScopedOperationScope operationScope;
+    auto redis = registry.get(&operationMemory, operationScope);
+    ruvia::StopSource cancellation;
+    cancellation.requestStop();
+    auto cancelled = redis.withOptions({.stopToken = cancellation.token()});
+    const std::string key(2048, 'k');
+
+    auto exercise = [&]() -> ruvia::Task<void> {
+        for (int index = 0; index != 128; ++index) {
+            bool rejected = false;
+            try {
+                (void)co_await cancelled.get(key);
+            } catch (const ruvia::RedisError& error) {
+                rejected = error.code() == ruvia::RedisError::Code::kCancelled;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), std::size_t{0});
+        }
+        registry.closeNow();
+        for (int index = 0; index != 128; ++index) {
+            bool rejected = false;
+            try {
+                (void)co_await redis.get(key);
+            } catch (const ruvia::RedisError& error) {
+                rejected = error.code() == ruvia::RedisError::Code::kClosing;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(operationMemory.liveAllocations(), std::size_t{0});
+        }
+    };
+    auto result =
+        asio::co_spawn(ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    worker.run();
+    result.get();
+
+    RUVIA_CHECK(operationMemory.allocationCount() > 0);
+    RUVIA_CHECK_EQ(operationMemory.allocationCount(), operationMemory.deallocationCount());
+}
+
 RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
     RejectingMemoryResource rejecting;
     const auto longValue =

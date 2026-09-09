@@ -99,6 +99,15 @@ Http2Event* Http2Connection::peekEvent() & noexcept {
     return nullptr;
 }
 
+bool Http2Connection::hasPendingEvents(std::uint32_t streamId) const noexcept {
+    for (std::size_t index = eventOffset_; index < events_.size(); ++index) {
+        if (events_[index].referencesStream(streamId)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void Http2Connection::consumeEvent() noexcept {
     if (eventOffset_ >= events_.size()) {
         std::terminate();

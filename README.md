@@ -214,7 +214,7 @@ Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2 prior
 knowledge.
 
 Handlers use an origin-bound handle and the protocol target's existing borrowed
-`HttpClientRequestView`. The handle copies that view into request PMR memory
+`HttpClientRequestView`. The handle copies that view into reclaimable operation PMR memory
 before returning the lazy operation, so its inputs only need to survive the
 synchronous `send()` call:
 
@@ -958,6 +958,29 @@ Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 
+`Context::resource()` and `allocator()` use the request arena. For WebSocket
+and response-stream routes, that arena stays alive for the whole handler,
+including its handshake and middleware state. Destroying an arena-backed object
+does not reclaim its individual allocation.
+
+Use `c.operationResource()` for temporary PMR data produced repeatedly in a
+long-lived handler. It uses the owning worker's reclaimable pool: destroying
+each object returns its storage for reuse, while other live objects remain
+valid. `c.db()`, `c.redis()`, and `c.httpClient()` use this resource automatically
+for operation arguments and results, including handles obtained before an
+upgrade. Keep these objects on the owning worker and destroy them before the
+Context's scope ends. The pool may retain freed blocks for reuse; it does not
+promise an immediate drop in process RSS.
+
+For example, a streaming loop can transfer a temporary chunk without retaining
+each allocation in the request arena:
+
+```cpp
+std::pmr::string chunk(c.operationResource());
+chunk.append("heartbeat\n");
+co_await c.stream().write(std::move(chunk));
+```
+
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
 deterministic 500. A failure past the response's point of no return cannot become
@@ -1087,11 +1110,28 @@ use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `<ruvia/http/MultipartParser.h>`. The supported protocol-driver entry points
 are `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
-`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake, and
+`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,
+`<ruvia/http/Http1WebSocketClientHandshake.h>` for client handshake request
+preparation and response validation, and
 `<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket driver
 and its typed events. The WebSocket driver accepts masked client frames and
 emits unmasked server frames; it does not claim a client role. SSE messages are
 formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
+
+`Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a
+caller-generated random nonce and validates the peer's response against that
+request's key and offered subprotocols. It does not negotiate extensions.
+The caller supplies the transport and drives `Http1ClientResponseParser`;
+handshake acceptance is required before exchanging WebSocket frames.
+
+`Http2Connection` delivers owned response heads and owned request/response
+trailers through its events, using `HttpHeader` values. Move them out with
+`takeHead()` and `takeTrailers()` when retaining them beyond event processing.
+DATA events carry linear flow-control credits: retain a credit to apply
+backpressure, merge credits from the same stream without allocation, and
+acknowledge or destroy them when their bytes have been consumed.
+The supplied PMR resource must outlive the connection and all retained events,
+credits, response heads, and trailers allocated from it.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket,

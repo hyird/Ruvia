@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
@@ -40,7 +41,7 @@ struct Http2ResponseDecodeContext final {
 
     Http2HeaderDecodeContext base;
     HttpInterimResponseHeaderValidator interimHeaders;
-    std::pmr::vector<HttpClientResponseHeader> informationalFields;
+    std::pmr::vector<HttpHeader> informationalFields;
     std::optional<HttpStatusCode> status;
     bool sawRegular{false};
 };
@@ -87,7 +88,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
             HttpInterimResponseHeaderValidationStatus::kOk) {
             return false;
         }
-        context->informationalFields.push_back(HttpClientResponseHeaderAccess::make(
+        context->informationalFields.push_back(HttpHeaderAccess::make(
             name, value, context->informationalFields.get_allocator().resource()));
         return true;
     }
@@ -143,7 +144,7 @@ bool http2OnDecodedResponseTrailer(void* target, std::string_view name, std::str
     // while response controls such as Date and Location are not.
     return context.acceptRegularField() && http2IsValidDecodedResponseHeader(name, value) &&
            !isForbiddenResponseTrailerName(name) &&
-           context.stream.appendRemoteHeader(name, value, classifyRequestHeader(name));
+           context.stream.appendRemoteTrailer(name, value);
 }
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream,
@@ -227,9 +228,6 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kProtocolError;
     }
     if (http2RemotePeerHalfClosed(stream) && !stream.remoteContent().terminalLengthValid()) {
-        return HeaderDecodeStatus::kProtocolError;
-    }
-    if (!stream.setRemoteInitialHeaderCount(stream.remoteHeaderCount())) {
         return HeaderDecodeStatus::kProtocolError;
     }
     return HeaderDecodeStatus::kOk;

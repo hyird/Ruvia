@@ -94,7 +94,13 @@ ClientTransportConfigView ClientTransportConfigStorage::view() const noexcept {
 void validateClientOriginHost(
     std::string_view host, const char* emptyMessage, const char* invalidMessage) {
     ensureConfigHost(host, emptyMessage, invalidMessage, kSeparatedPortHostRules);
-    std::string wireHost;
+    if (!isValidHttpHost(clientUriHost(host, std::pmr::get_default_resource()))) {
+        throw std::invalid_argument(invalidMessage);
+    }
+}
+
+std::pmr::string clientUriHost(std::string_view host, std::pmr::memory_resource* resource) {
+    std::pmr::string wireHost(pmrResourceOrDefault(resource));
     if (host.contains(':')) {
         wireHost.reserve(host.size() + 2);
         wireHost.push_back('[');
@@ -103,9 +109,7 @@ void validateClientOriginHost(
     } else {
         wireHost.assign(host);
     }
-    if (!isValidHttpHost(wireHost)) {
-        throw std::invalid_argument(invalidMessage);
-    }
+    return wireHost;
 }
 
 void validateClientTransportConfig(ClientTransportConfigView config) {

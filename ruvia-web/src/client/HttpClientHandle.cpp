@@ -100,10 +100,10 @@ HttpStatusCode HttpClientResponse::status() const noexcept {
 HttpProtocolVersion HttpClientResponse::protocolVersion() const noexcept {
     return state_->protocolVersion;
 }
-std::span<const HttpClientResponseHeader> HttpClientResponse::headers() const& noexcept {
+std::span<const HttpHeader> HttpClientResponse::headers() const& noexcept {
     return state_->headers;
 }
-std::span<const HttpClientResponseHeader> HttpClientResponse::trailers() const& noexcept {
+std::span<const HttpHeader> HttpClientResponse::trailers() const& noexcept {
     return state_->trailers;
 }
 
@@ -111,7 +111,7 @@ void HttpClientResponseBody::promotePendingData(detail::HttpClientResponseState&
     if (state.offset != state.buffered.size() || state.pending.empty()) {
         return;
     }
-    if (state.http2DataPending && state.pool != nullptr) {
+    if (state.http2DataCredit && state.pool != nullptr) {
         state.pool->releaseResponseData(state);
     }
     state.buffered.clear();
@@ -167,7 +167,7 @@ ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t ma
 Task<std::pmr::string> HttpClientResponseBody::readAllTask(
     detail::HttpClientResponseState& state, std::size_t maxBytes) {
     state.collectAll = true;
-    if (state.http2DataPending && state.pool != nullptr) {
+    if (state.http2DataCredit && state.pool != nullptr) {
         state.pool->releaseResponseData(state);
     }
     state.spaceSignal.notify();
@@ -375,11 +375,11 @@ HttpScheme HttpClientHandle::scheme() const {
 }
 
 HttpClientHandle Context::httpClient() const {
-    return clientRegistries_.httpClient(resource(), operationScope_, stopToken_);
+    return clientRegistries_.httpClient(operationResource(), operationScope_, stopToken_);
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, resource(), operationScope_, stopToken_);
+    return clientRegistries_.httpClient(alias, operationResource(), operationScope_, stopToken_);
 }
 
 }  // namespace ruvia

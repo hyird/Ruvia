@@ -227,8 +227,12 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 框架内部拥有动态内存的对象默认使用 PMR 容器。
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 公开启动配置的拥有型字段使用标准 `std::string`/`std::vector`，不得要求调用方提供 PMR allocator；App/worker 留存时再复制到所属 PMR 存储。
-- 请求热路径 PMR 容器使用请求 arena；Worker 层容器使用 `WorkerMemory`。
-- `RequestMemory` 只提供 arena resource，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
+- 请求/响应及握手状态使用请求 arena；Worker 层容器使用 `WorkerMemory`。
+- 可独立结束的操作参数、结果和临时输出块使用可逐项回收的 worker PMR，由操作或结果对象 RAII 归还；长连接重复操作不得累积到握手/会话 arena，也不得清空仍被存活对象引用的 arena。
+- 新增拥有型对象或异步接口时，必须明确对象 owner、分配器 owner、释放时点和借用有效期；分配器必须活到最后一个使用它的对象析构，借用不得跨出 owner 的有效期。
+- `Context::resource()` / `allocator()` 只用于请求或握手寿命的数据；重复操作的临时数据使用 `operationResource()`。框架操作入口必须默认选择正确资源，不得要求调用方每次手动换 allocator，也不得在 WebSocket 升级后才切换而遗漏此前取得的 handle。
+- 操作完成与结果销毁是两个释放边界；结果可以跨后续操作存活，其内存必须由结果对象持有到析构。不得用操作完成、下一条消息或定时器触发的 arena reset 代替对象所有权。
+- `RequestMemory` 只管理请求 arena 并借用 worker 上游资源，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
 - 启动期容器使用进程级同步 PMR pool。
 - `Context::text(std::string&)`、`std::string&&`、`const std::string&` 入口保持 deleted。
 
@@ -309,6 +313,8 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
 ## 验证要求
 
 改动完成前至少运行任务相关的最小验证。
+
+涉及长连接或异步操作内存归属的改动，功能单测必须验证重复操作的临时分配能归还、保留结果及握手数据不被后续操作破坏，并覆盖受影响的成功、异常、取消及未启动即丢弃路径。使用分配/归还计数或 arena 使用量验证生命周期，不能只检查析构函数被调用。内存池缓存与仍存活的分配应分别判断；RSS 不立即下降不能单独认定泄漏，短时单测也不能代替线上长时间观测。
 
 目录、文档、CMake 清理：
 

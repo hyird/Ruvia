@@ -8,6 +8,7 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolVersion.h"
@@ -39,8 +40,8 @@ public:
     std::pmr::memory_resource* resource;
     HttpStatusCode status{http_status::kOk};
     HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
-    std::pmr::vector<HttpClientResponseHeader> headers;
-    std::pmr::vector<HttpClientResponseHeader> trailers;
+    std::pmr::vector<HttpHeader> headers;
+    std::pmr::vector<HttpHeader> trailers;
     std::pmr::string buffered;
     // Producers only append here. The consumer swaps it with `buffered` before
     // returning a view, so later network progress cannot invalidate that view.
@@ -56,7 +57,7 @@ public:
     bool incrementalRead{false};
     bool collectAll{false};
     bool http2{false};
-    bool http2DataPending{false};
+    std::optional<::ruvia::Http2ReceivedDataCredit> http2DataCredit{};
     std::size_t connectionIndex{0};
     std::uint64_t requestId{0};
     std::uint64_t cancellationId{0};

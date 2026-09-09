@@ -194,8 +194,19 @@ public:
     [[nodiscard]] Session session();
     [[nodiscard]] std::optional<Session> trySession() noexcept;
 
+    // Request and handshake lifetime resource. Allocations remain in the
+    // request arena until the owning RequestMemory is destroyed and are not
+    // individually reclaimed.
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
+    }
+
+    // Same worker resource used by operation results and handles. Objects
+    // allocated here may be reclaimed individually, but must be destroyed in
+    // the owning worker and while this Context is in scope. Results may outlive
+    // other operations without being invalidated.
+    [[nodiscard]] std::pmr::memory_resource* operationResource() const noexcept {
+        return memory_.upstreamResource();
     }
 
     // Request-scoped typed state: how a middleware hands a value it computed --

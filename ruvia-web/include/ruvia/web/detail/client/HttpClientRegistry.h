@@ -21,8 +21,8 @@
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
@@ -89,7 +89,6 @@ private:
         std::uint64_t requestId{0};
         std::uint64_t cancellationId{0};
         std::uint32_t streamId{0};
-        std::size_t responseHeaderCount{0};
         bool complete{false};
         bool retryable{false};
 
@@ -138,7 +137,7 @@ private:
         asio::ssl::stream<asio::ip::tcp::socket> stream;
         std::pmr::string readBuffer;
         std::pmr::string writeBuffer;
-        std::unique_ptr<Http2Connection, PmrObjectDeleter<Http2Connection>> http2;
+        std::unique_ptr<::ruvia::Http2Connection, PmrObjectDeleter<::ruvia::Http2Connection>> http2;
         std::unique_ptr<Http2Runtime, PmrObjectDeleter<Http2Runtime>> http2Runtime;
         OperationDeadline<DeadlineKind> deadline;
         std::unique_ptr<WorkerTimerRegistration, PmrObjectDeleter<WorkerTimerRegistration>>

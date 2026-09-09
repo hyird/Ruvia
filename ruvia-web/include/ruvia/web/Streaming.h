@@ -84,7 +84,8 @@ public:
 
     /// Zero-copy write: takes ownership of an already-allocated chunk and
     /// transfers it into the output lane without copying. Build the chunk with
-    /// a request-owned arena (Context::resource()) for hot-path streaming.
+    /// a worker operation allocator (c.operationResource()) so the chunk
+    /// returns to the worker pool after the result or operation completes.
     ScopedOperation<void> write(std::pmr::string&& chunk) &;
     ScopedOperation<void> write(std::pmr::string&&) && = delete;
 
