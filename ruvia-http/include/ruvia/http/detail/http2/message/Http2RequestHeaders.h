@@ -255,7 +255,8 @@ struct Http2HeaderDecodeContext final {
     }
 
     return context.acceptRegularField() && http2IsValidRegularHeader(name, value) &&
-           !http2IsForbiddenRequestTrailerHeader(name);
+           !http2IsForbiddenRequestTrailerHeader(name) &&
+           context.stream.appendRemoteTrailer(name, value);
 }
 
 }  // namespace ruvia::detail

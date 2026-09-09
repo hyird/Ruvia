@@ -12,7 +12,6 @@
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
@@ -34,7 +33,7 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
     std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity) {
     static_cast<void>(activity);
     state->requireOpen();
-    const OperationTimeout operationTimeout(options.timeout);
+    OperationGuard operation(*state, options);
     std::array<char, kWebSocketClientTransportBufferBytes> bytes{};
     for (;;) {
         std::optional<WsEvent> event;
@@ -43,12 +42,12 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             WriteGuard writeGuard(*state, WritePhase::kApplication);
             event = state->requireProtocol().poll();
             if (event.has_value() && event->ping() != nullptr) {
-                co_await state->flushOutput(options, operationTimeout);
+                co_await state->flushOutput();
             }
         }
         if (!event.has_value()) {
             const auto count = co_await state->readTransport(
-                bytes, options, operationTimeout, state->config_.readTimeout);
+                bytes, state->config_.readTimeout);
             if (count == 0) {
                 state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
@@ -71,30 +70,22 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             continue;
         }
         if (event->protocolError() != nullptr) {
-            co_await WebSocketClientState::throwProtocolErrorAfterFlush(state, std::move(options),
-                operationTimeout, "WebSocket peer violated the protocol");
+            co_await WebSocketClientState::throwProtocolErrorAfterFlush(
+                state, "WebSocket peer violated the protocol");
             std::terminate();
         }
         if (event->close() != nullptr || event->transportEnd() != nullptr) {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
-            co_await state->flushOutput(options, operationTimeout);
+            co_await state->flushOutput();
             co_return std::nullopt;
         }
     }
 }
 
-Task<std::size_t> WebSocketClientState::readTransport(std::span<char> output,
-    OperationOptions options, OperationTimeout operationTimeout,
-    std::optional<std::chrono::milliseconds> configuredTimeout) {
-    StopRegistration cancellation;
-    if (options.stopToken.stoppable()) {
-        options.stopToken.registerCallback(cancellation, WebSocketClientStopAbort{weak_from_this()});
-    }
-    if (options.stopToken.stopRequested()) {
-        closeOnWorker(AbortReason::kCancelled);
-    }
-    arm(readTimer_, effectiveTimeout(operationTimeout, configuredTimeout), AbortReason::kTimeout);
+Task<std::size_t> WebSocketClientState::readTransport(
+    std::span<char> output, std::optional<std::chrono::milliseconds> configuredTimeout) {
+    arm(readTimer_, configuredTimeout, AbortReason::kTimeout);
     auto initiateRead = [this, output](auto handler) {
         if (config_.scheme == WebSocketScheme::kWss) {
             stream_.async_read_some(asio::buffer(output.data(), output.size()), std::move(handler));
@@ -105,7 +96,6 @@ Task<std::size_t> WebSocketClientState::readTransport(std::span<char> output,
     };
     const auto completion = co_await asyncAsio<std::size_t>(std::move(initiateRead));
     disarm(readTimer_);
-    cancellation.reset();
     throwAbort();
     if (completion.errorCode() == asio::error::eof ||
         completion.errorCode() == asio::ssl::error::stream_truncated) {

@@ -108,21 +108,20 @@ bool detail::DbRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-DbHandle detail::DbRegistry::get(
-    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(ScopedOperationScope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
         throw DbError(
             DbError::Code::kNotConfigured, std::nullopt, "default database is not configured");
     }
-    return DbHandle(poolRef(pools_[*defaultPoolIndex]), resource, operationScope);
+    return DbHandle(poolRef(pools_[*defaultPoolIndex]), resource_, operationScope);
 }
 
-DbHandle detail::DbRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
-    ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(
+    std::string_view alias, ScopedOperationScope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
-        return DbHandle(poolRef(pools_[*match]), resource, operationScope);
+        return DbHandle(poolRef(pools_[*match]), resource_, operationScope);
     }
     throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
 }

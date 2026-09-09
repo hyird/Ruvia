@@ -1,6 +1,7 @@
 #pragma once
 
 #include <exception>
+#include <memory_resource>
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
@@ -35,8 +36,9 @@ void webSocketAbortThunk(void* target) noexcept {
 }
 
 template <typename Connection>
-[[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
-    return WebSocketAccess::make(&connection, &webSocketReadThunk<Connection>,
+[[nodiscard]] WebSocket makeWebSocketFacade(
+    Connection& connection, std::pmr::memory_resource& resource) noexcept {
+    return WebSocketAccess::make(resource, &connection, &webSocketReadThunk<Connection>,
         &webSocketWriteThunk<Connection>, &webSocketCloseThunk<Connection>,
         &webSocketAbortThunk<Connection>);
 }
@@ -48,7 +50,7 @@ template <typename Transport>
 Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler,
     Context& context) {
-    auto webSocket = makeWebSocketFacade(connection);
+    auto webSocket = makeWebSocketFacade(connection, *context.operationResource());
     ContextWebSocketBinding webSocketBinding(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);

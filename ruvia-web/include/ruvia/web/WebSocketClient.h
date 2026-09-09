@@ -30,6 +30,7 @@ enum class WebSocketScheme : std::uint8_t {
 
 struct WebSocketClientConfig final {
     WebSocketScheme scheme{WebSocketScheme::kWss};
+    // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host{};
     std::optional<std::uint16_t> port{};
     std::string target{"/"};

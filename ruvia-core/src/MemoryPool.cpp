@@ -157,4 +157,12 @@ std::pmr::memory_resource* RequestMemory::resource() const& noexcept {
     return const_cast<std::pmr::monotonic_buffer_resource*>(&arena_);
 }
 
+std::pmr::memory_resource* RequestMemory::upstreamResource() & noexcept {
+    return arena_.upstream_resource();
+}
+
+std::pmr::memory_resource* RequestMemory::upstreamResource() const& noexcept {
+    return arena_.upstream_resource();
+}
+
 }  // namespace ruvia

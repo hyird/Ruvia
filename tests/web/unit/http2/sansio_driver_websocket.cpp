@@ -2,6 +2,41 @@
 
 // Sans-I/O HTTP/2 driver: WebSocket tunnels over HTTP/2 (RFC 8441).
 
+namespace {
+
+struct WebSocketOperationMemory final {
+    std::size_t messages{0};
+    bool requestArenaStable{true};
+    bool retainedDataStable{true};
+};
+
+ruvia::Task<void> echoWithOperationMemory(void* target, ruvia::Context& context) {
+    auto& observed = *static_cast<WebSocketOperationMemory*>(target);
+    const std::string expectedHandshake(512, 'h');
+    const std::string expectedRetained(512, 'r');
+    const std::pmr::string handshake(expectedHandshake, context.resource());
+    const std::pmr::string retained(expectedRetained, context.operationResource());
+    auto& socket = context.webSocket();
+    for (;;) {
+        auto* before = static_cast<std::byte*>(context.resource()->allocate(1, 1));
+        auto message = co_await socket.read();
+        if (message && message->text()) {
+            co_await socket.text(message->payload());
+            ++observed.messages;
+        }
+        auto* after = static_cast<std::byte*>(context.resource()->allocate(1, 1));
+        observed.requestArenaStable = observed.requestArenaStable && after == before + 1;
+        observed.retainedDataStable = observed.retainedDataStable &&
+                                      handshake == std::string_view(expectedHandshake) &&
+                                      retained == std::string_view(expectedRetained);
+        if (!message) {
+            co_return;
+        }
+    }
+}
+
+}  // namespace
+
 RUVIA_TEST(sansio_driver_h2_websocket_echo) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
@@ -9,6 +44,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
     bool gotHandshake = false;
     std::string echoedFrame;  // reassembled ws frame bytes from stream-1 DATA
     bool gotCloseEndStream = false;
+    WebSocketOperationMemory operationMemory;
+    constexpr std::size_t messageCount = 32;
+    const std::string messagePayload(80, 'e');
+    std::size_t echoes = 0;
 
     asio::co_spawn(
         io,
@@ -19,7 +58,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ws", std::pmr::get_default_resource()),
-                ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
+                ruvia::detail::RouteStreamHandler(&operationMemory, &echoWithOperationMemory),
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -95,28 +134,36 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 }
             }
 
-            // Send a masked text frame through the tunnel and reassemble the echo
-            // (the transport may split the ws frame across DATA frames).
-            if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, maskedWsFrame(0x1, "hello")))) {
-                co_return;
-            }
-            std::string tunnelBytes;
-            while (echoedFrame.empty()) {
-                if (!co_await readFrameInto(header, payload)) {
+            // Repeated reads and writes must reuse operation memory while the
+            // handshake and explicitly retained data stay alive.
+            for (std::size_t index = 0; index != messageCount; ++index) {
+                if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, maskedWsFrame(0x1, messagePayload)))) {
                     co_return;
                 }
-                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
-                    header.streamId != 1) {
-                    continue;
-                }
-                tunnelBytes += payload;
-                if (tunnelBytes.size() >= 2) {
-                    const auto len = static_cast<std::size_t>(
-                        static_cast<unsigned char>(tunnelBytes[1]) & 0x7FU);
-                    if (tunnelBytes.size() >= 2 + len) {
-                        echoedFrame = tunnelBytes.substr(0, 2 + len);
+                echoedFrame.clear();
+                std::string tunnelBytes;
+                while (echoedFrame.empty()) {
+                    if (!co_await readFrameInto(header, payload)) {
+                        co_return;
+                    }
+                    if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
+                        header.streamId != 1) {
+                        continue;
+                    }
+                    tunnelBytes += payload;
+                    if (tunnelBytes.size() >= 2) {
+                        const auto len = static_cast<std::size_t>(
+                            static_cast<unsigned char>(tunnelBytes[1]) & 0x7FU);
+                        if (tunnelBytes.size() >= 2 + len) {
+                            echoedFrame = tunnelBytes.substr(0, 2 + len);
+                        }
                     }
                 }
+                if (echoedFrame.substr(2) != messagePayload) {
+                    closeClientSocket(sock);
+                    co_return;
+                }
+                ++echoes;
             }
 
             // Close the tunnel: the client sends its masked Close and orderly
@@ -144,11 +191,15 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
 
     io.run();
     RUVIA_CHECK(gotHandshake);
-    // FIN|text, length 5, "hello" -- unmasked server frame, payload echoed intact.
-    RUVIA_CHECK_EQ(echoedFrame.size(), static_cast<std::size_t>(7));
+    RUVIA_CHECK_EQ(echoes, messageCount);
+    RUVIA_CHECK_EQ(operationMemory.messages, messageCount);
+    RUVIA_CHECK(operationMemory.requestArenaStable);
+    RUVIA_CHECK(operationMemory.retainedDataStable);
+    // FIN|text -- unmasked server frame, payload echoed intact.
+    RUVIA_CHECK_EQ(echoedFrame.size(), messagePayload.size() + 2);
     RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[0]), static_cast<unsigned char>(0x81));
-    RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[1]), static_cast<unsigned char>(5));
-    RUVIA_CHECK(echoedFrame.substr(2) == "hello");
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[1]), static_cast<unsigned char>(messagePayload.size()));
+    RUVIA_CHECK(echoedFrame.substr(2) == messagePayload);
     RUVIA_CHECK(gotCloseEndStream);
 }
 

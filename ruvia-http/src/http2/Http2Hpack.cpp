@@ -10,9 +10,9 @@ namespace ruvia::detail {
 
 HpackDecoder::HpackDecoder(HpackDecoderOptions options)
     : resource_(httpPmrResourceOrDefault(options.resource)),
-      dynamic_(resource_),
-      nameScratch_(resource_),
-      valueScratch_(resource_) {}
+      dynamic_(std::size_t{0}, resource_),
+      nameScratch_(std::string_view{}, resource_),
+      valueScratch_(std::string_view{}, resource_) {}
 
 HpackDecoder::DecodeTransaction::DecodeTransaction(HpackDecoder& decoder) noexcept
     : decoder_(&decoder) {

@@ -7,6 +7,7 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpClientRedirect.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 
 #include "test_harness.h"
@@ -175,7 +176,7 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
     auto head = ruvia::detail::HttpClientResponseHeadAccess::make(ruvia::http_status::kFound,
         ruvia::HttpProtocolVersion::kHttp11, std::pmr::get_default_resource());
     auto& headers = ruvia::detail::HttpClientResponseHeadAccess::headers(head);
-    headers.emplace_back(ruvia::detail::HttpClientResponseHeaderAccess::make(
+    headers.emplace_back(ruvia::detail::HttpHeaderAccess::make(
         "Location", "", std::pmr::get_default_resource()));
 
     const auto empty = lookupUniqueHttpClientResponseHeader(head, "location");
@@ -190,7 +191,7 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
     RUVIA_CHECK(missing.found() == nullptr);
     RUVIA_CHECK(missing.repeated() == nullptr);
 
-    headers.emplace_back(ruvia::detail::HttpClientResponseHeaderAccess::make(
+    headers.emplace_back(ruvia::detail::HttpHeaderAccess::make(
         "LOCATION", "/second", std::pmr::get_default_resource()));
     const auto repeated = lookupUniqueHttpClientResponseHeader(head, "Location");
     RUVIA_CHECK(repeated.absent() == nullptr);

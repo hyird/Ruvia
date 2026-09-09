@@ -61,22 +61,21 @@ bool RedisRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-RedisHandle RedisRegistry::get(
-    std::pmr::memory_resource* resource, ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(ScopedOperationScope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
     auto& entry = pools_[*defaultPoolIndex];
-    return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
+    return RedisHandle(*entry.general, *entry.blocking, resource_, operationScope);
 }
 
-RedisHandle RedisRegistry::get(std::string_view alias, std::pmr::memory_resource* resource,
-    ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(
+    std::string_view alias, ScopedOperationScope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         auto& entry = pools_[*match];
-        return RedisHandle(*entry.general, *entry.blocking, resource, operationScope);
+        return RedisHandle(*entry.general, *entry.blocking, resource_, operationScope);
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
 }

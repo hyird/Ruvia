@@ -2,12 +2,15 @@
 
 #include <exception>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderList.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
@@ -15,7 +18,10 @@ namespace ruvia::detail {
 
 class Http2StreamRequestData final {
 public:
-    using HeaderCheckpoint = Http2HeaderList::Checkpoint;
+    struct HeaderCheckpoint final {
+        Http2HeaderList::Checkpoint headers;
+        std::size_t trailerCount{0};
+    };
 
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
         : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {
@@ -47,14 +53,22 @@ public:
         protocol_.swap(other.protocol_);
         cookie_.swap(other.cookie_);
         headers_.swap(other.headers_);
+        trailers_.swap(other.trailers_);
     }
 
     [[nodiscard]] HeaderCheckpoint headerCheckpoint() const noexcept {
-        return headers_.checkpoint();
+        return HeaderCheckpoint{.headers = headers_.checkpoint(),
+            .trailerCount = trailers_.size()};
     }
 
     void rollbackHeaders(HeaderCheckpoint checkpoint) noexcept {
-        headers_.rollback(checkpoint);
+        headers_.rollback(checkpoint.headers);
+        if (checkpoint.trailerCount > trailers_.size()) {
+            std::terminate();
+        }
+        while (trailers_.size() > checkpoint.trailerCount) {
+            trailers_.pop_back();
+        }
     }
 
     void assignMethod(std::string_view method) {
@@ -139,6 +153,21 @@ public:
         return headers_.append(name, value, kind);
     }
 
+    [[nodiscard]] bool appendTrailer(std::string_view name, std::string_view value) {
+        if (trailers_.size() == kMaxHttpHeaderFields) {
+            return false;
+        }
+        trailers_.push_back(HttpHeaderAccess::make(name, value, resource()));
+        return true;
+    }
+
+    [[nodiscard]] std::span<const HttpHeader> trailers() const& noexcept {
+        return trailers_;
+    }
+    [[nodiscard]] std::pmr::vector<HttpHeader> takeTrailers() & noexcept {
+        return std::move(trailers_);
+    }
+
 private:
     Http2StreamRequestData(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : method_(resource),
@@ -147,7 +176,8 @@ private:
           path_(resource),
           protocol_(resource),
           cookie_(resource),
-          headers_(resource) {}
+          headers_(resource),
+          trailers_(resource) {}
 
     std::pmr::string method_;
     HttpKnownMethod knownMethod_{HttpKnownMethod::kUnknown};
@@ -157,6 +187,7 @@ private:
     std::pmr::string protocol_;
     std::pmr::string cookie_;
     Http2HeaderList headers_;
+    std::pmr::vector<HttpHeader> trailers_;
 };
 
 }  // namespace ruvia::detail

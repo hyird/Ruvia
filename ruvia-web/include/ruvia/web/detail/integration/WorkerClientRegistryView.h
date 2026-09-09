@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <string_view>
 
 namespace ruvia {
@@ -48,24 +47,23 @@ public:
         const WorkerClientRegistryView&, const WorkerClientRegistryView&) noexcept = default;
 
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] DbHandle db(std::pmr::memory_resource* resource,
+    [[nodiscard]] DbHandle db(
         ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] DbHandle db(std::string_view alias, std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] DbHandle db(std::string_view alias, ScopedOperationScope& operationScope,
+        const StopToken& stopToken) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] RedisHandle redis(std::pmr::memory_resource* resource,
+    [[nodiscard]] RedisHandle redis(
         ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] RedisHandle redis(std::string_view alias, std::pmr::memory_resource* resource,
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] RedisHandle redis(std::string_view alias, ScopedOperationScope& operationScope,
+        const StopToken& stopToken) const;
 #endif
 
-    [[nodiscard]] HttpClientHandle httpClient(std::pmr::memory_resource* resource,
+    [[nodiscard]] HttpClientHandle httpClient(
         ScopedOperationScope& operationScope, const StopToken& stopToken) const;
     [[nodiscard]] HttpClientHandle httpClient(std::string_view alias,
-        std::pmr::memory_resource* resource, ScopedOperationScope& operationScope,
-        const StopToken& stopToken) const;
+        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
 
 private:
     explicit constexpr WorkerClientRegistryView(std::nullptr_t) noexcept {}

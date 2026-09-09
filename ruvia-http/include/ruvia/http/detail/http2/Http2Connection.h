@@ -388,6 +388,7 @@ public:
     // an exception never consumes the only protocol notification for a stream.
     [[nodiscard]] Http2Event* peekEvent() & noexcept;
     [[nodiscard]] Http2Event* peekEvent() && = delete;
+    [[nodiscard]] bool hasPendingEvents(std::uint32_t streamId) const noexcept;
     void consumeEvent() noexcept;
 
     // Access an assembled request head / stream for the owner to build an HttpRequest.

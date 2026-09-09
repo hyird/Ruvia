@@ -1,6 +1,5 @@
 #include "ruvia/web/WebSocketClient.h"
 
-#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <optional>
@@ -114,19 +113,6 @@ void WebSocketClientState::disarm(WorkerTimerRegistration& timer) noexcept {
     timer.cancel();
 }
 
-std::optional<std::chrono::milliseconds> WebSocketClientState::effectiveTimeout(
-    const OperationTimeout& operationTimeout,
-    std::optional<std::chrono::milliseconds> configured) const {
-    const auto remaining = operationTimeout.remaining();
-    if (!remaining.has_value()) {
-        return configured;
-    }
-    if (!configured.has_value()) {
-        return remaining;
-    }
-    return std::min(*remaining, *configured);
-}
-
 void WebSocketClientState::throwAbort() const {
     switch (abortReason_) {
         case AbortReason::kNone:
@@ -141,6 +127,25 @@ void WebSocketClientState::throwAbort() const {
             throw WebSocketClientError(
                 WebSocketClientError::Code::kClosing, "WebSocket client is closing");
     }
+}
+
+WebSocketClientState::OperationGuard::OperationGuard(
+    WebSocketClientState& state, const OperationOptions& options)
+    : state_(state) {
+    state_.arm(timer_, options.timeout, AbortReason::kTimeout);
+    if (options.stopToken.stoppable()) {
+        options.stopToken.registerCallback(cancellation_, WebSocketClientStopAbort{
+                                                              state_.weak_from_this()});
+    }
+    if (options.stopToken.stopRequested()) {
+        state_.closeOnWorker(AbortReason::kCancelled);
+    }
+    state_.throwAbort();
+}
+
+WebSocketClientState::OperationGuard::~OperationGuard() {
+    cancellation_.reset();
+    timer_.cancel();
 }
 
 WebSocketClientHandle WebSocketClientState::handle(OperationOptions options) {

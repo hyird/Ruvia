@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -59,10 +60,9 @@ public:
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() &;
     ScopedOperation<std::optional<WebSocketMessage>> read() && = delete;
 
-    /// The string_view overloads copy payloads into process-owned PMR storage
-    /// before returning. Hot-path producers that already hold a buffer in
-    /// request-owned storage can move it into the matching PMR-string overload
-    /// to skip that copy.
+    /// The string_view overloads copy payloads into owner-worker PMR storage
+    /// before returning. PMR-string inputs with the matching owner allocator
+    /// can transfer their existing allocation; incompatible inputs are copied.
     ScopedOperation<void> text(std::string_view payload) &;
     ScopedOperation<void> text(std::string_view) && = delete;
 
@@ -148,8 +148,9 @@ private:
     using Close = Task<void> (*)(void*, WebSocketCloseOptions);
     using Abort = void (*)(void*) noexcept;
 
-    WebSocket(void* target, Read read, Write write, Close close, Abort abort) noexcept
-        : target_(target),
+    WebSocket(std::pmr::memory_resource& resource, void* target, Read read, Write write, Close close, Abort abort) noexcept
+        : resource_(&resource),
+          target_(target),
           read_(read),
           write_(write),
           close_(close),
@@ -164,6 +165,7 @@ private:
     ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
     ScopedOperation<void> write(WebSocketOpcode opcode, std::pmr::string&& payload);
 
+    std::pmr::memory_resource* resource_;
     void* target_;
     Read read_;
     Write write_;

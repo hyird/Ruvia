@@ -9,7 +9,6 @@
 namespace ruvia::detail {
 
 constexpr std::size_t kWebSocketClientHandshakeNonceBytes = 16;
-constexpr std::size_t kWebSocketClientHandshakeHeaderReserve = 6;
 constexpr std::size_t kWebSocketClientHandshakeRequestBufferExtraBytes = 1024;
 constexpr std::size_t kWebSocketClientTransportBufferBytes = std::size_t{16} * 1024;
 constexpr std::size_t kWebSocketClientCloseHandshakeBufferBytes = std::size_t{4} * 1024;

@@ -214,7 +214,7 @@ Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2 prior
 knowledge.
 
 Handlers use an origin-bound handle and the protocol target's existing borrowed
-`HttpClientRequestView`. The handle copies that view into request PMR memory
+`HttpClientRequestView`. The handle copies that view into reclaimable operation PMR memory
 before returning the lazy operation, so its inputs only need to survive the
 synchronous `send()` call:
 
@@ -287,6 +287,10 @@ combined with that ambient token rather than replacing it.
 HTTPS origins verify both the peer certificate and host name by default. Test
 or private self-signed origins must opt out explicitly with
 `tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification`.
+The `host` field accepts an ASCII DNS hostname (including IDNA A-labels), an
+IPv4 address, or an unbracketed IPv6 address, with the port configured separately.
+URI percent-encoding is not accepted. A DNS name's final dot is retained for
+resolution and HTTP authority fields; TLS uses the name without that final dot.
 TCP socket options use explicit policies: HTTP clients enable `tcpNoDelay` and
 `tcpKeepAlive` by default, while `Tcp*Policy::kSystemDefault` leaves the socket
 option untouched.
@@ -347,9 +351,14 @@ selected subprotocol, and rejects unsolicited extensions. Client frames use a
 cryptographically generated mask; inbound masked server frames are rejected.
 The driver automatically answers Ping, completes peer-initiated Close, enforces
 one concurrent read and one concurrent write, bounds complete messages, and
-closes the transport when an operation is cancelled or times out. `wss` verifies
+closes the transport when an operation is cancelled or times out. An operation's
+timeout starts when it is awaited and covers waiting for the write channel as
+well as transport I/O. Cancellation is checked before buffered messages are
+returned. Creating and discarding an unstarted operation does not start its
+timer or close the connection. `wss` verifies
 the peer certificate and host name by default and supports the same CA and client
-certificate fields as `HttpClientConfig`. `heartbeat` is optional; it sends Ping
+certificate fields and network `host` syntax as `HttpClientConfig`.
+`heartbeat` is optional; it sends Ping
 after an idle interval and aborts the transport when the matching Pong is not
 observed before `pongTimeout`. Omitting `pongTimeout` uses the ping interval.
 The application must keep a `read()` operation active so inbound control frames
@@ -958,6 +967,42 @@ Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 
+`Context::resource()` and `allocator()` use the request arena. For WebSocket
+and response-stream routes, that arena stays alive for the whole handler,
+including its handshake and middleware state. Destroying an arena-backed object
+does not reclaim its individual allocation.
+
+DB, Redis, HTTP client, response-stream, SSE, and WebSocket operations select
+their owning worker's reclaimable pool automatically. Borrowed inputs are
+copied before the operation is returned, so the source only needs to survive
+the synchronous call. Stream and WebSocket writes can take an owned PMR string:
+compatible storage is moved without copying, while storage from another
+resource is copied into the writer's pool before the call returns.
+
+Operation arguments are released with their operation. Owned return values hold
+their storage independently and remain valid across later operations until
+they are destroyed. Keep operations and results on their owning worker and
+within their owner's scope; Context handles and results belong to the
+Context's scope. These rules also apply to handles obtained before an upgrade.
+Borrowed body chunks and WebSocket payload views retain their documented
+validity until the next read on the same stream or connection.
+
+Ordinary code does not need to select an allocator. For example, a handler can
+transfer an owned Redis value directly to its response stream:
+
+```cpp
+auto value = co_await c.redis().get("status");
+if (value) {
+    co_await c.stream().write(std::move(*value));
+}
+```
+
+When constructing temporary PMR data yourself, use `c.operationResource()`.
+It uses the same worker pool, so each object's destruction returns its storage
+for reuse without invalidating other live objects. The pool may cache freed
+blocks and does not promise an immediate drop in process RSS. Moving an object
+originally allocated in the request arena does not reclaim its arena storage.
+
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
 deterministic 500. A failure past the response's point of no return cannot become
@@ -1087,11 +1132,28 @@ use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `<ruvia/http/MultipartParser.h>`. The supported protocol-driver entry points
 are `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
-`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake, and
+`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,
+`<ruvia/http/Http1WebSocketClientHandshake.h>` for client handshake request
+preparation and response validation, and
 `<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket driver
 and its typed events. The WebSocket driver accepts masked client frames and
 emits unmasked server frames; it does not claim a client role. SSE messages are
 formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
+
+`Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a
+caller-generated random nonce and validates the peer's response against that
+request's key and offered subprotocols. It does not negotiate extensions.
+The caller supplies the transport and drives `Http1ClientResponseParser`;
+handshake acceptance is required before exchanging WebSocket frames.
+
+`Http2Connection` delivers owned response heads and owned request/response
+trailers through its events, using `HttpHeader` values. Move them out with
+`takeHead()` and `takeTrailers()` when retaining them beyond event processing.
+DATA events carry linear flow-control credits: retain a credit to apply
+backpressure, merge credits from the same stream without allocation, and
+acknowledge or destroy them when their bytes have been consumed.
+The supplied PMR resource must outlive the connection and all retained events,
+credits, response heads, and trailers allocated from it.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket,

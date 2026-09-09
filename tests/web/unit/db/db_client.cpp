@@ -623,12 +623,12 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     bool defaultResolved = true;
     bool aliasResolved = true;
     try {
-        (void)registry.get(std::pmr::get_default_resource(), operationScope);
+        (void)registry.get(operationScope);
     } catch (...) {
         defaultResolved = false;
     }
     try {
-        (void)registry.get("analytics", std::pmr::get_default_resource(), operationScope);
+        (void)registry.get("analytics", operationScope);
     } catch (...) {
         aliasResolved = false;
     }
@@ -645,13 +645,13 @@ RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     bool defaultTyped = false;
     bool aliasTyped = false;
     try {
-        (void)registry.get(std::pmr::get_default_resource(), operationScope);
+        (void)registry.get(operationScope);
     } catch (const ruvia::DbError& error) {
         defaultTyped =
             error.code() == ruvia::DbError::Code::kNotConfigured && !error.driver().has_value();
     }
     try {
-        (void)registry.get("missing", std::pmr::get_default_resource(), operationScope);
+        (void)registry.get("missing", operationScope);
     } catch (const ruvia::DbError& error) {
         aliasTyped =
             error.code() == ruvia::DbError::Code::kNotConfigured && !error.driver().has_value();
@@ -693,7 +693,7 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
     ruvia::detail::DbRegistry registry(
         runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
     ruvia::detail::ScopedOperationScope operationScope;
-    auto handle = registry.get(std::pmr::get_default_resource(), operationScope);
+    auto handle = registry.get(operationScope);
     auto copiedHandle = handle;
     operationScope.close();
 

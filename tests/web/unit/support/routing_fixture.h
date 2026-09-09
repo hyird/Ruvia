@@ -351,7 +351,7 @@ inline bool scAborted(void*) noexcept {
 
 inline ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scCommitted, &scAborted);
+        *ruvia::detail::processResource(), &sink, &scWrite, &scEnd, &scSleep, &scBind, &scReleaseContext, &scCommitted, &scAborted);
 }
 
 struct EmptyStreamDispatchObservation final {
@@ -465,7 +465,8 @@ inline WebSocketDispatchObservation dispatchWebSocketWith(
     }
 
     WebSocketDispatchObservation observation;
-    auto webSocket = ruvia::detail::WebSocketAccess::make(nullptr, nullptr, nullptr, nullptr);
+    auto webSocket = ruvia::detail::WebSocketAccess::make(
+        *ruvia::detail::processResource(), nullptr, nullptr, nullptr, nullptr);
     WebSocketTerminalTarget terminalTarget{&observation, &webSocket};
     const auto terminal = ruvia::detail::RouteStreamHandler(&terminalTarget, &webSocketTerminal);
     asio::io_context context(1);
@@ -505,7 +506,7 @@ inline ruvia::Task<void> headOnlyWrite(void* target, std::string_view) {
 }
 
 inline ruvia::ResponseStreamWriter makeHeadOnlyWriter(StreamCaptureSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &headOnlyWrite, &scEnd,
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink, &headOnlyWrite, &scEnd,
         &scSleep, &scBind, &scReleaseContext, &scCommitted, &scAborted);
 }
 

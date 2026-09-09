@@ -121,7 +121,7 @@ inline ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
 }
 
 inline ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeChunk, &endStream,
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink, &writeChunk, &endStream,
         &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
 }
 
@@ -172,7 +172,7 @@ inline ruvia::Task<void> closeSocket(void*, ruvia::WebSocketCloseOptions) {
 
 inline ruvia::ScopedOperation<void> makeExpiredWebSocketWrite(CaptureWebSocket& capture) {
     auto socket =
-        ruvia::detail::WebSocketAccess::make(&capture, &readSocket, &writeSocket, &closeSocket);
+        ruvia::detail::WebSocketAccess::make(*ruvia::detail::processResource(), &capture, &readSocket, &writeSocket, &closeSocket);
     return socket.text(std::string("expired-payload"));
 }
 
@@ -294,7 +294,7 @@ inline ruvia::Task<void> endSuspendedStream(void* target, std::span<const ruvia:
 }
 
 inline ruvia::ResponseStreamWriter makeSuspendedWriter(SuspendedStreamSink& sink) noexcept {
-    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(&sink, &writeSuspendedStream,
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink, &writeSuspendedStream,
         &endSuspendedStream, &sleepStream, &bindContext, &releaseContext, &committed, &aborted);
 }
 

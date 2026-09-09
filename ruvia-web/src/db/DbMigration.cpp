@@ -223,7 +223,7 @@ public:
         detail::DbRegistry registry(ioContext, worker, resolved, databases);
         co_await registry.connect();
         detail::ScopedOperationScope operationScope;
-        auto handle = registry.get(resolved, operationScope);
+        auto handle = registry.get(operationScope);
 
         co_await acquireLock(handle, driver, lockName, options.lockTimeout, resolved);
 
