@@ -1,8 +1,6 @@
 #include "ruvia/web/HttpClientHandle.h"
 
 #include <algorithm>
-#include <cctype>
-#include <cstring>
 #include <stdexcept>
 #include <utility>
 
@@ -10,6 +8,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/client/HttpClientContentEncoding.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -22,14 +21,6 @@ namespace ruvia {
 namespace {
 
 constexpr std::size_t kResponseBodyReadChunkBytes = std::size_t{16} * 1024;
-
-bool headerNameEquals(std::string_view left, std::string_view right) noexcept {
-    return left.size() == right.size() &&
-           std::equal(left.begin(), left.end(), right.begin(), [](char a, char b) {
-               return std::tolower(static_cast<unsigned char>(a)) ==
-                      std::tolower(static_cast<unsigned char>(b));
-           });
-}
 
 }  // namespace
 
@@ -233,14 +224,14 @@ Task<void> HttpClientResponseBody::pipeToTask(
 
 std::optional<std::string_view> HttpClientResponse::header(std::string_view name) const& noexcept {
     const auto match = std::ranges::find_if(state_->headers,
-        [name](const auto& header) { return headerNameEquals(header.name(), name); });
+        [name](const auto& header) { return detail::httpAsciiEqualsIgnoreCase(header.name(), name); });
     return match == state_->headers.end() ? std::nullopt
                                           : std::optional<std::string_view>(match->value());
 }
 
 std::optional<std::string_view> HttpClientResponse::trailer(std::string_view name) const& noexcept {
     const auto match = std::ranges::find_if(state_->trailers,
-        [name](const auto& header) { return headerNameEquals(header.name(), name); });
+        [name](const auto& header) { return detail::httpAsciiEqualsIgnoreCase(header.name(), name); });
     return match == state_->trailers.end() ? std::nullopt
                                            : std::optional<std::string_view>(match->value());
 }
@@ -290,33 +281,6 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
 }
 
 }  // namespace detail
-
-detail::HttpClientRequestStorage::HttpClientRequestStorage(
-    std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
-    : method_(method, detail::pmrResourceOrDefault(resource)),
-      target_(target, detail::pmrResourceOrDefault(resource)),
-      headers_(detail::pmrResourceOrDefault(resource)),
-      body_(detail::pmrResourceOrDefault(resource)) {}
-
-detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::appendHeader(
-    std::string_view name, std::string_view value) {
-    auto& header = headers_.emplace_back(name, value, headers_.get_allocator().resource());
-    // HTTP field names are case-insensitive, but HTTP/2 requires their wire form
-    // to be lowercase (RFC 9113 Section 8.2). Normalize once at the owning public
-    // request boundary so the same request remains valid after ALPN selects either
-    // HTTP/1.1 or HTTP/2; invalid non-token bytes are deliberately left for the
-    // shared protocol validators to reject at submission time.
-    for (auto& ch : header.name) {
-        ch = static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch)));
-    }
-    return *this;
-}
-
-detail::HttpClientRequestStorage& detail::HttpClientRequestStorage::setBody(std::string_view body) {
-    body_.assign(body);
-    hasBody_ = true;
-    return *this;
-}
 
 HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
     std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept

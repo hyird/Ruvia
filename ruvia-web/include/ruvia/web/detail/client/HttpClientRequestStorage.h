@@ -5,21 +5,24 @@
 #include <string_view>
 #include <vector>
 
-namespace ruvia {
+namespace ruvia::detail {
 
-class HttpClientHandle;
-
-namespace detail {
-
-class HttpClientPool;
 struct HttpClientRequestStorageAccess;
 
 class HttpClientRequestStorage final {
 public:
+    // Internal owning boundary: callers must transfer the completed request before
+    // asynchronous transport work can outlive the source operation.
+    HttpClientRequestStorage(
+        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
+
     HttpClientRequestStorage(const HttpClientRequestStorage&) = delete;
     HttpClientRequestStorage& operator=(const HttpClientRequestStorage&) = delete;
     HttpClientRequestStorage(HttpClientRequestStorage&&) noexcept = default;
-    HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = default;
+    HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = delete;
+
+    [[nodiscard]] HttpClientRequestStorage intoResource(
+        std::pmr::memory_resource* resource) &&;
 
     HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
     HttpClientRequestStorage& setBody(std::string_view body);
@@ -38,8 +41,6 @@ public:
     [[nodiscard]] std::string_view body() const&& = delete;
 
 private:
-    friend class ::ruvia::HttpClientHandle;
-    friend class HttpClientPool;
     friend struct HttpClientRequestStorageAccess;
 
     struct Header final {
@@ -50,9 +51,6 @@ private:
         std::pmr::string value;
     };
 
-    HttpClientRequestStorage(
-        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
-
     std::pmr::string method_;
     std::pmr::string target_;
     std::pmr::vector<Header> headers_;
@@ -60,5 +58,4 @@ private:
     bool hasBody_{false};
 };
 
-}  // namespace detail
-}  // namespace ruvia
+}  // namespace ruvia::detail

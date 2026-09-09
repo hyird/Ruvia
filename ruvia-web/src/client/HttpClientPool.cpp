@@ -527,19 +527,8 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
 
 Task<HttpClientResponse> HttpClientPool::execute(
     HttpClientRequestStorage request, OperationOptions options) {
-    // The public request is copied from request-local borrowed storage. Both
-    // request and response state use worker-owned storage because transport
-    // work may continue beyond the handler frame.
-    std::pmr::vector<HttpHeaderView> requestHeaders(resource_);
-    const auto requestView = HttpClientRequestStorageAccess::view(request, requestHeaders);
-    HttpClientRequestStorage ownedRequest(
-        requestView.method.view(), requestView.target.view(), resource_);
-    for (const auto& header : requestView.headers) {
-        ownedRequest.appendHeader(header.name(), header.value());
-    }
-    if (const auto* bytes = requestView.content.borrowedBytes()) {
-        ownedRequest.setBody(bytes->value());
-    }
+    // The request owns all data before transport work can outlive the caller.
+    auto ownedRequest = std::move(request).intoResource(resource_);
     HttpClientResponse response(resource_, worker_, *this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
