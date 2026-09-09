@@ -287,6 +287,10 @@ combined with that ambient token rather than replacing it.
 HTTPS origins verify both the peer certificate and host name by default. Test
 or private self-signed origins must opt out explicitly with
 `tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification`.
+The `host` field accepts an ASCII DNS hostname (including IDNA A-labels), an
+IPv4 address, or an unbracketed IPv6 address, with the port configured separately.
+URI percent-encoding is not accepted. A DNS name's final dot is retained for
+resolution and HTTP authority fields; TLS uses the name without that final dot.
 TCP socket options use explicit policies: HTTP clients enable `tcpNoDelay` and
 `tcpKeepAlive` by default, while `Tcp*Policy::kSystemDefault` leaves the socket
 option untouched.
@@ -347,9 +351,14 @@ selected subprotocol, and rejects unsolicited extensions. Client frames use a
 cryptographically generated mask; inbound masked server frames are rejected.
 The driver automatically answers Ping, completes peer-initiated Close, enforces
 one concurrent read and one concurrent write, bounds complete messages, and
-closes the transport when an operation is cancelled or times out. `wss` verifies
+closes the transport when an operation is cancelled or times out. An operation's
+timeout starts when it is awaited and covers waiting for the write channel as
+well as transport I/O. Cancellation is checked before buffered messages are
+returned. Creating and discarding an unstarted operation does not start its
+timer or close the connection. `wss` verifies
 the peer certificate and host name by default and supports the same CA and client
-certificate fields as `HttpClientConfig`. `heartbeat` is optional; it sends Ping
+certificate fields and network `host` syntax as `HttpClientConfig`.
+`heartbeat` is optional; it sends Ping
 after an idle interval and aborts the transport when the matching Pong is not
 observed before `pongTimeout`. Omitting `pongTimeout` uses the ping interval.
 The application must keep a `read()` operation active so inbound control frames

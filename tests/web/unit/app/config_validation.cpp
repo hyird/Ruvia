@@ -9,6 +9,9 @@
 #include <string_view>
 #include <utility>
 
+#include <asio/io_context.hpp>
+#include <openssl/ssl.h>
+
 #include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
@@ -60,6 +63,26 @@ bool throwsInvalid(Fn&& fn) {
 }
 
 }  // namespace
+
+RUVIA_TEST(client_ip_classification_uses_complete_literal_views) {
+    for (const std::string_view host : {"127.0.0.1", "0.0.0.0", "255.255.255.255",
+             "::", "::1", "2001:db8::1234", "::ffff:192.0.2.1",
+             "1:2:3:4:5:6:7:8"}) {
+        RUVIA_CHECK(ruvia::detail::isClientIpAddress(host));
+    }
+    for (const std::string_view host : {"", "localhost", "api.example.test",
+             "256.1.2.3", "127.1", "01.2.3.4", "127.0.0.1.example", "[::1]",
+             "fe80::1%eth0", "1:2:3:4:5:6:7:8:9", "2001:db8::bad::1"}) {
+        RUVIA_CHECK(!ruvia::detail::isClientIpAddress(host));
+    }
+    constexpr std::string_view bounded = "2001:db8::1/trailing";
+    RUVIA_CHECK(ruvia::detail::isClientIpAddress(bounded.substr(0, bounded.find('/'))));
+    RUVIA_CHECK(!ruvia::detail::isClientIpAddress(bounded));
+    constexpr char embeddedNull[] = "127.0.0.1\0suffix";
+    RUVIA_CHECK(!ruvia::detail::isClientIpAddress(
+        std::string_view(embeddedNull, sizeof(embeddedNull) - 1)));
+    RUVIA_CHECK(!ruvia::detail::isClientIpAddress(std::string(253, 'a')));
+}
 
 RUVIA_TEST(config_host_validation_default_rules) {
     RUVIA_CHECK(isValidConfigHost("localhost"));
@@ -161,6 +184,51 @@ RUVIA_TEST(client_transport_validation_uses_one_host_and_policy_contract) {
     config.certificateChainFile = "client.pem";
     RUVIA_CHECK(throwsInvalid(
         [&config] { validateClientTransportConfig(clientTransportConfigView(config)); }));
+}
+
+RUVIA_TEST(client_origin_accepts_network_names_and_rejects_uri_only_names) {
+    for (const auto host : {"localhost", "api.example.com", "api.example.com.",
+             "xn--bcher-kva.example", "192.0.2.1", "::1", "::ffff:192.0.2.1"}) {
+        RUVIA_CHECK(!throwsInvalid(
+            [host] { validateClientOriginHost(host, "empty", "invalid"); }));
+    }
+    for (const auto host : {"foo%2Ebar", "%C3%BC.example", "bad_name.example",
+             "-bad.example", "bad-.example", "bad..example", ".", "example.com..",
+             "[::1]", "fe80::1%eth0", "[v1.example]", "example.com:443"}) {
+        RUVIA_CHECK(throwsInvalid(
+            [host] { validateClientOriginHost(host, "empty", "invalid"); }));
+    }
+    const auto label = std::string(63, 'a');
+    const auto longest = label + "." + label + "." + label + "." + std::string(61, 'b');
+    for (const auto& host : {label + ".example", longest, longest + "."}) {
+        RUVIA_CHECK(!throwsInvalid(
+            [&host] { validateClientOriginHost(host, "empty", "invalid"); }));
+    }
+    for (const auto& host : {std::string(64, 'a') + ".example", longest + "b"}) {
+        RUVIA_CHECK(throwsInvalid(
+            [&host] { validateClientOriginHost(host, "empty", "invalid"); }));
+    }
+}
+
+RUVIA_TEST(client_tls_sni_uses_dns_identity_without_changing_network_host) {
+    asio::io_context loop;
+    asio::ssl::context tls(asio::ssl::context::tls_client);
+    for (const auto& [host, expected] : {
+             std::pair{"example.com", "example.com"},
+             std::pair{"example.com.", "example.com"},
+             std::pair{"127.0.0.1", ""},
+             std::pair{"2001:db8::1", ""}}) {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(loop, tls);
+        std::pmr::string networkHost(host);
+        RUVIA_CHECK(ruvia::detail::prepareClientTlsStream(stream, networkHost,
+                        {.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kVerify},
+                        ruvia::detail::ClientAlpnMode::kHttp11) ==
+                    ruvia::detail::ClientTlsSetupError::kNone);
+        const auto* name = SSL_get_servername(stream.native_handle(), TLSEXT_NAMETYPE_host_name);
+        RUVIA_CHECK_EQ(name ? std::string_view(name) : std::string_view{},
+            std::string_view(expected));
+        RUVIA_CHECK_EQ(std::string_view(networkHost), std::string_view(host));
+    }
 }
 
 RUVIA_TEST(client_transport_formats_the_complete_port_domain) {
@@ -268,7 +336,7 @@ RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
     std::optional<ruvia::detail::WebSocketClientConfigStorage> storage;
     ruvia::WebSocketClientConfig config;
     {
-        config.host = std::string(80, 'h');
+        config.host = std::string(40, 'h') + "." + std::string(40, 'h');
         config.target = "/" + std::string(80, 't');
         config.headers.emplace_back("X-Test", std::string(80, 'v'));
         config.subprotocols = {"chat", "superchat"};
@@ -285,7 +353,7 @@ RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {
     RUVIA_CHECK(storage->subprotocols.get_allocator().resource() == &resource);
     RUVIA_CHECK(storage->subprotocols.front().get_allocator().resource() == &resource);
     RUVIA_CHECK(storage->userAgent.get_allocator().resource() == &resource);
-    RUVIA_CHECK_EQ(std::string(storage->host), std::string(80, 'h'));
+    RUVIA_CHECK_EQ(std::string(storage->host), std::string(40, 'h') + "." + std::string(40, 'h'));
     RUVIA_CHECK_EQ(std::string(storage->target), "/" + std::string(80, 't'));
     RUVIA_CHECK_EQ(std::string(storage->headers.front().name), "X-Test");
     RUVIA_CHECK_EQ(std::string(storage->headers.front().value), std::string(80, 'v'));

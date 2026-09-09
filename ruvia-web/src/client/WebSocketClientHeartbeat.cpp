@@ -110,8 +110,7 @@ Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientS
                 throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                     "failed to submit WebSocket client heartbeat");
             }
-            co_await state->flushOutput(OperationOptions{.stopToken = state->stopSource_.token()},
-                OperationTimeout(std::nullopt));
+            co_await state->flushOutput();
             const auto pingSentAtMs = webSocketSteadyNowMs();
             if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen &&
                 std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {

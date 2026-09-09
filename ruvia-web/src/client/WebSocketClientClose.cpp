@@ -8,7 +8,6 @@
 #include <asio/bind_executor.hpp>
 
 #include "ruvia/core/AsioTask.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
@@ -34,6 +33,7 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
     disarm(writeTimer_);
     disarm(heartbeatTimer_);
     disarm(closeHandshakeTimer_);
+    writeSignal_.notify();
     livenessState_ = WebSocketLivenessIdle{};
     if (protocol_) {
         (void)protocol_->abort();
@@ -141,7 +141,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
     static_cast<void>(writeActivity);
     static_cast<void>(closeActivity);
     state->requireOpen();
-    const OperationTimeout operationTimeout(operationOptions.timeout);
+    OperationGuard operation(*state, operationOptions);
     {
         co_await state->waitForWriteIdle();
         state->requireOpen();
@@ -152,18 +152,13 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
                 "invalid WebSocket client close payload");
         }
         state->phase_.store(Phase::kClosing, std::memory_order_release);
-        co_await state->flushOutput(operationOptions, operationTimeout);
+        co_await state->flushOutput();
     }
     // The close-handshake limit starts after the local Close frame is committed.
     // Keep it on its own timer so peer traffic and control-frame responses cannot
     // restart the deadline for the next transport read.
-    const auto handshakeTimeout =
-        state->effectiveTimeout(operationTimeout, state->config_.closeHandshakeTimeout);
-    if (handshakeTimeout.has_value() && handshakeTimeout->count() == 0) {
-        state->closeOnWorker(AbortReason::kTimeout);
-        state->throwAbort();
-    }
-    state->arm(state->closeHandshakeTimer_, handshakeTimeout, AbortReason::kTimeout);
+    state->arm(state->closeHandshakeTimer_, state->config_.closeHandshakeTimeout,
+        AbortReason::kTimeout);
     std::array<char, kWebSocketClientCloseHandshakeBufferBytes> bytes{};
     for (;;) {
         std::optional<WsEvent> event;
@@ -172,12 +167,11 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
             WriteGuard writeGuard(*state, WritePhase::kApplication);
             event = state->requireProtocol().poll();
             if (event.has_value() && event->ping() != nullptr) {
-                co_await state->flushOutput(operationOptions, operationTimeout);
+                co_await state->flushOutput();
             }
         }
         if (!event.has_value()) {
-            const auto count = co_await state->readTransport(
-                bytes, operationOptions, operationTimeout, std::nullopt);
+            const auto count = co_await state->readTransport(bytes, std::nullopt);
             if (count == 0) {
                 state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
@@ -188,14 +182,13 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
         }
         if (event->protocolError() != nullptr) {
             co_await WebSocketClientState::throwProtocolErrorAfterFlush(state,
-                std::move(operationOptions), operationTimeout,
                 "WebSocket peer violated the protocol during close handshake");
             std::terminate();
         }
         if (event->close() != nullptr || event->transportEnd() != nullptr) {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
-            co_await state->flushOutput(operationOptions, operationTimeout);
+            co_await state->flushOutput();
             if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
                 state->closeOnWorker(AbortReason::kNone);
             }

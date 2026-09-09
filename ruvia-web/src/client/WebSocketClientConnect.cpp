@@ -9,7 +9,6 @@
 #include <openssl/rand.h>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -97,8 +96,7 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
     state->connectInFlight_ = true;
     try {
         co_await state->establishTransport();
-        co_await state->performHandshake(
-            {.timeout = state->config_.connectTimeout, .stopToken = state->stopSource_.token()});
+        co_await state->performHandshake();
         state->protocol_.emplace(state->input_,
             ProtocolByteLimit::limited(state->config_.maxMessageBytes),
             WebSocketCompression::kDisabled, WsConnectionRole::kClient,
@@ -127,7 +125,7 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
     }
 }
 
-Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
+Task<void> WebSocketClientState::performHandshake() {
     std::array<std::uint8_t, kWebSocketClientHandshakeNonceBytes> nonce{};
     if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
@@ -168,8 +166,7 @@ Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
         throw WebSocketClientError(WebSocketClientError::Code::kInvalidConfig, message);
     }
     Http1ClientResponseParser parser(prepared->exchangeState(), {.resource = memory_.resource()});
-    const OperationTimeout operationTimeout(options.timeout);
-    co_await writeTransport(prepared->head(), options, operationTimeout, config_.writeTimeout);
+    co_await writeTransport(prepared->head(), config_.writeTimeout);
 
     std::array<char, kWebSocketClientTransportBufferBytes> bytes{};
     for (;;) {
@@ -183,8 +180,7 @@ Task<void> WebSocketClientState::performHandshake(OperationOptions options) {
                 throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                     "WebSocket handshake response head is too large");
             }
-            const auto read =
-                co_await readTransport(bytes, options, operationTimeout, config_.connectTimeout);
+            const auto read = co_await readTransport(bytes, config_.connectTimeout);
             if (read == 0) {
                 throw WebSocketClientError(WebSocketClientError::Code::kIoError,
                     "upstream closed during WebSocket handshake");

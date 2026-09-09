@@ -8,14 +8,13 @@
 #include <system_error>
 #include <utility>
 
-#include <asio/ip/address.hpp>
 #include <asio/ssl/host_name_verification.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpUriGrammar.h"
 
 namespace ruvia::detail {
 namespace {
@@ -40,9 +39,7 @@ constexpr std::array<unsigned char, 12> kNegotiatedHttpAlpn = {
 }  // namespace
 
 bool isClientIpAddress(std::string_view host) noexcept {
-    std::error_code error;
-    (void)asio::ip::make_address(host, error);
-    return !error;
+    return parseIpv4Address(host) || isValidIpv6Literal(host);
 }
 
 std::string_view formatClientPort(std::uint16_t port, ClientPortTextBuffer& buffer) noexcept {
@@ -94,7 +91,14 @@ ClientTransportConfigView ClientTransportConfigStorage::view() const noexcept {
 void validateClientOriginHost(
     std::string_view host, const char* emptyMessage, const char* invalidMessage) {
     ensureConfigHost(host, emptyMessage, invalidMessage, kSeparatedPortHostRules);
-    if (!isValidHttpHost(clientUriHost(host, std::pmr::get_default_resource()))) {
+    if (isClientIpAddress(host)) {
+        return;
+    }
+    auto sniHost = host;
+    if (sniHost.ends_with('.')) {
+        sniHost.remove_suffix(1);
+    }
+    if (!isValidSniHost(sniHost)) {
         throw std::invalid_argument(invalidMessage);
     }
 }
@@ -153,15 +157,26 @@ ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::sock
     if (SSL_clear(stream.native_handle()) != 1) {
         return ClientTlsSetupError::kResetFailed;
     }
+    const bool isIpAddress = isClientIpAddress(host);
+    std::array<char, 254> sniHostBuffer;
+    std::string_view tlsHost = host;
+    if (!isIpAddress && host.ends_with('.')) {
+        tlsHost.remove_suffix(1);
+        for (std::size_t i = 0; i < tlsHost.size(); ++i) {
+            sniHostBuffer[i] = tlsHost[i];
+        }
+        sniHostBuffer[tlsHost.size()] = '\0';
+        tlsHost = std::string_view(sniHostBuffer.data(), tlsHost.size());
+    }
     // RFC 6066 HostName carries a DNS host_name, never an IPv4/IPv6 literal.
     // Host verification still receives IP literals so OpenSSL can validate IP
     // subjectAltName entries.
-    if (!isClientIpAddress(host) &&
-        SSL_set_tlsext_host_name(stream.native_handle(), host.c_str()) != 1) {
+    if (!isIpAddress &&
+        SSL_set_tlsext_host_name(stream.native_handle(), tlsHost.data()) != 1) {
         return ClientTlsSetupError::kSniFailed;
     }
     if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
-        stream.set_verify_callback(asio::ssl::host_name_verification(std::string(host)));
+        stream.set_verify_callback(asio::ssl::host_name_verification(std::string(tlsHost)));
     }
     const auto protocols = clientAlpnBytes(alpnMode);
     if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),

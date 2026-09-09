@@ -9,7 +9,6 @@
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
 #include "client/WebSocketClientInternal.h"
@@ -25,24 +24,21 @@ void WebSocketClientState::finishWrite(WritePhase phase) noexcept {
 }
 
 Task<void> WebSocketClientState::waitForWriteIdle() {
-    while (writePhase_ != WritePhase::kIdle) {
+    for (;;) {
+        throwAbort();
+        if (writePhase_ == WritePhase::kIdle) {
+            co_return;
+        }
         co_await writeSignal_.wait();
     }
 }
 
-Task<void> WebSocketClientState::writeTransport(std::string_view bytes, OperationOptions options,
-    OperationTimeout operationTimeout, std::optional<std::chrono::milliseconds> configuredTimeout) {
+Task<void> WebSocketClientState::writeTransport(
+    std::string_view bytes, std::optional<std::chrono::milliseconds> configuredTimeout) {
     if (bytes.empty()) {
         co_return;
     }
-    StopRegistration cancellation;
-    if (options.stopToken.stoppable()) {
-        options.stopToken.registerCallback(cancellation, WebSocketClientStopAbort{weak_from_this()});
-    }
-    if (options.stopToken.stopRequested()) {
-        closeOnWorker(AbortReason::kCancelled);
-    }
-    arm(writeTimer_, effectiveTimeout(operationTimeout, configuredTimeout), AbortReason::kTimeout);
+    arm(writeTimer_, configuredTimeout, AbortReason::kTimeout);
     auto initiateWrite = [this, bytes](auto handler) {
         if (config_.scheme == WebSocketScheme::kWss) {
             asio::async_write(stream_, asio::buffer(bytes), std::move(handler));
@@ -52,7 +48,6 @@ Task<void> WebSocketClientState::writeTransport(std::string_view bytes, Operatio
     };
     const auto completion = co_await asyncAsio<std::size_t>(std::move(initiateWrite));
     disarm(writeTimer_);
-    cancellation.reset();
     throwAbort();
     if (completion.errorCode()) {
         throw WebSocketClientError(
@@ -62,13 +57,12 @@ Task<void> WebSocketClientState::writeTransport(std::string_view bytes, Operatio
     touchActivity();
 }
 
-Task<void> WebSocketClientState::flushOutput(
-    OperationOptions options, OperationTimeout operationTimeout) {
+Task<void> WebSocketClientState::flushOutput() {
     for (;;) {
         auto& protocol = requireProtocol();
         const auto plan = protocol.outputPlan();
         if (!plan.bytes().empty()) {
-            co_await writeTransport(plan.bytes(), options, operationTimeout, config_.writeTimeout);
+            co_await writeTransport(plan.bytes(), config_.writeTimeout);
             if (protocol.consumeOutput(plan.bytes().size()) == WsOutputConsumeStatus::kOutOfRange) {
                 std::terminate();
             }
@@ -83,12 +77,11 @@ Task<void> WebSocketClientState::flushOutput(
 }
 
 Task<void> WebSocketClientState::throwProtocolErrorAfterFlush(
-    std::shared_ptr<WebSocketClientState> state, OperationOptions options,
-    OperationTimeout operationTimeout, std::string_view message) {
+    std::shared_ptr<WebSocketClientState> state, std::string_view message) {
     co_await state->waitForWriteIdle();
     try {
         WriteGuard writeGuard(*state, WritePhase::kApplication);
-        co_await state->flushOutput(std::move(options), operationTimeout);
+        co_await state->flushOutput();
     } catch (const WebSocketClientError& error) {
         if (error.code() != WebSocketClientError::Code::kIoError &&
             error.code() != WebSocketClientError::Code::kTlsFailed) {
@@ -116,7 +109,7 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
     ActivityLease activity) {
     static_cast<void>(activity);
     state->requireOpen();
-    const OperationTimeout operationTimeout(options.timeout);
+    OperationGuard operation(*state, options);
     co_await state->waitForWriteIdle();
     state->requireOpen();
     WriteGuard writeGuard(*state, WritePhase::kApplication);
@@ -134,7 +127,7 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
             throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                 "invalid WebSocket client frame payload");
     }
-    co_await state->flushOutput(options, operationTimeout);
+    co_await state->flushOutput();
 }
 
 }  // namespace ruvia::detail

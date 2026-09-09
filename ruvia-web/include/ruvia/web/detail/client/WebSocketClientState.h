@@ -16,7 +16,6 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -125,6 +124,20 @@ private:
         bool* active_;
     };
 
+    class OperationGuard final {
+    public:
+        OperationGuard(WebSocketClientState& state, const OperationOptions& options);
+        ~OperationGuard();
+
+        OperationGuard(const OperationGuard&) = delete;
+        OperationGuard& operator=(const OperationGuard&) = delete;
+
+    private:
+        WebSocketClientState& state_;
+        WorkerTimerRegistration timer_;
+        StopRegistration cancellation_;
+    };
+
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
     [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state);
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
@@ -156,21 +169,14 @@ private:
     void armHeartbeatTimer(std::chrono::milliseconds delay);
     void touchActivity() noexcept;
     [[nodiscard]] std::chrono::milliseconds heartbeatDelay(std::int64_t now) const noexcept;
-    [[nodiscard]] Task<void> flushOutput(
-        OperationOptions options, OperationTimeout operationTimeout);
+    [[nodiscard]] Task<void> flushOutput();
     [[nodiscard]] static Task<void> throwProtocolErrorAfterFlush(
-        std::shared_ptr<WebSocketClientState> state, OperationOptions options,
-        OperationTimeout operationTimeout, std::string_view message);
-    [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output, OperationOptions options,
-        OperationTimeout operationTimeout,
+        std::shared_ptr<WebSocketClientState> state, std::string_view message);
+    [[nodiscard]] Task<std::size_t> readTransport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configuredTimeout);
-    [[nodiscard]] Task<void> writeTransport(std::string_view bytes, OperationOptions options,
-        OperationTimeout operationTimeout,
+    [[nodiscard]] Task<void> writeTransport(std::string_view bytes,
         std::optional<std::chrono::milliseconds> configuredTimeout);
-    [[nodiscard]] Task<void> performHandshake(OperationOptions options);
-    [[nodiscard]] std::optional<std::chrono::milliseconds> effectiveTimeout(
-        const OperationTimeout& operationTimeout,
-        std::optional<std::chrono::milliseconds> configured) const;
+    [[nodiscard]] Task<void> performHandshake();
     void arm(WorkerTimerRegistration& timer, std::optional<std::chrono::milliseconds> timeout,
         AbortReason reason);
     void disarm(WorkerTimerRegistration& timer) noexcept;
