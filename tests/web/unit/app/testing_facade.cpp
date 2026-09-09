@@ -124,6 +124,7 @@ public:
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
     RUVIA_GET("/report", report);
+    RUVIA_GET("/large", large);
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/deadline", deadline, ruvia::Deadline<20>);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
@@ -214,6 +215,13 @@ private:
             reportTags.emplace_back(tag, ruvia::ModelOptions{.resource = c.resource()});
         }
         co_return c.json(report);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> large(ruvia::Context& c) {
+        std::pmr::string body(c.resource());
+        const auto fill = c.req().query("fill").value_or("x");
+        body.assign(1024 * 1024, fill.empty() ? 'x' : fill.front());
+        co_return c.body(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> worker(ruvia::Context& c) {
@@ -567,6 +575,19 @@ RUVIA_TEST(testing_facade_builds_a_runtime_sized_response_model) {
     const auto contentType = response.header("Content-Type");
     RUVIA_CHECK(contentType.has_value());
     RUVIA_CHECK_EQ(*contentType, std::string_view("application/json"));
+}
+
+RUVIA_TEST(testing_facade_response_owns_large_bodies_across_requests) {
+    ruvia::TestApp app;
+    const auto first = app.request(ruvia::TestRequest::get("/t/large?fill=a"));
+    RUVIA_CHECK_EQ(first.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(first.body(), std::string(1024 * 1024, 'a'));
+
+    const auto second = app.request(ruvia::TestRequest::get("/t/large?fill=b"));
+    RUVIA_CHECK_EQ(second.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(first.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(second.body(), std::string(1024 * 1024, 'b'));
+    RUVIA_CHECK_EQ(first.body(), std::string(1024 * 1024, 'a'));
 }
 
 RUVIA_TEST(testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {

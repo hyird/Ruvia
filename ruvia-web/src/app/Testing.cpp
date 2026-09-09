@@ -244,165 +244,170 @@ TestApp& TestApp::useWorkerStateDefinition(detail::WorkerStateDefinition definit
 TestResponse TestApp::request(const TestRequest& request) {
     impl_->finalize();
 
-    RequestMemory requestMemory(impl_->memory);
-    HttpRequest parsed = detail::HttpRequestAccess::make();
-    detail::HttpRequestAccess::reset(parsed);
-    detail::HttpRequestAccess::setResource(parsed, requestMemory.resource());
-    detail::HttpRequestAccess::setMethod(parsed, request.method_);
-    detail::HttpRequestAccess::setTarget(parsed, request.target_);
+    // Keep the request arena and every arena-backed response on the worker
+    // until the response has been copied into its owning facade type.
+    auto operation = [this, &request]() -> Task<TestResponse> {
+        RequestMemory requestMemory(impl_->memory);
+        HttpRequest parsed = detail::HttpRequestAccess::make();
+        detail::HttpRequestAccess::reset(parsed);
+        detail::HttpRequestAccess::setResource(parsed, requestMemory.resource());
+        detail::HttpRequestAccess::setMethod(parsed, request.method_);
+        detail::HttpRequestAccess::setTarget(parsed, request.target_);
 
-    std::optional<HttpParseError> parseError;
-    detail::RequestTargetView targetView;
-    if (!isValidHttpMethodToken(request.method_)) {
-        parseError = HttpParseError::kInvalidRequestLine;
-    } else if (!detail::parseRequestTarget(parsed.knownMethod(), request.target_, targetView)) {
-        parseError = HttpParseError::kInvalidRequestTarget;
-    } else {
-        detail::HttpRequestAccess::setPath(parsed, targetView.path);
-        detail::HttpRequestAccess::setQueryString(parsed, targetView.query);
-    }
-
-    std::string requestHead;
-    if (!parseError.has_value()) {
-        for (const auto& [name, value] : request.headers_) {
-            if (!detail::isValidHttpHeaderName(name) || !detail::isValidHttpHeaderValue(value)) {
-                parseError = HttpParseError::kInvalidHeader;
-                break;
-            }
-        }
-        if (!parseError.has_value() && !request.cookies_.empty() &&
-            !detail::isValidHttpHeaderValue(request.cookies_)) {
-            parseError = HttpParseError::kInvalidHeader;
-        }
-    }
-    if (!parseError.has_value()) {
-        requestHead.reserve(
-            request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
-        requestHead.append(request.method_);
-        requestHead.push_back(' ');
-        requestHead.append(request.target_);
-        requestHead.append(" HTTP/1.1\r\n");
-        for (const auto& [name, value] : request.headers_) {
-            appendSyntheticHeaderLine(requestHead, name, value);
-        }
-        if (!request.cookies_.empty()) {
-            appendSyntheticHeaderLine(requestHead, "Cookie", request.cookies_);
-        }
-        requestHead.append("\r\n");
-
-        detail::ParsedRequestHeaderBlock block;
-        if (requestHead.size() > kMaxHttpHeaderBytes) {
-            parseError = HttpParseError::kHeaderTooLarge;
-        } else if (const auto error =
-                       detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
-            parseError = *error;
+        std::optional<HttpParseError> parseError;
+        detail::RequestTargetView targetView;
+        if (!isValidHttpMethodToken(request.method_)) {
+            parseError = HttpParseError::kInvalidRequestLine;
+        } else if (!detail::parseRequestTarget(parsed.knownMethod(), request.target_, targetView)) {
+            parseError = HttpParseError::kInvalidRequestTarget;
         } else {
-            const auto contentLength = block.contentLength.value();
-            const auto transferEncoding = block.transferEncoding.value();
-            const auto contentSemantics = detail::httpRequestContentSemantics(request.method_);
-            if (transferEncoding.has_value() && contentLength.has_value()) {
-                parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
-                       transferEncoding.has_value()) {
-                parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
-                       contentLength.has_value()) {
-                parseError = HttpParseError::kInvalidContentLength;
-            } else if (transferEncoding.has_value() &&
-                       transferEncoding->finalChunked() == nullptr) {
-                parseError = HttpParseError::kInvalidTransferEncoding;
-            } else if (contentSemantics ==
-                           detail::HttpRequestContentSemantics::kContentTypeRequired &&
-                       (contentLength.has_value() || transferEncoding.has_value()) &&
-                       (block.seenHeaderBits & detail::singletonRequestHeaderBit(
-                                                   detail::RequestHeaderKind::kContentType)) == 0) {
+            detail::HttpRequestAccess::setPath(parsed, targetView.path);
+            detail::HttpRequestAccess::setQueryString(parsed, targetView.query);
+        }
+
+        std::string requestHead;
+        if (!parseError.has_value()) {
+            for (const auto& [name, value] : request.headers_) {
+                if (!detail::isValidHttpHeaderName(name) || !detail::isValidHttpHeaderValue(value)) {
+                    parseError = HttpParseError::kInvalidHeader;
+                    break;
+                }
+            }
+            if (!parseError.has_value() && !request.cookies_.empty() &&
+                !detail::isValidHttpHeaderValue(request.cookies_)) {
                 parseError = HttpParseError::kInvalidHeader;
             }
+        }
+        if (!parseError.has_value()) {
+            requestHead.reserve(
+                request.method_.size() + request.target_.size() + request.cookies_.size() + 16);
+            requestHead.append(request.method_);
+            requestHead.push_back(' ');
+            requestHead.append(request.target_);
+            requestHead.append(" HTTP/1.1\r\n");
+            for (const auto& [name, value] : request.headers_) {
+                appendSyntheticHeaderLine(requestHead, name, value);
+            }
+            if (!request.cookies_.empty()) {
+                appendSyntheticHeaderLine(requestHead, "Cookie", request.cookies_);
+            }
+            requestHead.append("\r\n");
 
-            if (!parseError.has_value()) {
-                const auto targetRebindsHost =
-                    targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
-                    targetView.form == detail::HttpRequestTargetForm::kAuthority;
-                for (std::size_t i = 0; i < block.headerCount; ++i) {
-                    const auto& header = block.headers[i];
-                    auto value = header.value.bind(requestHead);
-                    if (targetRebindsHost && block.hostHeaderIndex >= 0 &&
-                        i == static_cast<std::size_t>(block.hostHeaderIndex)) {
-                        value = targetView.authority;
-                    }
-                    const HttpHeaderView view{header.name.bind(requestHead), value};
-                    const auto slot = detail::requestHeaderKindKnownSlot(header.kind);
-                    const bool added =
-                        slot < detail::kRequestHeaderKindCount
-                            ? detail::HttpRequestAccess::addHeader(parsed, view, slot)
-                            : detail::HttpRequestAccess::addHeader(parsed, view);
-                    if (!added) {
-                        parseError = HttpParseError::kTooManyHeaders;
-                        break;
+            detail::ParsedRequestHeaderBlock block;
+            if (requestHead.size() > kMaxHttpHeaderBytes) {
+                parseError = HttpParseError::kHeaderTooLarge;
+            } else if (const auto error =
+                           detail::parseHttpHeaderBlock(requestHead, requestHead.size(), block)) {
+                parseError = *error;
+            } else {
+                const auto contentLength = block.contentLength.value();
+                const auto transferEncoding = block.transferEncoding.value();
+                const auto contentSemantics = detail::httpRequestContentSemantics(request.method_);
+                if (transferEncoding.has_value() && contentLength.has_value()) {
+                    parseError = HttpParseError::kInvalidTransferEncoding;
+                } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                           transferEncoding.has_value()) {
+                    parseError = HttpParseError::kInvalidTransferEncoding;
+                } else if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden &&
+                           contentLength.has_value()) {
+                    parseError = HttpParseError::kInvalidContentLength;
+                } else if (transferEncoding.has_value() &&
+                           transferEncoding->finalChunked() == nullptr) {
+                    parseError = HttpParseError::kInvalidTransferEncoding;
+                } else if (contentSemantics ==
+                               detail::HttpRequestContentSemantics::kContentTypeRequired &&
+                           (contentLength.has_value() || transferEncoding.has_value()) &&
+                           (block.seenHeaderBits & detail::singletonRequestHeaderBit(
+                                                       detail::RequestHeaderKind::kContentType)) == 0) {
+                    parseError = HttpParseError::kInvalidHeader;
+                }
+
+                if (!parseError.has_value()) {
+                    const auto targetRebindsHost =
+                        targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
+                        targetView.form == detail::HttpRequestTargetForm::kAuthority;
+                    for (std::size_t i = 0; i < block.headerCount; ++i) {
+                        const auto& header = block.headers[i];
+                        auto value = header.value.bind(requestHead);
+                        if (targetRebindsHost && block.hostHeaderIndex >= 0 &&
+                            i == static_cast<std::size_t>(block.hostHeaderIndex)) {
+                            value = targetView.authority;
+                        }
+                        const HttpHeaderView view{header.name.bind(requestHead), value};
+                        const auto slot = detail::requestHeaderKindKnownSlot(header.kind);
+                        const bool added =
+                            slot < detail::kRequestHeaderKindCount
+                                ? detail::HttpRequestAccess::addHeader(parsed, view, slot)
+                                : detail::HttpRequestAccess::addHeader(parsed, view);
+                        if (!added) {
+                            parseError = HttpParseError::kTooManyHeaders;
+                            break;
+                        }
                     }
                 }
             }
         }
-    }
-    detail::HttpRequestAccess::setBody(parsed, request.body_);
+        detail::HttpRequestAccess::setBody(parsed, request.body_);
 
-    const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
-    const auto resolution = routes.resolve(parsed);
-    const auto* resolved = resolution.resolved();
+        const auto& routes = detail::RouterImpl::from(impl_->router).routeTable();
+        const auto resolution = routes.resolve(parsed);
+        const auto* resolved = resolution.resolved();
 
-    const auto services = impl_->capabilities->contextServices(impl_->stopToken);
+        const auto services = impl_->capabilities->contextServices(impl_->stopToken);
 
-    std::optional<HttpProtocolError> bodyLimitError;
-    if (!parseError.has_value() && resolved != nullptr) {
-        const auto routeLimit = resolved->route().maxRequestBodyBytes();
-        if (routeLimit != 0 && request.body_.size() > routeLimit) {
-            bodyLimitError = detail::HttpRequestBodyFailure::tooLarge().protocolError();
+        std::optional<HttpProtocolError> bodyLimitError;
+        if (!parseError.has_value() && resolved != nullptr) {
+            const auto routeLimit = resolved->route().maxRequestBodyBytes();
+            if (routeLimit != 0 && request.body_.size() > routeLimit) {
+                bodyLimitError = detail::HttpRequestBodyFailure::tooLarge().protocolError();
+            }
         }
-    }
 
-    auto dispatch = [&]() -> Task<HttpResponse> {
-        auto requestServices = services;
-        std::optional<detail::RequestDeadline> requestDeadline;
-        if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr &&
-            resolved->route().deadlineMs() != 0) {
-            requestDeadline.emplace(requestServices.stopToken());
-            requestDeadline->arm(requestServices.worker(),
-                std::chrono::milliseconds(resolved->route().deadlineMs()));
-            requestServices = requestServices.withRequestDeadline(*requestDeadline);
+        auto dispatch = [&]() -> Task<HttpResponse> {
+            auto requestServices = services;
+            std::optional<detail::RequestDeadline> requestDeadline;
+            if (!parseError.has_value() && !bodyLimitError.has_value() && resolved != nullptr &&
+                resolved->route().deadlineMs() != 0) {
+                requestDeadline.emplace(requestServices.stopToken());
+                requestDeadline->arm(requestServices.worker(),
+                    std::chrono::milliseconds(resolved->route().deadlineMs()));
+                requestServices = requestServices.withRequestDeadline(*requestDeadline);
+            }
+            if (parseError.has_value()) {
+                const auto error = httpParseProtocolError(*parseError);
+                co_return co_await routes.handleError(parsed, requestMemory,
+                    HttpErrorInfo({.status = error.status(), .message = error.what()}),
+                    requestServices);
+            }
+            if (bodyLimitError.has_value()) {
+                co_return co_await routes.handleError(parsed, requestMemory,
+                    HttpErrorInfo(
+                        {.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
+                    requestServices);
+            }
+            co_return co_await routes.dispatchBufferedResponse(parsed, resolution, requestMemory,
+                detail::DocumentRootBinding::none(), requestServices);
+        };
+        auto response = co_await dispatch();
+
+        // Copy everything out while the request arena is still alive.
+        TestResponse result(response.status());
+        result.headers_.reserve(response.headers().size());
+        for (const auto& header : response.headers()) {
+            result.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
         }
-        if (parseError.has_value()) {
-            const auto error = httpParseProtocolError(*parseError);
-            co_return co_await routes.handleError(parsed, requestMemory,
-                HttpErrorInfo({.status = error.status(), .message = error.what()}),
-                requestServices);
+        // Mirror wire semantics: the response writers suppress the body for HEAD
+        // and content-forbidden statuses, so the facade must not surface one
+        // either. Writer-synthesized fields (Content-Length, Date, Connection)
+        // are framing concerns and stay absent here.
+        const auto bodyPlan = detail::httpResponseBodyPlan(parsed.knownMethod(), response.status());
+        if (!bodyPlan.bodySuppressed()) {
+            const auto body = detail::responseBody(response).bytes();
+            result.body_.assign(body.data(), body.size());
         }
-        if (bodyLimitError.has_value()) {
-            co_return co_await routes.handleError(parsed, requestMemory,
-                HttpErrorInfo(
-                    {.status = bodyLimitError->status(), .message = bodyLimitError->what()}),
-                requestServices);
-        }
-        co_return co_await routes.dispatchBufferedResponse(parsed, resolution, requestMemory,
-            detail::DocumentRootBinding::none(), requestServices);
+        co_return result;
     };
-    auto response = impl_->eventLoop.start(dispatch()).get();
-
-    // Copy everything out while the request arena is still alive.
-    TestResponse result(response.status());
-    result.headers_.reserve(response.headers().size());
-    for (const auto& header : response.headers()) {
-        result.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
-    }
-    // Mirror wire semantics: the response writers suppress the body for HEAD
-    // and content-forbidden statuses, so the facade must not surface one
-    // either. Writer-synthesized fields (Content-Length, Date, Connection)
-    // are framing concerns and stay absent here.
-    const auto bodyPlan = detail::httpResponseBodyPlan(parsed.knownMethod(), response.status());
-    if (!bodyPlan.bodySuppressed()) {
-        const auto body = detail::responseBody(response).bytes();
-        result.body_.assign(body.data(), body.size());
-    }
-    return result;
+    return impl_->eventLoop.start(operation()).get();
 }
 
 std::optional<std::string_view> TestResponse::header(std::string_view name) const& noexcept {
