@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/tls/TlsHost.h"
 
 namespace ruvia::detail {
 

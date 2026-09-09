@@ -20,6 +20,7 @@
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/detail/tls/TlsHost.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -122,6 +123,25 @@ RUVIA_TEST(sni_host_validation_accepts_dns_name_only) {
     RUVIA_CHECK(!isValidSniHost("-bad.example"));
     RUVIA_CHECK(!isValidSniHost("bad-.example"));
     RUVIA_CHECK(!isValidSniHost("bad..example"));
+    const auto label = std::string(63, 'a');
+    const auto longest = label + "." + label + "." + label + "." + std::string(61, 'b');
+    RUVIA_CHECK(isValidSniHost(longest));
+    RUVIA_CHECK(!isValidSniHost(longest + "b"));
+}
+
+RUVIA_TEST(sni_host_validation_uses_distinct_empty_and_invalid_messages) {
+    RUVIA_CHECK_EQ(caughtMessage(
+                       [] { ruvia::detail::ensureSniHost("", "was-empty", "was-invalid"); }),
+        std::string("was-empty"));
+    RUVIA_CHECK_EQ(caughtMessage([] {
+        ruvia::detail::ensureSniHost("bad host", "was-empty", "was-invalid");
+    }),
+        std::string("was-invalid"));
+    RUVIA_CHECK(caughtMessage([] {
+        ruvia::detail::ensureSniHost(
+            "example.com", "was-empty", "was-invalid");
+    })
+            .empty());
 }
 
 RUVIA_TEST(config_size_port_duration_guards) {
