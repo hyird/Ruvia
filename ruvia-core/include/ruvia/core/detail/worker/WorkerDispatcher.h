@@ -72,6 +72,8 @@ private:
     [[nodiscard]] ShutdownListeners beginStopping(bool abandonDrain) noexcept;
     static void notifyStopping(const ShutdownListeners& listeners) noexcept;
     void abandonQueued() noexcept;
+    void publish(std::size_t index);
+    void rollbackReserved(std::size_t index) noexcept;
     void drain();
     void armTimer();
     void fireTimers();

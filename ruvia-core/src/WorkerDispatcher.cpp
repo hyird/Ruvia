@@ -57,20 +57,32 @@ PostResult WorkerDispatcher::post(MoveOnlyFunction<void()> task) {
     if (!task) {
         throw std::invalid_argument("worker post requires a callable task");
     }
-    std::lock_guard lock(impl_->mutex);
-    if (!impl_->contextAttached || !impl_->accepting) {
-        return PostResult::reject(PostStatus::kWorkerStopping, std::move(task));
+    std::size_t index = kNoTimerSlot;
+    PostStatus rejection = PostStatus::kAccepted;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->contextAttached || !impl_->accepting) {
+            rejection = PostStatus::kWorkerStopping;
+        } else if (impl_->pendingCount == impl_->nodes.size() - 1 ||
+                   impl_->freeHead == kNoTimerSlot) {
+            rejection = PostStatus::kQueueFull;
+        } else {
+            index = impl_->freeHead;
+            impl_->freeHead = impl_->nodes[index].next;
+            impl_->nodes[index].state = Impl::NodeState::kReserved;
+            ++impl_->pendingCount;
+        }
     }
-    if (impl_->size == impl_->slots.size()) {
-        return PostResult::reject(PostStatus::kQueueFull, std::move(task));
+    if (rejection != PostStatus::kAccepted) {
+        return PostResult::reject(rejection, std::move(task));
     }
-    if (!impl_->drainScheduled) {
-        asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
-        impl_->drainScheduled = true;
+    impl_->nodes[index].task = std::move(task);
+    try {
+        publish(index);
+    } catch (...) {
+        rollbackReserved(index);
+        throw;
     }
-    impl_->slots[impl_->tail].emplace(std::move(task));
-    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
-    ++impl_->size;
     return PostResult::accept();
 }
 
@@ -78,25 +90,85 @@ PostStatus WorkerDispatcher::postFactory(MoveOnlyFunction<MoveOnlyFunction<void(
     if (!factory) {
         throw std::invalid_argument("worker post factory requires a callable");
     }
-    std::lock_guard lock(impl_->mutex);
-    if (!impl_->contextAttached || !impl_->accepting) {
-        return PostStatus::kWorkerStopping;
+    std::size_t index = kNoTimerSlot;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->contextAttached || !impl_->accepting) {
+            return PostStatus::kWorkerStopping;
+        }
+        if (impl_->pendingCount == impl_->nodes.size() - 1 ||
+            impl_->freeHead == kNoTimerSlot) {
+            return PostStatus::kQueueFull;
+        }
+        index = impl_->freeHead;
+        impl_->freeHead = impl_->nodes[index].next;
+        impl_->nodes[index].state = Impl::NodeState::kReserved;
+        ++impl_->pendingCount;
     }
-    if (impl_->size == impl_->slots.size()) {
-        return PostStatus::kQueueFull;
+    try {
+        auto task = factory();
+        if (!task) {
+            throw std::invalid_argument("worker post factory produced an empty task");
+        }
+        impl_->nodes[index].task = std::move(task);
+        publish(index);
+    } catch (...) {
+        rollbackReserved(index);
+        throw;
     }
-    if (!impl_->drainScheduled) {
-        asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
-        impl_->drainScheduled = true;
-    }
-    auto task = factory();
-    if (!task) {
-        throw std::invalid_argument("worker post factory produced an empty task");
-    }
-    impl_->slots[impl_->tail].emplace(std::move(task));
-    impl_->tail = (impl_->tail + 1) % impl_->slots.size();
-    ++impl_->size;
     return PostStatus::kAccepted;
+}
+
+void WorkerDispatcher::publish(std::size_t index) {
+    bool abandon = false;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->abandonDrain || !impl_->contextAttached) {
+            impl_->nodes[index].state = Impl::NodeState::kReleasing;
+            abandon = true;
+        } else {
+            if (!impl_->drainScheduled) {
+                asio::post(impl_->ioContext, [self = shared_from_this()] { self->drain(); });
+                impl_->drainScheduled = true;
+            }
+            impl_->nodes[index].state = Impl::NodeState::kReady;
+            impl_->nodes[index].next = kNoTimerSlot;
+            if (impl_->readyTail == kNoTimerSlot) {
+                impl_->readyHead = index;
+            } else {
+                impl_->nodes[impl_->readyTail].next = index;
+            }
+            impl_->readyTail = index;
+        }
+    }
+    if (abandon) {
+        auto abandoned = std::move(impl_->nodes[index].task);
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->nodes[index].state = Impl::NodeState::kFree;
+            impl_->nodes[index].next = impl_->freeHead;
+            impl_->freeHead = index;
+            --impl_->pendingCount;
+        }
+    }
+}
+
+void WorkerDispatcher::rollbackReserved(std::size_t index) noexcept {
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->nodes[index].state != Impl::NodeState::kReserved) {
+            return;
+        }
+        impl_->nodes[index].state = Impl::NodeState::kReleasing;
+    }
+    auto abandoned = std::move(impl_->nodes[index].task);
+    {
+        std::lock_guard lock(impl_->mutex);
+        impl_->nodes[index].state = Impl::NodeState::kFree;
+        impl_->nodes[index].next = impl_->freeHead;
+        impl_->freeHead = index;
+        --impl_->pendingCount;
+    }
 }
 
 void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
@@ -211,7 +283,6 @@ void WorkerDispatcher::close() noexcept {
 }
 
 void WorkerDispatcher::detachContext() noexcept {
-    std::vector<std::optional<MoveOnlyFunction<void()>>> abandonedSlots;
     ShutdownListeners abandonedListeners;
     std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
     std::pmr::vector<TimerSlot> abandonedTimerSlots(impl_->timerSlots.get_allocator());
@@ -223,12 +294,7 @@ void WorkerDispatcher::detachContext() noexcept {
         }
         impl_->accepting = false;
         impl_->contextAttached = false;
-        impl_->drainScheduled = false;
         impl_->abandonDrain = true;
-        impl_->head = 0;
-        impl_->tail = 0;
-        impl_->size = 0;
-        abandonedSlots.swap(impl_->slots);
         abandonedListeners.swap(impl_->shutdownListeners);
         detachedTimer = std::move(impl_->timer);
     }
@@ -247,6 +313,7 @@ void WorkerDispatcher::detachContext() noexcept {
     impl_->timerArmed = false;
     impl_->timersStopping.store(true, std::memory_order_release);
     detachedTimer.reset();
+    abandonQueued();
 }
 
 bool WorkerDispatcher::attached() const noexcept {
@@ -280,18 +347,26 @@ void WorkerDispatcher::notifyStopping(const ShutdownListeners& listeners) noexce
 
 void WorkerDispatcher::abandonQueued() noexcept {
     for (;;) {
-        MoveOnlyFunction<void()> abandoned;
+        std::size_t index = kNoTimerSlot;
         {
             std::lock_guard lock(impl_->mutex);
-            if (impl_->size == 0) {
-                impl_->head = 0;
-                impl_->tail = 0;
+            if (impl_->readyHead == kNoTimerSlot) {
                 return;
             }
-            abandoned = std::move(*impl_->slots[impl_->head]);
-            impl_->slots[impl_->head].reset();
-            impl_->head = (impl_->head + 1) % impl_->slots.size();
-            --impl_->size;
+            index = impl_->readyHead;
+            impl_->readyHead = impl_->nodes[index].next;
+            if (impl_->readyHead == kNoTimerSlot) {
+                impl_->readyTail = kNoTimerSlot;
+            }
+            impl_->nodes[index].state = Impl::NodeState::kReleasing;
+        }
+        auto abandoned = std::move(impl_->nodes[index].task);
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->nodes[index].state = Impl::NodeState::kFree;
+            impl_->nodes[index].next = impl_->freeHead;
+            impl_->freeHead = index;
+            --impl_->pendingCount;
         }
         // Destroy user closures outside the dispatcher mutex. Their destructors
         // may reconcile higher-level outstanding-work reservations.
@@ -317,25 +392,48 @@ WorkerId WorkerDispatcher::id() const noexcept {
 void WorkerDispatcher::drain() {
     for (;;) {
         MoveOnlyFunction<void()> task;
+        std::size_t index = kNoTimerSlot;
         {
             std::lock_guard lock(impl_->mutex);
-            if (impl_->abandonDrain || impl_->size == 0) {
+            if (impl_->abandonDrain) {
+                impl_->drainScheduled = false;
+                break;
+            }
+            if (impl_->readyHead == kNoTimerSlot) {
                 impl_->drainScheduled = false;
                 return;
             }
-            task = std::move(*impl_->slots[impl_->head]);
-            impl_->slots[impl_->head].reset();
-            impl_->head = (impl_->head + 1) % impl_->slots.size();
-            --impl_->size;
+            index = impl_->readyHead;
+            impl_->readyHead = impl_->nodes[index].next;
+            if (impl_->readyHead == kNoTimerSlot) {
+                impl_->readyTail = kNoTimerSlot;
+            }
+            impl_->nodes[index].state = Impl::NodeState::kActive;
+            --impl_->pendingCount;
         }
+        task = std::move(impl_->nodes[index].task);
         try {
             task();
         } catch (...) {
+            {
+                std::lock_guard lock(impl_->mutex);
+                impl_->nodes[index].state = Impl::NodeState::kFree;
+                impl_->nodes[index].next = impl_->freeHead;
+                impl_->freeHead = index;
+            }
             notifyStopping(beginStopping(true));
             abandonQueued();
             throw;
         }
+        task = nullptr;
+        {
+            std::lock_guard lock(impl_->mutex);
+            impl_->nodes[index].state = Impl::NodeState::kFree;
+            impl_->nodes[index].next = impl_->freeHead;
+            impl_->freeHead = index;
+        }
     }
+    abandonQueued();
 }
 
 }  // namespace ruvia::detail

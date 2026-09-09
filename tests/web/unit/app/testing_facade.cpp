@@ -37,6 +37,26 @@ struct TestingFacadeCounter final {
     int count{0};
 };
 
+struct TestingFacadeStartupFailureState final {};
+
+class TestingFacadeStartupError final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+class TestingFacadeThrowingMiddleware final
+    : public ruvia::Middleware<TestingFacadeThrowingMiddleware> {
+public:
+    explicit TestingFacadeThrowingMiddleware(int* attempts) {
+        ++*attempts;
+        throw TestingFacadeStartupError("testing facade middleware startup failed");
+    }
+
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
+        co_return;
+    }
+};
+
 class TestingFacadeStamp final : public ruvia::Middleware<TestingFacadeStamp> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
@@ -124,6 +144,7 @@ public:
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
     RUVIA_GET("/report", report);
+    RUVIA_GET("/large", large);
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/deadline", deadline, ruvia::Deadline<20>);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
@@ -214,6 +235,13 @@ private:
             reportTags.emplace_back(tag, ruvia::ModelOptions{.resource = c.resource()});
         }
         co_return c.json(report);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> large(ruvia::Context& c) {
+        std::pmr::string body(c.resource());
+        const auto fill = c.req().query("fill").value_or("x");
+        body.assign(1024 * 1024, fill.empty() ? 'x' : fill.front());
+        co_return c.body(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> worker(ruvia::Context& c) {
@@ -420,6 +448,64 @@ RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     RUVIA_CHECK(sealed);
 }
 
+RUVIA_TEST(testing_facade_retains_startup_failure_without_retrying) {
+    ruvia::TestApp app;
+    int factoryCalls = 0;
+    app.useWorkerState<TestingFacadeStartupFailureState>([&]()
+                                                             -> TestingFacadeStartupFailureState {
+        ++factoryCalls;
+        throw std::runtime_error("testing facade startup failed");
+    });
+
+    for (int attempt = 0; attempt != 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)app.request(ruvia::TestRequest::get("/t/hello"));
+        } catch (const std::runtime_error& error) {
+            threw = true;
+            RUVIA_CHECK_EQ(std::string_view(error.what()),
+                std::string_view("testing facade startup failed"));
+        }
+        RUVIA_CHECK(threw);
+    }
+    RUVIA_CHECK_EQ(factoryCalls, 1);
+
+    bool sealed = false;
+    try {
+        app.use<TestingFacadeStamp>();
+    } catch (const std::logic_error&) {
+        sealed = true;
+    }
+    RUVIA_CHECK(sealed);
+}
+
+RUVIA_TEST(testing_facade_retains_pre_worker_startup_failure_without_retrying) {
+    ruvia::TestApp app;
+    int constructorCalls = 0;
+    app.use<TestingFacadeThrowingMiddleware>(&constructorCalls);
+
+    for (int attempt = 0; attempt != 2; ++attempt) {
+        bool threw = false;
+        try {
+            (void)app.request(ruvia::TestRequest::get("/t/hello"));
+        } catch (const TestingFacadeStartupError& error) {
+            threw = true;
+            RUVIA_CHECK_EQ(std::string_view(error.what()),
+                std::string_view("testing facade middleware startup failed"));
+        }
+        RUVIA_CHECK(threw);
+    }
+    RUVIA_CHECK_EQ(constructorCalls, 1);
+
+    bool sealed = false;
+    try {
+        app.use<TestingFacadeStamp>();
+    } catch (const std::logic_error&) {
+        sealed = true;
+    }
+    RUVIA_CHECK(sealed);
+}
+
 RUVIA_TEST(testing_facade_constructs_middleware_from_registration_arguments) {
     ruvia::TestApp app;
     app.use<TestingFacadeConfiguredStamp>("audit", 2);
@@ -567,6 +653,19 @@ RUVIA_TEST(testing_facade_builds_a_runtime_sized_response_model) {
     const auto contentType = response.header("Content-Type");
     RUVIA_CHECK(contentType.has_value());
     RUVIA_CHECK_EQ(*contentType, std::string_view("application/json"));
+}
+
+RUVIA_TEST(testing_facade_response_owns_large_bodies_across_requests) {
+    ruvia::TestApp app;
+    const auto first = app.request(ruvia::TestRequest::get("/t/large?fill=a"));
+    RUVIA_CHECK_EQ(first.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(first.body(), std::string(1024 * 1024, 'a'));
+
+    const auto second = app.request(ruvia::TestRequest::get("/t/large?fill=b"));
+    RUVIA_CHECK_EQ(second.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(first.body().size(), std::size_t(1024 * 1024));
+    RUVIA_CHECK_EQ(second.body(), std::string(1024 * 1024, 'b'));
+    RUVIA_CHECK_EQ(first.body(), std::string(1024 * 1024, 'a'));
 }
 
 RUVIA_TEST(testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {

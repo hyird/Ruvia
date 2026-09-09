@@ -158,37 +158,49 @@ WorkerId WebWorkerDispatch::id() const noexcept {
 }
 
 WebWorkerPostResult WebWorkerDispatch::post(Task task) {
-    std::lock_guard lock(submitMutex_);
-    if (!accepting_) {
+    bool accepting = false;
+    {
+        std::lock_guard lock(submitMutex_);
+        accepting = accepting_;
+    }
+    if (!accepting) {
         postCounters_.recordWorkerStopping();
         return WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
     }
 
+    // Reserve before entering the core mailbox. The core factory may be delayed
+    // past detach; its only obligation is then to return an abandonment guard.
+    outstanding_.fetch_add(1, std::memory_order_acq_rel);
+    AbandonReservation reservation(this);
     const auto status = WorkerHandleAccess::postFactory(
-        worker_, [this, &task]() mutable -> MoveOnlyFunction<void()> {
-            outstanding_.fetch_add(1, std::memory_order_acq_rel);
-            AbandonReservation reservation(this);
+        worker_, [&task, &reservation]() mutable -> MoveOnlyFunction<void()> {
             return [task = std::move(task), reservation = std::move(reservation)]() mutable {
                 WebWorkerDispatch* self = reservation.release();
                 self->start(std::move(task));
             };
         });
     postCounters_.record(status);
-    return status == PostStatus::kAccepted ? WebWorkerPostResult::accept()
-                                           : WebWorkerPostResult::reject(status, std::move(task));
+    if (status == PostStatus::kAccepted) {
+        return WebWorkerPostResult::accept();
+    }
+    return WebWorkerPostResult::reject(status, std::move(task));
 }
 
 void WebWorkerDispatch::close() noexcept {
-    std::lock_guard lock(submitMutex_);
-    accepting_ = false;
+    {
+        std::lock_guard lock(submitMutex_);
+        accepting_ = false;
+    }
     stopSource_.requestStop();
 }
 
 void WebWorkerDispatch::retire() noexcept {
-    std::lock_guard lock(submitMutex_);
-    accepting_ = false;
+    {
+        std::lock_guard lock(submitMutex_);
+        accepting_ = false;
+    }
     stopSource_.requestStop();
-    if (outstanding_.load(std::memory_order_acquire) != 0) {
+    if (activeStarted_.load(std::memory_order_acquire) != 0) {
         std::terminate();
     }
     // A public handle may keep this terminal endpoint alive after WebWorkerRuntime.
@@ -196,6 +208,8 @@ void WebWorkerDispatch::retire() noexcept {
     // destroyed; terminal queries use only atomics and the stable WorkerHandle.
     failed_ = nullptr;
     clientRegistries_ = WorkerClientRegistryView::detached();
+    workerStates_ = nullptr;
+    blockingPool_ = nullptr;
     resource_ = nullptr;
     executor_ = asio::any_io_executor{};
 }
@@ -217,6 +231,7 @@ WebWorkerStats WebWorkerDispatch::stats() const noexcept {
 }
 
 void WebWorkerDispatch::start(Task task) {
+    activeStarted_.fetch_add(1, std::memory_order_acq_rel);
     try {
         auto operation = run(std::move(task));
         asyncStartTask(std::move(operation),
@@ -249,6 +264,7 @@ ruvia::Task<void> WebWorkerDispatch::run(Task task) {
 
 void WebWorkerDispatch::complete() noexcept {
     completed_.fetch_add(1, std::memory_order_relaxed);
+    activeStarted_.fetch_sub(1, std::memory_order_acq_rel);
     outstanding_.fetch_sub(1, std::memory_order_acq_rel);
 }
 

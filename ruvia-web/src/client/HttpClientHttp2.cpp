@@ -8,8 +8,7 @@
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
-
-#include "client/HttpClientResponseState.h"
+#include "ruvia/web/detail/client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 namespace {

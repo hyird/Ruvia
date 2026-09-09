@@ -10,9 +10,8 @@
 
 #include "ruvia/core/detail/io/TcpSocketOptions.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
-
-#include "client/WebSocketClientInternal.h"
 
 namespace ruvia::detail {
 namespace {

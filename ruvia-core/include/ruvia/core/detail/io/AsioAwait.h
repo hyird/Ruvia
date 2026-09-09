@@ -182,10 +182,7 @@ public:
         StateOwner owner(state, StateDeleter{StateAllocator(state->allocator_)});
         asio::post(executor, asio::bind_allocator(std::move(completionAllocator),
                                  [owner = std::move(owner)]() mutable {
-                                     // Own the state before invoking user code. If the completion
-                                     // handler throws through the Asio executor, stack unwinding
-                                     // still destroys both this state and its completed Task frame.
-                                     owner->deliver();
+                                     deliver(std::move(owner));
                                  }));
     }
 
@@ -201,27 +198,27 @@ private:
 
     using StateOwner = std::unique_ptr<TaskCompletionState, StateDeleter>;
 
-    void deliver() {
-        if constexpr (std::is_void_v<T>) {
-            auto result = [this]() {
+    static void deliver(StateOwner owner) {
+        auto result = [&owner]() {
+            if constexpr (std::is_void_v<T>) {
                 try {
-                    task_.handle_.promise().result();
+                    owner->task_.handle_.promise().result();
                     return TaskCompletionResult<void>::makeSuccess();
                 } catch (...) {
                     return TaskCompletionResult<void>::makeFailure(std::current_exception());
                 }
-            }();
-            std::move(handler_)(std::move(result));
-        } else {
-            auto result = [this]() {
+            } else {
                 try {
-                    return TaskCompletionResult<T>::makeSuccess(task_.handle_.promise().result());
+                    return TaskCompletionResult<T>::makeSuccess(
+                        owner->task_.handle_.promise().result());
                 } catch (...) {
                     return TaskCompletionResult<T>::makeFailure(std::current_exception());
                 }
-            }();
-            std::move(handler_)(std::move(result));
-        }
+            }
+        }();
+        auto handler = std::move(owner->handler_);
+        owner.reset();
+        std::move(handler)(std::move(result));
     }
 
     Task<T> task_;
