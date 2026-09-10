@@ -27,6 +27,7 @@
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
+#include "ruvia/web/detail/db/DbTransactionStart.h"
 
 // The parts of a pooled database operation that do not depend on the driver:
 // which slot it runs on, and what happens to that slot when it fails.
@@ -253,15 +254,18 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
 // backend control statement owns cancellation checks and connect-on-demand;
 // duplicating those here would run the same policy twice on the call chain.
 template <typename Pool>
-Task<DbTransaction> beginDbTransaction(Pool& pool, std::string_view command,
-    std::pmr::memory_resource* resource, OperationOptions options) {
-    const OperationTimeout operationTimeout(options.timeout);
-    const auto slotIndex = co_await pool.acquireSlot(operationTimeout, options.stopToken);
-    DbSlotCancellationGuard cancellation(pool, slotIndex, options.stopToken);
+Task<DbTransaction> beginDbTransaction(Pool& pool, std::pmr::memory_resource* resource,
+    OperationOptions operationOptions,
+    DbTransactionStartPlan plan) {
+    const OperationTimeout operationTimeout(operationOptions.timeout);
+    const auto slotIndex = co_await pool.acquireSlot(operationTimeout, operationOptions.stopToken);
+    DbSlotCancellationGuard cancellation(pool, slotIndex, operationOptions.stopToken);
     try {
-        co_await pool.executeControl(
-            pool.slots_[slotIndex], command, resource, operationTimeout);
-        co_return DbTransaction(DbPoolRef{&pool}, slotIndex, resource, std::move(options));
+        if (!plan.configure.empty()) {
+            co_await pool.executeControl(pool.slots_[slotIndex], plan.configure, resource, operationTimeout);
+        }
+        co_await pool.executeControl(pool.slots_[slotIndex], plan.begin, resource, operationTimeout);
+        co_return DbTransaction(DbPoolRef{&pool}, slotIndex, resource, std::move(operationOptions));
     } catch (...) {
         pool.closeSlot(pool.slots_[slotIndex]);
         cancellation.finish();

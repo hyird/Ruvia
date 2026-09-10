@@ -86,7 +86,8 @@ public:
         Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
     friend Task<DbTransaction> beginDbTransaction(
-        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
+        Pool&, std::pmr::memory_resource*, OperationOptions,
+        DbTransactionStartPlan);
     template <typename Pool>
     friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
         std::pmr::memory_resource*, OperationOptions);
@@ -186,7 +187,8 @@ public:
         std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
         const OperationOptions& options);
     Task<DbTransaction> beginTransaction(
-        std::pmr::memory_resource* resource, OperationOptions options);
+        std::pmr::memory_resource* resource, OperationOptions operationOptions,
+        DbTransactionOptions transactionOptions);
     Task<void> commitTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     Task<void> rollbackTransaction(
@@ -224,7 +226,8 @@ private:
         Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
     friend Task<DbTransaction> beginDbTransaction(
-        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
+        Pool&, std::pmr::memory_resource*, OperationOptions,
+        DbTransactionStartPlan);
     template <typename Pool>
     friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
         std::pmr::memory_resource*, OperationOptions);
@@ -318,7 +321,8 @@ public:
         std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
         const OperationOptions& options);
     Task<DbTransaction> beginTransaction(
-        std::pmr::memory_resource* resource, OperationOptions options);
+        std::pmr::memory_resource* resource, OperationOptions operationOptions,
+        DbTransactionOptions transactionOptions);
     Task<void> commitTransaction(
         std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
     Task<void> rollbackTransaction(

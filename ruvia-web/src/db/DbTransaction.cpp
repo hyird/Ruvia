@@ -1,6 +1,7 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbQuery.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
@@ -92,6 +93,44 @@ void DbTransaction::bindOperationScope(detail::ScopedOperationScope& scope) noex
 void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
     auto& transaction = static_cast<DbTransaction&>(capability);
     transaction.reset();
+}
+
+DbDriver DbTransaction::queryDriver() const {
+    requireActive();
+    return detail::dbPoolDriver(state_->operation.activePayload().client);
+}
+
+std::pmr::memory_resource* DbTransaction::queryResource() const {
+    requireActive();
+    return state_->operation.activePayload().resource;
+}
+
+Task<DbRows> DbTransaction::queryTask(const DbQuery& query) {
+    requireActive();
+    OperationGuard operation(state_->operation);
+    const auto& lease = operation.lease();
+    auto statement = query.compile(detail::dbPoolDriver(lease.client), lease.resource);
+    if (!statement.returnsRows()) {
+        throw std::invalid_argument("query requires a statement that returns rows");
+    }
+    return queryPrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation));
+}
+
+ScopedOperation<DbRows> DbTransaction::query(const DbQuery& query) & {
+    requireActive();
+    return detail::makeScopedOperation(operationScope(), queryTask(query));
+}
+
+ScopedOperation<DbExecResult> DbTransaction::execute(const DbQuery& query) & {
+    requireActive();
+    OperationGuard operation(state_->operation);
+    const auto& lease = operation.lease();
+    auto statement = query.compile(detail::dbPoolDriver(lease.client), lease.resource);
+    if (statement.returnsRows()) {
+        throw std::invalid_argument("execute requires a statement without returned rows");
+    }
+    return detail::makeScopedOperation(operationScope(),
+        executePrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
 }
 
 ScopedOperation<DbRows> DbTransaction::query(

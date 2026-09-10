@@ -1,6 +1,7 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbQuery.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbPreparedStatement.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
@@ -39,9 +40,13 @@ Task<DbStreamResult> streamPool(detail::DbPoolRef pool, std::pmr::string sql,
 }
 
 Task<DbTransaction> beginPoolTransaction(
-    detail::DbPoolRef pool, std::pmr::memory_resource* resource, OperationOptions options) {
+    detail::DbPoolRef pool, std::pmr::memory_resource* resource,
+    OperationOptions operationOptions, DbTransactionOptions transactionOptions) {
     return detail::visitDbPool(pool,
-        [&](auto& client) { return client.beginTransaction(resource, std::move(options)); });
+        [&](auto& client) {
+            return client.beginTransaction(
+                resource, std::move(operationOptions), std::move(transactionOptions));
+        });
 }
 
 }  // namespace
@@ -71,6 +76,40 @@ void DbHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexce
     handle.client_ = detail::DbPoolRef{};
     handle.resource_ = nullptr;
     handle.options_ = {};
+}
+
+DbDriver DbHandle::queryDriver() const {
+    requireActive();
+    return detail::dbPoolDriver(client_);
+}
+
+std::pmr::memory_resource* DbHandle::queryResource() const {
+    requireActive();
+    return resource_;
+}
+
+Task<DbRows> DbHandle::queryTask(const DbQuery& query) const {
+    requireActive();
+    auto statement = query.compile(queryDriver(), resource_);
+    if (!statement.returnsRows()) {
+        throw std::invalid_argument("query requires a statement that returns rows");
+    }
+    return queryPool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_);
+}
+
+ScopedOperation<DbRows> DbHandle::query(const DbQuery& query) const {
+    requireActive();
+    return detail::makeScopedOperation(operationScope(), queryTask(query));
+}
+
+ScopedOperation<DbExecResult> DbHandle::execute(const DbQuery& query) const {
+    requireActive();
+    auto statement = query.compile(queryDriver(), resource_);
+    if (statement.returnsRows()) {
+        throw std::invalid_argument("execute requires a statement without returned rows");
+    }
+    return detail::makeScopedOperation(operationScope(),
+        executePool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_));
 }
 
 ScopedOperation<DbRows> DbHandle::query(
@@ -109,16 +148,18 @@ Task<DbStreamResult> DbHandle::queryStreamPrepared(detail::DbPoolRef client, std
     co_return result;
 }
 
-ScopedOperation<DbTransaction> DbHandle::beginTransaction() const {
+ScopedOperation<DbTransaction> DbHandle::beginTransaction(DbTransactionOptions options) const {
     requireActive();
     return detail::makeScopedOperation(
-        operationScope(), beginTransactionPrepared(client_, resource_, operationScope(), options_));
+        operationScope(), beginTransactionPrepared(
+                              client_, resource_, operationScope(), options_, std::move(options)));
 }
 
 Task<DbTransaction> DbHandle::beginTransactionPrepared(detail::DbPoolRef client,
     std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
-    OperationOptions options) {
-    auto transaction = co_await beginPoolTransaction(client, resource, std::move(options));
+    OperationOptions operationOptions, DbTransactionOptions transactionOptions) {
+    auto transaction = co_await beginPoolTransaction(
+        client, resource, std::move(operationOptions), std::move(transactionOptions));
     transaction.bindOperationScope(operationScope);
     co_return transaction;
 }

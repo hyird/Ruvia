@@ -11,6 +11,7 @@
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/db/DbHandle.h"
+#include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/db/DbTypes.h"
 
 namespace ruvia {
@@ -42,6 +43,28 @@ public:
     // client would begin pool shutdown at the end of the full expression.
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const&;
     DbHandle withOptions(OperationOptions) const&& = delete;
+
+    template <typename Entity>
+    [[nodiscard]] DbRepository<Entity, DbHandle> getRepository() const& {
+        return withOptions({}).template getRepository<Entity>();
+    }
+    template <typename Entity>
+    DbRepository<Entity, DbHandle> getRepository() const&& = delete;
+
+    [[nodiscard]] ScopedOperation<DbRows> query(const DbQuery& query) const& {
+        return withOptions({}).query(query);
+    }
+    ScopedOperation<DbRows> query(const DbQuery&) const&& = delete;
+    template <typename Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) const& {
+        return withOptions({}).template query<Entity>(query);
+    }
+    template <typename Entity>
+    ScopedOperation<DbEntityRows<Entity>> query(const DbQuery&) const&& = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) const& {
+        return withOptions({}).execute(query);
+    }
+    ScopedOperation<DbExecResult> execute(const DbQuery&) const&& = delete;
 
     [[nodiscard]] ScopedOperation<DbRows> query(
         std::string_view sql, std::span<const DbValue> params = {}) const&;
@@ -98,8 +121,9 @@ public:
         requires detail::DbParameterPack<Params...>
     ScopedOperation<DbStreamResult> queryStream(std::string_view, Params&&...) const&& = delete;
 
-    [[nodiscard]] ScopedOperation<DbTransaction> beginTransaction() const&;
-    ScopedOperation<DbTransaction> beginTransaction() const&& = delete;
+    [[nodiscard]] ScopedOperation<DbTransaction> beginTransaction(
+        DbTransactionOptions options = {}) const&;
+    ScopedOperation<DbTransaction> beginTransaction(DbTransactionOptions = {}) const&& = delete;
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.

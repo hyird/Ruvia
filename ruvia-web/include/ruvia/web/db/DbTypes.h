@@ -30,6 +30,25 @@ enum class DbDriver : std::uint8_t {
     kPostgreSql,
 };
 
+enum class DbTransactionIsolation : std::uint8_t {
+    kDefault,
+    kReadUncommitted,
+    kReadCommitted,
+    kRepeatableRead,
+    kSerializable,
+};
+
+enum class DbTransactionAccessMode : std::uint8_t {
+    kDefault,
+    kReadWrite,
+    kReadOnly,
+};
+
+struct DbTransactionOptions final {
+    DbTransactionIsolation isolation{DbTransactionIsolation::kDefault};
+    DbTransactionAccessMode accessMode{DbTransactionAccessMode::kDefault};
+};
+
 struct DbConfig final {
     DbDriver driver{DbDriver::kUnspecified};
     // Host name or unbracketed address only; keep the port in port.

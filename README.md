@@ -27,7 +27,8 @@ protocol library do not require the full Web framework.
   policy, SNI identities, and an outbound client with certificate verification,
   SNI, ALPN, HTTP/1.1, and HTTP/2.
 - **Optional integrations** — MariaDB, PostgreSQL, Redis, and JWT behind vcpkg
-  features; both database drivers share one `DbHandle` API surface.
+  features; database drivers share typed entities, repositories, structured
+  queries, and explicit schema migrations through the same `DbHandle`.
 
 ## Contents
 
@@ -853,7 +854,224 @@ auto rows = co_await c.db().withOptions({
 }).query("SELECT name FROM users WHERE id = $1", userId);
 ```
 
-### Migrations
+### ORM and QueryBuilder
+
+Enable either database driver and include `ruvia/web/db/DbRepository.h`.
+Entities declare database columns; repositories are obtained from the same
+`DbClient`, `DbHandle`, or `DbTransaction` used for other database operations:
+
+```cpp
+RUVIA_DB_ENTITY(Device, "device",
+    RUVIA_DB_COLUMN(id, std::int64_t,
+        ruvia::DbColumnOptions{.primaryKey = true}),
+    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(enabled, bool))
+
+auto devices = c.db().getRepository<Device>();
+auto rows = co_await devices.find({
+    .where = (Device::column<"enabled">() == true)
+        && Device::column<"name">().like("pump%"),
+    .order = {{"id", ruvia::DbOrderDirection::kDesc}},
+    .take = 50,
+});
+
+Device changes;
+changes.set<"name">("Main pump");
+co_await devices.update(Device::column<"id">() == deviceId, changes);
+
+auto transaction = co_await c.db().beginTransaction();
+auto transactional = transaction.getRepository<Device>();
+auto device = co_await transactional.findOne({
+    .where = Device::column<"id">() == deviceId,
+    .lock = ruvia::DbLockOptions{.mode = ruvia::DbRowLock::kUpdate},
+});
+co_await transaction.commit();
+```
+
+Pass transaction options when the operation needs a specific snapshot or access
+mode. Both PostgreSQL and MariaDB apply them on the transaction's own connection:
+
+```cpp
+auto snapshot = co_await c.db().beginTransaction({
+    .isolation = ruvia::DbTransactionIsolation::kRepeatableRead,
+    .accessMode = ruvia::DbTransactionAccessMode::kReadOnly,
+});
+auto rows = co_await snapshot.getRepository<Device>().find();
+co_await snapshot.commit();
+```
+
+The default options retain the server's defaults. Isolation also supports read
+uncommitted, read committed, and serializable; access mode can explicitly select
+read-write. The database's isolation semantics still apply. A failed operation
+retires its transaction lease; start a new transaction before issuing more work.
+
+`find`, `findOne`, `count`, `insert`, `update`, `upsert`, `deleteBy`, and
+`remove` return cold `ScopedOperation` objects for `co_await`. `findOne`
+returns `std::optional<Entity>`. `insert` and `upsert` also accept a span of
+entities. `upsert` takes `DbUpsertOptions{.conflictPaths = {"id"}}` on
+PostgreSQL. MariaDB uses its distinct any-unique-key behavior, selected with
+`.anyUniqueKey = true`. `remove(entity)` requires every primary-key field;
+`update` and `deleteBy` require a condition.
+Bulk upserts infer updated columns only when the input entities set the same
+fields; otherwise specify `updateColumns` explicitly, including any deliberate
+updates from database defaults.
+
+Relations are declared in the entity macro with one owning side and an optional
+inverse side. `ManyToOne` stores the foreign-key column on the source table;
+`OneToMany` names that owning relation. An owning `OneToOne` also stores a
+foreign key and gets a unique constraint, while its inverse uses
+`RUVIA_DB_INVERSE`. `ManyToMany` uses an owning `RUVIA_DB_JOIN_TABLE` mapping;
+the inverse points back to the owning relation. Create referenced tables first,
+then call `createRelationTables<OwningEntity>()` for junction tables. See
+[`examples/web/orm_relations.cpp`](examples/web/orm_relations.cpp) for all four
+mapping forms and nested relation queries.
+
+Relations load data but do not persist it automatically. Write the owning
+foreign-key column yourself, or insert/delete junction rows with a `DbQuery`;
+there is no cascade, lazy/eager proxy, or schema-diff behavior. Loaded relations
+use the same `isSet`, `isNull`, and `get` state model as fields: to-one relations
+can be unset, NULL, or loaded, while a loaded collection is empty or contains
+entities. Relation loading requires primary keys on the root and each selected
+entity, including all components of a composite key. Root `.take`/`.skip`
+pagination limits entities while retaining their complete selected collections:
+
+```cpp
+auto rows = co_await employees.find({
+    .relations = {"department", "department.employees"},
+    .take = 25,
+});
+auto builder = employees.createQueryBuilder("employee");
+builder.leftJoinAndSelect("department", "department")
+    .leftJoinAndSelect("department.employees", "colleague");
+auto joined = co_await builder.getMany();
+```
+
+Each field distinguishes unset, SQL NULL, and a value. Unset insert fields use
+database defaults; unset update fields are untouched. Declare nullable fields
+with `.nullable = true` and use `setNull<"field">()` explicitly. Owning text
+uses `std::pmr::string` or `ruvia::String`; PostgreSQL one-dimensional arrays
+use `std::pmr::vector<T>`, with `std::optional<T>` elements when array elements
+may be NULL. Column options select UUID, JSONB, timestamp, network, and other
+database types independently of their owning C++ representation.
+
+For joins, projections, aggregates, or more complex conditions, use
+`createQueryBuilder()` and its structured statement:
+
+```cpp
+auto builder = devices.createQueryBuilder("d");
+auto& q = builder.statement();
+builder.leftJoin("device_group", "g",
+    q.binary(builder.column<"id">(), ruvia::DbBinaryOperator::kEqual,
+        q.column("device_id", "g")));
+builder.where(Device::column<"enabled">() == true);
+builder.addSelect(q.alias(q.column("name", "g"), "group_name"));
+auto joined = co_await builder.getRawMany();
+```
+
+`getMany()` and `getOne()` map all declared entity columns. Use `getRawMany()`
+for arbitrary projections, or `db.query<ProjectionEntity>(query)` for an
+owning typed projection with matching column names. `getCount()` counts the
+query's result groups/distinct rows without pagination. Generated SQL and
+parameters can be inspected with `getQueryAndParameters()`.
+
+`DbQuery` owns a relational statement and generates SQL for the selected
+driver. Its input is identifiers, values, expressions, and nested statements:
+`value()` binds data, `column()` quotes names, and `call()` invokes a named
+database function. It accepts no SQL expression fragments. `coalesce`,
+`nullIf`, casts, CASE, tuples, arrays, JSON/network operators, window frames,
+aggregate FILTER/order, and table functions are explicit expression nodes.
+Reusing an expression also reuses its PostgreSQL parameter positions.
+
+| Query requirement | Structured API |
+| --- | --- |
+| Recursive, materialized, and data-changing CTEs | `with`, `DbCteOptions` |
+| Bulk input, conflict updates, partial conflict targets | `values`, `insertFrom`, `onConflict`, `excluded` |
+| Joins, correlated subqueries, lateral JSON expansion | `join`, `from`, `exists`, `subquery`, `joinFunction` |
+| Latest values and time-series aggregation | `distinctOn`, `over`, `aggregate`, `filter`, `call` |
+| Unions and grouped result sets | `combine`, `groupBy`, `having` |
+| Queue claims and conditional writes | `lock`, `updateFrom`, `deleteUsing`, `returning` |
+
+Common SQL operations compile for PostgreSQL and MariaDB. PostgreSQL-specific
+operators, partial indexes, procedures, and TimescaleDB functions retain their
+database requirements; unsupported dialect combinations fail during
+compilation. These capabilities do not make a TimescaleDB workload portable
+to a database without equivalent features.
+
+Queries, predicates, and entities consume input values synchronously. An
+operation owns its SQL and parameters before it is returned, so its builder
+and input strings may be destroyed before awaiting it. Returned entities own
+their fields independently of backend rows and subsequent operations. Keep
+the originating client/worker and its memory resource alive until its results
+are destroyed. A transaction repository borrows its transaction; use it before
+that transaction is moved or destroyed.
+
+### Generated schema and migrations
+
+Include `ruvia/web/db/DbSchema.h` to build versioned migrations without SQL:
+
+```cpp
+ruvia::DbSchema schema({.driver = ruvia::DbDriver::kPostgreSql});
+schema.createTable<Device>({.ifNotExists = true});
+schema.createIndex({.name = "device_name_idx", .table = "device",
+    .keys = {{.column = "name"}}});
+const auto migrations = schema.compile("001_devices");
+const auto report = ruvia::DbMigrator::migrate(config, migrations);
+```
+
+`DbTableDefinition` also describes tables directly. Schema operations cover
+columns, defaults, identity, composite keys, foreign keys, checks, enums,
+extensions, views, expression/partial/GIN indexes, and explicit data changes.
+Computed columns use `DbGeneratedType` independently of auto-generated identity
+values. Declare the field's storage mode in its entity metadata and supply its
+expression when creating the table:
+
+```cpp
+RUVIA_DB_ENTITY(LineItem, "line_item",
+    RUVIA_DB_COLUMN(id, std::int64_t,
+        ruvia::DbColumnOptions{.primaryKey = true}),
+    RUVIA_DB_COLUMN(quantity, std::int64_t),
+    RUVIA_DB_COLUMN(unit_price, std::int64_t),
+    RUVIA_DB_COLUMN(total, std::int64_t,
+        ruvia::DbColumnOptions{.generatedType = ruvia::DbGeneratedType::kStored}))
+
+ruvia::DbQuery expressions;
+schema.createTable<LineItem>({.generatedColumns = {{"total",
+    expressions.binary(expressions.column("quantity"),
+        ruvia::DbBinaryOperator::kMultiply, expressions.column("unit_price"))}}});
+```
+
+Computed fields are read normally and excluded from repository inserts, updates,
+and upserts, including explicitly assigned values. They cannot also have an
+identity or default. Direct table definitions use `DbSchemaColumn::generatedType`
+and `asExpression`. PostgreSQL compilation supports stored columns; MariaDB also
+supports `kVirtual`. See [orm_columns.cpp](examples/web/orm_columns.cpp) for a
+runnable example of computed writes, retained results, and read-only snapshots.
+MariaDB generated fields require `.nullable = true` and cannot be primary keys;
+use an explicit table CHECK constraint when their expression must never be NULL.
+
+`DbProcedure` supplies declarations, assignments, SELECT INTO, conditional
+branches, exception handlers, and returns for migration blocks and trigger
+functions. `apply(schema)` places generated schema changes inside such a
+block; `createTriggerFunction` and `createTrigger` install trigger behavior.
+
+TimescaleDB operations include `createHypertable` (the `by_range` API available
+since TimescaleDB 2.13), `setChunkTimeInterval`, `setCompression`, compression
+and retention policies. Pass interval expressions such as
+`q.cast(q.value("7 days"), ruvia::DbDataType::kInterval)`; integer time columns
+can use integer interval values. The extension must be installed on the server.
+
+PostgreSQL batches compile to one atomic migration. An unwrapped operation,
+such as a concurrent index, occupies its own batch. MariaDB DDL commits
+implicitly, so each generated statement receives its own numbered migration
+ID. Schema changes are explicit; obtaining a repository does not synchronize
+or alter tables.
+
+The PostgreSQL example [orm.cpp](examples/web/orm.cpp) prints its generated
+schema and queries by default. `ruvia_example_orm --migrate --run` applies and
+executes it against `RUVIA_DB_HOST`, `RUVIA_DB_PORT`, `RUVIA_DB_USER`,
+`RUVIA_DB_PASSWORD`, and `RUVIA_DB_DATABASE`.
+
+### SQL migrations
 
 `DbMigrator` applies pending migrations synchronously, under a backend lock so
 that concurrent deployers serialize. It runs its own event loop and blocks, so
@@ -877,6 +1095,14 @@ table. Ids that differ only in letter case are rejected, because a
 case-insensitive collation would treat them as the same migration. The text is
 recorded as a digest alongside the id, so editing a migration that has already
 run is reported rather than silently skipped.
+
+Use SQL migrations for database features without a structured schema operation,
+including independent sequences, constraint renaming, ordinary SQL functions,
+procedural loops, and transition-table triggers. A PostgreSQL dollar-quoted
+function or `DO` body is one statement and can contain its own SQL statements.
+Runtime table locks and temporary tables belong on the same `DbTransaction` as
+the work that uses them. PostgreSQL `LISTEN` notification consumption requires a
+dedicated driver connection; the ORM does not provide a notification subscriber.
 
 On PostgreSQL the statement and the row recording it commit together, so an
 interruption cannot leave the schema changed and unrecorded. A statement the

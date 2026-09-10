@@ -14,17 +14,27 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/db/DbRows.h"
+#include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbMappedQuery.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
 
 namespace ruvia {
 
 class DbTransaction;
+class DbQuery;
+template <typename Entity>
+class DbEntityRows;
+template <typename Entity, typename Executor>
+class DbRepository;
+template <typename Entity, typename Executor>
+class DbQueryBuilder;
 
 namespace detail {
+struct DbTransactionStartPlan;
 template <typename Pool>
-Task<DbTransaction> beginDbTransaction(Pool&, std::string_view, std::pmr::memory_resource*,
-    OperationOptions);
-}
+Task<DbTransaction> beginDbTransaction(Pool&, std::pmr::memory_resource*,
+    OperationOptions, DbTransactionStartPlan);
+}  // namespace detail
 
 class DbTransaction final : private detail::ScopedCapabilityNode {
 public:
@@ -37,6 +47,20 @@ public:
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
+
+    template <typename Entity>
+    [[nodiscard]] DbRepository<Entity, DbTransaction> getRepository() &;
+    template <typename Entity>
+    DbRepository<Entity, DbTransaction> getRepository() && = delete;
+
+    [[nodiscard]] ScopedOperation<DbRows> query(const DbQuery& query) &;
+    ScopedOperation<DbRows> query(const DbQuery&) && = delete;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) &;
+    ScopedOperation<DbExecResult> execute(const DbQuery&) && = delete;
+    template <typename Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) &;
+    template <typename Entity>
+    ScopedOperation<DbEntityRows<Entity>> query(const DbQuery&) && = delete;
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) &;
     ScopedOperation<DbRows> query(std::string_view, std::span<const DbValue> = {}) && = delete;
     ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) & = delete;
@@ -80,11 +104,28 @@ public:
 
 private:
     friend class DbHandle;
+    template <typename, typename>
+    friend class DbRepository;
+    template <typename, typename>
+    friend class DbQueryBuilder;
+
+    [[nodiscard]] DbDriver queryDriver() const;
+    [[nodiscard]] std::pmr::memory_resource* queryResource() const;
+    [[nodiscard]] Task<DbRows> queryTask(const DbQuery& query);
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) {
+        requireActive();
+        auto* resource = queryResource();
+        auto task = queryTask(query);
+        return detail::makeScopedOperation(operationScope(),
+            detail::mapDbQuery<Result>(std::move(task), resource, std::move(mapper)));
+    }
     friend class detail::MariaDbPool;
     friend class detail::PostgreSqlPool;
     template <typename Pool>
     friend Task<DbTransaction> detail::beginDbTransaction(
-        Pool&, std::string_view, std::pmr::memory_resource*, OperationOptions);
+        Pool&, std::pmr::memory_resource*, OperationOptions,
+        detail::DbTransactionStartPlan);
 
     struct Lease final {
         Lease(detail::DbPoolRef client, std::size_t slot, std::pmr::memory_resource* resource,

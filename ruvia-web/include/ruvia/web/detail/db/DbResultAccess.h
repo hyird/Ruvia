@@ -33,6 +33,10 @@ struct DbResultAccess final {
         return result.columnNames_;
     }
 
+    [[nodiscard]] static std::span<const std::pmr::string> columnNames(const DbRow& row) noexcept {
+        return row.columnNames();
+    }
+
     static void ownRawResult(DbRows& result, void* raw, void (*release)(void*) noexcept) noexcept {
         if (raw == nullptr || release == nullptr ||
             std::holds_alternative<DbRows::OwnedRawResult>(result.rawResult_)) {
