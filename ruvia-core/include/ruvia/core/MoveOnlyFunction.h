@@ -34,7 +34,7 @@ public:
                 detail::MoveOnlyFunctionTarget<Result, Fn, Args...>
     MoveOnlyFunction(Fn&& fn) {
         using Stored = std::decay_t<Fn>;
-        if constexpr (std::is_pointer_v<Stored> || std::is_member_pointer_v<Stored>) {
+        if constexpr (std::is_pointer_v<std::remove_reference_t<Fn>> || std::is_member_pointer_v<std::remove_reference_t<Fn>>) {
             if (fn == nullptr) {
                 return;
             }
