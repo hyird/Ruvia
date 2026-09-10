@@ -49,6 +49,13 @@ inline void reportFailure(TestContext& ctx, const char* file, int line, std::str
         static_cast<int>(expr.size()), expr.data());
 }
 
+inline void reportCheck(TestContext& ctx, bool failed, const char* file, int line,
+    std::string_view expr) {
+    if (failed) {
+        reportFailure(ctx, file, line, expr);
+    }
+}
+
 }  // namespace ruvia::testing
 
 #define RUVIA_TEST(name)                                                   \
@@ -56,16 +63,8 @@ inline void reportFailure(TestContext& ctx, const char* file, int line, std::str
     static const ruvia::testing::Registrar ruvia_reg_##name{#name, &name}; \
     static void name([[maybe_unused]] ruvia::testing::TestContext& ruvia_ctx)
 
-#define RUVIA_CHECK(cond)                                                        \
-    do {                                                                         \
-        if (!(cond)) {                                                           \
-            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__, #cond); \
-        }                                                                        \
-    } while (0)
+#define RUVIA_CHECK(cond) \
+    ruvia::testing::reportCheck(ruvia_ctx, static_cast<bool>(!(cond)), __FILE__, __LINE__, #cond)
 
-#define RUVIA_CHECK_EQ(a, b)                                                            \
-    do {                                                                                \
-        if (!((a) == (b))) {                                                            \
-            ruvia::testing::reportFailure(ruvia_ctx, __FILE__, __LINE__, #a " == " #b); \
-        }                                                                               \
-    } while (0)
+#define RUVIA_CHECK_EQ(a, b) \
+    ruvia::testing::reportCheck(ruvia_ctx, static_cast<bool>(!((a) == (b))), __FILE__, __LINE__, #a " == " #b)

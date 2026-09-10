@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // the span overload keeps winning without needing an explicit exclusion.
 template <typename Param>
 concept DbParameter =
-    std::constructible_from<DbValue, Param&&> || HttpTemporaryOwningCharString<Param>;
+    std::constructible_from<DbValue, Param&&> || kIsHttpOwningCharString<std::remove_cvref_t<Param>>;
 
 template <typename... Params>
 concept DbParameterPack = sizeof...(Params) > 0 && (DbParameter<Params> && ...);
@@ -26,7 +26,7 @@ concept DbParameterPack = sizeof...(Params) > 0 && (DbParameter<Params> && ...);
 template <typename Param>
     requires DbParameter<Param>
 [[nodiscard]] DbValue makeImmediateDbParameter(Param&& param) {
-    if constexpr (HttpTemporaryOwningCharString<Param>) {
+    if constexpr (kIsHttpOwningCharString<std::remove_cvref_t<Param>>) {
         return DbValue(std::string_view(param));
     } else {
         return DbValue(std::forward<Param>(param));

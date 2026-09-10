@@ -337,8 +337,10 @@ Task<DbExecResult> PostgreSqlPool::executeOnTransactionSlot(std::size_t slot, st
 }
 
 Task<DbTransaction> PostgreSqlPool::beginTransaction(
-    std::pmr::memory_resource* resource, OperationOptions options) {
-    return beginDbTransaction(*this, "BEGIN", resource, std::move(options));
+    std::pmr::memory_resource* resource, OperationOptions operationOptions,
+    DbTransactionOptions transactionOptions) {
+    return beginDbTransaction(*this, resource,
+        std::move(operationOptions), makeDbTransactionStartPlan(DbDriver::kPostgreSql, transactionOptions));
 }
 
 Task<void> PostgreSqlPool::commitTransaction(

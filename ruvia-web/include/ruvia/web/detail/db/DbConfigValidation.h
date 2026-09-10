@@ -2,6 +2,7 @@
 
 #include "ruvia/core/detail/config/ConfigValidation.h"
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 
 namespace ruvia::detail {
 
@@ -36,6 +37,15 @@ private:
 }
 
 inline void validateDbConfig(const DbConfig& config) {
+    if (config.cache) {
+#ifndef RUVIA_ENABLE_REDIS
+        throw std::invalid_argument("database query caching requires Redis support");
+#endif
+        validateRedisConfig(config.cache->options);
+        if (config.cache->duration.count() <= 0 || config.cache->nameSpace.empty()) {
+            throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
+        }
+    }
     const auto driver = config.driver;
     if (driver != DbDriver::kMariaDb && driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("database driver must be selected");

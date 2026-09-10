@@ -11,7 +11,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
-#include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
 namespace ruvia::detail {
@@ -68,6 +68,20 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
 // means the build has no driver for it.
 [[noreturn]] inline void throwUnavailableDbBackend() {
     throw std::logic_error("database backend is not available");
+}
+
+[[nodiscard]] inline DbDriver dbPoolDriver(const DbPoolRef& pool) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<MariaDbPool*>(&pool); client != nullptr && *client != nullptr) {
+        return DbDriver::kMariaDb;
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<PostgreSqlPool*>(&pool); client != nullptr && *client != nullptr) {
+        return DbDriver::kPostgreSql;
+    }
+#endif
+    throwUnavailableDbBackend();
 }
 
 // DbPoolRef is a closed backend set. Keep its single checked dispatch here so

@@ -2,6 +2,8 @@
 
 #include "ruvia/web/db/DbHandle.h"
 #include "ruvia/web/db/DbMigration.h"
+#include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/db/DbRows.h"
+#include "ruvia/web/db/DbSchema.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"

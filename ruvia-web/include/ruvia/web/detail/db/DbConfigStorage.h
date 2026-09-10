@@ -10,8 +10,24 @@
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 
 namespace ruvia::detail {
+
+struct DbCacheConfigStorage final {
+    template <typename Config>
+    DbCacheConfigStorage(const Config& source, std::pmr::memory_resource* resource)
+        : options(source.options, resource),
+          duration(source.duration),
+          alwaysEnabled(source.alwaysEnabled),
+          ignoreErrors(source.ignoreErrors),
+          nameSpace(source.nameSpace, resource) {}
+    RedisConfigStorage options;
+    std::chrono::milliseconds duration;
+    bool alwaysEnabled;
+    bool ignoreErrors;
+    std::pmr::string nameSpace;
+};
 
 // Worker/app-owned copy of the public startup configuration. Public DbConfig
 // deliberately uses ordinary value types; retained runtime state is rebound to
@@ -37,6 +53,7 @@ struct DbConfigStorage final {
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> queryTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
+    std::optional<DbCacheConfigStorage> cache{};
 
 private:
     struct ValidatedConfigTag final {};
@@ -52,7 +69,11 @@ private:
           readTimeout(source.readTimeout),
           writeTimeout(source.writeTimeout),
           queryTimeout(source.queryTimeout),
-          acquireTimeout(source.acquireTimeout) {}
+          acquireTimeout(source.acquireTimeout) {
+        if (source.cache) {
+            cache.emplace(*source.cache, resource);
+        }
+    }
 
     DbConfigStorage(
         ValidatedConfigTag, const DbConfigStorage& source, std::pmr::memory_resource* resource)
@@ -66,7 +87,11 @@ private:
           readTimeout(source.readTimeout),
           writeTimeout(source.writeTimeout),
           queryTimeout(source.queryTimeout),
-          acquireTimeout(source.acquireTimeout) {}
+          acquireTimeout(source.acquireTimeout) {
+        if (source.cache) {
+            cache.emplace(*source.cache, resource);
+        }
+    }
 };
 
 using DbDefinition = NamedCapabilityDefinition<DbConfigStorage>;

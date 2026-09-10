@@ -248,8 +248,8 @@ ScopedOperation<DbStreamResult> DbClient::queryStream(
     return withOptions({}).queryStream(sql, params);
 }
 
-ScopedOperation<DbTransaction> DbClient::beginTransaction() const& {
-    return withOptions({}).beginTransaction();
+ScopedOperation<DbTransaction> DbClient::beginTransaction(DbTransactionOptions options) const& {
+    return withOptions({}).beginTransaction(std::move(options));
 }
 
 void DbClient::close() noexcept {
