@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
 #include <span>
@@ -9,11 +10,21 @@
 #include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/web/db/DbQueryResultCache.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/detail/db/DbBackend.h"
+#include "ruvia/web/detail/db/DbMappedQuery.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
 
 namespace ruvia {
+
+class DbQuery;
+template <typename Entity>
+class DbEntityRows;
+template <typename Entity, typename Executor>
+class DbRepository;
+template <typename Entity, typename Executor>
+class DbQueryBuilder;
 
 class DbHandle final : private detail::ScopedCapabilityNode {
 public:
@@ -21,6 +32,15 @@ public:
     DbHandle& operator=(const DbHandle&) = delete;
 
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
+    [[nodiscard]] DbQueryResultCache queryResultCache() const;
+
+    template <typename Entity>
+    [[nodiscard]] DbRepository<Entity, DbHandle> getRepository() const;
+
+    [[nodiscard]] ScopedOperation<DbRows> query(const DbQuery& query) const;
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) const;
+    template <typename Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) const;
 
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
     ScopedOperation<DbRows> query(
@@ -65,20 +85,45 @@ public:
         return queryStream(sql, std::span<const DbValue>(values));
     }
 
-    ScopedOperation<DbTransaction> beginTransaction() const;
+    ScopedOperation<DbTransaction> beginTransaction(
+        DbTransactionOptions options = {}) const;
 
 private:
     friend class detail::DbRegistry;
+    template <typename, typename>
+    friend class DbRepository;
+    template <typename, typename>
+    friend class DbQueryBuilder;
+
+    [[nodiscard]] DbDriver queryDriver() const;
+    [[nodiscard]] std::pmr::memory_resource* queryResource() const;
+    [[nodiscard]] Task<DbRows> queryTask(const DbQuery& query) const;
+    [[nodiscard]] Task<std::pair<DbRows, DbRows>> queryAndCountTask(const DbQuery& query, const DbQuery& count) const;
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<std::pair<Result, std::uint64_t>> queryMappedAndCount(const DbQuery& query, const DbQuery& count, Mapper mapper) const {
+        requireActive();
+        auto task = queryAndCountTask(query, count);
+        return detail::makeScopedOperation(operationScope(),
+            detail::mapDbQueryAndCount<Result>(std::move(task), resource_, std::move(mapper)));
+    }
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) const {
+        requireActive();
+        auto task = queryTask(query);
+        return detail::makeScopedOperation(operationScope(),
+            detail::mapDbQuery<Result>(std::move(task), resource_, std::move(mapper)));
+    }
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope) noexcept;
+        detail::ScopedOperationScope& operationScope, detail::DbQueryCacheState* cache = nullptr) noexcept;
     static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql,
         std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
         detail::ScopedOperationScope& operationScope, OperationOptions options);
     static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client,
         std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
-        OperationOptions options);
+        OperationOptions operationOptions, DbTransactionOptions transactionOptions, detail::DbQueryCacheState* cache);
 
+    detail::DbQueryCacheState* cache_{nullptr};
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
     OperationOptions options_;

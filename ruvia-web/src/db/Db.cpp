@@ -238,8 +238,10 @@ Task<void> detail::MariaDbPool::executeControl(ConnectionSlot& slot, std::string
 }
 
 Task<DbTransaction> detail::MariaDbPool::beginTransaction(
-    std::pmr::memory_resource* resource, OperationOptions options) {
-    return beginDbTransaction(*this, "START TRANSACTION", resource, std::move(options));
+    std::pmr::memory_resource* resource, OperationOptions operationOptions,
+    DbTransactionOptions transactionOptions) {
+    return beginDbTransaction(*this, resource,
+        std::move(operationOptions), makeDbTransactionStartPlan(DbDriver::kMariaDb, transactionOptions));
 }
 
 Task<void> detail::MariaDbPool::commitTransaction(

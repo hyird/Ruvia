@@ -18,6 +18,7 @@
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/web/db/DbCache.h"
 
 namespace ruvia {
 
@@ -28,6 +29,25 @@ enum class DbDriver : std::uint8_t {
     kUnspecified,
     kMariaDb,
     kPostgreSql,
+};
+
+enum class DbTransactionIsolation : std::uint8_t {
+    kDefault,
+    kReadUncommitted,
+    kReadCommitted,
+    kRepeatableRead,
+    kSerializable,
+};
+
+enum class DbTransactionAccessMode : std::uint8_t {
+    kDefault,
+    kReadWrite,
+    kReadOnly,
+};
+
+struct DbTransactionOptions final {
+    DbTransactionIsolation isolation{DbTransactionIsolation::kDefault};
+    DbTransactionAccessMode accessMode{DbTransactionAccessMode::kDefault};
 };
 
 struct DbConfig final {
@@ -45,6 +65,7 @@ struct DbConfig final {
     std::optional<std::chrono::milliseconds> writeTimeout{};
     std::optional<std::chrono::milliseconds> queryTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
+    std::optional<DbCacheConfig> cache{};
 };
 
 class DbError final : public std::runtime_error {

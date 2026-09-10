@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/db/DbTypes.h"
@@ -273,6 +274,24 @@ RUVIA_TEST(db_migration_carries_its_atomicity) {
         .atomicity = DbMigrationAtomicity::kUnwrapped}};
     RUVIA_CHECK(standard.atomicity() == DbMigrationAtomicity::kTransactional);
     RUVIA_CHECK(concurrent.atomicity() == DbMigrationAtomicity::kUnwrapped);
+}
+
+RUVIA_TEST(db_migration_descriptor_owns_and_exposes_public_options) {
+    using ruvia::DbMigration;
+    using ruvia::DbMigrationAtomicity;
+    using ruvia::DbMigrationOptions;
+
+    std::string id = "cs_owned";
+    std::string sql = "CREATE TABLE cs_owned (id INTEGER)";
+    DbMigration migration(DbMigrationOptions{.id = std::move(id),
+        .sql = std::move(sql),
+        .atomicity = DbMigrationAtomicity::kUnwrapped});
+    RUVIA_CHECK_EQ(migration.id(), "cs_owned");
+    RUVIA_CHECK_EQ(migration.sql(), "CREATE TABLE cs_owned (id INTEGER)");
+    RUVIA_CHECK_EQ(migration.atomicity(), DbMigrationAtomicity::kUnwrapped);
+
+    const DbMigration defaults(DbMigrationOptions{.id = "cs_default", .sql = "SELECT 1"});
+    RUVIA_CHECK_EQ(defaults.atomicity(), DbMigrationAtomicity::kTransactional);
 }
 
 RUVIA_TEST(db_migration_list_rejects_invalid_atomicity) {
