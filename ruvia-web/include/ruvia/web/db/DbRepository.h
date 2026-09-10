@@ -37,6 +37,8 @@ struct DbUpsertOptions final {
     std::vector<std::string> updateColumns{};
     bool doNothing{false};
     bool anyUniqueKey{false};
+    bool skipUpdateIfNoValuesChanged{false};
+    DbPredicate indexPredicate{};
 };
 
 namespace detail {
@@ -111,10 +113,15 @@ struct DbMapOneEntity final {
 };
 struct DbMapCount final {
     std::uint64_t operator()(DbRows&& rows, std::pmr::memory_resource*) const {
+        return dbCountValue(rows);
+    }
+};
+struct DbMapExists final {
+    bool operator()(DbRows&& rows, std::pmr::memory_resource*) const {
         if (rows.size() != 1) {
-            throw std::runtime_error("database count did not return exactly one row");
+            throw std::runtime_error("database exists did not return exactly one row");
         }
-        return rows.front()["count"].template as<std::uint64_t>().value();
+        return rows.front()["exists"].template as<bool>().value();
     }
 };
 template <typename E, typename C>
@@ -248,21 +255,24 @@ public:
         return executor_.query(query_);
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> getCount() const {
+        const auto count = countQuery();
+        return executor_.template queryMapped<std::uint64_t>(count, detail::DbMapCount{});
+    }
+    [[nodiscard]] ScopedOperation<bool> getExists() const {
         auto source = query_.clone(query_.resource());
         source.clearOrder().clearLock().limit(std::nullopt).offset(std::nullopt);
+        DbQuery query(query_.resource());
+        query.select(query.alias(query.exists(source), "exists"));
+        return executor_.template queryMapped<bool>(query, detail::DbMapExists{});
+    }
+    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> getManyAndCount() const {
+        const auto count = countQuery();
         if (relations_ && !relations_->empty()) {
-            DbQuery roots(query_.resource());
-            constexpr auto keys = detail::dbPrimaryKeyColumns<Entity>();
-            for (const auto key : keys) {
-                roots.addSelect(roots.column(key, "__ruvia_count_roots"));
-            }
-            roots.from(source, "__ruvia_count_roots").distinct();
-            source = std::move(roots);
+            auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
+            return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(prepared ? *prepared : query_, count,
+                detail::DbMapRelatedEntities<Entity>{relations_->clone()});
         }
-        DbQuery count(query_.resource());
-        const std::array args{count.star()};
-        count.select(count.alias(count.aggregate("count", args), "count")).from(source, "count_source");
-        return executor_.template queryMapped<std::uint64_t>(count, detail::DbMapCount{});
+        return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(query_, count, detail::DbMapEntityRows<Entity>{});
     }
     [[nodiscard]] ScopedOperation<DbExecResult> execute() const {
         return executor_.execute(query_);
@@ -282,6 +292,23 @@ private:
           query_(executor.queryResource()),
           alias_(alias.empty() ? detail::entityQueryAlias<Entity>() : alias, query_.resource()) {
         detail::selectEntity<Entity>(query_, alias_);
+    }
+    [[nodiscard]] DbQuery countQuery() const {
+        auto source = query_.clone(query_.resource());
+        source.clearOrder().clearLock().limit(std::nullopt).offset(std::nullopt);
+        if (relations_ && !relations_->empty()) {
+            DbQuery roots(query_.resource());
+            constexpr auto keys = detail::dbPrimaryKeyColumns<Entity>();
+            for (const auto key : keys) {
+                roots.addSelect(roots.column(key, "__ruvia_count_roots"));
+            }
+            roots.from(source, "__ruvia_count_roots").distinct();
+            source = std::move(roots);
+        }
+        DbQuery count(query_.resource());
+        const std::array args{count.star()};
+        count.select(count.alias(count.aggregate("count", args), "count")).from(source, "count_source");
+        return count;
     }
     DbQueryBuilder& joinAndSelect(std::string_view relation, std::string_view alias, DbJoinType join) {
         if (alias.empty()) {
@@ -306,37 +333,13 @@ public:
         return DbQueryBuilder<Entity, Executor>(executor_, alias);
     }
     [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> find(const DbFindOptions& options = {}) const {
-        DbQuery query(executor_.queryResource());
-        const auto alias = options.relations.empty() ? std::string_view{} : detail::entityQueryAlias<Entity>();
-        detail::selectEntity<Entity>(query, alias);
-        detail::applyFindOptions<Entity>(query, options, alias);
-        if (!options.relations.empty()) {
-            detail::DbRelationPlan relations(query.resource());
-            for (const auto& path : options.relations) {
-                relations.template add<Entity>(query, alias, path);
-            }
-            auto prepared = relations.template prepare<Entity>(query, alias, executor_.queryDriver());
-            return executor_.template queryMapped<DbEntityRows<Entity>>(prepared ? *prepared : query,
-                detail::DbMapRelatedEntities<Entity>{std::move(relations)});
-        }
-        return executor_.template query<Entity>(query);
+        return findBuilder(options).getMany();
     }
     [[nodiscard]] ScopedOperation<std::optional<Entity>> findOne(const DbFindOptions& options) const {
-        DbQuery query(executor_.queryResource());
-        const auto alias = options.relations.empty() ? std::string_view{} : detail::entityQueryAlias<Entity>();
-        detail::selectEntity<Entity>(query, alias);
-        detail::applyFindOptions<Entity>(query, options, alias);
-        query.limit(1);
-        if (!options.relations.empty()) {
-            detail::DbRelationPlan relations(query.resource());
-            for (const auto& path : options.relations) {
-                relations.template add<Entity>(query, alias, path);
-            }
-            auto prepared = relations.template prepare<Entity>(query, alias, executor_.queryDriver());
-            return executor_.template queryMapped<std::optional<Entity>>(prepared ? *prepared : query,
-                detail::DbMapOneRelatedEntity<Entity>{std::move(relations)});
-        }
-        return executor_.template queryMapped<std::optional<Entity>>(query, detail::DbMapOneEntity<Entity>{});
+        return findBuilder(options).getOne();
+    }
+    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> findAndCount(const DbFindOptions& options = {}) const {
+        return findBuilder(options).getManyAndCount();
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbPredicate& predicate = {}) const {
         DbQuery query(executor_.queryResource());
@@ -346,6 +349,9 @@ public:
             query.where(predicate.expression(query));
         }
         return executor_.template queryMapped<std::uint64_t>(query, detail::DbMapCount{});
+    }
+    [[nodiscard]] ScopedOperation<bool> exists(const DbFindOptions& options = {}) const {
+        return findBuilder(options).getExists();
     }
     [[nodiscard]] ScopedOperation<DbExecResult> insert(const Entity& entity) const {
         return insert(std::span<const Entity>(&entity, 1));
@@ -382,6 +388,16 @@ public:
         query.deleteFrom(Entity::tableName()).where(predicate.expression(query));
         return executor_.execute(query);
     }
+    template <typename Number>
+        requires((std::integral<Number> || std::floating_point<Number>) && !std::same_as<Number, bool>)
+    [[nodiscard]] ScopedOperation<DbExecResult> increment(const DbPredicate& predicate, std::string_view propertyPath, Number value) const {
+        return adjustNumber(predicate, propertyPath, value, DbBinaryOperator::kAdd);
+    }
+    template <typename Number>
+        requires((std::integral<Number> || std::floating_point<Number>) && !std::same_as<Number, bool>)
+    [[nodiscard]] ScopedOperation<DbExecResult> decrement(const DbPredicate& predicate, std::string_view propertyPath, Number value) const {
+        return adjustNumber(predicate, propertyPath, value, DbBinaryOperator::kSubtract);
+    }
     [[nodiscard]] ScopedOperation<DbExecResult> remove(const Entity& entity) const {
         DbQuery query(executor_.queryResource());
         query.deleteFrom(Entity::tableName());
@@ -403,7 +419,11 @@ public:
     }
     [[nodiscard]] ScopedOperation<DbExecResult> upsert(std::span<const Entity> entities, const DbUpsertOptions& options) const {
         auto query = insertQuery(entities);
+        if ((options.skipUpdateIfNoValuesChanged || !options.indexPredicate.empty()) && executor_.queryDriver() != DbDriver::kPostgreSql) {
+            throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
+        }
         DbConflictOptions conflict{.columns = options.conflictPaths, .doNothing = options.doNothing, .anyUniqueKey = options.anyUniqueKey};
+        conflict.targetWhere = options.indexPredicate.expression(query);
         for (const auto& name : options.conflictPaths) {
             detail::requireEntityColumn<Entity>(name);
         }
@@ -432,8 +452,15 @@ public:
                 if (selected) {
                     auto value = query.excluded(C::name.view());
                     conflict.update.push_back({std::string(C::name.view()), value});
+                    if (options.skipUpdateIfNoValuesChanged) {
+                        auto changed = query.binary(query.column(C::name.view(), Entity::tableName()), DbBinaryOperator::kIsDistinctFrom, value);
+                        conflict.updateWhere = conflict.updateWhere.empty() ? changed : query.binary(conflict.updateWhere, DbBinaryOperator::kOr, changed);
+                    }
                 }
             });
+            if (conflict.update.empty() && executor_.queryDriver() == DbDriver::kPostgreSql) {
+                conflict.doNothing = true;
+            }
         }
         query.onConflict(conflict);
         return executor_.execute(query);
@@ -444,6 +471,36 @@ private:
     friend class DbTransaction;
     explicit DbRepository(detail::DbRepositoryInput<Executor> executor)
         : executor_(executor) {}
+    template <typename Number>
+    [[nodiscard]] ScopedOperation<DbExecResult> adjustNumber(const DbPredicate& predicate, std::string_view propertyPath, Number value, DbBinaryOperator op) const {
+        if (predicate.empty()) {
+            throw std::invalid_argument("repository increment/decrement requires a condition");
+        }
+        bool numeric = false;
+        detail::forEachEntityColumn<Entity>([&]<typename C> {
+            if (C::name.view() == propertyPath && C::options.generatedType == DbGeneratedType::kNone && !detail::IsPmrVector<typename C::value_type>::value) {
+                numeric = C::dataType == DbDataType::kSmallInt || C::dataType == DbDataType::kInteger || C::dataType == DbDataType::kBigInt || C::dataType == DbDataType::kNumeric || C::dataType == DbDataType::kReal || C::dataType == DbDataType::kDouble;
+            }
+        });
+        if (!numeric) {
+            throw std::invalid_argument("repository increment/decrement requires a writable numeric column");
+        }
+        DbQuery query(executor_.queryResource());
+        query.update(Entity::tableName()).where(predicate.expression(query));
+        query.set(propertyPath, query.binary(query.column(propertyPath), op, query.value(value)));
+        return executor_.execute(query);
+    }
+    [[nodiscard]] DbQueryBuilder<Entity, Executor> findBuilder(const DbFindOptions& options) const {
+        auto builder = createQueryBuilder();
+        detail::applyFindOptions<Entity>(builder.query_, options, builder.alias_);
+        if (!options.relations.empty()) {
+            builder.relations_.emplace(builder.query_.resource());
+            for (const auto& path : options.relations) {
+                builder.relations_->template add<Entity>(builder.query_, builder.alias_, path);
+            }
+        }
+        return builder;
+    }
     DbQuery insertQuery(std::span<const Entity> entities) const {
         if (entities.empty()) {
             throw std::invalid_argument("repository insert requires an entity");

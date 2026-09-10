@@ -116,6 +116,28 @@ Task<DbRows> DbTransaction::queryTask(const DbQuery& query) {
     return queryPrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation));
 }
 
+Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountTask(const DbQuery& query, const DbQuery& count) {
+    requireActive();
+    OperationGuard operation(state_->operation);
+    const auto& lease = operation.lease();
+    const auto driver = detail::dbPoolDriver(lease.client);
+    auto first = query.compile(driver, lease.resource);
+    auto second = count.compile(driver, lease.resource);
+    if (!first.returnsRows() || !second.returnsRows()) {
+        throw std::invalid_argument("query and count require statements that return rows");
+    }
+    return queryAndCountPrepared(std::move(first), std::move(second), std::move(operation));
+}
+
+Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(DbStatement query, DbStatement count, OperationGuard operation) {
+    operation.start();
+    auto& lease = operation.lease();
+    auto rows = co_await queryTransactionPool(lease.client, lease.slot, std::move(query.sql_), std::move(query.params_), lease.resource, lease.options);
+    auto total = co_await queryTransactionPool(lease.client, lease.slot, std::move(count.sql_), std::move(count.params_), lease.resource, lease.options);
+    operation.finishActive();
+    co_return std::pair{std::move(rows), std::move(total)};
+}
+
 ScopedOperation<DbRows> DbTransaction::query(const DbQuery& query) & {
     requireActive();
     return detail::makeScopedOperation(operationScope(), queryTask(query));

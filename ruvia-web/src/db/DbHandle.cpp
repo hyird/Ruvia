@@ -97,6 +97,12 @@ Task<DbRows> DbHandle::queryTask(const DbQuery& query) const {
     return queryPool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_);
 }
 
+Task<std::pair<DbRows, DbRows>> DbHandle::queryAndCountTask(const DbQuery& query, const DbQuery& count) const {
+    auto first = queryTask(query);
+    auto second = queryTask(count);
+    return detail::queryDbPair(std::move(first), std::move(second));
+}
+
 ScopedOperation<DbRows> DbHandle::query(const DbQuery& query) const {
     requireActive();
     return detail::makeScopedOperation(operationScope(), queryTask(query));

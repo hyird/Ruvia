@@ -100,6 +100,16 @@ public:
     [[nodiscard]] DbPredicate ilike(std::string_view pattern) const {
         return compare(DbBinaryOperator::kILike, pattern);
     }
+    template <detail::DbParameter Lower, detail::DbParameter Upper>
+    [[nodiscard]] DbPredicate between(Lower&& lower, Upper&& upper) const {
+        DbPredicate result;
+        result.query_.emplace();
+        auto& query = *result.query_;
+        result.expression_ = query.between(expression(query),
+            query.value(detail::makeImmediateDbParameter(std::forward<Lower>(lower))),
+            query.value(detail::makeImmediateDbParameter(std::forward<Upper>(upper))));
+        return result;
+    }
     [[nodiscard]] DbPredicate isNull() const {
         return compare(DbBinaryOperator::kEqual, nullptr);
     }
@@ -123,7 +133,56 @@ public:
         return in(std::span<const T>(values.begin(), values.size()));
     }
 
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayContains(std::span<const T> values) const {
+        return compareArray(DbBinaryOperator::kArrayContains, values);
+    }
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayContains(std::initializer_list<T> values) const {
+        return arrayContains(std::span<const T>(values.begin(), values.size()));
+    }
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayContainedBy(std::span<const T> values) const {
+        return compareArray(DbBinaryOperator::kArrayContainedBy, values);
+    }
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayContainedBy(std::initializer_list<T> values) const {
+        return arrayContainedBy(std::span<const T>(values.begin(), values.size()));
+    }
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayOverlap(std::span<const T> values) const {
+        return compareArray(DbBinaryOperator::kArrayOverlap, values);
+    }
+    template <typename T>
+    [[nodiscard]] DbPredicate arrayOverlap(std::initializer_list<T> values) const {
+        return arrayOverlap(std::span<const T>(values.begin(), values.size()));
+    }
+
 private:
+    template <typename T>
+    DbPredicate compareArray(DbBinaryOperator op, std::span<const T> values) const {
+        using Column = std::tuple_element_t<E::template columnIndex<Name>(), typename E::Columns>;
+        static_assert(detail::IsPmrVector<typename Column::value_type>::value, "array predicates require an array column");
+        using Item = typename detail::IsPmrVector<typename Column::value_type>::value_type;
+        constexpr auto type = Column::options.dataType == DbDataType::kInferred || Column::options.dataType == DbDataType::kArray
+                                  ? detail::DbEntityTypeTraits<Item>::dataType
+                                  : Column::options.dataType;
+        DbPredicate result;
+        result.query_.emplace();
+        auto& query = *result.query_;
+        std::pmr::vector<DbExpression> args(query.resource());
+        args.reserve(values.size());
+        for (const auto& value : values) {
+            args.push_back(query.value(detail::makeImmediateDbParameter(value)));
+        }
+        const auto array = query.cast(query.array(args), {.dataType = type,
+                                                             .length = Column::options.length,
+                                                             .precision = Column::options.precision,
+                                                             .scale = Column::options.scale,
+                                                             .array = true});
+        result.expression_ = query.binary(expression(query), op, array);
+        return result;
+    }
     template <detail::DbParameter V>
     DbPredicate compare(DbBinaryOperator op, V&& value) const {
         DbPredicate result;

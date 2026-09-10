@@ -84,7 +84,7 @@ Task<void> queryExample(DbClient& db) {
         .order = {{"id", DbOrderDirection::kAsc}},
         .take = 25,
     };
-    auto rows = co_await employees.find(employeeOptions);
+    auto [rows, total] = co_await employees.findAndCount(employeeOptions);
     for (const auto& employee : rows) {
         const auto& department = employee.get<"department">();
         (void)department.get<"name">();
@@ -97,8 +97,8 @@ Task<void> queryExample(DbClient& db) {
     builder.leftJoinAndSelect("department", "department")
         .leftJoinAndSelect("department.employees", "colleague")
         .take(25);
-    auto joined = co_await builder.getMany();
-    if (rows.size() < 2 || joined.size() < 2) {
+    auto [joined, joinedTotal] = co_await builder.getManyAndCount();
+    if (rows.size() < 2 || joined.size() < 2 || total != 3 || joinedTotal != 3) {
         throw std::runtime_error("relation example expected at least two employees");
     }
     for (const auto& employee : joined) {
@@ -159,8 +159,8 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
         co_await db.execute(junction);
         co_await queryExample(db);
         const DbFindOptions departmentPageOptions{.relations = {"employees"}, .order = {{"id"}}, .take = 1};
-        auto departmentPage = co_await departments.find(departmentPageOptions);
-        if (departmentPage.size() != 1 || departmentPage[0].get<"employees">().size() != 2) {
+        auto [departmentPage, departmentCount] = co_await departments.findAndCount(departmentPageOptions);
+        if (departmentPage.size() != 1 || departmentCount != 2 || departmentPage[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
         }
         auto department = co_await departments.findOne({.where = Department::column<"id">() == 1, .relations = {"employees"}});
@@ -183,8 +183,8 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
             throw std::runtime_error("one-to-one owning and inverse mapping failed");
         }
         const DbFindOptions courseOptions{.relations = {"courses.students"}, .order = {{"id"}}, .take = 1};
-        auto courseRows = co_await students.find(courseOptions);
-        if (courseRows.size() != 1 || courseRows[0].get<"courses">().size() != 2) {
+        auto [courseRows, studentCount] = co_await students.findAndCount(courseOptions);
+        if (courseRows.size() != 1 || studentCount != 2 || courseRows[0].get<"courses">().size() != 2) {
             throw std::runtime_error("many-to-many pagination truncated the courses");
         }
         auto inverseCourses = co_await courses.findOne({.where = Course::column<"id">() == 2, .relations = {"students"}});

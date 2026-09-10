@@ -906,8 +906,9 @@ uncommitted, read committed, and serializable; access mode can explicitly select
 read-write. The database's isolation semantics still apply. A failed operation
 retires its transaction lease; start a new transaction before issuing more work.
 
-`find`, `findOne`, `count`, `insert`, `update`, `upsert`, `deleteBy`, and
-`remove` return cold `ScopedOperation` objects for `co_await`. `findOne`
+`find`, `findOne`, `findAndCount`, `count`, `exists`, `insert`, `update`,
+`increment`, `decrement`, `upsert`, `deleteBy`, and `remove` return cold
+`ScopedOperation` objects for `co_await`. `findOne`
 returns `std::optional<Entity>`. `insert` and `upsert` also accept a span of
 entities. `upsert` takes `DbUpsertOptions{.conflictPaths = {"id"}}` on
 PostgreSQL. MariaDB uses its distinct any-unique-key behavior, selected with
@@ -916,6 +917,45 @@ PostgreSQL. MariaDB uses its distinct any-unique-key behavior, selected with
 Bulk upserts infer updated columns only when the input entities set the same
 fields; otherwise specify `updateColumns` explicitly, including any deliberate
 updates from database defaults.
+
+Repository and query-builder names follow TypeORM's corresponding operations.
+`findAndCount(options)` and `getManyAndCount()` return a pair suitable for
+structured bindings: the selected entities and the total matching count before
+`skip`/`take`. Relation joins count distinct root entities, and an empty page
+still returns the total. The page and count execute sequentially; use a
+repeatable-read transaction when they must observe one snapshot. Both statements
+and all their parameters are owned before the cold operation is returned.
+
+```cpp
+const ruvia::DbFindOptions options{
+    .where = Device::column<"enabled">() == true,
+    .order = {{"id", ruvia::DbOrderDirection::kDesc}},
+    .skip = 20,
+    .take = 20,
+};
+auto [devices, total] = co_await repository.findAndCount(options);
+const bool present = co_await repository.exists({
+    .where = Device::column<"id">() == deviceId,
+});
+```
+
+`exists(options)` and the builder's `getExists()` ignore pagination and use an
+existence query. `increment(condition, "column", amount)` and `decrement(...)`
+perform an atomic database update; they require a condition and a writable
+numeric column. They do not read a value into the application before updating it.
+`column<"field">().between(lower, upper)` expresses an inclusive range. Array
+fields support `arrayContains`, `arrayContainedBy`, and `arrayOverlap` on
+PostgreSQL, including typed empty arrays. Values are bound parameters and are
+owned when the predicate is constructed.
+
+PostgreSQL upserts accept `skipUpdateIfNoValuesChanged = true` and a typed
+`indexPredicate` for partial unique indexes. The former compares writable update
+columns with `IS DISTINCT FROM`, including NULL changes. On PostgreSQL, when there are no
+columns to update, an upsert becomes insert-or-ignore. MariaDB rejects these
+PostgreSQL-specific options.
+
+See the runnable [ORM example](examples/web/orm.cpp) for pagination, existence,
+counter updates, array conditions and transaction usage.
 
 Relations are declared in the entity macro with one owning side and an optional
 inverse side. `ManyToOne` stores the foreign-key column on the source table;

@@ -195,4 +195,38 @@ RUVIA_TEST(db_predicate_composes_typed_fields_and_owns_literal_strings) {
     RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[1]), std::string(150, 'a'));
 }
 
+RUVIA_TEST(db_predicate_between_and_array_operators_bind_owned_typed_values) {
+    using Tagged = DbEntity<"tagged", DbColumn<"id", std::int64_t>,
+        DbColumn<"tags", std::pmr::vector<std::pmr::string>>>;
+    std::array<std::string, 2> input{std::string(200, 'a'), "zone-b"};
+    auto condition = Tagged::column<"id">().between(3, 8) && Tagged::column<"tags">().arrayContains(std::span<const std::string>(input));
+    input[0].assign(200, 'z');
+    DbQuery query;
+    query.from("tagged").where(condition.expression(query));
+    const auto statement = query.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK_EQ(statement.sql(), "SELECT * FROM \"tagged\" WHERE ((\"tagged\".\"id\" BETWEEN $1 AND $2) AND (\"tagged\".\"tags\" @> CAST(ARRAY[$3, $4] AS TEXT[])))");
+    RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[2]), std::string(200, 'a'));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)query.compile(DbDriver::kMariaDb, nullptr); }));
+
+    DbQuery contained;
+    auto subset = Tagged::column<"tags">().arrayContainedBy<std::string_view>({});
+    contained.from("tagged").where(subset.expression(contained));
+    const auto empty = contained.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK_EQ(empty.sql(), "SELECT * FROM \"tagged\" WHERE (\"tagged\".\"tags\" <@ CAST(ARRAY[] AS TEXT[]))");
+    RUVIA_CHECK(empty.params().empty());
+
+    using Uuids = DbEntity<"uuid_tags", DbColumn<"tags", std::pmr::vector<std::pmr::string>, DbColumnOptions{.dataType = DbDataType::kUuid}>>;
+    DbQuery overlap;
+    auto any = Uuids::column<"tags">().arrayOverlap({"12345678-1234-1234-1234-123456789abc"});
+    overlap.from("uuid_tags").where(any.expression(overlap));
+    const auto typed = overlap.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK_EQ(typed.sql(), "SELECT * FROM \"uuid_tags\" WHERE (\"uuid_tags\".\"tags\" && CAST(ARRAY[$1] AS UUID[]))");
+    using Codes = DbEntity<"codes", DbColumn<"values", std::pmr::vector<std::pmr::string>, DbColumnOptions{.dataType = DbDataType::kVarchar, .length = 32}>>;
+    DbQuery codes;
+    auto code = Codes::column<"values">().arrayContains({"zone-a"});
+    codes.from("codes").where(code.expression(codes));
+    const auto sized = codes.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK(sized.sql().find("AS VARCHAR(32)[]") != std::string_view::npos);
+}
+
 }  // namespace

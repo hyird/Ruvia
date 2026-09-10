@@ -87,6 +87,8 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
             auto getOne = builder.getOne();
             auto raw = builder.getRawMany();
             auto count = builder.getCount();
+            auto page = builder.getManyAndCount();
+            auto exists = builder.getExists();
             RUVIA_CHECK(scope.hasPendingOperations());
         }
         RUVIA_CHECK(!scope.hasPendingOperations());
@@ -144,6 +146,18 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
             const auto operation = repository.count(where);
         }
         {
+            const auto operation = repository.exists({.where = Entity::column<"id">() == 8});
+        }
+        {
+            const auto operation = repository.findAndCount({.where = Entity::column<"name">() == std::string(400, 'x'), .take = 1});
+        }
+        {
+            const auto operation = repository.increment(where, "id", 1);
+        }
+        {
+            const auto operation = repository.decrement(where, "id", 1);
+        }
+        {
             const auto operation = repository.insert(input);
         }
         {
@@ -169,7 +183,9 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
     RUVIA_CHECK(resource.deallocationCount() > 0);
+    auto pendingPage = repository.findAndCount();
     scope.close();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.find(); }));
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.createQueryBuilder(); }));
 }
@@ -185,6 +201,9 @@ RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.deleteBy({}); }));
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.remove(changes); }));
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.find({.order = {{"missing"}}}); }));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.increment({}, "id", 1); }));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.increment(Entity::column<"id">() == 1, "name", 1); }));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.decrement(Entity::column<"id">() == 1, "missing", 1); }));
     std::array<Entity, 2> batch;
     batch[0].set<"id">(1);
     batch[0].set<"name">("new");
@@ -202,6 +221,7 @@ RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
     changes.set<"name_length">(3);
     auto predicate = ComputedEntity::column<"id">() == 1;
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(predicate, changes); }));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.increment(predicate, "name_length", 1); }));
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(changes, {.updateColumns = {"name_length"}}); }));
 
     ComputedEntity input;
@@ -213,6 +233,63 @@ RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
         RUVIA_CHECK(scope.hasPendingOperations());
     }
     scope.close();
+}
+
+RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_storage) {
+    const std::array drivers{
+#ifdef RUVIA_ENABLE_POSTGRESQL
+        DbDriver::kPostgreSql,
+#endif
+#ifdef RUVIA_ENABLE_MARIADB
+        DbDriver::kMariaDb,
+#endif
+    };
+    for (const auto driver : drivers) {
+        RepositoryRuntime runtime;
+        test::CountingMemoryResource resource;
+        const DbConfig config{.driver = driver};
+        detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config);
+        detail::ScopedOperationScope scope;
+        auto repository = registry.get(scope).getRepository<Entity>();
+        Entity input;
+        input.set<"id">(1);
+        input.set<"name">(std::string(400, 'n'));
+        const auto baseline = resource.liveAllocations();
+        for (int i = 0; i < 12; ++i) {
+            if (config.driver == DbDriver::kPostgreSql) {
+                {
+                    const auto operation = repository.upsert(input, {.conflictPaths = {"id"},
+                                                                        .skipUpdateIfNoValuesChanged = true,
+                                                                        .indexPredicate = Entity::column<"name">().isNotNull()});
+                    RUVIA_CHECK(resource.liveAllocations() > baseline);
+                }
+            } else {
+                RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(input, {.anyUniqueKey = true, .skipUpdateIfNoValuesChanged = true}); }));
+                RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(input, {.anyUniqueKey = true, .indexPredicate = Entity::column<"name">().isNotNull()}); }));
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+            RUVIA_CHECK(!scope.hasPendingOperations());
+        }
+        using KeyOnly = DbEntity<"keys", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>>;
+        auto keys = registry.get(scope).getRepository<KeyOnly>();
+        KeyOnly key;
+        key.set<"id">(1);
+        {
+            DbUpsertOptions options;
+            if (config.driver == DbDriver::kPostgreSql) {
+                options.conflictPaths = {"id"};
+            } else {
+                options.anyUniqueKey = true;
+            }
+            if (config.driver == DbDriver::kPostgreSql) {
+                const auto operation = keys.upsert(key, options);
+                RUVIA_CHECK(scope.hasPendingOperations());
+            } else {
+                RUVIA_CHECK(testing::throwsOn([&] { (void)keys.upsert(key, options); }));
+            }
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    }
 }
 
 }  // namespace

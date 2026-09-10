@@ -65,12 +65,14 @@ Task<void> demonstrate(DbClient& db) {
     labels.emplace_back("telemetry");
     labels.emplace_back("zone-a");
     input.set<"labels">(std::move(labels));
-    co_await devices.upsert(input, {.conflictPaths = {"id"}});
+    const DbUpsertOptions upsertOptions{.conflictPaths = {"id"}, .skipUpdateIfNoValuesChanged = true};
+    co_await devices.upsert(input, upsertOptions);
 
-    const DbFindOptions findOptions{.where = (Device::column<"id">() >= 1) && Device::column<"name">().like("%station%"),
+    const DbFindOptions findOptions{.where = Device::column<"id">().between(1, 100) && Device::column<"name">().like("%station%") && Device::column<"labels">().arrayContains({"telemetry"}),
         .order = {{"id", DbOrderDirection::kAsc}},
         .take = 20};
-    auto found = co_await devices.find(findOptions);
+    auto [found, total] = co_await devices.findAndCount(findOptions);
+    std::cout << "total=" << total << '\n';
     for (const auto& device : found) {
         std::cout << device.get<"id">() << ": " << device.get<"name">() << '\n';
     }
@@ -78,6 +80,9 @@ Task<void> demonstrate(DbClient& db) {
     Device patch;
     patch.set<"name">("Pump station updated");
     co_await devices.update(Device::column<"id">() == 1, patch);
+    co_await devices.increment(Device::column<"id">() == 1, "revision", 1);
+    co_await devices.decrement(Device::column<"id">() == 1, "revision", 1);
+    std::cout << "exists=" << co_await devices.exists({.where = Device::column<"id">() == 1}) << '\n';
     const auto one = co_await devices.findOne({.where = Device::column<"id">() == 1});
     if (one) {
         std::cout << "revision=" << one->get<"revision">() << '\n';
@@ -87,9 +92,15 @@ Task<void> demonstrate(DbClient& db) {
     auto& query = builder.statement();
     builder.where(query.binary(builder.column<"revision">(), DbBinaryOperator::kGreaterEqual, query.value(1)));
     std::cout << "matching=" << co_await builder.getCount() << '\n';
+    builder.take(1);
+    auto [page, matching] = co_await builder.getManyAndCount();
+    std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
 
     auto transaction = co_await db.beginTransaction();
     auto transactional = transaction.getRepository<Device>();
+    const DbFindOptions transactionPage{.where = Device::column<"id">() == 1, .skip = 10, .take = 1};
+    auto [emptyPage, transactionTotal] = co_await transactional.findAndCount(transactionPage);
+    std::cout << "empty page=" << emptyPage.size() << ", transaction total=" << transactionTotal << '\n';
     const auto locked = co_await transactional.findOne({.where = Device::column<"id">() == 1,
         .lock = DbLockOptions{.mode = DbRowLock::kUpdate, .skipLocked = true}});
     if (locked) {

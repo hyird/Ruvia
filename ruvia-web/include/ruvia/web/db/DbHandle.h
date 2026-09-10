@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
 #include <span>
@@ -95,6 +96,14 @@ private:
     [[nodiscard]] DbDriver queryDriver() const;
     [[nodiscard]] std::pmr::memory_resource* queryResource() const;
     [[nodiscard]] Task<DbRows> queryTask(const DbQuery& query) const;
+    [[nodiscard]] Task<std::pair<DbRows, DbRows>> queryAndCountTask(const DbQuery& query, const DbQuery& count) const;
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<std::pair<Result, std::uint64_t>> queryMappedAndCount(const DbQuery& query, const DbQuery& count, Mapper mapper) const {
+        requireActive();
+        auto task = queryAndCountTask(query, count);
+        return detail::makeScopedOperation(operationScope(),
+            detail::mapDbQueryAndCount<Result>(std::move(task), resource_, std::move(mapper)));
+    }
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) const {
         requireActive();

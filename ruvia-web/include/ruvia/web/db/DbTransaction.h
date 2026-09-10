@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
@@ -22,6 +23,7 @@ namespace ruvia {
 
 class DbTransaction;
 class DbQuery;
+class DbStatement;
 template <typename Entity>
 class DbEntityRows;
 template <typename Entity, typename Executor>
@@ -112,6 +114,15 @@ private:
     [[nodiscard]] DbDriver queryDriver() const;
     [[nodiscard]] std::pmr::memory_resource* queryResource() const;
     [[nodiscard]] Task<DbRows> queryTask(const DbQuery& query);
+    [[nodiscard]] Task<std::pair<DbRows, DbRows>> queryAndCountTask(const DbQuery& query, const DbQuery& count);
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<std::pair<Result, std::uint64_t>> queryMappedAndCount(const DbQuery& query, const DbQuery& count, Mapper mapper) {
+        requireActive();
+        auto* resource = queryResource();
+        auto task = queryAndCountTask(query, count);
+        return detail::makeScopedOperation(operationScope(),
+            detail::mapDbQueryAndCount<Result>(std::move(task), resource, std::move(mapper)));
+    }
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) {
         requireActive();
@@ -139,6 +150,7 @@ private:
 
     using OperationState = detail::DbOperationState<Lease>;
     using OperationGuard = detail::DbOperationGuard<Lease>;
+    static Task<std::pair<DbRows, DbRows>> queryAndCountPrepared(DbStatement query, DbStatement count, OperationGuard operation);
 
     class State;
     using StateOwner = std::unique_ptr<State, detail::PmrObjectDeleter<State>>;

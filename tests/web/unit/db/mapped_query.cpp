@@ -227,4 +227,114 @@ RUVIA_TEST(db_relation_mapped_query_cold_drop_and_cancellation_release_owned_pla
     RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
+ruvia::Task<ruvia::DbRows> countRowsTask(std::pmr::memory_resource* resource,
+    QueryGate* gate = nullptr, bool invalid = false, bool* started = nullptr) {
+    if (started != nullptr) {
+        *started = true;
+    }
+    if (gate != nullptr) {
+        co_await *gate;
+    }
+    auto rows = ruvia::detail::DbResultAccess::makeResult(resource);
+    auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+    names.emplace_back("count");
+    auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+    fields.push_back(ruvia::detail::DbResultAccess::ownedField(invalid ? "invalid" : "17", resource));
+    ruvia::detail::DbResultAccess::rows(rows).push_back(ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(), resource));
+    co_return rows;
+}
+
+RUVIA_TEST(db_mapped_page_repeated_operations_release_temporaries_and_retain_results) {
+    using Page = std::pair<ruvia::DbEntityRows<Entity>, std::uint64_t>;
+    asio::io_context context;
+    ruvia::test::CountingMemoryResource resource;
+    const auto perform = [&] {
+        context.restart();
+        std::optional<Page> result;
+        std::exception_ptr failure;
+        auto query = ruvia::detail::queryDbPair(ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource), countRowsTask(&resource));
+        ruvia::detail::asyncStartTask(ruvia::detail::mapDbQueryAndCount<ruvia::DbEntityRows<Entity>>(
+                                          std::move(query), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
+            asio::bind_executor(context, [&](auto completion) {
+                if (completion.failure()) {
+                    failure = completion.failure()->exception();
+                } else {
+                    result.emplace(std::move(*completion.success()).takeValue());
+                }
+            }));
+        context.run();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        return result;
+    };
+    auto retained = perform();
+    RUVIA_CHECK(retained.has_value());
+    if (!retained) {
+        return;
+    }
+    const auto baseline = resource.liveAllocations();
+    for (int i = 0; i < 12; ++i) {
+        {
+            auto next = perform();
+            RUVIA_CHECK_EQ(next->second, std::uint64_t{17});
+            RUVIA_CHECK_EQ(next->first.size(), std::size_t{1});
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+        const std::string expected(500, 'p');
+        RUVIA_CHECK_EQ(std::string_view(retained->first[0].get<"name">()), std::string_view(expected));
+    }
+    retained.reset();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(db_mapped_page_cold_drop_failures_and_cancellation_release_both_queries) {
+    asio::io_context context;
+    ruvia::test::CountingMemoryResource resource;
+    const auto operation = [&](QueryGate* first, QueryGate* second, bool invalidRow, bool invalidCount, bool* countStarted) {
+        return ruvia::detail::mapDbQueryAndCount<ruvia::DbEntityRows<Entity>>(
+            ruvia::detail::queryDbPair(ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource, invalidRow, first),
+                countRowsTask(&resource, second, invalidCount, countStarted)),
+            &resource, ruvia::detail::DbMapEntityRows<Entity>{});
+    };
+    bool countStarted = false;
+    {
+        auto cold = operation(nullptr, nullptr, false, false, &countStarted);
+        RUVIA_CHECK(resource.liveAllocations() > 0);
+    }
+    RUVIA_CHECK(!countStarted);
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        context.restart();
+        QueryGate gate;
+        countStarted = false;
+        bool failed = false;
+        bool cancelled = false;
+        ruvia::detail::asyncStartTask(operation(scenario == 0 ? &gate : nullptr,
+                                          scenario == 1 ? &gate : nullptr, scenario == 2, scenario == 3, &countStarted),
+            asio::bind_executor(context, [&](auto completion) {
+                failed = completion.failure() != nullptr;
+                if (completion.failure()) {
+                    try {
+                        std::rethrow_exception(completion.failure()->exception());
+                    } catch (const ruvia::DbError& error) {
+                        cancelled = error.code() == ruvia::DbError::Code::kCancelled;
+                    } catch (const ruvia::DbConversionError&) {
+                    }
+                }
+            }));
+        if (scenario < 2) {
+            RUVIA_CHECK(gate.continuation != nullptr);
+            RUVIA_CHECK_EQ(countStarted, scenario == 1);
+            gate.resume(true);
+        }
+        context.run();
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(cancelled, scenario < 2);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
 }  // namespace
