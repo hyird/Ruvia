@@ -1046,6 +1046,97 @@ the originating client/worker and its memory resource alive until its results
 are destroyed. A transaction repository borrows its transaction; use it before
 that transaction is moved or destroyed.
 
+### Redis query result caching
+
+Enable `RUVIA_ENABLE_REDIS` together with either database driver. Set
+`DbConfig::cache` to configure a worker-local Redis cache for that database;
+App registrations and standalone `DbClient` use the same implementation.
+
+```cpp
+using namespace std::chrono_literals;
+ruvia::DbConfig settings{
+    .driver = ruvia::DbDriver::kPostgreSql,
+    .username = "app",
+    .database = "devices",
+    .cache = ruvia::DbCacheConfig{
+        .options = {.host = "127.0.0.1", .port = 6379},
+        .duration = 1s,
+        .nameSpace = "devices"}};
+```
+
+The API follows TypeORM's query-cache conventions. Configuring Redis makes the
+cache available; individual queries opt in unless `alwaysEnabled = true`.
+The default duration is one second. Use `std::chrono::milliseconds` or another
+convertible duration instead of TypeScript's bare millisecond numbers.
+
+```cpp
+auto devices = db.getRepository<Device>();
+const ruvia::DbFindOptions options{
+    .order = {{"id"}},
+    .take = 20,
+    .cache = ruvia::DbCacheOptions{.id = "device-page", .milliseconds = 30s}};
+auto [page, total] = co_await devices.findAndCount(options);
+auto count = co_await devices.count(ruvia::DbFindOptions{.cache = 5s});
+
+auto query = devices.createQueryBuilder("device");
+query.where(Device::column<"id">() == 1).cache("device-one", 10s);
+auto device = co_await query.getOne();
+query.cache(false); // bypass even when alwaysEnabled is true
+```
+
+`cache(true)` uses the configured duration; `cache(5s)` uses an automatic key;
+`cache("id", 5s)` selects an explicit ID. Find options accept `true`, `false`,
+a duration, or `DbCacheOptions`. Automatic keys distinguish SQL, bound parameter
+values and types, and database driver. Explicit IDs deliberately identify a
+result independently of SQL: use a different ID for each filter, page, tenant,
+or result shape. Choose distinct namespaces for databases sharing Redis.
+
+Caching applies to entity reads, raw row reads, counts, existence checks, and
+relation loading. `findAndCount()` / `getManyAndCount()` cache the page and total
+separately; an explicit ID uses `"<id>-count"` for the total. These remain two
+sequential reads and can have different cache ages.
+
+Writes do not automatically invalidate cached results. Remove IDs explicitly
+when freshness matters, or wait for their TTL:
+
+```cpp
+const std::array<std::string_view, 2> ids{"device-page", "device-page-count"};
+co_await db.queryResultCache().remove(ids);
+co_await db.queryResultCache().clear();
+```
+
+`queryResultCache()` is available on `DbClient` and `DbHandle` (including
+`c.db()`). `clear()` scans and removes only this cache namespace, preserving
+unrelated Redis keys. Like ID removal, it is not a barrier against concurrent
+queries refilling the cache.
+
+`ignoreErrors = true` falls back to the database on cache read/decode failures
+and returns database results when cache writes fail. Explicit cancellation and
+shutdown still propagate; database errors are never suppressed. Redis connection
+validation at startup and explicit remove/clear failures also propagate.
+`OperationOptions::timeout` bounds the entire operation, including cache access,
+SQL execution, and cache writes; pagination pairs and remove/clear loops share
+that same budget. Exhausting it is never ignored by `ignoreErrors`.
+
+Cache settings also apply to transaction repository reads. Cached results are
+shared outside the transaction and do not provide its snapshot guarantees;
+cache misses can publish the transaction's uncommitted reads. Set `cache(false)`
+for reads that must observe transaction isolation or read-your-writes behavior.
+Locking reads, DML statements, and queries with DML CTEs bypass caching. Raw SQL
+`query()` and streaming reads do not use this cache.
+
+Queries synchronously own their parameters and cache IDs before returning a
+cold operation. Cache hits skip database execution. Returned rows and mapped
+entities own their result storage until destruction, independently of Redis
+replies, subsequent queries, and cache invalidation.
+
+The ORM example enables caching when `RUVIA_ORM_CACHE_REDIS_PORT` is set; optional
+`RUVIA_ORM_CACHE_REDIS_HOST` selects the Redis host:
+
+```bash
+RUVIA_ORM_CACHE_REDIS_PORT=6379 ./build/examples/ruvia_example_orm --migrate --run
+```
+
 ### Generated schema and migrations
 
 Include `ruvia/web/db/DbSchema.h` to build versioned migrations without SQL:

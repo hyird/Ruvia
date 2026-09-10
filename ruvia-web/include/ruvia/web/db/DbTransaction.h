@@ -32,6 +32,7 @@ template <typename Entity, typename Executor>
 class DbQueryBuilder;
 
 namespace detail {
+class DbQueryCacheState;
 struct DbTransactionStartPlan;
 template <typename Pool>
 Task<DbTransaction> beginDbTransaction(Pool&, std::pmr::memory_resource*,
@@ -167,6 +168,15 @@ private:
     void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
+    template <bool Count>
+    static Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> queryCachedPrepared(
+        DbStatement first, std::optional<DbStatement> second,
+        std::optional<std::pmr::string> firstKey, std::optional<std::pmr::string> secondKey,
+        std::optional<std::chrono::milliseconds> firstDuration,
+        std::optional<std::chrono::milliseconds> secondDuration,
+        detail::DbQueryCacheState& cache,
+        detail::ScopedOperationScope& scope, OperationGuard operation);
+    detail::DbQueryCacheState* cache_{nullptr};
     StateOwner state_;
 };
 

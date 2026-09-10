@@ -44,6 +44,11 @@ public:
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const&;
     DbHandle withOptions(OperationOptions) const&& = delete;
 
+    [[nodiscard]] DbQueryResultCache queryResultCache() const& {
+        return withOptions({}).queryResultCache();
+    }
+    DbQueryResultCache queryResultCache() const&& = delete;
+
     template <typename Entity>
     [[nodiscard]] DbRepository<Entity, DbHandle> getRepository() const& {
         return withOptions({}).template getRepository<Entity>();

@@ -24,6 +24,7 @@ namespace detail {
 class DbQueryStorage;
 class DbQueryCompiler;
 class DbRelationPlan;
+class DbQueryCacheState;
 }  // namespace detail
 
 enum class DbParameterMode : std::uint8_t { kBound,
@@ -274,6 +275,8 @@ public:
     [[nodiscard]] bool returnsRows() const;
     [[nodiscard]] bool hasWhere() const;
     [[nodiscard]] bool hasGrouping() const;
+    DbQuery& cache(const DbCacheSetting& setting);
+    DbQuery& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {});
 
     Expr column(std::string_view name, std::string_view table = {});
     Expr star(std::string_view table = {});
@@ -412,6 +415,16 @@ private:
     friend class detail::DbQueryCompiler;
     friend class detail::DbRelationPlan;
     friend class DbSchema;
+    friend class detail::DbQueryCacheState;
+    friend class DbTransaction;
+    friend class DbHandle;
+    template <typename, typename>
+    friend class DbQueryBuilder;
+    [[nodiscard]] bool cacheable() const;
+    [[nodiscard]] std::optional<bool> cacheEnabled() const;
+    [[nodiscard]] std::optional<std::chrono::milliseconds> cacheDuration() const;
+    [[nodiscard]] std::string_view cacheId() const;
+    void copyCache(const DbQuery& source, std::string_view suffix = {});
     struct StorageDeleter final {
         std::pmr::memory_resource* resource{nullptr};
         void operator()(detail::DbQueryStorage* storage) const noexcept;

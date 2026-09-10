@@ -219,6 +219,9 @@ void DbSchema::createSchema(std::string_view n, bool ine) {
     append(std::move(s));
 }
 void DbSchema::dropSchema(std::string_view n, DbDropBehavior b, bool ie) {
+    if (driver_ == DbDriver::kMariaDb && b == DbDropBehavior::kCascade) {
+        throw std::invalid_argument("MariaDB schema drops do not support CASCADE");
+    }
     std::pmr::string s("DROP SCHEMA ", resource_);
     if (ie) {
         s += "IF EXISTS ";
@@ -308,6 +311,12 @@ void DbSchema::renameTable(std::string_view t, std::string_view n) {
     std::pmr::string s("ALTER TABLE ", resource_);
     appendDbQualifiedIdentifier(s, t, driver_);
     s += " RENAME TO ";
+    if (driver_ == DbDriver::kMariaDb) {
+        if (const auto dot = t.rfind('.'); dot != std::string_view::npos) {
+            appendDbQualifiedIdentifier(s, t.substr(0, dot), driver_);
+            s += '.';
+        }
+    }
     appendDbIdentifier(s, n, driver_);
     append(std::move(s));
 }
@@ -430,10 +439,16 @@ void DbSchema::createIndex(const DbIndexDefinition& i) {
         s += "IF NOT EXISTS ";
     }
     appendDbIdentifier(s, i.name, driver_);
+    if (driver_ == DbDriver::kMariaDb) {
+        s += " USING ";
+        s += method(i.method);
+    }
     s += " ON ";
     appendDbQualifiedIdentifier(s, i.table, driver_);
-    s += " USING ";
-    s += method(i.method);
+    if (driver_ == DbDriver::kPostgreSql) {
+        s += " USING ";
+        s += method(i.method);
+    }
     s += " (";
     for (size_t n = 0; n < i.keys.size(); ++n) {
         if (n) {

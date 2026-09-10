@@ -18,6 +18,7 @@
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/web/db/DbCache.h"
 
 namespace ruvia {
 
@@ -64,6 +65,7 @@ struct DbConfig final {
     std::optional<std::chrono::milliseconds> writeTimeout{};
     std::optional<std::chrono::milliseconds> queryTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
+    std::optional<DbCacheConfig> cache{};
 };
 
 class DbError final : public std::runtime_error {

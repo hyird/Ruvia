@@ -1,8 +1,10 @@
 #include <coroutine>
+#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
@@ -53,6 +55,93 @@ RUVIA_TEST(db_mapped_query_success_owns_result_after_source_task) {
         return;
     }
     RUVIA_CHECK_EQ((*result)[0].get<"id">(), 3);
+}
+
+RUVIA_TEST(db_mapped_result_mappers_cover_empty_rows_and_shape_errors) {
+    ruvia::detail::DbMapOneEntity<Entity> one;
+    auto empty = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    const auto noEntity = one(std::move(empty), std::pmr::get_default_resource());
+    RUVIA_CHECK(!noEntity.has_value());
+
+    auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+    names.emplace_back("id");
+    names.emplace_back("name");
+    auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+    fields.push_back(ruvia::detail::DbResultAccess::ownedField("3", std::pmr::get_default_resource()));
+    fields.push_back(ruvia::detail::DbResultAccess::ownedField("first", std::pmr::get_default_resource()));
+    auto& resultRows = ruvia::detail::DbResultAccess::rows(rows);
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        fields.data(), fields.size(), names.data(), names.size(), std::pmr::get_default_resource()));
+    const auto entity = one(std::move(rows), std::pmr::get_default_resource());
+    RUVIA_CHECK(entity.has_value());
+    RUVIA_CHECK_EQ(entity->get<"id">(), 3);
+    RUVIA_CHECK_EQ(entity->get<"name">(), std::string_view("first"));
+
+    auto counts = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& countNames = ruvia::detail::DbResultAccess::columnNames(counts);
+    countNames.emplace_back("count");
+    auto& countFields = ruvia::detail::DbResultAccess::fields(counts);
+    countFields.push_back(ruvia::detail::DbResultAccess::ownedField("7", std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(counts).push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        countFields.data(), 1, countNames.data(), countNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK_EQ(ruvia::detail::dbCountValue(counts), std::uint64_t{7});
+    auto emptyCount = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)ruvia::detail::dbCountValue(emptyCount); }));
+    auto missingCount = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& missingCountNames = ruvia::detail::DbResultAccess::columnNames(missingCount);
+    missingCountNames.emplace_back("other");
+    auto& missingCountFields = ruvia::detail::DbResultAccess::fields(missingCount);
+    missingCountFields.push_back(ruvia::detail::DbResultAccess::ownedField("7", std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(missingCount).push_back(ruvia::detail::DbResultAccess::borrowedRow(missingCountFields.data(), 1, missingCountNames.data(), missingCountNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)ruvia::detail::dbCountValue(missingCount); }));
+    auto nullCount = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& nullCountNames = ruvia::detail::DbResultAccess::columnNames(nullCount);
+    nullCountNames.emplace_back("count");
+    auto& nullCountFields = ruvia::detail::DbResultAccess::fields(nullCount);
+    nullCountFields.push_back(ruvia::detail::DbResultAccess::nullField(std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(nullCount).push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        nullCountFields.data(), 1, nullCountNames.data(), nullCountNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)ruvia::detail::dbCountValue(nullCount); }));
+
+    auto existsRows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& existsNames = ruvia::detail::DbResultAccess::columnNames(existsRows);
+    existsNames.emplace_back("exists");
+    auto& existsFields = ruvia::detail::DbResultAccess::fields(existsRows);
+    existsFields.push_back(ruvia::detail::DbResultAccess::ownedField("true", std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(existsRows).push_back(ruvia::detail::DbResultAccess::borrowedRow(existsFields.data(), 1, existsNames.data(), existsNames.size(), std::pmr::get_default_resource()));
+    ruvia::detail::DbMapExists exists;
+    RUVIA_CHECK(exists(std::move(existsRows), std::pmr::get_default_resource()));
+
+    auto badExists = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& badNames = ruvia::detail::DbResultAccess::columnNames(badExists);
+    badNames.emplace_back("exists");
+    auto& badFields = ruvia::detail::DbResultAccess::fields(badExists);
+    badFields.push_back(ruvia::detail::DbResultAccess::ownedField("not-bool", std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(badExists).push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        badFields.data(), 1, badNames.data(), badNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)exists(std::move(badExists), std::pmr::get_default_resource()); }));
+
+    auto wrongExists = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& wrongNames = ruvia::detail::DbResultAccess::columnNames(wrongExists);
+    wrongNames.emplace_back("exists");
+    auto& wrongFields = ruvia::detail::DbResultAccess::fields(wrongExists);
+    wrongFields.push_back(ruvia::detail::DbResultAccess::ownedField("true", std::pmr::get_default_resource()));
+    wrongFields.push_back(ruvia::detail::DbResultAccess::ownedField("false", std::pmr::get_default_resource()));
+    auto& wrongRows = ruvia::detail::DbResultAccess::rows(wrongExists);
+    wrongRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        wrongFields.data(), 1, wrongNames.data(), wrongNames.size(), std::pmr::get_default_resource()));
+    wrongRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        wrongFields.data() + 1, 1, wrongNames.data(), wrongNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)exists(std::move(wrongExists), std::pmr::get_default_resource()); }));
+
+    auto missingExists = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& missingFields = ruvia::detail::DbResultAccess::fields(missingExists);
+    missingFields.push_back(ruvia::detail::DbResultAccess::ownedField("true", std::pmr::get_default_resource()));
+    auto& missingNames = ruvia::detail::DbResultAccess::columnNames(missingExists);
+    missingNames.emplace_back("other");
+    ruvia::detail::DbResultAccess::rows(missingExists).push_back(ruvia::detail::DbResultAccess::borrowedRow(missingFields.data(), 1, missingNames.data(), missingNames.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)exists(std::move(missingExists), std::pmr::get_default_resource()); }));
 }
 
 struct QueryGate final {

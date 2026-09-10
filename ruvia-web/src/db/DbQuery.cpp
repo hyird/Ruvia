@@ -294,7 +294,8 @@ public:
           rows(resource),
           assignments(resource),
           ctes(resource),
-          setOperations(resource) {}
+          setOperations(resource),
+          cacheId(resource) {}
 
     std::pmr::memory_resource* resource;
     std::pmr::vector<DbQueryNode> nodes;
@@ -323,6 +324,10 @@ public:
     std::pmr::vector<DbStoredCte> ctes;
     std::pmr::vector<DbStoredSetOperation> setOperations;
 
+    std::optional<bool> cacheEnabled{};
+    std::optional<std::chrono::milliseconds> cacheDuration{};
+    std::pmr::string cacheId;
+
     [[nodiscard]] bool returnsRows() const noexcept {
         return kind == DbQueryKind::kSelect || kind == DbQueryKind::kValues || !returning.empty();
     }
@@ -336,6 +341,20 @@ void requireName(std::string_view name, bool qualified = false) {
     if (qualified && (name.front() == '.' || name.back() == '.' || name.find("..") != std::string_view::npos)) {
         throw std::invalid_argument("database qualified identifier has an empty component");
     }
+}
+bool isMariaDbBareFunctionName(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 64) {
+        return false;
+    }
+    const auto isAsciiLetter = [](char value) noexcept {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+    };
+    if (!isAsciiLetter(name.front()) && name.front() != '_') {
+        return false;
+    }
+    return std::ranges::all_of(name.substr(1), [&](char value) noexcept {
+        return isAsciiLetter(value) || (value >= '0' && value <= '9') || value == '_' || value == '$';
+    });
 }
 void setSourceOptions(DbQuerySource& source, const DbSourceOptions& options, std::pmr::memory_resource* resource) {
     source.lateral = options.lateral;
@@ -549,6 +568,9 @@ std::size_t DbQuery::requireExpression(Expr expression) const {
 DbQuery::StorageOwner DbQuery::copyStorage(const detail::DbQueryStorage& source, std::pmr::memory_resource* resource) {
     DbQuery copy(resource);
     auto& target = copy.storage();
+    target.cacheEnabled = source.cacheEnabled;
+    target.cacheDuration = source.cacheDuration;
+    target.cacheId = source.cacheId;
     target.kind = source.kind;
     target.target = source.target;
     target.targetAlias = source.targetAlias;
@@ -596,6 +618,60 @@ DbQuery::StorageOwner DbQuery::copyStorage(const detail::DbQueryStorage& source,
 }
 DbQuery DbQuery::clone(std::pmr::memory_resource* resource) const {
     return DbQuery(copyStorage(storage(), detail::pmrResourceOrDefault(resource)));
+}
+
+bool DbQuery::cacheable() const {
+    const auto& s = storage();
+    return (s.kind == DbQueryKind::kSelect || s.kind == DbQueryKind::kValues) && !s.lock &&
+           std::ranges::all_of(s.queries, [](const auto& query) { return query.cacheable(); });
+}
+std::optional<bool> DbQuery::cacheEnabled() const {
+    return storage().cacheEnabled;
+}
+std::optional<std::chrono::milliseconds> DbQuery::cacheDuration() const {
+    return storage().cacheDuration;
+}
+std::string_view DbQuery::cacheId() const {
+    return storage().cacheId;
+}
+void DbQuery::copyCache(const DbQuery& source, std::string_view suffix) {
+    auto& s = storage();
+    s.cacheEnabled = source.cacheEnabled();
+    s.cacheDuration = source.cacheDuration();
+    s.cacheId = source.cacheId();
+    if (!s.cacheId.empty()) {
+        s.cacheId.append(suffix);
+    }
+}
+DbQuery& DbQuery::cache(const DbCacheSetting& setting) {
+    return std::visit([&](const auto& value) -> DbQuery& {
+        using T = std::remove_cvref_t<decltype(value)>;
+        if constexpr (std::same_as<T, DbCacheOptions>) {
+            return cache(std::string_view(value.id), value.milliseconds);
+        } else if constexpr (std::same_as<T, std::chrono::milliseconds>) {
+            return cache(std::string_view{}, value);
+        } else {
+            auto& s = storage();
+            s.cacheEnabled.reset();
+            if constexpr (std::same_as<T, bool>) {
+                s.cacheEnabled = value;
+            }
+            s.cacheDuration.reset();
+            s.cacheId.clear();
+            return *this;
+        }
+    },
+        setting);
+}
+DbQuery& DbQuery::cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds) {
+    if (milliseconds && milliseconds->count() <= 0) {
+        throw std::invalid_argument("cache duration must be positive");
+    }
+    auto& s = storage();
+    s.cacheId = id;
+    s.cacheDuration = milliseconds;
+    s.cacheEnabled = true;
+    return *this;
 }
 
 DbQuery::Expr DbQuery::column(std::string_view name, std::string_view table) {
@@ -1468,6 +1544,13 @@ private:
     void qualified(std::string_view name) {
         appendDbQualifiedIdentifier(sql, name, driver_);
     }
+    void functionName(std::string_view name) {
+        if (driver_ == DbDriver::kMariaDb && isMariaDbBareFunctionName(name)) {
+            sql += name;
+        } else {
+            qualified(name);
+        }
+    }
     template <class Range, class Fn>
     void separated(const Range& range, Fn&& fn) {
         bool first = true;
@@ -1614,7 +1697,7 @@ private:
                         sql += "LEAST";
                         break;
                     default:
-                        qualified(n.text);
+                        functionName(n.text);
                         break;
                 }
                 sql += '(';

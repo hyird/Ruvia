@@ -25,6 +25,8 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbProcedure.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryCache.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryResultCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchema.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchemaTimescale.cpp

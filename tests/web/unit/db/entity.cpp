@@ -61,6 +61,10 @@ using ComputedEntity = ruvia::DbEntity<"computed_users",
 using ArrayEntity = ruvia::DbEntity<ruvia::FixedString{"events"},
     ruvia::DbColumn<ruvia::FixedString{"tags"}, std::pmr::vector<std::pmr::string>>,
     ruvia::DbColumn<ruvia::FixedString{"scores"}, std::pmr::vector<std::optional<int>>>>;
+using NullableArrayEntity = ruvia::DbEntity<"nullable_events",
+    ruvia::DbColumn<"tags", std::pmr::vector<std::pmr::string>,
+        ruvia::DbColumnOptions{.nullable = true}>>;
+using NumericEntity = ruvia::DbEntity<"numeric_values", ruvia::DbColumn<"value", int>>;
 
 using RelationTarget = ruvia::DbEntity<"relation_targets", ruvia::DbColumn<"id", std::int64_t>>;
 using RelationOwner = ruvia::DbEntity<"relation_owners", ruvia::DbColumn<"id", std::int64_t>,
@@ -82,12 +86,25 @@ RUVIA_TEST(db_entity_tracks_unset_null_and_value_states) {
     entity.set<"id">(7);
     RUVIA_CHECK(entity.isSet<"id">());
     RUVIA_CHECK_EQ(entity.get<"id">(), 7);
+    const auto& constEntity = entity;
+    RUVIA_CHECK_EQ(constEntity.get<"id">(), 7);
     entity.setNull<"name">();
     RUVIA_CHECK(entity.isNull<"name">());
     entity.reset<"id">();
     RUVIA_CHECK(!entity.isSet<"id">());
     RUVIA_CHECK_EQ(Entity::tableName(), std::string_view("users"));
     RUVIA_CHECK_EQ(Entity::columnIndex<"name">(), std::size_t{1});
+}
+
+RUVIA_TEST(db_exec_result_exposes_affected_rows_and_optional_insert_id) {
+    const auto inserted = ruvia::detail::DbResultAccess::makeExecResult(3, 91);
+    RUVIA_CHECK_EQ(inserted.affectedRows(), std::uint64_t{3});
+    RUVIA_CHECK(inserted.lastInsertId().has_value());
+    RUVIA_CHECK_EQ(*inserted.lastInsertId(), std::uint64_t{91});
+
+    const auto updated = ruvia::detail::DbResultAccess::makeExecResult(2);
+    RUVIA_CHECK_EQ(updated.affectedRows(), std::uint64_t{2});
+    RUVIA_CHECK(!updated.lastInsertId().has_value());
 }
 
 RUVIA_TEST(db_entity_relation_access_preserves_mixed_columns_and_relation_states) {
@@ -209,6 +226,93 @@ RUVIA_TEST(db_entity_rows_mapping_owns_field_storage) {
     auto entities = ruvia::detail::mapDbEntityRows<Entity>(std::move(rows));
     RUVIA_CHECK_EQ(entities[0].get<"id">(), 9);
     RUVIA_CHECK_EQ(entities[0].get<"name">(), std::string_view("alice"));
+    const auto& constEntities = entities;
+    RUVIA_CHECK_EQ(constEntities[0].get<"id">(), 9);
+    std::size_t visited = 0;
+    for (const auto& entity : constEntities) {
+        RUVIA_CHECK_EQ(entity.get<"id">(), 9);
+        ++visited;
+    }
+    RUVIA_CHECK_EQ(visited, std::size_t{1});
+}
+
+RUVIA_TEST(db_entity_mapping_handles_nullable_null_and_rejects_required_null) {
+    auto makeRows = [](bool nullId, bool nullName) {
+        auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+        auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+        names.emplace_back(std::pmr::string("id", std::pmr::get_default_resource()));
+        names.emplace_back(std::pmr::string("name", std::pmr::get_default_resource()));
+        auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+        fields.push_back(nullId ? ruvia::detail::DbResultAccess::nullField(std::pmr::get_default_resource())
+                                : ruvia::detail::DbResultAccess::ownedField("7", std::pmr::get_default_resource()));
+        fields.push_back(nullName ? ruvia::detail::DbResultAccess::nullField(std::pmr::get_default_resource())
+                                  : ruvia::detail::DbResultAccess::ownedField("Ada", std::pmr::get_default_resource()));
+        auto& resultRows = ruvia::detail::DbResultAccess::rows(rows);
+        resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(),
+            std::pmr::get_default_resource()));
+        return rows;
+    };
+
+    auto requiredNull = makeRows(true, false);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)ruvia::detail::mapDbEntityRows<Entity>(std::move(requiredNull)); }));
+
+    auto nullableNull = makeRows(false, true);
+    auto mapped = ruvia::detail::mapDbEntityRows<Entity>(std::move(nullableNull));
+    RUVIA_CHECK_EQ(mapped.size(), std::size_t{1});
+    RUVIA_CHECK(mapped[0].isNull<"name">());
+    RUVIA_CHECK(mapped[0].isSet<"name">());
+}
+
+RUVIA_TEST(db_entity_mapping_reports_invalid_and_overflow_numeric_fields) {
+    ruvia::test::CountingMemoryResource resource;
+    auto makeRows = [&](std::string_view text) {
+        auto rows = ruvia::detail::DbResultAccess::makeResult(&resource);
+        auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+        names.emplace_back(std::pmr::string("value", &resource));
+        auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+        fields.push_back(ruvia::detail::DbResultAccess::ownedField(text, &resource));
+        auto& resultRows = ruvia::detail::DbResultAccess::rows(rows);
+        resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(), &resource));
+        return rows;
+    };
+
+    {
+        auto rows = makeRows("not-a-number");
+        bool invalid = false;
+        try {
+            (void)ruvia::detail::mapDbEntityRows<NumericEntity>(std::move(rows), &resource);
+        } catch (const ruvia::DbConversionError& error) {
+            invalid = error.code() == ruvia::DbConversionError::Code::kInvalidFormat;
+        }
+        RUVIA_CHECK(invalid);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+
+    {
+        auto rows = makeRows("999999999999999999999999999999");
+        bool outOfRange = false;
+        try {
+            (void)ruvia::detail::mapDbEntityRows<NumericEntity>(std::move(rows), &resource);
+        } catch (const ruvia::DbConversionError& error) {
+            outOfRange = error.code() == ruvia::DbConversionError::Code::kOutOfRange;
+        }
+        RUVIA_CHECK(outOfRange);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(db_entity_mapping_rejects_sql_null_for_non_nullable_scalars) {
+    auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+    names.emplace_back(std::pmr::string("value", std::pmr::get_default_resource()));
+    auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+    fields.push_back(ruvia::detail::DbResultAccess::nullField(std::pmr::get_default_resource()));
+    ruvia::detail::DbResultAccess::rows(rows).push_back(ruvia::detail::DbResultAccess::borrowedRow(
+        fields.data(), fields.size(), names.data(), names.size(), std::pmr::get_default_resource()));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        (void)ruvia::detail::mapDbEntityRows<NumericEntity>(std::move(rows));
+    }));
 }
 
 RUVIA_TEST(db_entity_computed_column_is_mapped_as_a_read_value) {
@@ -242,6 +346,71 @@ RUVIA_TEST(db_entity_postgresql_array_codec_handles_quotes_null_and_empty) {
     RUVIA_CHECK_EQ(entities[0].get<"tags">()[1], std::string_view("q\"x"));
     RUVIA_CHECK_EQ(entities[0].get<"scores">().size(), std::size_t{3});
     RUVIA_CHECK(!entities[0].get<"scores">()[1].has_value());
+}
+
+RUVIA_TEST(db_entity_array_codec_handles_empty_and_rejects_null_non_nullable_elements) {
+    ruvia::test::CountingMemoryResource resource;
+    std::pmr::vector<std::pmr::string> values(&resource);
+    const auto empty = ruvia::detail::DbResultAccess::ownedField("{}", &resource);
+    ruvia::detail::decodeDbField(empty, values, &resource);
+    RUVIA_CHECK(values.empty());
+    const auto nullElement = ruvia::detail::DbResultAccess::ownedField("{NULL}", &resource);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::decodeDbField(nullElement, values, &resource); }));
+    const auto malformedNumber = ruvia::detail::DbResultAccess::ownedField("{1,not-a-number}", &resource);
+    std::pmr::vector<int> numbers(&resource);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::decodeDbField(malformedNumber, numbers, &resource); }));
+    RUVIA_CHECK_EQ(values.size(), std::size_t{0});
+}
+
+RUVIA_TEST(db_entity_array_encoding_rejects_embedded_nul) {
+    ruvia::test::CountingMemoryResource resource;
+    {
+        std::pmr::vector<std::pmr::string> values(&resource);
+        values.emplace_back("a\0b", 3);
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            (void)ruvia::detail::entityDbValue(values, &resource);
+        }));
+        RUVIA_CHECK(resource.liveAllocations() > 0);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(db_entity_nullable_array_mapping_distinguishes_empty_and_sql_null) {
+    auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
+    auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+    names.emplace_back(std::pmr::string("tags", std::pmr::get_default_resource()));
+    auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+    fields.push_back(ruvia::detail::DbResultAccess::ownedField("{}", std::pmr::get_default_resource()));
+    fields.push_back(ruvia::detail::DbResultAccess::nullField(std::pmr::get_default_resource()));
+    auto& resultRows = ruvia::detail::DbResultAccess::rows(rows);
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(fields.data(), 1, names.data(), names.size(),
+        std::pmr::get_default_resource()));
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(fields.data() + 1, 1, names.data(), names.size(),
+        std::pmr::get_default_resource()));
+
+    auto mapped = ruvia::detail::mapDbEntityRows<NullableArrayEntity>(std::move(rows));
+    RUVIA_CHECK_EQ(mapped.size(), std::size_t{2});
+    RUVIA_CHECK(mapped[0].isSet<"tags">());
+    RUVIA_CHECK(!mapped[0].isNull<"tags">());
+    RUVIA_CHECK(mapped[0].get<"tags">().empty());
+    RUVIA_CHECK(mapped[1].isSet<"tags">());
+    RUVIA_CHECK(mapped[1].isNull<"tags">());
+}
+
+RUVIA_TEST(db_entity_rows_reject_elements_from_a_different_memory_resource) {
+    ruvia::test::CountingMemoryResource resultResource;
+    ruvia::test::CountingMemoryResource entityResource;
+    {
+        ruvia::DbEntityRows<Entity> rows(&resultResource);
+        Entity entity(&entityResource);
+        entity.set<"id">(7);
+        entity.set<"name">(std::string(200, 'x'));
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] { rows.push_back(std::move(entity)); }));
+        RUVIA_CHECK(rows.empty());
+    }
+    RUVIA_CHECK_EQ(resultResource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(entityResource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(entityResource.allocationCount(), entityResource.deallocationCount());
 }
 
 RUVIA_TEST(db_entity_mapping_exception_and_result_retention_respect_resources) {

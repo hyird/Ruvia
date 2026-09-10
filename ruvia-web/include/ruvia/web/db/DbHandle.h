@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/web/db/DbQueryResultCache.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/detail/db/DbMappedQuery.h"
@@ -31,6 +32,7 @@ public:
     DbHandle& operator=(const DbHandle&) = delete;
 
     [[nodiscard]] DbHandle withOptions(OperationOptions options) const;
+    [[nodiscard]] DbQueryResultCache queryResultCache() const;
 
     template <typename Entity>
     [[nodiscard]] DbRepository<Entity, DbHandle> getRepository() const;
@@ -113,14 +115,15 @@ private:
     }
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope) noexcept;
+        detail::ScopedOperationScope& operationScope, detail::DbQueryCacheState* cache = nullptr) noexcept;
     static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql,
         std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
         detail::ScopedOperationScope& operationScope, OperationOptions options);
     static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client,
         std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
-        OperationOptions operationOptions, DbTransactionOptions transactionOptions);
+        OperationOptions operationOptions, DbTransactionOptions transactionOptions, detail::DbQueryCacheState* cache);
 
+    detail::DbQueryCacheState* cache_{nullptr};
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
     OperationOptions options_;

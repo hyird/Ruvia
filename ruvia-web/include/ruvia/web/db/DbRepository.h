@@ -31,6 +31,7 @@ struct DbFindOptions final {
     std::optional<std::uint64_t> skip{};
     std::optional<std::uint64_t> take{};
     std::optional<DbLockOptions> lock{};
+    DbCacheSetting cache{};
 };
 struct DbUpsertOptions final {
     std::vector<std::string> conflictPaths{};
@@ -81,6 +82,7 @@ constexpr std::string_view entityQueryAlias() noexcept {
 }
 template <typename E>
 void applyFindOptions(DbQuery& query, const DbFindOptions& options, std::string_view alias = {}) {
+    query.cache(options.cache);
     if (!options.where.empty()) {
         query.where(options.where.expression(query, E::tableName(), alias));
     }
@@ -221,6 +223,14 @@ public:
         query_.having(predicate);
         return *this;
     }
+    DbQueryBuilder& cache(const DbCacheSetting& setting) {
+        query_.cache(setting);
+        return *this;
+    }
+    DbQueryBuilder& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {}) {
+        query_.cache(id, milliseconds);
+        return *this;
+    }
     DbQueryBuilder& setLock(const DbLockOptions& options) {
         query_.lock(options);
         return *this;
@@ -263,10 +273,12 @@ public:
         source.clearOrder().clearLock().limit(std::nullopt).offset(std::nullopt);
         DbQuery query(query_.resource());
         query.select(query.alias(query.exists(source), "exists"));
+        query.copyCache(query_);
         return executor_.template queryMapped<bool>(query, detail::DbMapExists{});
     }
     [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> getManyAndCount() const {
-        const auto count = countQuery();
+        auto count = countQuery();
+        count.copyCache(query_, "-count");
         if (relations_ && !relations_->empty()) {
             auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
             return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(prepared ? *prepared : query_, count,
@@ -308,6 +320,7 @@ private:
         DbQuery count(query_.resource());
         const std::array args{count.star()};
         count.select(count.alias(count.aggregate("count", args), "count")).from(source, "count_source");
+        count.copyCache(query_);
         return count;
     }
     DbQueryBuilder& joinAndSelect(std::string_view relation, std::string_view alias, DbJoinType join) {
@@ -341,7 +354,12 @@ public:
     [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> findAndCount(const DbFindOptions& options = {}) const {
         return findBuilder(options).getManyAndCount();
     }
-    [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbPredicate& predicate = {}) const {
+    [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbFindOptions& options = {}) const {
+        return findBuilder(options).getCount();
+    }
+    template <typename Predicate>
+        requires std::same_as<std::remove_cvref_t<Predicate>, DbPredicate>
+    [[nodiscard]] ScopedOperation<std::uint64_t> count(Predicate&& predicate) const {
         DbQuery query(executor_.queryResource());
         const std::array args{query.star()};
         query.select(query.alias(query.aggregate("count", args), "count")).from(Entity::tableName());

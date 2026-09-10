@@ -56,6 +56,11 @@ RUVIA_DB_ENTITY(Profile, "profiles", Id, RUVIA_DB_ONE_TO_ONE(user, User, RUVIA_D
 using Pair = DbEntity<"pairs", DbColumn<"left_id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
     DbColumn<"right_id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
     DbManyToOne<"label", Label, DbJoinColumn<"left_id", "id">>>;
+using NoPkTarget = DbEntity<"no_pk_targets", DbColumn<"id", std::int64_t>>;
+using RootNoPkTarget = DbEntity<"root_no_pk_targets", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
+    DbManyToOne<"target", NoPkTarget, DbJoinColumn<"id", "id">>>;
+using NoPkRoot = DbEntity<"no_pk_roots", DbColumn<"id", std::int64_t>,
+    DbManyToOne<"label", Label, DbJoinColumn<"id", "id">>>;
 void addRootSelect(DbQuery& query) {
     query.select({query.column("id", "a")});
 }
@@ -130,6 +135,76 @@ RUVIA_TEST(db_relation_plan_resolves_inverse_one_to_one_and_many_to_many) {
     onePlan.add<Profile>(one, "p", "user", "u");
     const auto oneStatement = one.compile(DbDriver::kPostgreSql, one.resource());
     RUVIA_CHECK(oneStatement.sql().find("\"p\".\"id\" = \"u\".\"profile_id\"") != std::string_view::npos);
+}
+
+RUVIA_TEST(db_relation_plan_rejects_malformed_paths_aliases_depth_and_missing_keys) {
+    DbQuery query;
+    query.select(query.column("id", "a")).from("accounts", "a");
+    detail::DbRelationPlan plan(query.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { plan.add<Account>(query, "a", "missing"); }));
+    RUVIA_CHECK(testing::throwsOn([&] { plan.add<Account>(query, "a", "address."); }));
+    RUVIA_CHECK(testing::throwsOn([&] { plan.add<Account>(query, "a", "address", "a.bad"); }));
+    const std::string nulAlias{"a\0bad", 5};
+    RUVIA_CHECK(testing::throwsOn([&] { plan.add<Account>(query, "a", "address", nulAlias); }));
+
+    DbQuery noTargetQuery;
+    noTargetQuery.select(noTargetQuery.column("id", "r")).from("root_no_pk_targets", "r");
+    detail::DbRelationPlan noTargetPlan(noTargetQuery.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { noTargetPlan.add<RootNoPkTarget>(noTargetQuery, "r", "target"); }));
+
+    DbQuery noRootQuery;
+    noRootQuery.select(noRootQuery.column("id", "r")).from("no_pk_roots", "r");
+    detail::DbRelationPlan noRootPlan(noRootQuery.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { noRootPlan.add<NoPkRoot>(noRootQuery, "r", "label"); }));
+
+    std::string deep;
+    for (std::size_t i = 0; i < 257; ++i) {
+        if (!deep.empty()) {
+            deep.push_back('.');
+        }
+        deep.append("parent");
+    }
+    DbQuery deepQuery;
+    deepQuery.select(deepQuery.column("id", "n")).from("nodes", "n");
+    detail::DbRelationPlan deepPlan(deepQuery.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { deepPlan.add<Node>(deepQuery, "n", deep); }));
+}
+
+RUVIA_TEST(db_relation_plan_prepare_rejects_unsafe_paged_shapes_and_applies_scope_lock) {
+    const auto makePlan = [](DbQuery& query) {
+        detail::DbRelationPlan plan(query.resource());
+        plan.add<Parent>(query, "p", "children");
+        return plan;
+    };
+
+    DbQuery plain;
+    plain.select(plain.column("id", "p")).from("parents", "p");
+    auto plainPlan = makePlan(plain);
+    RUVIA_CHECK(!plainPlan.prepare<Parent>(plain, "p", DbDriver::kPostgreSql).has_value());
+
+    DbQuery locked;
+    locked.select(locked.column("id", "p")).from("parents", "p").lock({.mode = DbRowLock::kUpdate});
+    auto lockedPlan = makePlan(locked);
+    auto lockedPrepared = lockedPlan.prepare<Parent>(locked, "p", DbDriver::kPostgreSql);
+    RUVIA_CHECK(lockedPrepared.has_value());
+    const auto lockedStatement = lockedPrepared->compile(DbDriver::kPostgreSql, nullptr);
+    const auto lockedSql = lockedStatement.sql();
+    RUVIA_CHECK(lockedSql.find("FOR UPDATE OF \"p\"") != std::string_view::npos);
+
+    DbQuery grouped;
+    grouped.select(grouped.column("id", "p")).from("parents", "p").groupBy({grouped.column("id", "p")}).limit(1);
+    auto groupedPlan = makePlan(grouped);
+    RUVIA_CHECK(testing::throwsOn([&] { (void)groupedPlan.prepare<Parent>(grouped, "p", DbDriver::kPostgreSql); }));
+
+    DbQuery distinct;
+    distinct.select(distinct.column("id", "p")).from("parents", "p").distinctOn({distinct.column("id", "p")}).limit(1);
+    auto distinctPlan = makePlan(distinct);
+    RUVIA_CHECK(testing::throwsOn([&] { (void)distinctPlan.prepare<Parent>(distinct, "p", DbDriver::kPostgreSql); }));
+
+    DbQuery skipped;
+    skipped.select(skipped.column("id", "p")).from("parents", "p").lock({.mode = DbRowLock::kUpdate, .skipLocked = true}).limit(1);
+    auto skippedPlan = makePlan(skipped);
+    RUVIA_CHECK(testing::throwsOn([&] { (void)skippedPlan.prepare<Parent>(skipped, "p", DbDriver::kPostgreSql); }));
 }
 
 void addRow(DbRows& result, const std::pmr::vector<std::pmr::string>& names,
@@ -248,6 +323,50 @@ RUVIA_TEST(db_relation_decoder_rejects_conflicting_to_one_and_partial_composite_
     RUVIA_CHECK_EQ(pairs.size(), std::size_t{2});
     addRow(compositeRows, compositeNames, {"<NULL>", "3", "12"}, &resource);
     RUVIA_CHECK(testing::throwsOn([&] { (void)detail::DbRelationDecoder(emptyPlan, &resource).decode<Pair>(compositeRows); }));
+}
+
+RUVIA_TEST(db_relation_decoder_rejects_malformed_projection_and_root_identity) {
+    DbQuery query;
+    query.from("parents", "p");
+    query.select(query.column("id", "p"));
+    detail::DbRelationPlan plan(query.resource());
+    plan.add<Parent>(query, "p", "children");
+    const auto childId = plan.nodes()[0].columns[0];
+    const auto childParent = plan.nodes()[0].columns[1];
+
+    std::pmr::vector<std::pmr::string> names(query.resource());
+    names.emplace_back("id");
+    names.emplace_back(childId);
+    names.emplace_back(childParent);
+    auto rows = detail::DbResultAccess::makeResult(query.resource());
+    addRow(rows, names, {"1", "10", "1"}, query.resource());
+    auto missing = detail::DbResultAccess::makeResult(query.resource());
+    auto& missingNames = detail::DbResultAccess::columnNames(missing);
+    missingNames.emplace_back("id");
+    auto& missingFields = detail::DbResultAccess::fields(missing);
+    missingFields.push_back(detail::DbResultAccess::ownedField("1", query.resource()));
+    detail::DbResultAccess::rows(missing).push_back(detail::DbResultAccess::borrowedRow(
+        missingFields.data(), missingFields.size(), missingNames.data(), missingNames.size(), query.resource()));
+    RUVIA_CHECK(testing::throwsOn([&] { (void)detail::DbRelationDecoder(plan, query.resource()).decode<Parent>(missing); }));
+
+    std::pmr::vector<std::pmr::string> duplicateNames(query.resource());
+    duplicateNames.emplace_back("id");
+    duplicateNames.emplace_back(childId);
+    duplicateNames.emplace_back(childId);
+    duplicateNames.emplace_back(childParent);
+    auto duplicate = detail::DbResultAccess::makeResult(query.resource());
+    addRow(duplicate, duplicateNames, {"1", "10", "10", "1"}, query.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { (void)detail::DbRelationDecoder(plan, query.resource()).decode<Parent>(duplicate); }));
+
+    auto nullRoot = detail::DbResultAccess::makeResult(query.resource());
+    addRow(nullRoot, names, {"<NULL>", "10", "1"}, query.resource());
+    RUVIA_CHECK(testing::throwsOn([&] { (void)detail::DbRelationDecoder(plan, query.resource()).decode<Parent>(nullRoot); }));
+
+    auto twoRoots = detail::DbResultAccess::makeResult(query.resource());
+    addRow(twoRoots, names, {"1", "10", "1"}, query.resource());
+    addRow(twoRoots, names, {"2", "20", "2"}, query.resource());
+    detail::DbMapOneRelatedEntity<Parent> one{plan.clone()};
+    RUVIA_CHECK(testing::throwsOn([&] { (void)one(std::move(twoRoots), query.resource()); }));
 }
 
 RUVIA_TEST(db_relation_decoder_releases_operation_storage_and_retains_prior_result) {

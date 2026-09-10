@@ -103,6 +103,7 @@ if(RUVIA_BUILD_WEB)
         web/unit/db/migration.cpp
         web/unit/db/postgresql.cpp
         web/unit/db/query.cpp
+        web/unit/db/query_cache.cpp
         web/unit/db/relations.cpp
         web/unit/db/repository.cpp
         web/unit/db/schema.cpp
@@ -126,6 +127,7 @@ if(RUVIA_BUILD_WEB)
             web/unit/db/mapped_query.cpp
             web/unit/db/migration.cpp
             web/unit/db/query.cpp
+            web/unit/db/query_cache.cpp
             web/unit/db/relations.cpp
             web/unit/db/repository.cpp
             web/unit/db/schema.cpp

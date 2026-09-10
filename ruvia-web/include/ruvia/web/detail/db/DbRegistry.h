@@ -65,6 +65,7 @@ struct pg_result;
 
 namespace ruvia::detail {
 
+class DbQueryCacheState;
 struct DbSlotSocket;
 struct DbSlotSocketQuarantine;
 
@@ -377,7 +378,11 @@ private:
     void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config);
 
     std::pmr::memory_resource* resource_;
-    std::pmr::vector<PoolOwner> pools_;
+    struct Entry final {
+        PoolOwner pool;
+        std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;
+    };
+    std::pmr::vector<Entry> entries_;
     NamedCapabilityIndex aliasIndex_;
 };
 

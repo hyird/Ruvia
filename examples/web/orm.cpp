@@ -2,6 +2,7 @@
 // queries. --migrate applies the demo migration; --run executes the demo on the
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -113,11 +114,26 @@ Task<void> demonstrate(DbClient& db) {
     std::cout << "ranked rows=" << latest.size() << '\n';
 }
 
-Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
+Task<void> demonstrateCache(DbClient& db) {
+    auto devices = db.getRepository<Device>();
+    const DbFindOptions options{.order = {{"id"}}, .take = 20, .cache = DbCacheOptions{.id = "device-page", .milliseconds = std::chrono::seconds(30)}};
+    auto [page, total] = co_await devices.findAndCount(options);
+    std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
+    auto query = devices.createQueryBuilder();
+    query.cache(std::chrono::seconds(5));
+    std::cout << "cached count=" << co_await query.getCount() << '\n';
+    const std::array<std::string_view, 2> ids{"device-page", "device-page-count"};
+    co_await db.queryResultCache().remove(ids);
+}
+
+Task<void> run(DbClient& db, EventLoopAttachment& attachment, bool useCache) {
     std::exception_ptr failure;
     try {
         co_await db.connect();
         co_await demonstrate(db);
+        if (useCache) {
+            co_await demonstrateCache(db);
+        }
     } catch (...) {
         failure = std::current_exception();
     }
@@ -148,6 +164,16 @@ DbConfig config() {
     }
     result.connectTimeout = std::chrono::seconds(5);
     result.queryTimeout = std::chrono::seconds(10);
+    if (const auto* port = std::getenv("RUVIA_ORM_CACHE_REDIS_PORT")) {
+        const auto value = std::stoul(port);
+        if (value == 0 || value > 65535) {
+            throw std::invalid_argument("invalid cache Redis port");
+        }
+        result.cache.emplace();
+        result.cache->options.port = static_cast<std::uint16_t>(value);
+        result.cache->nameSpace = "orm-demo";
+        read("RUVIA_ORM_CACHE_REDIS_HOST", result.cache->options.host);
+    }
     return result;
 }
 }  // namespace
@@ -181,7 +207,7 @@ int main(int argc, char** argv) {
             asio::io_context context(1);
             auto attachment = attachEventLoop(context);
             DbClient db(attachment.loop(), settings);
-            auto root = attachment.loop().start(run(db, attachment));
+            auto root = attachment.loop().start(run(db, attachment, settings.cache.has_value()));
             attachment.run();
             root.get();
         }
