@@ -868,12 +868,13 @@ RUVIA_DB_ENTITY(Device, "device",
     RUVIA_DB_COLUMN(enabled, bool))
 
 auto devices = c.db().getRepository<Device>();
-auto rows = co_await devices.find({
+const ruvia::DbFindOptions findOptions{
     .where = (Device::column<"enabled">() == true)
         && Device::column<"name">().like("pump%"),
     .order = {{"id", ruvia::DbOrderDirection::kDesc}},
     .take = 50,
-});
+};
+auto rows = co_await devices.find(findOptions);
 
 Device changes;
 changes.set<"name">("Main pump");

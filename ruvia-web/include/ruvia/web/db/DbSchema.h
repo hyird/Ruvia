@@ -333,24 +333,21 @@ void DbSchema::createTable(const DbEntityTableOptions& options) {
         const auto local = Entity::tableName().substr(dot == std::string_view::npos ? 0 : dot + 1);
         table.constraints.push_back({.name = std::string(local) + "_pkey", .kind = DbConstraintKind::kPrimaryKey, .columns = std::move(primary)});
     }
-    [&]<std::size_t... I>(std::index_sequence<I...>) {
-        const auto addRelation = [&]<typename R> {
-            if constexpr (!R::isCollection && R::isOwning) {
-                detail::validateDbRelation<Entity, R>();
-                using Mapping = detail::DbRelationMapping<Entity, R>;
-                using Target = typename R::TargetEntity;
-                const auto localTable = Entity::tableName().substr(Entity::tableName().rfind('.') == std::string_view::npos ? 0 : Entity::tableName().rfind('.') + 1);
-                const auto prefix = std::string(localTable) + "_" + std::string(R::name.view());
-                DbSchemaConstraint fk{.name = prefix + "_fkey", .kind = DbConstraintKind::kForeignKey, .referencedTable = std::string(Target::tableName())};
-                detail::forEachDbDescriptor<typename Mapping::JoinColumns>([&]<typename J, std::size_t> { fk.columns.emplace_back(J::local.view()); fk.referencedColumns.emplace_back(J::referenced.view()); });
-                table.constraints.push_back(std::move(fk));
-                if constexpr (R::kind == DbRelationKind::kOneToOne) {
-                    table.constraints.push_back({.name = prefix + "_key", .kind = DbConstraintKind::kUnique, .columns = table.constraints.back().columns});
-                }
+    detail::forEachDbDescriptor<typename Entity::Relations>([&]<typename R, std::size_t> {
+        if constexpr (!R::isCollection && R::isOwning) {
+            detail::validateDbRelation<Entity, R>();
+            using Mapping = detail::DbRelationMapping<Entity, R>;
+            using Target = typename R::TargetEntity;
+            const auto localTable = Entity::tableName().substr(Entity::tableName().rfind('.') == std::string_view::npos ? 0 : Entity::tableName().rfind('.') + 1);
+            const auto prefix = std::string(localTable) + "_" + std::string(R::name.view());
+            DbSchemaConstraint fk{.name = prefix + "_fkey", .kind = DbConstraintKind::kForeignKey, .referencedTable = std::string(Target::tableName())};
+            detail::forEachDbDescriptor<typename Mapping::JoinColumns>([&]<typename J, std::size_t> { fk.columns.emplace_back(J::local.view()); fk.referencedColumns.emplace_back(J::referenced.view()); });
+            table.constraints.push_back(std::move(fk));
+            if constexpr (R::kind == DbRelationKind::kOneToOne) {
+                table.constraints.push_back({.name = prefix + "_key", .kind = DbConstraintKind::kUnique, .columns = table.constraints.back().columns});
             }
-        };
-        (addRelation.template operator()<std::tuple_element_t<I, typename Entity::Relations>>(), ...);
-    }(std::make_index_sequence<std::tuple_size_v<typename Entity::Relations>>{});
+        }
+    });
     createTable(table);
 }
 

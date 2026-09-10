@@ -67,9 +67,10 @@ Task<void> demonstrate(DbClient& db) {
     input.set<"labels">(std::move(labels));
     co_await devices.upsert(input, {.conflictPaths = {"id"}});
 
-    auto found = co_await devices.find({.where = (Device::column<"id">() >= 1) && Device::column<"name">().like("%station%"),
+    const DbFindOptions findOptions{.where = (Device::column<"id">() >= 1) && Device::column<"name">().like("%station%"),
         .order = {{"id", DbOrderDirection::kAsc}},
-        .take = 20});
+        .take = 20};
+    auto found = co_await devices.find(findOptions);
     for (const auto& device : found) {
         std::cout << device.get<"id">() << ": " << device.get<"name">() << '\n';
     }

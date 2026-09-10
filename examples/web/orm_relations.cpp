@@ -79,11 +79,12 @@ auto migrations() {
 
 Task<void> queryExample(DbClient& db) {
     auto employees = db.getRepository<Employee>();
-    auto rows = co_await employees.find({
+    const DbFindOptions employeeOptions{
         .relations = {"department", "department.employees"},
         .order = {{"id", DbOrderDirection::kAsc}},
         .take = 25,
-    });
+    };
+    auto rows = co_await employees.find(employeeOptions);
     for (const auto& employee : rows) {
         const auto& department = employee.get<"department">();
         (void)department.get<"name">();
@@ -157,7 +158,8 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
             .onConflict({.columns = {"student_id", "course_id"}, .doNothing = true});
         co_await db.execute(junction);
         co_await queryExample(db);
-        auto departmentPage = co_await departments.find({.relations = {"employees"}, .order = {{"id"}}, .take = 1});
+        const DbFindOptions departmentPageOptions{.relations = {"employees"}, .order = {{"id"}}, .take = 1};
+        auto departmentPage = co_await departments.find(departmentPageOptions);
         if (departmentPage.size() != 1 || departmentPage[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
         }
@@ -180,7 +182,8 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
         if (userRows.size() != 1 || profileRows.size() != 1 || userRows[0].get<"profile">().get<"id">() != 1 || profileRows[0].get<"user">().get<"id">() != 1) {
             throw std::runtime_error("one-to-one owning and inverse mapping failed");
         }
-        auto courseRows = co_await students.find({.relations = {"courses.students"}, .order = {{"id"}}, .take = 1});
+        const DbFindOptions courseOptions{.relations = {"courses.students"}, .order = {{"id"}}, .take = 1};
+        auto courseRows = co_await students.find(courseOptions);
         if (courseRows.size() != 1 || courseRows[0].get<"courses">().size() != 2) {
             throw std::runtime_error("many-to-many pagination truncated the courses");
         }
