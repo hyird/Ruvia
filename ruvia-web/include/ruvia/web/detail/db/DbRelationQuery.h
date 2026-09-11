@@ -89,25 +89,26 @@ public:
         std::string_view alias = {}, DbJoinType join = DbJoinType::kLeft) {
         if constexpr (dbPrimaryKeyCount<Entity>() == 0) {
             throw std::invalid_argument("relation loading requires a primary key on the root entity");
-        }
-        if (alias.find('.') != std::string_view::npos || alias.find('\0') != std::string_view::npos) {
-            throw std::invalid_argument("a relation join alias must be one identifier");
-        }
-        auto normalized = normalize(rootAlias, path);
-        validatePath<Entity>(normalized, 0);
-        if (!alias.empty() && query.usesSourceName(alias)) {
-            bool same = false;
-            for (const auto& node : nodes_) {
-                same |= node.path == normalized && node.alias == alias && node.join == join;
+        } else {
+            if (alias.find('.') != std::string_view::npos || alias.find('\0') != std::string_view::npos) {
+                throw std::invalid_argument("a relation join alias must be one identifier");
             }
-            if (!same) {
-                throw std::invalid_argument("relation join alias is already in use");
+            auto normalized = normalize(rootAlias, path);
+            validatePath<Entity>(normalized, 0);
+            if (!alias.empty() && query.usesSourceName(alias)) {
+                bool same = false;
+                for (const auto& node : nodes_) {
+                    same |= node.path == normalized && node.alias == alias && node.join == join;
+                }
+                if (!same) {
+                    throw std::invalid_argument("relation join alias is already in use");
+                }
             }
+            if (nodes_.empty()) {
+                columnCount_ = std::tuple_size_v<typename Entity::Columns>;
+            }
+            addPath<Entity>(query, rootAlias, normalized, root, alias, join);
         }
-        if (nodes_.empty()) {
-            columnCount_ = std::tuple_size_v<typename Entity::Columns>;
-        }
-        addPath<Entity>(query, rootAlias, normalized, root, alias, join);
     }
 
     template <typename Entity>
@@ -154,8 +155,7 @@ private:
             using Target = typename Relation::TargetEntity;
             if constexpr (dbPrimaryKeyCount<Target>() == 0) {
                 throw std::invalid_argument("relation loading requires a primary key on every selected target");
-            }
-            if (!rest.empty()) {
+            } else if (!rest.empty()) {
                 validatePath<Target>(rest, depth + 1);
             }
         });
