@@ -139,7 +139,7 @@ Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request,
         withRouteHandlers(services, *this, errorHandler, notFoundHandlerFor(request.path())));
     auto terminal = [this, error, errorHandler](Context& terminalContext) -> Task<HttpResponse> {
         if (errorHandler == nullptr) {
-            co_return makeDefaultErrorResponse(terminalContext.resource(), error);
+            co_return makeDefaultErrorResponse(terminalContext.arena(), error);
         }
         co_return co_await handleError(terminalContext, error);
     };
@@ -182,7 +182,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, notFoundHandler](Context& terminalContext) -> Task<HttpResponse> {
         if (notFoundHandler == nullptr) {
-            co_return makeDefaultErrorResponse(terminalContext.resource(),
+            co_return makeDefaultErrorResponse(terminalContext.arena(),
                 HttpErrorInfo(
                     {.status = ruvia::http_status::kNotFound, .message = "route not found"}));
         }
@@ -201,7 +201,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
 Task<HttpResponse> detail::RouteTable::handleException(
     Context& context, std::exception_ptr exception) const {
     detail::ContextAccess::setError(context, exception);
-    OwnedHttpErrorInfo errorInfo(context.resource(), exception);
+    OwnedHttpErrorInfo errorInfo(context.arena(), exception);
 
     auto response = co_await handleError(context, errorInfo.info);
     applyExceptionResponseMetadata(response, exception);

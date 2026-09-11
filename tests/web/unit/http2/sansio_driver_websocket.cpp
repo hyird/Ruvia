@@ -14,17 +14,17 @@ ruvia::Task<void> echoWithOperationMemory(void* target, ruvia::Context& context)
     auto& observed = *static_cast<WebSocketOperationMemory*>(target);
     const std::string expectedHandshake(512, 'h');
     const std::string expectedRetained(512, 'r');
-    const std::pmr::string handshake(expectedHandshake, context.resource());
-    const std::pmr::string retained(expectedRetained, context.operationResource());
+    const std::pmr::string handshake(expectedHandshake, context.arena());
+    const std::pmr::string retained(expectedRetained, context.pool());
     auto& socket = context.webSocket();
     for (;;) {
-        auto* before = static_cast<std::byte*>(context.resource()->allocate(1, 1));
+        auto* before = static_cast<std::byte*>(context.arena()->allocate(1, 1));
         auto message = co_await socket.read();
         if (message && message->text()) {
             co_await socket.text(message->payload());
             ++observed.messages;
         }
-        auto* after = static_cast<std::byte*>(context.resource()->allocate(1, 1));
+        auto* after = static_cast<std::byte*>(context.arena()->allocate(1, 1));
         observed.requestArenaStable = observed.requestArenaStable && after == before + 1;
         observed.retainedDataStable = observed.retainedDataStable &&
                                       handshake == std::string_view(expectedHandshake) &&

@@ -150,11 +150,11 @@ RUVIA_TEST(context_operation_clients_keep_parameters_out_of_request_arena) {
         fixture.requestMemory, fixture.request,
         fixture.capabilities.contextServices(fixture.stopToken));
 
-    RUVIA_CHECK(context.resource() == fixture.requestMemory.resource());
-    RUVIA_CHECK(context.operationResource() == fixture.worker.resource());
+    RUVIA_CHECK(context.arena() == fixture.requestMemory.resource());
+    RUVIA_CHECK(context.pool() == fixture.worker.resource());
 
     std::pmr::string handshake("websocket-handshake", fixture.requestMemory.allocator<char>());
-    std::pmr::string retainedOperationValue(2048, 'r', context.operationResource());
+    std::pmr::string retainedOperationValue(2048, 'r', context.pool());
     const std::string expectedOperationValue(2048, 'r');
 #ifdef RUVIA_ENABLE_DATABASE
     auto database = context.db();
@@ -164,12 +164,12 @@ RUVIA_TEST(context_operation_clients_keep_parameters_out_of_request_arena) {
 #endif
     auto httpClient = context.httpClient();
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *context.operationResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *context.pool(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     for (int index = 0; index != 2000; ++index) {
         const std::string value(2048, static_cast<char>('a' + index % 26));
         const std::string target = "/" + value;
-        std::pmr::string transientOperationValue(value, context.operationResource());
+        std::pmr::string transientOperationValue(value, context.pool());
         RUVIA_CHECK_EQ(handshake, std::string_view("websocket-handshake"));
         RUVIA_CHECK_EQ(retainedOperationValue, std::string_view(expectedOperationValue));
 #ifdef RUVIA_ENABLE_DATABASE

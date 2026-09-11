@@ -18,7 +18,7 @@ void storeRepeatedNextError(Context& context) {
     detail::ContextAccess::setError(
         context, std::make_exception_ptr(std::logic_error("next() called multiple times")));
     detail::ContextAccess::setResponse(
-        context, detail::makeDefaultErrorResponse(context.resource(),
+        context, detail::makeDefaultErrorResponse(context.arena(),
                      HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
                          .code = "next_called_multiple_times",
                          .message = "next() called multiple times"})));
@@ -28,7 +28,7 @@ void storeNextAfterResponseError(Context& context) {
     detail::ContextAccess::setError(
         context, std::make_exception_ptr(std::logic_error("next() called after respond()")));
     detail::ContextAccess::setResponse(
-        context, detail::makeDefaultErrorResponse(context.resource(),
+        context, detail::makeDefaultErrorResponse(context.arena(),
                      HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
                          .code = "next_called_after_response",
                          .message = "next() called after respond()"})));
@@ -48,7 +48,7 @@ void storeNextAfterResponseError(Context& context) {
 }
 
 detail::NextState::Control* makeNextControl(Context& context) {
-    auto* control = static_cast<detail::NextState::Control*>(context.resource()->allocate(
+    auto* control = static_cast<detail::NextState::Control*>(context.arena()->allocate(
         sizeof(detail::NextState::Control), alignof(detail::NextState::Control)));
     std::construct_at(control);
     return control;
@@ -119,7 +119,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
+    auto& next = NextAccess::makeIn(context.arena(),
         detail::NextState{.table = this,
             .route = &route,
             .context = &context,
@@ -182,7 +182,7 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareAt(
     const auto& middleware = middlewareFrames_[unmatchedMiddlewareOffset_ + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
+    auto& next = NextAccess::makeIn(context.arena(),
         detail::NextState{.table = this,
             .context = &context,
             .unmatchedTerminal = &terminal,
@@ -224,7 +224,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route,
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto& next = NextAccess::makeIn(context.resource(),
+    auto& next = NextAccess::makeIn(context.arena(),
         detail::NextState{.table = this,
             .route = &route,
             .context = &context,

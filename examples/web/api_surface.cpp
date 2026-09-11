@@ -253,7 +253,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
         c.header("X-Response-Prepared", "true");
-        ruvia::HttpResponse response({.resource = c.resource()});
+        ruvia::HttpResponse response({.resource = c.arena()});
         response.status(ruvia::http_status::kNonAuthoritativeInformation);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
@@ -273,7 +273,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> jsonResponse(ruvia::Context& c) {
-        SurfaceJsonResponse response(c);
+        SurfaceJsonResponse response({.resource = c.arena()});
         response.set<"message">("json response");
         co_return c.json(response);
     }
@@ -352,7 +352,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
         c.header("X-Surface-Prepared-Assigned", "true");
-        ruvia::HttpResponse response({.resource = c.resource()});
+        ruvia::HttpResponse response({.resource = c.arena()});
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.body("assigned prepared response\n");
         co_return response;
@@ -642,7 +642,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> manualBody(ruvia::Context& c) {
-        ruvia::HttpResponse response({.resource = c.resource()});
+        ruvia::HttpResponse response({.resource = c.arena()});
         response.status(ruvia::http_status::kAccepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.header("X-Manual-Body", "owned");

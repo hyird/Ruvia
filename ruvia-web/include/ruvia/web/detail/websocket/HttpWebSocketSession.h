@@ -50,7 +50,7 @@ template <typename Transport>
 Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler,
     Context& context) {
-    auto webSocket = makeWebSocketFacade(connection, *context.operationResource());
+    auto webSocket = makeWebSocketFacade(connection, *context.pool());
     ContextWebSocketBinding webSocketBinding(context, webSocket);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);

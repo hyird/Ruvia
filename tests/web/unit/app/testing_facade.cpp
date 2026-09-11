@@ -170,7 +170,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> greet(ruvia::Context& c) {
-        std::pmr::string reply(c.resource());
+        std::pmr::string reply(c.arena());
         reply.append(c.req().query("name").value_or("nobody"));
         reply.push_back('/');
         reply.append(c.req().cookie("sid").value_or("no-sid"));
@@ -184,7 +184,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> count(ruvia::Context& c) {
         auto& counter = c.workerState<TestingFacadeCounter>();
         ++counter.count;
-        std::pmr::string reply(c.resource());
+        std::pmr::string reply(c.arena());
         reply.append(std::to_string(counter.count));
         co_return c.body(std::move(reply));
     }
@@ -215,7 +215,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> whoami(ruvia::Context& c) {
         const auto& user = c.requestState<TestingFacadeUser>();
-        std::pmr::string reply(c.resource());
+        std::pmr::string reply(c.arena());
         reply.append(user.name);
         reply.push_back('/');
         reply.append(std::to_string(user.level));
@@ -226,26 +226,26 @@ private:
     // schema; JSON output never bypasses the model boundary.
     ruvia::Task<ruvia::HttpResponse> report(ruvia::Context& c) {
         const std::string_view tags[] = {"a\"quoted", "b"};
-        TestingFacadeReport report({.resource = c.resource()});
+        TestingFacadeReport report({.resource = c.arena()});
         report.set<"path">(c.req().path());
         report.set<"count">(static_cast<std::uint64_t>(std::size(tags)));
         auto& reportTags = report.ensure<"tags">();
         reportTags.reserve(std::size(tags));
         for (const auto tag : tags) {
-            reportTags.emplace_back(tag, ruvia::ModelOptions{.resource = c.resource()});
+            reportTags.emplace_back(tag, ruvia::ModelOptions{.resource = c.arena()});
         }
         co_return c.json(report);
     }
 
     ruvia::Task<ruvia::HttpResponse> large(ruvia::Context& c) {
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         const auto fill = c.req().query("fill").value_or("x");
         body.assign(1024 * 1024, fill.empty() ? 'x' : fill.front());
         co_return c.body(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> worker(ruvia::Context& c) {
-        std::pmr::string state(c.resource());
+        std::pmr::string state(c.arena());
         state.append(c.worker().valid() ? "valid" : "invalid");
         state.push_back('/');
         state.append(c.worker().isCurrent() ? "current" : "foreign");
@@ -544,7 +544,7 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
     app.onError([branding](ruvia::Context& c,
                     ruvia::HttpErrorInfo error) -> ruvia::Task<ruvia::HttpResponse> {
         c.status(error.status());
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append(branding.label);
         body.append(":error");
         co_return c.text(std::move(body));

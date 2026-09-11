@@ -27,7 +27,7 @@ using ruvia::detail::RouteStreamHandler;
 using ruvia::detail::RouteTable;
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
-    co_return ruvia::HttpResponse({.resource = context.resource()});
+    co_return ruvia::HttpResponse({.resource = context.arena()});
 }
 
 ruvia::Task<void> streamRouteHandler(void*, ruvia::Context&) {

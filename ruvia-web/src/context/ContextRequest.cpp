@@ -123,8 +123,8 @@ const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
     if (!cache) {
         const auto rawHeaders = request_.headers();
-        std::pmr::vector<std::pmr::string> names(resource());
-        auto headers = detail::RequestNameValueListAccess::make(resource());
+        std::pmr::vector<std::pmr::string> names(arena());
+        auto headers = detail::RequestNameValueListAccess::make(arena());
         names.reserve(rawHeaders.size());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
@@ -158,13 +158,13 @@ void Context::ensureRequestQuery() const {
     }
 
     const auto pairCount = detail::delimitedFieldCount(request_.queryString(), '&');
-    std::pmr::vector<std::pmr::string> storage(resource());
+    std::pmr::vector<std::pmr::string> storage(arena());
     storage.reserve(detail::boundedFieldReserve(pairCount * 2));
     bool valid = true;
     const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
         [this, &storage, &valid](std::string_view key, std::string_view value) {
-            std::pmr::string decodedName(resource());
-            std::pmr::string decodedValue(resource());
+            std::pmr::string decodedName(arena());
+            std::pmr::string decodedValue(arena());
             if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
                 !detail::assignUrlDecodedOrCopy(
                     decodedValue, value, detail::UrlDecodeMode::kForm)) {
@@ -187,8 +187,8 @@ void Context::ensureRequestQuery() const {
         std::size_t end;
     };
 
-    const auto order = detail::sortedPairOrder(storage, resource());
-    std::pmr::vector<QueryBuild> builds(resource());
+    const auto order = detail::sortedPairOrder(storage, arena());
+    std::pmr::vector<QueryBuild> builds(arena());
     builds.reserve(order.size());
     for (std::size_t offset = 0; offset < order.size();) {
         const auto begin = offset;
@@ -203,8 +203,8 @@ void Context::ensureRequestQuery() const {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto query = detail::RequestNameValueListAccess::make(resource());
-    detail::RequestQueryValues groups{resource()};
+    auto query = detail::RequestNameValueListAccess::make(arena());
+    detail::RequestQueryValues groups{arena()};
     const auto decodedPairCount = storage.size() / 2;
     detail::RequestNameValueListAccess::reserve(query, decodedPairCount);
     groups.reserve(builds.size());
@@ -270,7 +270,7 @@ const RequestNameValueList& Context::requestCookies() const {
             }
         }
 
-        auto cookies = detail::RequestNameValueListAccess::make(resource());
+        auto cookies = detail::RequestNameValueListAccess::make(arena());
         detail::RequestNameValueListAccess::reserve(
             cookies, detail::boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
@@ -311,15 +311,15 @@ void Context::ensureRouteParams() const {
     // Route names and unencoded captures already borrow stable route/request
     // storage. Own only decoded values, keeping the cache compact while making
     // every returned view stable for the whole Context lifetime.
-    std::pmr::vector<std::pmr::string> storage(resource());
-    auto params = detail::RequestNameValueListAccess::make(resource());
+    std::pmr::vector<std::pmr::string> storage(arena());
+    auto params = detail::RequestNameValueListAccess::make(arena());
     storage.reserve(encodedValueCount);
     detail::RequestNameValueListAccess::reserve(params, paramCount_);
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
         if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
             auto decoded = detail::decodeUrlComponent(
-                value, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
+                value, {.mode = detail::UrlDecodeMode::kPercent, .resource = arena()});
             if (!decoded) {
                 requestStorage_->routeParamsInvalid = true;
                 detail::throwInvalidParam();
@@ -474,7 +474,7 @@ Task<std::string_view> Context::requestBody() const {
         co_return raw;
     }
     auto decodeResult = detail::decodeHttpRequestContent(
-        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = resource()});
+        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = arena()});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {
@@ -521,7 +521,7 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundary = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return detail::parseCompleteMultipartBody(requestBody, boundary, resource());
+    co_return detail::parseCompleteMultipartBody(requestBody, boundary, arena());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(
@@ -529,7 +529,7 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
     const auto requestBody = co_await this->requestBody();
     co_return detail::parseFormBodyFromView(
         detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), requestBody,
-        resource(), options);
+        arena(), options);
 }
 
 Task<void> Context::requestDiscardBody() const {
@@ -553,7 +553,7 @@ BodyReader& Context::requestBodyReader() const {
 
 MultipartReader Context::requestMultipartReader() const {
     return MultipartReader(
-        requestBodyReader(), {.boundary = multipartBoundary(), .resource = resource()});
+        requestBodyReader(), {.boundary = multipartBoundary(), .resource = arena()});
 }
 
 MultipartBoundary Context::multipartBoundary() const {

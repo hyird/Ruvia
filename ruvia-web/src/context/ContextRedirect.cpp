@@ -216,10 +216,10 @@ HttpResponse Context::redirect(RedirectResponseOptions options) const {
     if (redirectLocationContainsLineBreak(location)) {
         throw std::invalid_argument("redirect location must not contain CR or LF");
     }
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {
-        auto encodedLocation = encodeRedirectLocation(location, resource());
+        auto encodedLocation = encodeRedirectLocation(location, arena());
         response.header("Location", encodedLocation);
     } else {
         response.header("Location", location);
