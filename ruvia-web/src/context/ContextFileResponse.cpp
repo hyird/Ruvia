@@ -164,8 +164,8 @@ struct FileResponseSource final {
 template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(const Context& context, const HttpRequest& request,
     FileResponseSource source, ApplyResponseState applyResponseState) {
-    std::pmr::string etagStorage(context.resource());
-    std::pmr::string lastModifiedStorage(context.resource());
+    std::pmr::string etagStorage(context.arena());
+    std::pmr::string lastModifiedStorage(context.arena());
     std::string_view etag;
     std::string_view lastModified;
     const bool honorRangeRequests = source.rangeRequests == StaticRangeRequestPolicy::kHonor;
@@ -185,14 +185,14 @@ template <typename ApplyResponseState>
     if (emitResponseValidators) {
         if (source.precomputedEtag.empty()) {
             etagStorage = detail::makeStaticFileSnapshotEtag(
-                context.resource(), source.size, source.modifiedToken, source.body.identity());
+                context.arena(), source.size, source.modifiedToken, source.body.identity());
             etag = etagStorage;
         } else {
             etag = source.precomputedEtag;
         }
         if (source.precomputedLastModified.empty() || !lastModifiedIsActual) {
             lastModifiedStorage =
-                detail::httpFormatDate(context.resource(), validatorModifiedSeconds);
+                detail::httpFormatDate(context.arena(), validatorModifiedSeconds);
             lastModified = lastModifiedStorage;
         } else {
             lastModified = source.precomputedLastModified;
@@ -237,19 +237,19 @@ template <typename ApplyResponseState>
         }
     };
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) {
-        source.body.setBody(response, context.resource(), source.size, offset, length);
+        source.body.setBody(response, context.arena(), source.size, offset, length);
     };
     auto setFullFileBody = [&](HttpResponse& response) {
-        source.body.setFullBody(response, context.resource(), source.size);
+        source.body.setFullBody(response, context.arena(), source.size);
     };
     auto makeHeaderOnlyResponse = [&](std::optional<HttpStatusCode> statusCode) {
-        HttpResponse response({.resource = context.resource()});
+        HttpResponse response({.resource = context.arena()});
         addFileHeaders(response);
         applyFileResponseState(response, statusCode);
         return response;
     };
     auto makeFullFileResponse = [&](std::optional<HttpStatusCode> statusCode) {
-        HttpResponse response({.resource = context.resource()});
+        HttpResponse response({.resource = context.arena()});
         addFileHeaders(response);
         setFullFileBody(response);
         applyFileResponseState(response, statusCode);
@@ -323,7 +323,7 @@ template <typename ApplyResponseState>
             return makeFullFileResponse(std::nullopt);
         }
         if (rangeResolution.unsatisfiable()) {
-            HttpResponse response({.resource = context.resource()});
+            HttpResponse response({.resource = context.arena()});
             detail::setResponseContentRangeUnsatisfied(response, source.size);
             addFileHeaders(response);
             applyFileResponseState(response, http_status::kRangeNotSatisfiable);
@@ -331,7 +331,7 @@ template <typename ApplyResponseState>
         }
 
         const auto& resolved = *rangeResolution.resolved();
-        HttpResponse response({.resource = context.resource()});
+        HttpResponse response({.resource = context.arena()});
         addFileHeaders(response);
         detail::setResponseContentRange(
             response, resolved.offset(), resolved.length(), source.size);
@@ -400,7 +400,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     std::optional<std::pmr::string> decodedPath;
     if (detail::hasUrlEncoding(relativePath, detail::UrlDecodeMode::kPercent)) {
         decodedPath = detail::decodeUrlComponent(
-            relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = resource()});
+            relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = arena()});
     }
     const std::string_view lookupPath =
         decodedPath.has_value() ? std::string_view(*decodedPath) : relativePath;
@@ -436,7 +436,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     const auto served =
-        selectStaticFileRepresentation(root, relative, request_, resource(), baseEntry, mode);
+        selectStaticFileRepresentation(root, relative, request_, arena(), baseEntry, mode);
     if (!served.has_value()) {
         throw HttpError({.status = ruvia::http_status::kNotAcceptable,
             .code = "not_acceptable",

@@ -157,7 +157,7 @@ std::pmr::string Context::urlFor(
         throw std::logic_error("urlFor requires a route table bound to this context");
     }
     return routes_->urlFor(
-        pattern, std::span<const std::string_view>(values.begin(), values.size()), resource());
+        pattern, std::span<const std::string_view>(values.begin(), values.size()), arena());
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
@@ -183,41 +183,41 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
 }
 
 HttpResponse Context::body(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     response.body(body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::nullptr_t) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::pmr::string&& body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::body(std::span<const std::byte> body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     response.body(byteBodyView(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::bodyStaticView(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::text(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
@@ -225,7 +225,7 @@ HttpResponse Context::text(std::string_view body) const {
 }
 
 HttpResponse Context::text(std::pmr::string&& body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -233,7 +233,7 @@ HttpResponse Context::text(std::pmr::string&& body) const {
 }
 
 HttpResponse Context::textStaticView(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
@@ -241,7 +241,7 @@ HttpResponse Context::textStaticView(std::string_view body) const {
 }
 
 HttpResponse Context::jsonSerialized(std::pmr::string& body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -249,7 +249,7 @@ HttpResponse Context::jsonSerialized(std::pmr::string& body) const {
 }
 
 HttpResponse Context::html(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
@@ -257,7 +257,7 @@ HttpResponse Context::html(std::string_view body) const {
 }
 
 HttpResponse Context::html(std::pmr::string&& body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, std::nullopt);
@@ -265,7 +265,7 @@ HttpResponse Context::html(std::pmr::string&& body) const {
 }
 
 HttpResponse Context::htmlStaticView(std::string_view body) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, std::nullopt);
@@ -273,7 +273,7 @@ HttpResponse Context::htmlStaticView(std::string_view body) const {
 }
 
 HttpResponse Context::error(HttpErrorInfoOptions options) const {
-    auto response = detail::makeDefaultErrorResponse(resource(), HttpErrorInfo(options));
+    auto response = detail::makeDefaultErrorResponse(arena(), HttpErrorInfo(options));
     applyResponseState(response, response.status());
     return response;
 }
@@ -287,14 +287,14 @@ Task<HttpResponse> Context::notFoundTask() {
         co_return co_await notFoundHandler_(*this);
     }
 
-    auto response = detail::makeDefaultErrorResponse(resource(),
+    auto response = detail::makeDefaultErrorResponse(arena(),
         HttpErrorInfo({.status = http_status::kNotFound, .message = "route not found"}));
     applyResponseState(response, http_status::kNotFound);
     co_return response;
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {
-    HttpResponse response({.resource = resource()});
+    HttpResponse response({.resource = arena()});
     if (!contentType.empty()) {
         response.header("Content-Type", contentType);
     }

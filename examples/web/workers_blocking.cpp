@@ -49,7 +49,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
         auto& state = c.workerState<WorkerStats>();
         ++state.served;
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("served=");
         body.append(std::to_string(state.served));
         body.append(" dispatched=");
@@ -69,7 +69,7 @@ private:
             [input = std::string(c.req().query("input").value_or("default"))] {
                 return slowChecksum(input);
             });
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("checksum=");
         body.append(std::to_string(checksum));
         body.push_back('\n');
@@ -87,7 +87,7 @@ private:
                 .code = "busy",
                 .message = ruvia::describeBlockingStatus(result.status())});
         }
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("checksum=");
         body.append(std::to_string(std::move(result).value()));
         body.push_back('\n');
@@ -108,7 +108,7 @@ private:
                 ++accepted;
             }
         }
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("posted=");
         body.append(std::to_string(accepted));
         body.push_back('\n');

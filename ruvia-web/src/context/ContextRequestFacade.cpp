@@ -36,7 +36,7 @@ bool ContextRequest::contextContentTypeMatches(
 }
 
 std::pmr::memory_resource* ContextRequest::contextResource(const Context* context) noexcept {
-    return context->resource();
+    return context->arena();
 }
 
 detail::ScopedOperationScope& ContextRequest::contextOperationScope(
@@ -156,7 +156,7 @@ bool ContextRequest::contentTypeMatches(std::string_view expected) const noexcep
 }
 
 std::pmr::memory_resource* ContextRequest::resource() const noexcept {
-    return context_->resource();
+    return context_->arena();
 }
 
 const detail::RequestBindings& ContextRequest::requestBindings() const noexcept {

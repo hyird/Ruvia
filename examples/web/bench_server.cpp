@@ -51,14 +51,14 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> status(ruvia::Context& c) {
-        StatusResponse response(c);
+        StatusResponse response({.resource = c.arena()});
         response.set<"status">("running").set<"framework">("ruvia");
         co_return c.json(response);
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto user = co_await c.req().json<UserDTO>();
-        UserEcho response(c);
+        UserEcho response({.resource = c.arena()});
         if (const auto& name = user.get<"name">()) {
             response.set<"name">(name->view());
         }
@@ -73,7 +73,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         const auto id = c.req().param("id").value_or("");
-        UserByIdResponse response(c);
+        UserByIdResponse response({.resource = c.arena()});
         std::pmr::string name(c.allocator<char>());
         name.append("User ");
         name.append(id);
@@ -94,7 +94,7 @@ private:
     }
 
     static ruvia::HttpResponse middlewareResponse(ruvia::Context& c, std::uint32_t count) {
-        MiddlewareResponse response(c);
+        MiddlewareResponse response({.resource = c.arena()});
         response.set<"middleware_count">(ruvia::UInt32{count});
         return c.json(response);
     }

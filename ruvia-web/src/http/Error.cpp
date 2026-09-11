@@ -145,23 +145,23 @@ Task<HttpResponse> detail::invokeErrorHandler(
         try {
             co_return co_await handler(context, error);
         } catch (const HttpError& nested) {
-            co_return makeDefaultErrorResponse(context.resource(), nested.info());
+            co_return makeDefaultErrorResponse(context.arena(), nested.info());
         } catch (const std::exception&) {
             // The error handler itself threw; keep transport output deterministic
             // and avoid echoing exception detail to the client.
-            co_return makeDefaultErrorResponse(context.resource(),
+            co_return makeDefaultErrorResponse(context.arena(),
                 HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
                     .code = "error_handler_failed",
                     .message = "error handler failed"}));
         } catch (...) {
-            co_return makeDefaultErrorResponse(context.resource(),
+            co_return makeDefaultErrorResponse(context.arena(),
                 HttpErrorInfo({.status = ruvia::http_status::kInternalServerError,
                     .code = "error_handler_failed",
                     .message = "error handler failed"}));
         }
     }
 
-    co_return makeDefaultErrorResponse(context.resource(), error);
+    co_return makeDefaultErrorResponse(context.arena(), error);
 }
 
 }  // namespace ruvia

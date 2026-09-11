@@ -21,7 +21,7 @@ ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     options.audience.assign("ruvia-api");
     options.expiresIn = std::chrono::minutes(30);
     options.claims.emplace_back(ruvia::JwtClaimOptions{.name = "scope", .value = "example"});
-    options.resource = c.resource();
+    options.resource = c.arena();
     return options;
 }
 
@@ -59,7 +59,7 @@ public:
         // instead of reaching onError.
         std::optional<ruvia::JwtPayload> payload;
         try {
-            payload.emplace(ruvia::jwtVerify(verifyOptions(*token, c.resource())));
+            payload.emplace(ruvia::jwtVerify(verifyOptions(*token, c.arena())));
         } catch (...) {
             c.respond(c.error({.status = ruvia::http_status::kUnauthorized,
                 .code = "invalid_token",
@@ -97,7 +97,7 @@ private:
     // handler reads it back by type, with no out-of-band channel.
     ruvia::Task<ruvia::HttpResponse> me(ruvia::Context& c) {
         const auto& user = c.requestState<AuthenticatedUser>();
-        std::pmr::string reply(c.resource());
+        std::pmr::string reply(c.arena());
         reply.append("authenticated as ");
         reply.append(user.subject);
         reply.push_back('\n');

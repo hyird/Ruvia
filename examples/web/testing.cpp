@@ -41,7 +41,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> note(ruvia::Context& c) {
         // urlFor builds links from registered patterns; the pattern is the
         // route's identity.
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("note ");
         body.append(c.req().param("id").value_or("?"));
         body.append(" self=");
@@ -57,7 +57,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
-        std::pmr::string body(c.resource());
+        std::pmr::string body(c.arena());
         body.append("stored=");
         body.append(std::to_string(c.workerState<NoteCounter>().stored));
         co_return c.text(std::move(body));

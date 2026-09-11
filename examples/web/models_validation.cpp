@@ -135,7 +135,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
         const auto& request = c.req().validated<RegisterRequest>();
 
-        RegisterResponse response(c);
+        RegisterResponse response({.resource = c.arena()});
         const auto& username = request.get<"username">();
         response.set<"username">(username->view());
         const auto& roles = request.get<"roles">();
@@ -143,9 +143,9 @@ private:
             response.set<"roleCount">(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
         response.ensure<"tags">().emplace_back(
-            ruvia::String("created", {.resource = c.resource()}));
+            ruvia::String("created", {.resource = c.arena()}));
         response.ensure<"tags">().emplace_back(
-            ruvia::String("validated", {.resource = c.resource()}));
+            ruvia::String("validated", {.resource = c.arena()}));
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
@@ -210,7 +210,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> category(ruvia::Context& c) {
-        Category root(c);
+        Category root({.resource = c.arena()});
         root.set<"name">("root");
         root.ensure<"children">().emplace().set<"name">("leaf");
         co_return c.json(root);

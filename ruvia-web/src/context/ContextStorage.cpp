@@ -19,7 +19,7 @@ const Env& Context::env() const noexcept {
 std::pmr::string& Context::decodedBody() const {
     auto& storage = requestStorage();
     if (!storage.decodedBody) {
-        storage.decodedBody.emplace(resource());
+        storage.decodedBody.emplace(arena());
     }
     return *storage.decodedBody;
 }

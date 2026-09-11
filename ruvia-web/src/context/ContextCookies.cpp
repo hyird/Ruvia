@@ -62,13 +62,13 @@ void Context::setCookie(SetCookieOptions options) {
 }
 
 void Context::setSignedCookie(SetSignedCookieOptions options) {
-    std::pmr::string wireName(resource());
+    std::pmr::string wireName(arena());
     const auto name = options.name.view();
     const auto value = options.value.view();
     const auto secret = options.secret.view();
     writeCookie(responseState().activeResponse(), name,
         composeSignedCookieValue(
-            resource(), cookieWireName(wireName, name, options.attributes), value, secret),
+            arena(), cookieWireName(wireName, name, options.attributes), value, secret),
         options.attributes);
 }
 

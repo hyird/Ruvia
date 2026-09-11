@@ -1325,7 +1325,7 @@ Route tables, middleware chains, and controller instances are finalized before
 workers start. The request path does not rebuild them or use a per-request
 virtual dispatcher.
 
-`Context::resource()` and `allocator()` use the request arena. For WebSocket
+`Context::arena()` and `allocator()` use the request arena. For WebSocket
 and response-stream routes, that arena stays alive for the whole handler,
 including its handshake and middleware state. Destroying an arena-backed object
 does not reclaim its individual allocation.
@@ -1355,11 +1355,14 @@ if (value) {
 }
 ```
 
-When constructing temporary PMR data yourself, use `c.operationResource()`.
+When constructing temporary PMR data yourself, use `c.pool()`.
 It uses the same worker pool, so each object's destruction returns its storage
 for reuse without invalidating other live objects. The pool may cache freed
 blocks and does not promise an immediate drop in process RSS. Moving an object
 originally allocated in the request arena does not reclaim its arena storage.
+Both `c.arena()` and `c.pool()` return `std::pmr::memory_resource*` for use
+with PMR containers. Objects allocated from either must stay on the owning
+worker and be destroyed within the Context's scope.
 
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
