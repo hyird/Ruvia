@@ -93,7 +93,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     const auto cookie = c.req().cookie(config_.cookieName);
     if (cookie && detail::isValidSessionId(*cookie)) {
         detail::SessionAccess::observePresentedId(c, *cookie);
-        std::pmr::string key(c.resource());
+        std::pmr::string key(c.arena());
         key.append(config_.keyPrefix);
         key.append(cookie->data(), cookie->size());
         if (auto stored = co_await c.redis(config_.redisAlias).get(key)) {
@@ -113,14 +113,14 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     const bool secure = connection.scheme() == HttpScheme::kHttps;
     if (const auto* cleared = state.cleared()) {
         if (cleared->oldId.has_value()) {
-            std::pmr::string key(c.resource());
+            std::pmr::string key(c.arena());
             key.append(config_.keyPrefix);
             key.append(cleared->oldId->data(), cleared->oldId->size());
             (void)(co_await c.redis(config_.redisAlias).del(key));
         }
         auto& response = detail::ContextAccess::responseStorage(c);
         detail::appendExpiredSessionCookieHeader(
-            response, c.resource(), config_.cookieName, secure);
+            response, c.arena(), config_.cookieName, secure);
         co_return;
     }
 
@@ -161,7 +161,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     for (std::size_t i = 0; i < commitPlan.count; ++i) {
         switch (commitPlan.steps[i]) {
             case detail::SessionCommitStep::kPersistCurrent: {
-                std::pmr::string key(c.resource());
+                std::pmr::string key(c.arena());
                 key.append(config_.keyPrefix);
                 key.append(existingId.data(), existingId.size());
                 ruvia::RedisSetOptions options;
@@ -170,7 +170,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
                 break;
             }
             case detail::SessionCommitStep::kDeleteOld: {
-                std::pmr::string oldKey(c.resource());
+                std::pmr::string oldKey(c.arena());
                 oldKey.append(config_.keyPrefix);
                 oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
                 (void)(co_await c.redis(config_.redisAlias).del(oldKey));
@@ -179,7 +179,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             case detail::SessionCommitStep::kPublishCurrentCookie: {
                 auto& response = detail::ContextAccess::responseStorage(c);
                 detail::appendSessionCookieHeader(
-                    response, c.resource(), config_.cookieName, existingId, secure);
+                    response, c.arena(), config_.cookieName, existingId, secure);
                 break;
             }
         }

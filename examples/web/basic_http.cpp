@@ -106,7 +106,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
-        UserResponse response(c);
+        UserResponse response({.resource = c.arena()});
         response.set<"id">(c.req().param("id").value_or("unknown"))
             .set<"name">("example-user")
             .set<"active">(ruvia::Bool{true});

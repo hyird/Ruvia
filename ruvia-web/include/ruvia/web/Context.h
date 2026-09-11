@@ -197,7 +197,7 @@ public:
     // Request and handshake lifetime resource. Allocations remain in the
     // request arena until the owning RequestMemory is destroyed and are not
     // individually reclaimed.
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+    [[nodiscard]] std::pmr::memory_resource* arena() const noexcept {
         return memory_.resource();
     }
 
@@ -205,7 +205,7 @@ public:
     // allocated here may be reclaimed individually, but must be destroyed in
     // the owning worker and while this Context is in scope. Results may outlive
     // other operations without being invalidated.
-    [[nodiscard]] std::pmr::memory_resource* operationResource() const noexcept {
+    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
         return memory_.upstreamResource();
     }
 
@@ -278,7 +278,7 @@ public:
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() const noexcept {
-        return std::pmr::polymorphic_allocator<T>(resource());
+        return std::pmr::polymorphic_allocator<T>(arena());
     }
 
     // Route handlers construct one final response, so Context accepts only

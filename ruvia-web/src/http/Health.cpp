@@ -13,13 +13,13 @@ RUVIA_RESPONSE_MODEL(HealthResponseModel, RUVIA_REQUIRED_FIELD(status, ruvia::St
 }  // namespace
 
 HttpResponse makeHealthResponse(Context& context) {
-    HealthResponseModel model({.resource = context.resource()});
+    HealthResponseModel model({.resource = context.arena()});
     model.set<"status">("ok");
     return context.json(model);
 }
 
 HttpResponse makeReadinessResponse(Context& context, ReadinessResponseOptions options) {
-    HealthResponseModel model({.resource = context.resource()});
+    HealthResponseModel model({.resource = context.arena()});
     switch (options.state) {
         case ReadinessState::kReady:
             model.set<"status">("ready");

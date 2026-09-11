@@ -153,7 +153,7 @@ template <ValidationTarget Target>
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
     static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_REQUEST_MODEL");
-    auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(fields, c.resource());
+    auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(fields, c.arena());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();
     }
@@ -169,7 +169,7 @@ template <ValidationTarget Target, typename BodyT>
         }
         const auto requestBody = co_await c.req().text();
         auto parsed =
-            detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(requestBody, c.resource());
+            detail::ModelParseAccess::parseJsonBorrowedPartial<BodyT>(requestBody, c.arena());
         if (!parsed) {
             detail::throwInvalidJsonBody();
         }
@@ -181,7 +181,7 @@ template <ValidationTarget Target, typename BodyT>
         }
         const auto requestBody = co_await c.req().text();
         auto parsed =
-            detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(requestBody, c.resource());
+            detail::ModelParseAccess::parseFormBorrowedPartial<BodyT>(requestBody, c.arena());
         if (!parsed) {
             detail::throwInvalidFormBody();
         }
@@ -202,7 +202,7 @@ template <ValidationTarget Target, typename BodyT>
 template <ValidationTarget Target, typename BodyT, typename ValidatorT>
 Task<void> invokeModelValidator(const ValidatorT& validatorMiddleware, Context& c, Next& next) {
     BodyT body = co_await parseValidatedBody<Target, BodyT>(c);
-    Validator validator({.resource = c.resource()});
+    Validator validator({.resource = c.arena()});
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
     if constexpr (Target == ValidationTarget::kJson) {

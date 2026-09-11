@@ -359,7 +359,7 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
 RUVIA_TEST(context_json_serializes_response_model_with_json_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
 
-    ContextJsonResponse model({.resource = context.resource()});
+    ContextJsonResponse model({.resource = context.arena()});
     model.set<"number">(42);
     model.set<"boolean">(true);
     model.set<"real">(3.5);
