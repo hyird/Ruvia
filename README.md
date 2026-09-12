@@ -1153,6 +1153,21 @@ const auto report = ruvia::DbMigrator::migrate(config, migrations);
 `DbTableDefinition` also describes tables directly. Schema operations cover
 columns, defaults, identity, composite keys, foreign keys, checks, enums,
 extensions, views, expression/partial/GIN indexes, and explicit data changes.
+
+Fixed-length character columns use `DbDataType::kChar` with an explicit positive
+length; `kVarchar` selects variable-length character columns:
+
+```cpp
+RUVIA_DB_ENTITY(Token, "tokens",
+    RUVIA_DB_COLUMN(digest, ruvia::String,
+        ruvia::DbColumnOptions{.dataType = ruvia::DbDataType::kChar, .length = 64}))
+```
+
+This produces `CHAR(64)` in PostgreSQL and MariaDB schemas. The same type and
+length can be used in `DbTypeDefinition` for column changes and casts. PostgreSQL also
+supports character arrays. Length is measured in database characters; padding
+and comparison follow the database's character-type semantics.
+
 Computed columns use `DbGeneratedType` independently of auto-generated identity
 values. Declare the field's storage mode in its entity metadata and supply its
 expression when creating the table:

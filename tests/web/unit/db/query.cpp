@@ -1018,6 +1018,35 @@ RUVIA_TEST(db_query_expression_ownership_import_subquery_cast_and_cache_methods_
     RUVIA_CHECK(dmlInsert.returnsRows());
 }
 
+RUVIA_TEST(db_query_char_cast_and_array_predicate_render_for_supported_dialects) {
+    DbQuery casts;
+    casts.select(casts.cast(casts.value("x"), DbTypeDefinition{.dataType = DbDataType::kChar, .length = 64})).from("char_records");
+    const auto postgres = casts.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK(postgres.sql().find("CAST($1 AS CHAR(64))") != std::string_view::npos);
+
+    const auto maria = casts.compile(DbDriver::kMariaDb, nullptr);
+    RUVIA_CHECK(maria.sql().find("CAST(? AS CHAR(64))") != std::string_view::npos);
+
+    DbQuery longMariaCast;
+    longMariaCast.select(longMariaCast.cast(longMariaCast.value("x"), DbTypeDefinition{.dataType = DbDataType::kChar, .length = 256})).from("char_records");
+    const auto longMariaStatement = longMariaCast.compile(DbDriver::kMariaDb, nullptr);
+    RUVIA_CHECK(longMariaStatement.sql().find("AS CHAR(256)") != std::string_view::npos);
+    RUVIA_CHECK(testing::throwsOn([&] {
+        DbQuery invalid;
+        invalid.select(invalid.cast(invalid.value("x"), DbTypeDefinition{.dataType = DbDataType::kChar, .length = 10485761})).from("char_records");
+        (void)invalid.compile(DbDriver::kPostgreSql, nullptr);
+    }));
+
+    using CharCodes = DbEntity<"char_codes",
+        DbColumn<"values", std::pmr::vector<std::pmr::string>, DbColumnOptions{.dataType = DbDataType::kChar, .length = 8}>>;
+    DbQuery array;
+    auto contains = CharCodes::column<"values">().arrayContains({"zone-a"});
+    array.from("char_codes").where(contains.expression(array));
+    const auto arrayStatement = array.compile(DbDriver::kPostgreSql, nullptr);
+    RUVIA_CHECK(arrayStatement.sql().find("AS CHAR(8)[]") != std::string_view::npos);
+    RUVIA_CHECK(testing::throwsOn([&] { (void)array.compile(DbDriver::kMariaDb, nullptr); }));
+}
+
 RUVIA_TEST(db_query_span_overloads_cover_expression_and_statement_builders) {
     DbQuery query;
     const auto left = query.column("left");
