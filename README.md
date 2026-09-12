@@ -42,6 +42,7 @@ protocol library do not require the full Web framework.
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
+- [Redis ORM](#redis-orm)
 - [Install and Consume](#install-and-consume)
 - [Web API Shape](#web-api-shape)
 - [HTTP Protocol Library](#http-protocol-library)
@@ -856,6 +857,34 @@ auto rows = co_await c.db().withOptions({
 
 ### ORM and QueryBuilder
 
+SQL and Redis each offer two independent data-access routes. They share connection
+configuration and operation lifetimes; choosing ORM does not require using the
+direct APIs, and choosing the direct APIs does not require declaring entities.
+
+| Route | SQL | Redis |
+| --- | --- | --- |
+| Entity ORM | `RUVIA_DB_ENTITY`, `getRepository<Entity>()` | `RUVIA_REDIS_ENTITY`, `getRepository<Entity>(config)` |
+| Direct API | `query`, `execute`, `queryStream` with SQL; `DbQuery` with raw rows | Key commands, pipelines, transactions and Lua through `RedisHandle` |
+
+ORM operations use repositories throughout. Direct SQL queries return `DbRows`
+and do not map rows into an entity. SQL ORM query builders retain their bound
+entity and return entities, declared DTO projections or scalar counts. Expressions,
+joins and CTEs compose within that binding; the direct SQL route owns complete
+statements and raw results. Redis repositories
+own their hash keys, field encoding and indexes; direct Redis commands should use
+separate keys instead of editing repository-managed hashes.
+
+The common repository operations are `find`, `findOne`, `findAndCount`, `count`,
+`exists`, `insert`, `update`, `upsert`, `deleteBy` and `remove`. Both repositories
+use `DbFindOptions` for queries, including `count({.where = ...})`. SQL keeps
+relations, row locks and SQL-specific upsert options; Redis keeps TTL and Search
+index configuration. Neither route simulates unsupported backend features.
+
+The [SQL ORM example](examples/web/orm.cpp) and
+[Redis ORM example](examples/web/redis_orm.cpp) use entity repositories. The
+[direct SQL example](examples/web/database.cpp) and
+[direct Redis example](examples/web/redis.cpp) demonstrate the original APIs.
+
 Enable either database driver and include `ruvia/web/db/DbRepository.h`.
 Entities declare database columns; repositories are obtained from the same
 `DbClient`, `DbHandle`, or `DbTransaction` used for other database operations:
@@ -968,7 +997,7 @@ then call `createRelationTables<OwningEntity>()` for junction tables. See
 mapping forms and nested relation queries.
 
 Relations load data but do not persist it automatically. Write the owning
-foreign-key column yourself, or insert/delete junction rows with a `DbQuery`;
+foreign-key column yourself, or declare a junction entity and use its repository;
 there is no cascade, lazy/eager proxy, or schema-diff behavior. Loaded relations
 use the same `isSet`, `isNull`, and `get` state model as fields: to-one relations
 can be unset, NULL, or loaded, while a loaded collection is empty or contains
@@ -995,30 +1024,255 @@ use `std::pmr::vector<T>`, with `std::optional<T>` elements when array elements
 may be NULL. Column options select UUID, JSONB, timestamp, network, and other
 database types independently of their owning C++ representation.
 
-For joins, projections, aggregates, or more complex conditions, use
-`createQueryBuilder()` and its structured statement:
+Use the entity query builder for conditions, ordering, pagination and declared
+relation joins:
 
 ```cpp
 auto builder = devices.createQueryBuilder("d");
-auto& q = builder.statement();
-builder.leftJoin("device_group", "g",
-    q.binary(builder.column<"id">(), ruvia::DbBinaryOperator::kEqual,
-        q.column("device_id", "g")));
-builder.where(Device::column<"enabled">() == true);
-builder.addSelect(q.alias(q.column("name", "g"), "group_name"));
-auto joined = co_await builder.getRawMany();
+builder.where(Device::column<"enabled">() == true)
+    .orderBy("id", ruvia::DbOrderDirection::kDesc)
+    .take(20);
+auto selected = co_await builder.getMany();
 ```
 
-`getMany()` and `getOne()` map all declared entity columns. Use `getRawMany()`
-for arbitrary projections, or `db.query<ProjectionEntity>(query)` for an
-owning typed projection with matching column names. `getCount()` counts the
-query's result groups/distinct rows without pagination. Generated SQL and
-parameters can be inspected with `getQueryAndParameters()`.
+`getMany()` and `getOne()` map all declared entity columns by default. `orderBy` and
+`addOrderBy` accept declared entity column names and reject unknown names.
+`getCount()` counts matching root entities without pagination. Generated SQL and
+parameters can be inspected with `getQueryAndParameters()`; the inspection result
+does not expose a mutable ORM statement. Writes use repository methods such as
+`insert`, `update` and `deleteBy`.
+
+### SQL expressions, projections and returning writes
+
+`DbExpressions` owns expression nodes without an executable statement. It provides
+`value`, `column`, `call`, `cast`, JSON operators, CASE, aggregates and window
+functions. Pass application data through `value()`; `sql()` accepts trusted SQL
+syntax, with arguments inserted between syntax parts and bound by the compiler:
+
+```cpp
+ruvia::DbExpressions x;
+auto now = x.call("now");
+auto merged = x.binary(x.column("payload"), ruvia::DbBinaryOperator::kJsonConcat,
+    x.cast(x.value(jsonText), ruvia::DbDataType::kJsonb));
+auto custom = x.sql({"jsonb_set(", ", '{label}', to_jsonb(", "::text))"},
+    {x.column("payload"), x.value(label)});
+const std::array changes{
+    ruvia::DbAssignment{"updated_at", now},
+    ruvia::DbAssignment{"payload", merged},
+};
+co_await events.update(Event::column<"id">() == id, changes);
+```
+
+Expression views borrow their `DbExpressions` owner until consumed. Builder and
+repository methods copy expressions and values before returning; the owner and
+input strings may then be destroyed. SQL syntax is developer-authored code and
+must not contain interpolated request data. Dialect-specific syntax remains the
+application's responsibility.
+
+`select` declares output fields. An empty expression selects the named root-entity
+column; an expression can select a joined column or compute a value. Output names
+must be unique and belong to the requested result schema. A partial entity keeps
+unselected fields unset (`isSet<"field">() == false`); NULL remains distinct from
+unset. Use `RUVIA_DB_PROJECTION` for a DTO without a table binding:
+
+```cpp
+RUVIA_DB_PROJECTION(DeviceSummary,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
+
+ruvia::DbExpressions x;
+auto query = devices.createQueryBuilder("d");
+query.select({
+    {"id"},
+    {"label", x.call("upper", {x.column("name", "d")})},
+    {"rank", x.over(x.call("row_number"),
+        {.orderBy = {{x.column("id", "d")}}})},
+});
+auto summaries = co_await query.getMany<DeviceSummary>();
+// getOne<DeviceSummary>() and getManyAndCount<DeviceSummary>() use the same mapping.
+
+auto partial = devices.createQueryBuilder();
+partial.select({{"id"}, {"name"}});
+auto entities = co_await partial.getMany();
+```
+
+`insertReturning`, `updateReturning`, `upsertReturning` and `deleteReturning`
+return `DbEntityRows<Output>`. The default output is the repository entity and the
+default RETURNING list is its complete column set. An explicit list supports
+partial entities and computed DTO fields. These operations require PostgreSQL;
+unsupported drivers fail before starting I/O. Ordinary write methods continue
+returning `DbExecResult`.
+
+```cpp
+const std::array fields{
+    ruvia::DbSelection{"id"},
+    ruvia::DbSelection{"label", x.call("upper", {x.column("name")})},
+};
+auto changed = co_await devices.updateReturning<DeviceSummary>(
+    Device::column<"id">() == id, patch, fields);
+// rank is unset because it was not requested.
+
+const ruvia::DbUpsertOptions options{
+    .conflictPaths = {"id"},
+    .skipUpdateIfNoValuesChanged = true,
+    .updateExpressions = {{"revision", x.binary(x.column("revision", "devices"),
+        ruvia::DbBinaryOperator::kAdd, x.value(1))}},
+    .updateWhere = x.binary(x.excluded("revision"),
+        ruvia::DbBinaryOperator::kGreater, x.column("revision", "devices")),
+};
+auto saved = co_await devices.upsertReturning(entity, options);
+```
+
+Custom upsert expressions override inferred or explicit `updateColumns` for the
+same column and may add another writable column. `updateWhere` is combined with
+the optional change-detection condition using AND. Change detection compares
+against each actual update expression. A conflict whose update condition is false
+produces no RETURNING row; do not assume one returned entity per input entity.
+
+Entity-bound builders support unrelated entity joins, derived queries and table
+functions. CTE and subquery inputs are other repository builders:
+
+```cpp
+auto recent = devices.createQueryBuilder("recent_device");
+recent.where(Device::column<"revision">() > 2);
+auto query = devices.createQueryBuilder("d");
+query.with("recent", recent, {.materialization = ruvia::DbMaterialization::kMaterialized});
+query.joinCte(ruvia::DbJoinType::kInner, "recent", "r",
+    x.binary(x.column("id", "d"), ruvia::DbBinaryOperator::kEqual, x.column("id", "r")));
+
+auto latest = devices.createQueryBuilder("candidate");
+latest.where(x.binary(x.column("id", "candidate"), ruvia::DbBinaryOperator::kEqual,
+    x.column("id", "d"))).take(1);
+query.join(ruvia::DbJoinType::kLeft, latest, "latest", x.value(true), {.lateral = true});
+auto rows = co_await query.getMany();
+```
+
+Use `join<OtherEntity>(type, alias, on)` for an unrelated table and `joinFunction`
+for table-valued functions. `subquery(expressions)` and `exists(expressions)`
+produce expressions from an entity builder. `combine` supports set operations;
+`with(..., {.recursive = true})` declares recursive CTEs, whose recursive branches
+may reference their name through `joinCte`. `groupBy`, `having`, expression
+`orderBy`, and `DbExpressions::over` compose grouped and window queries.
+Explicit projections use flat row mapping and joins without automatic relation
+hydration; `leftJoinAndSelect` / `innerJoinAndSelect` retain full-entity relation
+loading. Ordinary joins preserve SQL row multiplicity, and counts reflect those
+rows or groups. Only relation-loading joins deduplicate root entities.
+
+Declare a PostgreSQL enum type name and a SQL default directly on entity columns:
+
+```cpp
+RUVIA_DB_ENTITY(Event, "events",
+    RUVIA_DB_COLUMN(id, std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}),
+    RUVIA_DB_COLUMN(state, std::pmr::string, ruvia::DbColumnOptions{
+        .enumName = ruvia::FixedString{"app.event_state"},
+        .defaultExpression = ruvia::FixedString{"'pending'::app.event_state"}}),
+    RUVIA_DB_COLUMN(created_at, std::pmr::string, ruvia::DbColumnOptions{
+        .dataType = ruvia::DbDataType::kTimestampTz,
+        .defaultExpression = ruvia::FixedString{"now()"}}))
+```
+
+`enumName` references an existing enum type, including its schema; create the type
+in a migration before creating the table. It cannot be combined with a scalar
+`dataType` or size modifiers. `FixedString` preserves literal length at compile time
+without a fixed metadata length limit. Declared defaults are applied by
+`DbSchema::createTable<Entity>()`; duplicate defaults in table options are rejected.
+Defaults remain database expressions and are not evaluated when constructing a
+C++ entity.
+
+### Composable entity writes
+
+`update` and `updateReturning` accept either `DbPredicate` or `DbExpression`
+conditions, including `IS DISTINCT FROM`, subquery conditions and trusted SQL
+expression fragments. Empty conditions are rejected. For example:
+
+```cpp
+ruvia::DbExpressions x;
+auto changed = x.binary(x.column("state"), ruvia::DbBinaryOperator::kIsDistinctFrom,
+    x.value(nextState));
+co_await commands.update(changed, patch);
+```
+
+Repositories provide `createUpdateBuilder(alias)`, `createDeleteBuilder(alias)`
+and `createInsertBuilder()`; the insert factory also accepts an entity or a span
+of entities. Each builder keeps its repository's target entity and executor.
+`set` accepts an entity patch or a declared column plus an expression. Update and
+delete builders require a nonempty `where`; `andWhere` and `orWhere` compose typed
+predicates or expressions. Inspect SQL with `getQueryAndParameters()`, call
+`execute()` for `DbExecResult`, or declare `returning(...)` and use
+`getMany<EntityOrDto>()` for owning typed results.
+
+`updateFrom<SourceEntity>(alias)` reads an entity table;
+`updateFrom(selectBuilder, alias)` reads a derived query; and
+`updateFromCte(name, alias)` reads a CTE. Expressions use these explicit aliases.
+`insertFrom({targetColumns...}, selectBuilder)` maps selected values by position,
+validates the column count and rejects unknown or computed target columns.
+The query builder's `fromCte(name)` reads a CTE using its existing root alias and
+result schema. These methods copy their inputs immediately.
+
+Both read and write builders accept another write builder in `with(name, writer)`.
+Attach all data-modifying CTEs to the outermost statement, in dependency order;
+read their `RETURNING` rows through CTE references. This follows the composable
+write-builder approach in [TypeORM's CTE API](https://typeorm.io/docs/query-builder/select-query-builder/#common-table-expressions).
+The following PostgreSQL statement claims pending commands and persists their
+returned fields into an archive atomically:
+
+```cpp
+ruvia::DbExpressions x;
+auto candidates = commands.createQueryBuilder("candidate");
+candidates.where(Command::column<"state">() == "pending")
+    .orderBy("id").take(100)
+    .setLock({.mode = ruvia::DbRowLock::kUpdate, .skipLocked = true});
+
+auto claim = commands.createUpdateBuilder("command");
+claim.updateFromCte("candidates", "candidate")
+    .set("state", x.value("claimed"))
+    .where(x.binary(x.column("id", "command"), ruvia::DbBinaryOperator::kEqual,
+        x.column("id", "candidate")))
+    .returning({{"id"}, {"state"}});
+
+auto claimed = commands.createQueryBuilder("claimed");
+claimed.fromCte("claimed").select({{"id"}, {"state"}});
+auto persist = archive.createInsertBuilder();
+persist.with("candidates", candidates)
+    .with("claimed", claim)
+    .insertFrom({"command_id", "state"}, claimed)
+    .returning();
+auto saved = co_await persist.getMany();
+```
+
+The outer `getMany()` submits one statement; constructing or attaching a builder
+does not execute it. The same builders work with transaction repositories.
+Use unique source keys when one source row must determine each updated target.
+`UPDATE FROM`, data-modifying CTEs and `RETURNING` require PostgreSQL in this API;
+unsupported dialects fail during compilation, before I/O.
+
+A read builder containing a write CTE supports flat `getMany`/`getOne` mapping.
+`getManyAndCount` rejects it because that API executes two statements. Count,
+existence and subquery wrappers also reject write CTEs; reference their returned
+rows explicitly in the outer query instead. A SELECT limit controls returned
+rows, not how many rows the CTE modifies. PostgreSQL executes data-modifying CTEs
+once to completion under one statement snapshot; pass data between writes through
+`RETURNING`, and avoid modifying the same row twice in one statement. See
+[PostgreSQL's data-modifying WITH rules](https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING).
+
+### Direct SQL and structured queries
+
+This route operates on statements and raw rows independently of entity ORM:
+
+```cpp
+ruvia::DbQuery query;
+query.select(query.column("name")).from("devices");
+query.where(query.binary(query.column("enabled"),
+    ruvia::DbBinaryOperator::kEqual, query.value(true)));
+auto rows = co_await c.db().query(query);
+```
 
 `DbQuery` owns a relational statement and generates SQL for the selected
 driver. Its input is identifiers, values, expressions, and nested statements:
 `value()` binds data, `column()` quotes names, and `call()` invokes a named
-database function. It accepts no SQL expression fragments. `coalesce`,
+database function. `sql(parts, arguments)` supports trusted expression syntax
+interleaved with bound expression arguments. `coalesce`,
 `nullIf`, casts, CASE, tuples, arrays, JSON/network operators, window frames,
 aggregate FILTER/order, and table functions are explicit expression nodes.
 Reusing an expression also reuses its PostgreSQL parameter positions.
@@ -1153,6 +1407,21 @@ const auto report = ruvia::DbMigrator::migrate(config, migrations);
 `DbTableDefinition` also describes tables directly. Schema operations cover
 columns, defaults, identity, composite keys, foreign keys, checks, enums,
 extensions, views, expression/partial/GIN indexes, and explicit data changes.
+
+Fixed-length character columns use `DbDataType::kChar` with an explicit positive
+length; `kVarchar` selects variable-length character columns:
+
+```cpp
+RUVIA_DB_ENTITY(Token, "tokens",
+    RUVIA_DB_COLUMN(digest, ruvia::String,
+        ruvia::DbColumnOptions{.dataType = ruvia::DbDataType::kChar, .length = 64}))
+```
+
+This produces `CHAR(64)` in PostgreSQL and MariaDB schemas. The same type and
+length can be used in `DbTypeDefinition` for column changes and casts. PostgreSQL also
+supports character arrays. Length is measured in database characters; padding
+and comparison follow the database's character-type semantics.
+
 Computed columns use `DbGeneratedType` independently of auto-generated identity
 values. Declare the field's storage mode in its entity metadata and supply its
 expression when creating the table:
@@ -1249,6 +1518,129 @@ ruvia::DbMigration{{.id = "002_index",
 MariaDB commits DDL implicitly, so there the two statements are always separate
 and an interruption between them re-runs the migration on the next start: write
 MariaDB migrations to be re-applicable.
+
+## Redis ORM
+
+Enable `RUVIA_ENABLE_REDIS` and include `ruvia/web/redis/RedisRepository.h`.
+This selects the entity ORM route. The original `RedisHandle` commands,
+pipelines, transactions and Lua API remain available as the separate direct
+route, illustrated in [redis.cpp](examples/web/redis.cpp).
+Declare Redis entities with `RUVIA_REDIS_ENTITY` and `RUVIA_REDIS_COLUMN`;
+SQL entities use `RUVIA_DB_ENTITY` and `RUVIA_DB_COLUMN`. Repositories reject
+entities declared for the other backend. The two entity types share field-access
+and predicate syntax, `DbFindOptions`, `DbEntityRows` and `DbExecResult`.
+`RedisColumnOptions` exposes only `primaryKey` and `nullable`; Redis prefix and
+Search indexes are configured separately:
+
+```cpp
+RUVIA_REDIS_ENTITY(User, "users",
+    RUVIA_REDIS_COLUMN(id, ruvia::String,
+        ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::String),
+    RUVIA_REDIS_COLUMN(age, std::uint32_t),
+    RUVIA_REDIS_COLUMN(note, ruvia::String,
+        ruvia::RedisColumnOptions{.nullable = true}));
+
+const ruvia::RedisRepositoryConfig userRedisConfig{
+    .prefix = "app:users",
+    .indexes = {
+        {.column = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
+        {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric},
+    },
+};
+
+auto users = c.redis().getRepository<User>(userRedisConfig);
+User user(c.pool());
+user.set<"id">("u-42");
+user.set<"name">("Alice");
+user.set<"age">(25);
+const auto inserted = co_await users.insert(user, {.ttl = std::chrono::hours(1)});
+if (inserted.affectedRows() == 0) {
+    // The primary key already exists; neither fields nor TTL were changed.
+}
+
+auto loaded = co_await users.findOne({.where = User::column<"id">() == "u-42"});
+User changes(c.pool());
+changes.set<"name">("Alice Smith");
+changes.setNull<"note">();
+co_await users.update(User::column<"id">() == "u-42", changes);
+const auto expiration = co_await users.ttl(User::column<"id">() == "u-42");
+```
+
+Each Redis entity needs exactly one non-nullable string or integer primary key;
+applications supply the key explicitly. The second argument of
+`RUVIA_REDIS_ENTITY` provides the default prefix. Keys are
+`ruvia:orm:<hex-encoded-prefix>:<id>`, so namespaces remain isolated when IDs
+contain colons. Use a distinct prefix per entity schema and reserve its keys for
+the repository. Column names beginning with `__ruvia_` are reserved.
+
+Hash mapping supports owning strings (`ruvia::String` or `std::pmr::string`),
+booleans, supported native integer/floating types and Ruvia scalar wrappers.
+Array, JSON, nested columns and SQL relation descriptors are unsupported.
+Redis rejects relation loading, SQL locking and enabled query caching.
+
+`insert` creates absent entities; `update` changes existing entities; `upsert`
+merges supplied fields and inserts when absent. `deleteBy` and `remove` delete an
+entity. Mutations return `DbExecResult`: `affectedRows()` is zero or one and
+`lastInsertId()` is empty. `update`, `deleteBy`, `expire` and `ttl` require an exact
+single-primary-key equality predicate. Unset fields are preserved on updates;
+`setNull` removes a nullable hash field. Empty strings remain values. New entities
+require all non-nullable fields. Updates cannot change their primary key.
+
+Writes and TTL changes execute atomically in one single-key Lua script. Omitted
+TTL preserves existing expiration; new entities are persistent. Set `.ttl` to a
+positive duration or `.persist = true` to remove expiration, but not both.
+`expire(predicate, seconds)` changes expiration and `ttl(predicate)` returns
+status-bearing `RedisTtl` with millisecond precision. There is no implicit dirty
+tracking, optimistic version check or cross-key transaction. Redis Cluster
+routing follows the capabilities of the existing Redis driver.
+
+### Redis Search queries
+
+Primary-key `findOne` and mutations work with ordinary Redis. Field queries
+require Redis Search with HASH indexing and query dialect 2. Create an index
+explicitly once during deployment through a request or `WebWorkerContext` handle:
+
+```cpp
+co_await users.createIndex();
+auto [matches, total] = co_await users.findAndCount({
+    .where = (User::column<"name">() == "Alice Smith")
+        && (User::column<"age">() >= 18),
+    .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},
+    .skip = 0,
+    .take = 20,
+});
+```
+
+`find` returns `DbEntityRows<User>`, `findOne` returns `std::optional<User>`, and
+`count` counts matches independently of pagination. `exists` accepts the same
+`DbFindOptions`. `findAndCount` returns the page and search engine total from one
+command. Results may omit documents that expire while Search loads them. Empty
+predicates match the whole index; `find` defaults to a page of 100. Search supports
+one sortable column per query; equal values do not guarantee stable page order.
+
+`kTag` provides exact case-sensitive string/boolean matching using encoded shadow
+fields, preserving punctuation, commas, empty strings and binary values.
+`kNumeric` provides comparisons and ranges; indexed values and query operands
+must be finite and within `[-(2^53-1), 2^53-1]`. Unindexed integer columns retain
+their full native range. `kText` creates a text index for external Search clients;
+SQL `like`/`ilike` are not translated into text-search semantics. Unsupported SQL
+expressions fail before sending a command. Null predicates use internal presence
+fields; inequality comparisons exclude absent fields.
+
+Index creation is explicit; an existing index or missing Search capability
+produces a Redis error. `dropIndex()` retains entity hashes. Repositories inherit
+the Redis handle's scope, worker affinity, timeout and cancellation. Configuration
+and operation inputs are copied into owned worker PMR storage before asynchronous
+execution. Results retain their own reclaimable storage independently of later
+operations and must be destroyed before that worker resource expires.
+
+[redis_orm.cpp](examples/web/redis_orm.cpp) demonstrates validated JSON input,
+insertion with TTL, primary-key lookup, indexed queries and response models.
+Build `ruvia_example_redis_orm`; run once with `--create-index` against Redis Search,
+then without arguments to serve on `127.0.0.1:8091`. It reads `RUVIA_REDIS_HOST`,
+`RUVIA_REDIS_PORT`, `RUVIA_REDIS_USER` and `RUVIA_REDIS_PASSWORD` from environment
+variables or `.env`.
 
 ## Install and Consume
 

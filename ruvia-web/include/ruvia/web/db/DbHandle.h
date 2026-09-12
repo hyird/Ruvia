@@ -39,8 +39,6 @@ public:
 
     [[nodiscard]] ScopedOperation<DbRows> query(const DbQuery& query) const;
     [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) const;
-    template <typename Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) const;
 
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) const;
     ScopedOperation<DbRows> query(
@@ -94,6 +92,8 @@ private:
     friend class DbRepository;
     template <typename, typename>
     friend class DbQueryBuilder;
+    template <typename, typename>
+    friend class DbWriteQueryBuilder;
 
     [[nodiscard]] DbDriver queryDriver() const;
     [[nodiscard]] std::pmr::memory_resource* queryResource() const;

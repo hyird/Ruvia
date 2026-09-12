@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -14,6 +15,16 @@ struct ModelValidationAccess final {
     template <FixedString Field, typename ModelT>
     [[nodiscard]] static ModelFieldState fieldState(const ModelT& model) {
         return model.template ruviaFieldState<Field>();
+    }
+
+    template <FixedString Field, typename ModelT>
+    [[nodiscard]] static const auto& fieldValue(const ModelT& model) {
+        return model.template ruviaFieldValue<Field>();
+    }
+
+    template <FixedString Field, typename ModelT>
+    [[nodiscard]] static constexpr bool fieldRequired(const ModelT&) noexcept {
+        return ModelT::template ruviaFieldRequired<Field>();
     }
 
     template <typename ModelT>
@@ -132,17 +143,19 @@ public:
         return result;
     }
 
-    template <typename OptionalT, typename ValidatorT>
-    void validate(ModelFieldState state, const OptionalT& value, std::string_view path,
-        ValidatorT& validator) const {
-        (void)state;
-        if (!value) {
-            if (required()) {
+    template <typename ValueT, typename ValidatorT>
+    void validate(ModelFieldState state, bool fieldRequired, const std::optional<ValueT>& value,
+        std::string_view path, ValidatorT& validator) const {
+        if (state != ModelFieldState::kParsed) {
+            if (state == ModelFieldState::kMissing && required() && !fieldRequired) {
                 validator.add(path, "required", requiredMessage());
             }
             return;
         }
-        validatePresent(*value, path, validator);
+
+        if (value) {
+            validatePresent(*value, path, validator);
+        }
     }
 
 private:

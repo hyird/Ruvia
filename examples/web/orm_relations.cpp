@@ -63,6 +63,10 @@ RUVIA_DB_ENTITY(Student, "orm_relations.orm_student",
     RUVIA_DB_COLUMN(name, std::pmr::string),
     RUVIA_DB_MANY_TO_MANY(courses, Course, StudentCourseTable))
 
+RUVIA_DB_ENTITY(StudentCourse, "orm_relations.orm_student_course",
+    RUVIA_DB_COLUMN(student_id, std::int64_t, DbColumnOptions{.primaryKey = true}),
+    RUVIA_DB_COLUMN(course_id, std::int64_t, DbColumnOptions{.primaryKey = true}))
+
 auto migrations() {
     DbSchema schema({.driver = DbDriver::kPostgreSql});
     schema.createSchema("orm_relations", true);
@@ -150,13 +154,13 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
             student.set<"name">("Learner");
             co_await students.upsert(student, {.conflictPaths = {"id"}});
         }
-        DbQuery junction;
-        junction.insertInto(StudentCourseTable::name.view(), {"student_id", "course_id"})
-            .values({junction.value(1), junction.value(1)})
-            .values({junction.value(1), junction.value(2)})
-            .values({junction.value(2), junction.value(2)})
-            .onConflict({.columns = {"student_id", "course_id"}, .doNothing = true});
-        co_await db.execute(junction);
+        auto memberships = db.getRepository<StudentCourse>();
+        for (const auto [studentId, courseId] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
+            StudentCourse membership;
+            membership.set<"student_id">(studentId);
+            membership.set<"course_id">(courseId);
+            co_await memberships.upsert(membership, {.conflictPaths = {"student_id", "course_id"}, .doNothing = true});
+        }
         co_await queryExample(db);
         const DbFindOptions departmentPageOptions{.relations = {"employees"}, .order = {{"id"}}, .take = 1};
         auto [departmentPage, departmentCount] = co_await departments.findAndCount(departmentPageOptions);
@@ -168,7 +172,7 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
         auto nextPage = departments.createQueryBuilder("d");
-        nextPage.leftJoinAndSelect("d.employees", "e").orderBy(nextPage.column<"id">()).skip(1).take(1);
+        nextPage.leftJoinAndSelect("d.employees", "e").orderBy("id").skip(1).take(1);
         auto second = co_await nextPage.getOne();
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {
             throw std::runtime_error("relation query offset did not page departments");

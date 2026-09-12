@@ -132,8 +132,8 @@ inline void appendDbTypeName(std::pmr::string& output, DbDataType type,
         }
         return;
     }
-    if (length != 0 && type != DbDataType::kVarchar) {
-        throw std::invalid_argument("length requires VARCHAR");
+    if (length != 0 && type != DbDataType::kChar && type != DbDataType::kVarchar) {
+        throw std::invalid_argument("length requires CHAR or VARCHAR");
     }
     if ((precision != 0 || scale != 0) && type != DbDataType::kNumeric) {
         throw std::invalid_argument("precision and scale require NUMERIC");
@@ -142,6 +142,17 @@ inline void appendDbTypeName(std::pmr::string& output, DbDataType type,
         throw std::invalid_argument("invalid database numeric precision or scale");
     }
     const bool mariaCast = !pg && usage == DbSqlTypeUsage::kCast;
+    if (type == DbDataType::kChar) {
+        if (length == 0) {
+            throw std::invalid_argument("CHAR requires a positive length");
+        }
+        if (pg && length > 10485760) {
+            throw std::invalid_argument("PostgreSQL CHAR length exceeds the supported maximum");
+        }
+        if (!pg && !mariaCast && length > 255) {
+            throw std::invalid_argument("MariaDB CHAR length exceeds the supported maximum");
+        }
+    }
     switch (type) {
         case DbDataType::kBoolean:
             output += mariaCast ? "UNSIGNED" : "BOOLEAN";
@@ -163,6 +174,11 @@ inline void appendDbTypeName(std::pmr::string& output, DbDataType type,
             break;
         case DbDataType::kText:
             output += mariaCast ? "CHAR" : "TEXT";
+            break;
+        case DbDataType::kChar:
+            output += "CHAR(";
+            appendDbNumber(output, static_cast<std::uint64_t>(length));
+            output.push_back(')');
             break;
         case DbDataType::kVarchar:
             if (length == 0) {

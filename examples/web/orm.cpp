@@ -1,5 +1,4 @@
-// PostgreSQL ORM example. With no arguments, print the generated migration and
-// queries. --migrate applies the demo migration; --run executes the demo on the
+// PostgreSQL ORM example. With no arguments, print the generated migration. --migrate applies the demo migration; --run executes the demo on the
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
 
 #include <array>
@@ -21,16 +20,18 @@ using namespace ruvia;
 RUVIA_DB_ENTITY(Device, "orm_demo_device",
     RUVIA_DB_COLUMN(id, std::int64_t, DbColumnOptions{.primaryKey = true}),
     RUVIA_DB_COLUMN(name, std::pmr::string),
-    RUVIA_DB_COLUMN(revision, std::int64_t),
-    RUVIA_DB_COLUMN(labels, std::pmr::vector<std::pmr::string>))
+    RUVIA_DB_COLUMN(revision, std::int64_t, DbColumnOptions{.defaultExpression = FixedString{"1"}}),
+    RUVIA_DB_COLUMN(labels, std::pmr::vector<std::pmr::string>, DbColumnOptions{.defaultExpression = FixedString{"ARRAY[]::text[]"}}))
+
+RUVIA_DB_PROJECTION(DeviceSummary,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
 
 auto migrations() {
-    DbQuery expressions;
+    DbExpressions expressions;
     DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<Device>({.defaults = {
-                                    {"revision", expressions.value(1)},
-                                    {"labels", expressions.cast(expressions.array({}), {.dataType = DbDataType::kText, .array = true})}},
-        .ifNotExists = true});
+    schema.createTable<Device>({.ifNotExists = true});
     schema.createIndex({.name = "orm_demo_device_labels", .table = Device::tableName().data(), .keys = {{.column = "labels"}}, .ifNotExists = true, .method = DbIndexMethod::kGin});
 
     DbProcedure version;
@@ -43,17 +44,6 @@ auto migrations() {
     schema.dropTrigger(Device::tableName(), "orm_demo_version", true);
     schema.createTrigger({.name = "orm_demo_version", .table = std::string(Device::tableName()), .function = "orm_demo_version", .events = {DbTriggerEvent::kUpdate}});
     return schema.compile("orm_demo_001");
-}
-
-DbQuery latestQuery() {
-    DbQuery ranked;
-    ranked.select({ranked.column("id"), ranked.column("name"), ranked.alias(ranked.over(ranked.call("row_number"), {.orderBy = {{ranked.column("revision"), DbOrderDirection::kDesc}}}), "rank")});
-    ranked.from(Device::tableName());
-    DbQuery query;
-    query.with("ranked", ranked, {.materialization = DbMaterialization::kMaterialized});
-    query.select({query.column("id"), query.column("name")}).from("ranked");
-    query.where(query.binary(query.column("rank"), DbBinaryOperator::kLessEqual, query.value(10)));
-    return query;
 }
 
 Task<void> demonstrate(DbClient& db) {
@@ -90,15 +80,41 @@ Task<void> demonstrate(DbClient& db) {
     }
 
     auto builder = devices.createQueryBuilder("d");
-    auto& query = builder.statement();
-    builder.where(query.binary(builder.column<"revision">(), DbBinaryOperator::kGreaterEqual, query.value(1)));
+    builder.where(Device::column<"revision">() >= 1);
     std::cout << "matching=" << co_await builder.getCount() << '\n';
     builder.take(1);
     auto [page, matching] = co_await builder.getManyAndCount();
     std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
 
+    DbExpressions expressions;
+    auto summary = devices.createQueryBuilder("d");
+    summary.select({{"id"},
+        {"label", expressions.call("upper", {expressions.column("name", "d")})},
+        {"rank", expressions.over(expressions.call("row_number"), {.orderBy = {{expressions.column("id", "d")}}})}});
+    const auto summaries = co_await summary.getMany<DeviceSummary>();
+    for (const auto& item : summaries) {
+        std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
+    }
+    const std::array changes{DbAssignment{"name", expressions.call("upper", {expressions.column("name")})}};
+    const std::array returning{DbSelection{"id"}, DbSelection{"label", expressions.column("name")}};
+    const auto changed = co_await devices.updateReturning<DeviceSummary>(Device::column<"id">() == 1, changes, returning);
+    for (const auto& item : changed) {
+        std::cout << "updated=" << item.get<"label">() << '\n';
+    }
+
     auto transaction = co_await db.beginTransaction();
     auto transactional = transaction.getRepository<Device>();
+    auto candidates = transactional.createQueryBuilder("candidate");
+    candidates.where(Device::column<"id">() == 1).take(1).setLock({.mode = DbRowLock::kUpdate, .skipLocked = true});
+    auto claim = transactional.createUpdateBuilder("target");
+    claim.updateFromCte("candidates", "candidate")
+        .set("name", expressions.value("Claimed device"))
+        .where(expressions.binary(expressions.column("id", "target"), DbBinaryOperator::kEqual, expressions.column("id", "candidate")))
+        .returning();
+    auto claimed = transactional.createQueryBuilder("claimed");
+    claimed.with("candidates", candidates).with("claimed", claim).fromCte("claimed");
+    const auto claimedDevices = co_await claimed.getMany();
+    std::cout << "claimed=" << claimedDevices.size() << '\n';
     const DbFindOptions transactionPage{.where = Device::column<"id">() == 1, .skip = 10, .take = 1};
     auto [emptyPage, transactionTotal] = co_await transactional.findAndCount(transactionPage);
     std::cout << "empty page=" << emptyPage.size() << ", transaction total=" << transactionTotal << '\n';
@@ -109,9 +125,6 @@ Task<void> demonstrate(DbClient& db) {
     }
     co_await transaction.rollback();
     std::cout << "after rollback=" << co_await devices.count() << '\n';
-
-    const auto latest = co_await db.query(latestQuery());
-    std::cout << "ranked rows=" << latest.size() << '\n';
 }
 
 Task<void> demonstrateCache(DbClient& db) {
@@ -194,8 +207,6 @@ int main(int argc, char** argv) {
         for (const auto& migration : changes) {
             std::cout << migration.sql() << ";\n";
         }
-        const auto query = latestQuery().compile(DbDriver::kPostgreSql, nullptr);
-        std::cout << query.sql() << '\n';
         if (!migrate && !execute) {
             return 0;
         }

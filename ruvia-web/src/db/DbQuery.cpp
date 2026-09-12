@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/db/DbExpressionAccess.h"
 #include "ruvia/web/detail/db/DbSqlFormat.h"
 
 namespace ruvia::detail {
@@ -15,6 +16,7 @@ namespace ruvia::detail {
 constexpr std::size_t noDbNode = std::numeric_limits<std::size_t>::max();
 
 enum class DbNodeKind : std::uint8_t {
+    kSql,
     kColumn,
     kStar,
     kValue,
@@ -375,6 +377,111 @@ using detail::DbQueryKind;
 using detail::DbSourceKind;
 using detail::noDbNode;
 
+namespace detail {
+
+namespace {
+
+[[nodiscard]] const DbQueryNode& inspectNode(
+    const DbQueryStorage* owner, std::size_t index) {
+    if (owner == nullptr) {
+        throw std::invalid_argument("cannot inspect an empty database expression");
+    }
+    if (index >= owner->nodes.size()) {
+        throw std::invalid_argument("database expression node is out of range");
+    }
+    return owner->nodes[index];
+}
+
+[[nodiscard]] std::size_t childNode(
+    const DbQueryStorage* owner, std::size_t root, std::size_t index) {
+    const auto& node = inspectNode(owner, root);
+    std::size_t child = noDbNode;
+    switch (node.kind) {
+        case DbNodeKind::kBinary:
+            if (index == 0) {
+                child = node.left;
+            } else if (index == 1) {
+                child = node.right;
+            }
+            break;
+        case DbNodeKind::kUnary:
+            if (index == 0) {
+                child = node.left;
+            }
+            break;
+        case DbNodeKind::kBetween:
+        case DbNodeKind::kList:
+            if (index < node.args.size()) {
+                child = node.args[index];
+            }
+            break;
+        default:
+            break;
+    }
+    if (child == noDbNode || child >= owner->nodes.size()) {
+        throw std::out_of_range("database expression operand is out of range");
+    }
+    return child;
+}
+
+}  // namespace
+
+DbExpressionInspection DbExpressionAccess::inspect(DbExpression expression) {
+    const auto& node = inspectNode(expression.owner_, expression.node_);
+    DbExpressionInspection result;
+    switch (node.kind) {
+        case DbNodeKind::kColumn:
+            result.kind = DbExpressionInspection::Kind::kColumn;
+            result.column = node.text;
+            result.table = node.qualifier;
+            break;
+        case DbNodeKind::kValue:
+            result.kind = DbExpressionInspection::Kind::kValue;
+            result.value = &node.value;
+            break;
+        case DbNodeKind::kBinary:
+            result.kind = DbExpressionInspection::Kind::kBinary;
+            result.binary = node.binary;
+            break;
+        case DbNodeKind::kUnary:
+            result.kind = DbExpressionInspection::Kind::kUnary;
+            result.unary = node.unary;
+            break;
+        case DbNodeKind::kBetween:
+            result.kind = DbExpressionInspection::Kind::kBetween;
+            result.negated = node.flag;
+            break;
+        case DbNodeKind::kList:
+            result.kind = DbExpressionInspection::Kind::kList;
+            break;
+        default:
+            break;
+    }
+    return result;
+}
+
+DbExpression DbExpressionAccess::operand(DbExpression expression, std::size_t index) {
+    const auto child = childNode(expression.owner_, expression.node_, index);
+    return DbExpression(expression.owner_, child);
+}
+
+std::size_t DbExpressionAccess::operandCount(DbExpression expression) {
+    const auto& node = inspectNode(expression.owner_, expression.node_);
+    switch (node.kind) {
+        case DbNodeKind::kBinary:
+            return 2;
+        case DbNodeKind::kUnary:
+            return 1;
+        case DbNodeKind::kBetween:
+        case DbNodeKind::kList:
+            return node.args.size();
+        default:
+            return 0;
+    }
+}
+
+}  // namespace detail
+
 void DbQuery::StorageDeleter::operator()(detail::DbQueryStorage* storage) const noexcept {
     if (storage != nullptr) {
         std::destroy_at(storage);
@@ -424,6 +531,11 @@ void DbQuery::requireSelectQuery() const {
     for (const auto& cte : storage().ctes) {
         storage().queries.at(cte.query).requireSelectQuery();
     }
+}
+bool DbQuery::hasWrites() const {
+    const auto& s = storage();
+    return (s.kind != DbQueryKind::kSelect && s.kind != DbQueryKind::kValues) ||
+           std::ranges::any_of(s.queries, [](const auto& query) { return query.hasWrites(); });
 }
 bool DbQuery::hasWhere() const {
     return storage().predicate != noDbNode;
@@ -716,6 +828,24 @@ DbQuery::Expr DbQuery::excluded(std::string_view column) {
 DbQuery::Expr DbQuery::defaultValue() {
     auto& s = storage();
     s.nodes.emplace_back(DbNodeKind::kDefault, s.resource);
+    return Expr(&s, s.nodes.size() - 1);
+}
+DbQuery::Expr DbQuery::sql(std::span<const std::string_view> parts, std::span<const Expr> args) {
+    if (parts.size() != args.size() + 1 || (args.empty() && parts.front().empty())) {
+        throw std::invalid_argument("SQL expression requires one more syntax part than arguments");
+    }
+    auto& s = storage();
+    detail::DbQueryNode node(DbNodeKind::kSql, s.resource);
+    for (auto part : parts) {
+        if (part.find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("SQL expression cannot contain NUL");
+        }
+    }
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        node.named.emplace_back(parts[i], requireExpression(args[i]), s.resource);
+    }
+    node.text = parts.back();
+    s.nodes.push_back(std::move(node));
     return Expr(&s, s.nodes.size() - 1);
 }
 DbQuery::Expr DbQuery::call(std::string_view function, std::span<const Expr> args, std::span<const DbNamedArgument> named) {
@@ -1644,11 +1774,121 @@ private:
                 break;
         }
     }
+    // Imports own their nodes. Equal grouped expressions must nevertheless use
+    // the same PostgreSQL parameter nodes in SELECT, GROUP BY and HAVING.
+    static bool sameExpression(const DbQueryStorage& s, std::size_t lhs, std::size_t rhs, std::size_t depth = 0) {
+        if (lhs == rhs) {
+            return true;
+        }
+        if (lhs == noDbNode || rhs == noDbNode || depth > 256) {
+            return false;
+        }
+        const auto& a = s.nodes.at(lhs);
+        const auto& b = s.nodes.at(rhs);
+        if (a.kind != b.kind || a.text != b.text || a.qualifier != b.qualifier || a.binary != b.binary ||
+            a.unary != b.unary || a.datePart != b.datePart || a.flag != b.flag ||
+            a.query != noDbNode || b.query != noDbNode || a.args.size() != b.args.size() ||
+            a.named.size() != b.named.size() || a.orders.size() != b.orders.size() ||
+            a.type.dataType != b.type.dataType || a.type.customName != b.type.customName ||
+            a.type.length != b.type.length || a.type.precision != b.type.precision || a.type.scale != b.type.scale ||
+            a.type.array != b.type.array || a.frame.has_value() != b.frame.has_value()) {
+            return false;
+        }
+        if (a.frame && (a.frame->kind != b.frame->kind || a.frame->start.kind != b.frame->start.kind ||
+                           a.frame->start.offset != b.frame->start.offset || a.frame->end.kind != b.frame->end.kind ||
+                           a.frame->end.offset != b.frame->end.offset)) {
+            return false;
+        }
+        if (a.kind == DbNodeKind::kValue) {
+            if (DbValueAccess::type(a.value) != DbValueAccess::type(b.value)) {
+                return false;
+            }
+            switch (DbValueAccess::type(a.value)) {
+                case DbValueType::kNull:
+                    break;
+                case DbValueType::kString:
+                    if (DbValueAccess::text(a.value) != DbValueAccess::text(b.value)) {
+                        return false;
+                    }
+                    break;
+                case DbValueType::kSigned:
+                    if (DbValueAccess::signedValue(a.value) != DbValueAccess::signedValue(b.value)) {
+                        return false;
+                    }
+                    break;
+                case DbValueType::kUnsigned:
+                    if (DbValueAccess::unsignedValue(a.value) != DbValueAccess::unsignedValue(b.value)) {
+                        return false;
+                    }
+                    break;
+                case DbValueType::kDouble:
+                    if (DbValueAccess::doubleValue(a.value) != DbValueAccess::doubleValue(b.value)) {
+                        return false;
+                    }
+                    break;
+                case DbValueType::kBool:
+                    if (DbValueAccess::boolValue(a.value) != DbValueAccess::boolValue(b.value)) {
+                        return false;
+                    }
+                    break;
+            }
+        }
+        const auto same = [&](std::size_t x, std::size_t y) { return sameExpression(s, x, y, depth + 1); };
+        if (!same(a.left, b.left) || !same(a.right, b.right)) {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.args.size(); ++i) {
+            if (!same(a.args[i], b.args[i])) {
+                return false;
+            }
+        }
+        for (std::size_t i = 0; i < a.named.size(); ++i) {
+            if (a.named[i].name != b.named[i].name || !same(a.named[i].expression, b.named[i].expression)) {
+                return false;
+            }
+        }
+        for (std::size_t i = 0; i < a.orders.size(); ++i) {
+            if (a.orders[i].direction != b.orders[i].direction || a.orders[i].nulls != b.orders[i].nulls ||
+                !same(a.orders[i].expression, b.orders[i].expression)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    static std::size_t groupExpression(const DbQueryStorage& s, std::size_t index) {
+        for (const auto group : s.groups) {
+            if (!sameExpression(s, group, index)) {
+                continue;
+            }
+            for (auto projection : s.projections) {
+                if (s.nodes[projection].kind == DbNodeKind::kAlias) {
+                    projection = s.nodes[projection].left;
+                }
+                if (sameExpression(s, group, projection)) {
+                    return projection;
+                }
+            }
+            return group;
+        }
+        return index;
+    }
     void expr(const DbQueryStorage& s, std::size_t index, std::size_t depth, bool aliases = false) {
         requireDepth(depth);
+        if (pg() && !s.groups.empty()) {
+            index = groupExpression(s, index);
+        }
         const auto& n = s.nodes.at(index);
         const auto child = [&](std::size_t id) { expr(s, id, depth + 1); };
         switch (n.kind) {
+            case DbNodeKind::kSql:
+                sql += '(';
+                for (const auto& part : n.named) {
+                    sql += part.name;
+                    child(part.expression);
+                }
+                sql += n.text;
+                sql += ')';
+                break;
             case DbNodeKind::kColumn:
             case DbNodeKind::kStar:
                 if (!n.qualifier.empty()) {
