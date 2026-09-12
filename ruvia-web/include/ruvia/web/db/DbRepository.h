@@ -12,27 +12,23 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/db/DbExpressions.h"
+#include "ruvia/web/db/DbFindOptions.h"
 #include "ruvia/web/db/DbHandle.h"
-#include "ruvia/web/db/DbPredicate.h"
+#include "ruvia/web/db/DbProjection.h"
 #include "ruvia/web/detail/db/DbEntityCodec.h"
 #include "ruvia/web/detail/db/DbRelationQuery.h"
 
 namespace ruvia {
 
-struct DbFindOrder final {
+template <typename Entity, typename Executor>
+class DbWriteQueryBuilder;
+
+struct DbSelection final {
     std::string column{};
-    DbOrderDirection direction{DbOrderDirection::kAsc};
-    DbNullsOrder nulls{DbNullsOrder::kDefault};
+    DbExpression expression{};
 };
-struct DbFindOptions final {
-    DbPredicate where{};
-    std::vector<std::string> relations{};
-    std::vector<DbFindOrder> order{};
-    std::optional<std::uint64_t> skip{};
-    std::optional<std::uint64_t> take{};
-    std::optional<DbLockOptions> lock{};
-    DbCacheSetting cache{};
-};
+
 struct DbUpsertOptions final {
     std::vector<std::string> conflictPaths{};
     std::vector<std::string> updateColumns{};
@@ -40,9 +36,21 @@ struct DbUpsertOptions final {
     bool anyUniqueKey{false};
     bool skipUpdateIfNoValuesChanged{false};
     DbPredicate indexPredicate{};
+    std::vector<DbAssignment> updateExpressions{};
+    DbExpression updateWhere{};
 };
 
 namespace detail {
+
+template <typename T>
+concept DbWriteCondition = std::same_as<T, DbPredicate> || std::same_as<T, DbExpression>;
+
+inline DbExpression writeCondition(DbQuery& query, const DbPredicate& predicate, std::string_view table = {}, std::string_view alias = {}) {
+    return predicate.expression(query, table, alias);
+}
+inline DbExpression writeCondition(DbQuery& query, DbExpression predicate, std::string_view = {}, std::string_view = {}) {
+    return query.importExpression(predicate);
+}
 
 template <typename E, typename Fn>
 void forEachEntityColumn(Fn&& fn) {
@@ -136,6 +144,68 @@ DbExpression entityColumnValue(DbQuery& query, const E& entity) {
     }
     return query.value(entityDbValue(entity.template get<C::name>(), query.resource()));
 }
+
+template <typename E>
+struct DbMapProjection final {
+    static_assert(requires { requires std::derived_from<E, typename E::SqlEntityType>; } || requires { requires std::derived_from<E, typename E::DbProjectionType>; }, "SQL results require a SQL entity or a DbProjection");
+    std::pmr::vector<std::pmr::string> columns;
+    explicit DbMapProjection(std::span<const std::pmr::string> selected, std::pmr::memory_resource* resource)
+        : columns(resource) {
+        for (const auto& name : selected) {
+            requireEntityColumn<E>(name);
+            columns.emplace_back(name);
+        }
+    }
+    E decode(const DbRow& row, std::pmr::memory_resource* resource) const {
+        E result(resource);
+        forEachEntityColumn<E>([&]<typename C> {
+            if (columns.empty() || std::ranges::find(columns, C::name.view()) != columns.end()) {
+                decodeEntityColumn<E, C>(result, row, resource);
+            }
+        });
+        return result;
+    }
+    DbEntityRows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
+        DbEntityRows<E> result(resource);
+        for (const auto& row : rows) {
+            result.push_back(decode(row, resource));
+        }
+        return result;
+    }
+};
+template <typename E>
+struct DbMapOneProjection final {
+    DbMapProjection<E> mapper;
+    std::optional<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
+        if (rows.empty()) {
+            return std::nullopt;
+        }
+        return mapper.decode(rows.front(), resource);
+    }
+};
+inline std::pmr::vector<std::pmr::string> applyProjection(DbQuery& query, std::span<const DbSelection> selection,
+    std::string_view qualifier, bool returning = false) {
+    if (selection.empty()) {
+        throw std::invalid_argument("projection requires at least one field");
+    }
+    std::pmr::vector<std::pmr::string> columns(query.resource());
+    std::pmr::vector<DbExpression> values(query.resource());
+    for (const auto& field : selection) {
+        if (field.column.empty() || std::ranges::find(columns, std::string_view(field.column)) != columns.end()) {
+            throw std::invalid_argument("projection requires unique nonempty field names");
+        }
+        columns.emplace_back(field.column);
+        auto expression = field.expression.empty() ? query.column(field.column, qualifier) : query.importExpression(field.expression);
+        values.push_back(query.alias(expression, field.column));
+    }
+    if (returning) {
+        query.returning(values);
+    } else {
+        query.select(values);
+    }
+    return columns;
+}
+
 template <typename Executor>
 using DbRepositoryExecutor = std::conditional_t<std::same_as<Executor, DbHandle>, DbHandle, Executor&>;
 template <typename Executor>
@@ -151,46 +221,137 @@ public:
     DbQueryBuilder(DbQueryBuilder&&) = default;
     DbQueryBuilder& operator=(DbQueryBuilder&&) = delete;
 
-    [[nodiscard]] DbQuery& statement() & noexcept {
-        return query_;
+    DbQueryBuilder& select(std::span<const DbSelection> fields) {
+        requirePlainProjection();
+        for (const auto& field : fields) {
+            if (field.expression.empty()) {
+                detail::requireEntityColumn<Entity>(field.column);
+            }
+        }
+        selected_ = detail::applyProjection(query_, fields, alias_);
+        return *this;
     }
-    DbQuery& statement() && = delete;
-    template <FixedString Name>
-    [[nodiscard]] DbExpression column() {
-        return query_.column(Entity::template columnName<Name>(), alias_);
+    DbQueryBuilder& select(std::initializer_list<DbSelection> fields) {
+        return select(std::span<const DbSelection>(fields.begin(), fields.size()));
+    }
+    template <typename Joined>
+    DbQueryBuilder& join(DbJoinType type, std::string_view alias, DbExpression on = {}) {
+        static_assert(std::derived_from<Joined, typename Joined::SqlEntityType>);
+        query_.join(type, Joined::tableName(), (on.empty() ? DbExpression{} : query_.importExpression(on)), alias);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbQueryBuilder& join(DbJoinType type, const DbQueryBuilder<Source, SourceExecutor>& source,
+        std::string_view alias, DbExpression on = {}, const DbSourceOptions& options = {}) {
+        source.requirePlainProjection();
+        query_.join(type, source.query_, (on.empty() ? DbExpression{} : query_.importExpression(on)), alias, options);
+        return *this;
+    }
+    DbQueryBuilder& joinCte(DbJoinType type, std::string_view name, std::string_view alias, DbExpression on = {}) {
+        query_.join(type, name, (on.empty() ? DbExpression{} : query_.importExpression(on)), alias);
+        return *this;
+    }
+    DbQueryBuilder& joinFunction(DbJoinType type, DbExpression function, std::string_view alias,
+        DbExpression on = {}, const DbSourceOptions& options = {}) {
+        query_.joinFunction(type, query_.importExpression(function), (on.empty() ? DbExpression{} : query_.importExpression(on)), alias, options);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbQueryBuilder& with(std::string_view name, const DbQueryBuilder<Source, SourceExecutor>& source, const DbCteOptions& options = {}) {
+        source.requirePlainProjection();
+        query_.with(name, source.query_, options);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbQueryBuilder& with(std::string_view name, const DbWriteQueryBuilder<Source, SourceExecutor>& source, const DbCteOptions& options = {}) {
+        requirePlainProjection();
+        source.validate();
+        query_.with(name, source.query_, options);
+        return *this;
+    }
+    DbQueryBuilder& fromCte(std::string_view name) {
+        requirePlainProjection();
+        query_.from(name, alias_);
+        return *this;
+    }
+    DbExpression subquery(DbExpressions& expressions) const {
+        requirePlainProjection();
+        return expressions.query_.subquery(query_);
+    }
+    DbExpression exists(DbExpressions& expressions) const {
+        requirePlainProjection();
+        return expressions.query_.exists(query_);
+    }
+    template <typename Source, typename SourceExecutor>
+    DbQueryBuilder& combine(DbSetOperation operation, const DbQueryBuilder<Source, SourceExecutor>& source) {
+        requirePlainProjection();
+        source.requirePlainProjection();
+        query_.combine(operation, source.query_);
+        return *this;
+    }
+    DbQueryBuilder& groupBy(std::span<const DbExpression> expressions) {
+        std::pmr::vector<DbExpression> imported(query_.resource());
+        for (auto expression : expressions) {
+            imported.push_back(query_.importExpression(expression));
+        }
+        query_.groupBy(imported);
+        return *this;
+    }
+    DbQueryBuilder& groupBy(std::initializer_list<DbExpression> expressions) {
+        return groupBy(std::span<const DbExpression>(expressions.begin(), expressions.size()));
+    }
+    DbQueryBuilder& having(DbExpression expression) {
+        query_.having(query_.importExpression(expression));
+        return *this;
+    }
+    DbQueryBuilder& andHaving(DbExpression expression) {
+        query_.andHaving(query_.importExpression(expression));
+        return *this;
+    }
+    DbQueryBuilder& where(DbExpression expression) {
+        query_.where(query_.importExpression(expression));
+        return *this;
+    }
+    DbQueryBuilder& andWhere(DbExpression expression) {
+        query_.andWhere(query_.importExpression(expression));
+        return *this;
+    }
+    DbQueryBuilder& orWhere(DbExpression expression) {
+        query_.orWhere(query_.importExpression(expression));
+        return *this;
+    }
+    DbQueryBuilder& orderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        query_.orderBy(query_.importExpression(expression), direction, nulls);
+        return *this;
+    }
+    DbQueryBuilder& addOrderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        query_.addOrderBy(query_.importExpression(expression), direction, nulls);
+        return *this;
+    }
+    DbQueryBuilder& distinct(bool enabled = true) {
+        query_.distinct(enabled);
+        return *this;
     }
     DbQueryBuilder& where(const DbPredicate& predicate) {
-        return where(predicate.expression(query_, Entity::tableName(), alias_));
-    }
-    DbQueryBuilder& where(DbExpression predicate) {
-        query_.where(predicate);
+        query_.where(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
     DbQueryBuilder& andWhere(const DbPredicate& predicate) {
-        return andWhere(predicate.expression(query_, Entity::tableName(), alias_));
-    }
-    DbQueryBuilder& andWhere(DbExpression predicate) {
-        query_.andWhere(predicate);
+        query_.andWhere(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
     DbQueryBuilder& orWhere(const DbPredicate& predicate) {
         query_.orWhere(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
-    DbQueryBuilder& select(std::span<const DbExpression> projections) {
-        query_.select(projections);
+    DbQueryBuilder& orderBy(std::string_view column, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        detail::requireEntityColumn<Entity>(column);
+        query_.orderBy(query_.column(column, alias_), direction, nulls);
         return *this;
     }
-    DbQueryBuilder& addSelect(DbExpression projection) {
-        query_.addSelect(projection);
-        return *this;
-    }
-    DbQueryBuilder& orderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
-        query_.orderBy(expression, direction, nulls);
-        return *this;
-    }
-    DbQueryBuilder& addOrderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
-        query_.addOrderBy(expression, direction, nulls);
+    DbQueryBuilder& addOrderBy(std::string_view column, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        detail::requireEntityColumn<Entity>(column);
+        query_.addOrderBy(query_.column(column, alias_), direction, nulls);
         return *this;
     }
     DbQueryBuilder& skip(std::uint64_t count) {
@@ -201,27 +362,11 @@ public:
         query_.limit(count);
         return *this;
     }
-    DbQueryBuilder& leftJoin(std::string_view table, std::string_view alias, DbExpression on) {
-        query_.join(DbJoinType::kLeft, table, on, alias);
-        return *this;
-    }
-    DbQueryBuilder& innerJoin(std::string_view table, std::string_view alias, DbExpression on) {
-        query_.join(DbJoinType::kInner, table, on, alias);
-        return *this;
-    }
     DbQueryBuilder& leftJoinAndSelect(std::string_view relation, std::string_view alias) {
         return joinAndSelect(relation, alias, DbJoinType::kLeft);
     }
     DbQueryBuilder& innerJoinAndSelect(std::string_view relation, std::string_view alias) {
         return joinAndSelect(relation, alias, DbJoinType::kInner);
-    }
-    DbQueryBuilder& groupBy(std::span<const DbExpression> expressions) {
-        query_.groupBy(expressions);
-        return *this;
-    }
-    DbQueryBuilder& having(DbExpression predicate) {
-        query_.having(predicate);
-        return *this;
     }
     DbQueryBuilder& cache(const DbCacheSetting& setting) {
         query_.cache(setting);
@@ -235,34 +380,31 @@ public:
         query_.lock(options);
         return *this;
     }
-    DbQueryBuilder& addCommonTableExpression(std::string_view name, const DbQuery& query, const DbCteOptions& options = {}) {
-        query_.with(name, query, options);
-        return *this;
-    }
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> getMany() const {
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-            return executor_.template queryMapped<DbEntityRows<Entity>>(prepared ? *prepared : query_,
-                detail::DbMapRelatedEntities<Entity>{relations_->clone()});
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> getMany() const {
+        auto mapper = projectionMapper<Output>();
+        if constexpr (std::same_as<Output, Entity>) {
+            if (relations_ && !relations_->empty()) {
+                auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
+                return executor_.template queryMapped<DbEntityRows<Entity>>(prepared ? *prepared : query_,
+                    detail::DbMapRelatedEntities<Entity>{relations_->clone()});
+            }
         }
-        return executor_.template query<Entity>(query_);
+        return executor_.template queryMapped<DbEntityRows<Output>>(query_, std::move(mapper));
     }
-    [[nodiscard]] ScopedOperation<std::optional<Entity>> getOne() const {
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<std::optional<Output>> getOne() const {
+        auto mapper = projectionMapper<Output>();
         auto query = query_.clone(query_.resource());
         query.limit(1);
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<Entity>(query, alias_, executor_.queryDriver());
-            return executor_.template queryMapped<std::optional<Entity>>(prepared ? *prepared : query,
-                detail::DbMapOneRelatedEntity<Entity>{relations_->clone()});
+        if constexpr (std::same_as<Output, Entity>) {
+            if (relations_ && !relations_->empty()) {
+                auto prepared = relations_->template prepare<Entity>(query, alias_, executor_.queryDriver());
+                return executor_.template queryMapped<std::optional<Entity>>(prepared ? *prepared : query,
+                    detail::DbMapOneRelatedEntity<Entity>{relations_->clone()});
+            }
         }
-        return executor_.template queryMapped<std::optional<Entity>>(query, detail::DbMapOneEntity<Entity>{});
-    }
-    [[nodiscard]] ScopedOperation<DbRows> getRawMany() const {
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-            return executor_.query(prepared ? *prepared : query_);
-        }
-        return executor_.query(query_);
+        return executor_.template queryMapped<std::optional<Output>>(query, detail::DbMapOneProjection<Output>{std::move(mapper)});
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> getCount() const {
         const auto count = countQuery();
@@ -276,18 +418,22 @@ public:
         query.copyCache(query_);
         return executor_.template queryMapped<bool>(query, detail::DbMapExists{});
     }
-    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> getManyAndCount() const {
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Output>, std::uint64_t>> getManyAndCount() const {
+        if (query_.hasWrites()) {
+            throw std::invalid_argument("getManyAndCount cannot execute a write CTE twice");
+        }
+        auto mapper = projectionMapper<Output>();
         auto count = countQuery();
         count.copyCache(query_, "-count");
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-            return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(prepared ? *prepared : query_, count,
-                detail::DbMapRelatedEntities<Entity>{relations_->clone()});
+        if constexpr (std::same_as<Output, Entity>) {
+            if (relations_ && !relations_->empty()) {
+                auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
+                return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(prepared ? *prepared : query_, count,
+                    detail::DbMapRelatedEntities<Entity>{relations_->clone()});
+            }
         }
-        return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(query_, count, detail::DbMapEntityRows<Entity>{});
-    }
-    [[nodiscard]] ScopedOperation<DbExecResult> execute() const {
-        return executor_.execute(query_);
+        return executor_.template queryMappedAndCount<DbEntityRows<Output>>(query_, count, std::move(mapper));
     }
     [[nodiscard]] DbStatement getQueryAndParameters() const {
         if (relations_ && !relations_->empty()) {
@@ -299,10 +445,30 @@ public:
 
 private:
     friend class DbRepository<Entity, Executor>;
+    template <typename, typename>
+    friend class DbQueryBuilder;
+    template <typename, typename>
+    friend class DbWriteQueryBuilder;
+    void requirePlainProjection() const {
+        if (relations_ && !relations_->empty()) {
+            throw std::invalid_argument("explicit projections and subqueries require joins without relation hydration");
+        }
+    }
+    template <typename Output>
+    detail::DbMapProjection<Output> projectionMapper() const {
+        if constexpr (!std::same_as<Output, Entity>) {
+            requirePlainProjection();
+            if (selected_.empty()) {
+                throw std::invalid_argument("DTO mapping requires an explicit projection");
+            }
+        }
+        return detail::DbMapProjection<Output>(selected_, query_.resource());
+    }
     DbQueryBuilder(detail::DbRepositoryInput<Executor> executor, std::string_view alias)
         : executor_(executor),
           query_(executor.queryResource()),
-          alias_(alias.empty() ? detail::entityQueryAlias<Entity>() : alias, query_.resource()) {
+          alias_(alias.empty() ? detail::entityQueryAlias<Entity>() : alias, query_.resource()),
+          selected_(query_.resource()) {
         detail::selectEntity<Entity>(query_, alias_);
     }
     [[nodiscard]] DbQuery countQuery() const {
@@ -324,6 +490,12 @@ private:
         return count;
     }
     DbQueryBuilder& joinAndSelect(std::string_view relation, std::string_view alias, DbJoinType join) {
+        if (query_.hasWrites()) {
+            throw std::invalid_argument("write CTEs require flat result mapping");
+        }
+        if (!selected_.empty()) {
+            throw std::invalid_argument("relation hydration requires a full entity projection");
+        }
         if (alias.empty()) {
             throw std::invalid_argument("relation joins require an alias");
         }
@@ -336,14 +508,213 @@ private:
     detail::DbRepositoryExecutor<Executor> executor_;
     DbQuery query_;
     std::pmr::string alias_;
+    std::pmr::vector<std::pmr::string> selected_;
     std::optional<detail::DbRelationPlan> relations_{};
 };
 
 template <typename Entity, typename Executor>
+class DbWriteQueryBuilder final {
+public:
+    DbWriteQueryBuilder(const DbWriteQueryBuilder&) = delete;
+    DbWriteQueryBuilder& operator=(const DbWriteQueryBuilder&) = delete;
+    DbWriteQueryBuilder(DbWriteQueryBuilder&&) = default;
+    DbWriteQueryBuilder& operator=(DbWriteQueryBuilder&&) = delete;
+
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    DbWriteQueryBuilder& where(const Condition& predicate) {
+        requireCondition(predicate);
+        query_.where(detail::writeCondition(query_, predicate, Entity::tableName(), alias_));
+        return *this;
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    DbWriteQueryBuilder& andWhere(const Condition& predicate) {
+        requireCondition(predicate);
+        query_.andWhere(detail::writeCondition(query_, predicate, Entity::tableName(), alias_));
+        return *this;
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    DbWriteQueryBuilder& orWhere(const Condition& predicate) {
+        requireCondition(predicate);
+        query_.orWhere(detail::writeCondition(query_, predicate, Entity::tableName(), alias_));
+        return *this;
+    }
+    DbWriteQueryBuilder& set(std::string_view column, DbExpression value) {
+        detail::requireEntityColumn<Entity>(column);
+        if (detail::isGeneratedEntityColumn<Entity>(column) || value.empty()) {
+            throw std::invalid_argument("SET requires a writable entity column and expression");
+        }
+        query_.set(column, query_.importExpression(value));
+        return *this;
+    }
+    DbWriteQueryBuilder& set(const Entity& changes) {
+        detail::forEachEntityColumn<Entity>([&]<typename C> {
+            if constexpr (C::options.generatedType == DbGeneratedType::kNone) {
+                if (changes.template isSet<C::name>()) {
+                    query_.set(C::name.view(), detail::entityColumnValue<Entity, C>(query_, changes));
+                }
+            }
+        });
+        return *this;
+    }
+    template <typename Source>
+    DbWriteQueryBuilder& updateFrom(std::string_view alias) {
+        static_assert(std::derived_from<Source, typename Source::SqlEntityType>);
+        query_.updateFrom(Source::tableName(), alias);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbWriteQueryBuilder& updateFrom(const DbQueryBuilder<Source, SourceExecutor>& source, std::string_view alias) {
+        source.requirePlainProjection();
+        query_.updateFrom(source.query_, alias);
+        return *this;
+    }
+    DbWriteQueryBuilder& updateFromCte(std::string_view name, std::string_view alias) {
+        query_.updateFrom(name, alias);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbWriteQueryBuilder& insertFrom(std::span<const std::string_view> columns, const DbQueryBuilder<Source, SourceExecutor>& source) {
+        if (!inserting_) {
+            throw std::invalid_argument("insertFrom requires an insert builder");
+        }
+        source.requirePlainProjection();
+        source.query_.requireSelectQuery();
+        if (columns.empty()) {
+            throw std::invalid_argument("insertFrom requires target columns");
+        }
+        for (auto column : columns) {
+            detail::requireEntityColumn<Entity>(column);
+            if (detail::isGeneratedEntityColumn<Entity>(column)) {
+                throw std::invalid_argument("insertFrom cannot write a generated column");
+            }
+        }
+        const auto count = source.selected_.empty() ? std::tuple_size_v<typename Source::Columns> : source.selected_.size();
+        if (count != columns.size()) {
+            throw std::invalid_argument("insertFrom projection and target column counts differ");
+        }
+        query_.insertInto(Entity::tableName(), columns, alias_).insertFrom(source.query_);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbWriteQueryBuilder& insertFrom(std::initializer_list<std::string_view> columns, const DbQueryBuilder<Source, SourceExecutor>& source) {
+        return insertFrom(std::span<const std::string_view>(columns.begin(), columns.size()), source);
+    }
+    template <typename Source, typename SourceExecutor>
+    DbWriteQueryBuilder& with(std::string_view name, const DbQueryBuilder<Source, SourceExecutor>& source, const DbCteOptions& options = {}) {
+        source.requirePlainProjection();
+        query_.with(name, source.query_, options);
+        return *this;
+    }
+    template <typename Source, typename SourceExecutor>
+    DbWriteQueryBuilder& with(std::string_view name, const DbWriteQueryBuilder<Source, SourceExecutor>& source, const DbCteOptions& options = {}) {
+        source.validate();
+        query_.with(name, source.query_, options);
+        return *this;
+    }
+    DbWriteQueryBuilder& returning(std::span<const DbSelection> fields = {}) {
+        if (fields.empty()) {
+            std::pmr::vector<DbExpression> expressions(query_.resource());
+            detail::forEachEntityColumn<Entity>([&]<typename C> { expressions.push_back(query_.column(C::name.view(), qualifier())); });
+            query_.returning(expressions);
+            selected_.clear();
+        } else {
+            for (const auto& field : fields) {
+                if (field.expression.empty()) {
+                    detail::requireEntityColumn<Entity>(field.column);
+                }
+            }
+            selected_ = detail::applyProjection(query_, fields, qualifier(), true);
+        }
+        return *this;
+    }
+    DbWriteQueryBuilder& returning(std::initializer_list<DbSelection> fields) {
+        return returning(std::span<const DbSelection>(fields.begin(), fields.size()));
+    }
+    [[nodiscard]] ScopedOperation<DbExecResult> execute() const {
+        validate();
+        return executor_.execute(query_);
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> getMany() const {
+        validate();
+        if (!query_.returnsRows()) {
+            throw std::invalid_argument("getMany requires RETURNING");
+        }
+        if constexpr (!std::same_as<Output, Entity>) {
+            if (selected_.empty()) {
+                throw std::invalid_argument("DTO returning requires an explicit projection");
+            }
+        }
+        return executor_.template queryMapped<DbEntityRows<Output>>(query_, detail::DbMapProjection<Output>(selected_, query_.resource()));
+    }
+    [[nodiscard]] DbStatement getQueryAndParameters() const {
+        validate();
+        return query_.compile(executor_.queryDriver(), query_.resource());
+    }
+
+private:
+    friend class DbRepository<Entity, Executor>;
+    template <typename, typename>
+    friend class DbQueryBuilder;
+    template <typename, typename>
+    friend class DbWriteQueryBuilder;
+    DbWriteQueryBuilder(detail::DbRepositoryInput<Executor> executor, DbQuery query, bool inserting, std::string_view alias = {})
+        : executor_(executor),
+          query_(std::move(query)),
+          inserting_(inserting),
+          alias_(alias, query_.resource()),
+          selected_(query_.resource()) {}
+    std::string_view qualifier() const {
+        return alias_.empty() ? Entity::tableName() : std::string_view(alias_);
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    void requireCondition(const Condition& condition) const {
+        if (inserting_ || condition.empty()) {
+            throw std::invalid_argument("write WHERE requires an update/delete builder and a nonempty condition");
+        }
+    }
+    void validate() const {
+        if (!inserting_ && !query_.hasWhere()) {
+            throw std::invalid_argument("repository update/delete requires a condition");
+        }
+    }
+    detail::DbRepositoryExecutor<Executor> executor_;
+    DbQuery query_;
+    bool inserting_;
+    std::pmr::string alias_;
+    std::pmr::vector<std::pmr::string> selected_;
+};
+
+template <typename Entity, typename Executor>
 class DbRepository final {
+    static_assert(requires {
+        typename Entity::SqlEntityType;
+        requires std::derived_from<Entity, typename Entity::SqlEntityType>; }, "SQL repositories require a RUVIA_DB_ENTITY declaration");
+
 public:
     [[nodiscard]] DbQueryBuilder<Entity, Executor> createQueryBuilder(std::string_view alias = {}) const {
         return DbQueryBuilder<Entity, Executor>(executor_, alias);
+    }
+    [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createUpdateBuilder(std::string_view alias = {}) const {
+        DbQuery query(executor_.queryResource());
+        query.update(Entity::tableName(), alias);
+        return DbWriteQueryBuilder<Entity, Executor>(executor_, std::move(query), false, alias);
+    }
+    [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createDeleteBuilder(std::string_view alias = {}) const {
+        DbQuery query(executor_.queryResource());
+        query.deleteFrom(Entity::tableName(), alias);
+        return DbWriteQueryBuilder<Entity, Executor>(executor_, std::move(query), false, alias);
+    }
+    [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createInsertBuilder() const {
+        DbQuery query(executor_.queryResource());
+        query.insertInto(Entity::tableName());
+        return DbWriteQueryBuilder<Entity, Executor>(executor_, std::move(query), true);
+    }
+    [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createInsertBuilder(const Entity& entity) const {
+        return createInsertBuilder(std::span<const Entity>(&entity, 1));
+    }
+    [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createInsertBuilder(std::span<const Entity> entities) const {
+        return DbWriteQueryBuilder<Entity, Executor>(executor_, insertQuery(entities), true);
     }
     [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> find(const DbFindOptions& options = {}) const {
         return findBuilder(options).getMany();
@@ -357,17 +728,6 @@ public:
     [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbFindOptions& options = {}) const {
         return findBuilder(options).getCount();
     }
-    template <typename Predicate>
-        requires std::same_as<std::remove_cvref_t<Predicate>, DbPredicate>
-    [[nodiscard]] ScopedOperation<std::uint64_t> count(Predicate&& predicate) const {
-        DbQuery query(executor_.queryResource());
-        const std::array args{query.star()};
-        query.select(query.alias(query.aggregate("count", args), "count")).from(Entity::tableName());
-        if (!predicate.empty()) {
-            query.where(predicate.expression(query));
-        }
-        return executor_.template queryMapped<std::uint64_t>(query, detail::DbMapCount{});
-    }
     [[nodiscard]] ScopedOperation<bool> exists(const DbFindOptions& options = {}) const {
         return findBuilder(options).getExists();
     }
@@ -378,24 +738,9 @@ public:
         auto query = insertQuery(entities);
         return executor_.execute(query);
     }
-    [[nodiscard]] ScopedOperation<DbExecResult> update(const DbPredicate& predicate, const Entity& changes) const {
-        if (predicate.empty()) {
-            throw std::invalid_argument("repository update requires a condition");
-        }
-        DbQuery query(executor_.queryResource());
-        query.update(Entity::tableName()).where(predicate.expression(query));
-        bool selected = false;
-        detail::forEachEntityColumn<Entity>([&]<typename C> {
-            if constexpr (C::options.generatedType == DbGeneratedType::kNone) {
-                if (changes.template isSet<C::name>()) {
-                    query.set(C::name.view(), detail::entityColumnValue<Entity, C>(query, changes));
-                    selected = true;
-                }
-            }
-        });
-        if (!selected) {
-            throw std::invalid_argument("repository update requires a writable column");
-        }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    [[nodiscard]] ScopedOperation<DbExecResult> update(const Condition& predicate, const Entity& changes) const {
+        auto query = updateQuery(predicate, changes);
         return executor_.execute(query);
     }
     [[nodiscard]] ScopedOperation<DbExecResult> deleteBy(const DbPredicate& predicate) const {
@@ -436,52 +781,55 @@ public:
         return upsert(std::span<const Entity>(&entity, 1), options);
     }
     [[nodiscard]] ScopedOperation<DbExecResult> upsert(std::span<const Entity> entities, const DbUpsertOptions& options) const {
-        auto query = insertQuery(entities);
-        if ((options.skipUpdateIfNoValuesChanged || !options.indexPredicate.empty()) && executor_.queryDriver() != DbDriver::kPostgreSql) {
-            throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
-        }
-        DbConflictOptions conflict{.columns = options.conflictPaths, .doNothing = options.doNothing, .anyUniqueKey = options.anyUniqueKey};
-        conflict.targetWhere = options.indexPredicate.expression(query);
-        for (const auto& name : options.conflictPaths) {
-            detail::requireEntityColumn<Entity>(name);
-        }
-        for (const auto& name : options.updateColumns) {
-            detail::requireEntityColumn<Entity>(name);
-            if (detail::isGeneratedEntityColumn<Entity>(name)) {
-                throw std::invalid_argument("repository upsert cannot update a generated column");
-            }
-        }
-        if (!options.doNothing) {
-            detail::forEachEntityColumn<Entity>([&]<typename C> {
-                bool selected = false;
-                if (options.updateColumns.empty()) {
-                    if constexpr (!C::options.primaryKey && !C::options.generated && C::options.generatedType == DbGeneratedType::kNone) {
-                        selected = std::ranges::all_of(entities, [](const Entity& entity) { return entity.template isSet<C::name>(); });
-                        if (!selected && std::ranges::any_of(entities, [](const Entity& entity) { return entity.template isSet<C::name>(); })) {
-                            throw std::invalid_argument("bulk upsert requires identical set columns or explicit updateColumns");
-                        }
-                        selected &= std::ranges::none_of(options.conflictPaths, [](const auto& name) { return name == C::name.view(); });
-                    }
-                } else {
-                    if constexpr (C::options.generatedType == DbGeneratedType::kNone) {
-                        selected = std::ranges::any_of(options.updateColumns, [](const auto& name) { return name == C::name.view(); });
-                    }
-                }
-                if (selected) {
-                    auto value = query.excluded(C::name.view());
-                    conflict.update.push_back({std::string(C::name.view()), value});
-                    if (options.skipUpdateIfNoValuesChanged) {
-                        auto changed = query.binary(query.column(C::name.view(), Entity::tableName()), DbBinaryOperator::kIsDistinctFrom, value);
-                        conflict.updateWhere = conflict.updateWhere.empty() ? changed : query.binary(conflict.updateWhere, DbBinaryOperator::kOr, changed);
-                    }
-                }
-            });
-            if (conflict.update.empty() && executor_.queryDriver() == DbDriver::kPostgreSql) {
-                conflict.doNothing = true;
-            }
-        }
-        query.onConflict(conflict);
+        auto query = upsertQuery(entities, options);
         return executor_.execute(query);
+    }
+
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    [[nodiscard]] ScopedOperation<DbExecResult> update(const Condition& predicate, std::span<const DbAssignment> changes) const {
+        auto query = updateQuery(predicate, changes);
+        return executor_.execute(query);
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    [[nodiscard]] ScopedOperation<DbExecResult> update(const Condition& predicate, std::initializer_list<DbAssignment> changes) const {
+        return update(predicate, std::span<const DbAssignment>(changes.begin(), changes.size()));
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> insertReturning(const Entity& entity, std::span<const DbSelection> fields = {}) const {
+        return insertReturning<Output>(std::span<const Entity>(&entity, 1), fields);
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> insertReturning(std::span<const Entity> entities, std::span<const DbSelection> fields = {}) const {
+        auto query = insertQuery(entities);
+        return returning<Output>(query, fields);
+    }
+    template <typename Output = Entity, detail::DbWriteCondition Condition = DbPredicate>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> updateReturning(const Condition& predicate, const Entity& changes, std::span<const DbSelection> fields = {}) const {
+        auto query = updateQuery(predicate, changes);
+        return returning<Output>(query, fields);
+    }
+    template <typename Output = Entity, detail::DbWriteCondition Condition = DbPredicate>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> updateReturning(const Condition& predicate, std::span<const DbAssignment> changes, std::span<const DbSelection> fields = {}) const {
+        auto query = updateQuery(predicate, changes);
+        return returning<Output>(query, fields);
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> deleteReturning(const DbPredicate& predicate, std::span<const DbSelection> fields = {}) const {
+        if (predicate.empty()) {
+            throw std::invalid_argument("repository deleteReturning requires a condition");
+        }
+        DbQuery query(executor_.queryResource());
+        query.deleteFrom(Entity::tableName()).where(predicate.expression(query));
+        return returning<Output>(query, fields);
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> upsertReturning(const Entity& entity, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
+        return upsertReturning<Output>(std::span<const Entity>(&entity, 1), options, fields);
+    }
+    template <typename Output = Entity>
+    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> upsertReturning(std::span<const Entity> entities, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
+        auto query = upsertQuery(entities, options);
+        return returning<Output>(query, fields);
     }
 
 private:
@@ -504,7 +852,7 @@ private:
             throw std::invalid_argument("repository increment/decrement requires a writable numeric column");
         }
         DbQuery query(executor_.queryResource());
-        query.update(Entity::tableName()).where(predicate.expression(query));
+        query.update(Entity::tableName()).where(detail::writeCondition(query, predicate));
         query.set(propertyPath, query.binary(query.column(propertyPath), op, query.value(value)));
         return executor_.execute(query);
     }
@@ -518,6 +866,141 @@ private:
             }
         }
         return builder;
+    }
+
+    template <typename Output>
+    ScopedOperation<DbEntityRows<Output>> returning(DbQuery& query, std::span<const DbSelection> fields) const {
+        std::pmr::vector<std::pmr::string> columns(query.resource());
+        if (fields.empty()) {
+            static_assert(requires { typename Output::Columns; });
+            std::pmr::vector<DbExpression> values(query.resource());
+            detail::forEachEntityColumn<Output>([&]<typename C> {
+                detail::requireEntityColumn<Entity>(C::name.view());
+                values.push_back(query.column(C::name.view()));
+            });
+            query.returning(values);
+        } else {
+            for (const auto& field : fields) {
+                if (field.expression.empty()) {
+                    detail::requireEntityColumn<Entity>(field.column);
+                }
+            }
+            columns = detail::applyProjection(query, fields, {}, true);
+        }
+        return executor_.template queryMapped<DbEntityRows<Output>>(query, detail::DbMapProjection<Output>(columns, query.resource()));
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    DbQuery updateQuery(const Condition& predicate, const Entity& changes) const {
+        if (predicate.empty()) {
+            throw std::invalid_argument("repository update requires a condition");
+        }
+        DbQuery query(executor_.queryResource());
+        query.update(Entity::tableName()).where(detail::writeCondition(query, predicate));
+        bool selected = false;
+        detail::forEachEntityColumn<Entity>([&]<typename C> {
+            if constexpr (C::options.generatedType == DbGeneratedType::kNone) {
+                if (changes.template isSet<C::name>()) {
+                    query.set(C::name.view(), detail::entityColumnValue<Entity, C>(query, changes));
+                    selected = true;
+                }
+            }
+        });
+        if (!selected) {
+            throw std::invalid_argument("repository update requires a writable column");
+        }
+        return query;
+    }
+    template <detail::DbWriteCondition Condition = DbPredicate>
+    DbQuery updateQuery(const Condition& predicate, std::span<const DbAssignment> changes) const {
+        if (predicate.empty() || changes.empty()) {
+            throw std::invalid_argument("repository update requires a condition and writable columns");
+        }
+        DbQuery query(executor_.queryResource());
+        query.update(Entity::tableName()).where(detail::writeCondition(query, predicate));
+        for (std::size_t i = 0; i < changes.size(); ++i) {
+            const auto& item = changes[i];
+            detail::requireEntityColumn<Entity>(item.column);
+            if (detail::isGeneratedEntityColumn<Entity>(item.column) || item.value.empty()) {
+                throw std::invalid_argument("update expression requires a writable column");
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                if (changes[j].column == item.column) {
+                    throw std::invalid_argument("duplicate update column");
+                }
+            }
+            query.set(item.column, query.importExpression(item.value));
+        }
+        return query;
+    }
+    DbQuery upsertQuery(std::span<const Entity> entities, const DbUpsertOptions& options) const {
+        auto query = insertQuery(entities);
+        if ((options.skipUpdateIfNoValuesChanged || !options.indexPredicate.empty() || !options.updateWhere.empty()) && executor_.queryDriver() != DbDriver::kPostgreSql) {
+            throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
+        }
+        DbConflictOptions conflict{.columns = options.conflictPaths, .doNothing = options.doNothing, .anyUniqueKey = options.anyUniqueKey};
+        conflict.targetWhere = options.indexPredicate.expression(query);
+        for (const auto& name : options.conflictPaths) {
+            detail::requireEntityColumn<Entity>(name);
+        }
+        for (const auto& name : options.updateColumns) {
+            detail::requireEntityColumn<Entity>(name);
+            if (detail::isGeneratedEntityColumn<Entity>(name)) {
+                throw std::invalid_argument("repository upsert cannot update a generated column");
+            }
+        }
+        for (std::size_t i = 0; i < options.updateExpressions.size(); ++i) {
+            const auto& item = options.updateExpressions[i];
+            detail::requireEntityColumn<Entity>(item.column);
+            if (item.value.empty() || detail::isGeneratedEntityColumn<Entity>(item.column) || options.doNothing) {
+                throw std::invalid_argument("upsert expression requires a writable column and update action");
+            }
+            for (std::size_t j = 0; j < i; ++j) {
+                if (options.updateExpressions[j].column == item.column) {
+                    throw std::invalid_argument("duplicate upsert expression column");
+                }
+            }
+        }
+        if (options.doNothing && !options.updateWhere.empty()) {
+            throw std::invalid_argument("upsert update condition requires an update action");
+        }
+        if (!options.doNothing) {
+            detail::forEachEntityColumn<Entity>([&]<typename C> {
+                bool selected = false;
+                const auto custom = std::ranges::find_if(options.updateExpressions, [](const auto& item) { return item.column == C::name.view(); });
+                if (custom != options.updateExpressions.end()) {
+                    selected = true;
+                } else if (options.updateColumns.empty()) {
+                    if constexpr (!C::options.primaryKey && !C::options.generated && C::options.generatedType == DbGeneratedType::kNone) {
+                        selected = std::ranges::all_of(entities, [](const Entity& entity) { return entity.template isSet<C::name>(); });
+                        if (!selected && std::ranges::any_of(entities, [](const Entity& entity) { return entity.template isSet<C::name>(); })) {
+                            throw std::invalid_argument("bulk upsert requires identical set columns or explicit updateColumns");
+                        }
+                        selected &= std::ranges::none_of(options.conflictPaths, [](const auto& name) { return name == C::name.view(); });
+                    }
+                } else {
+                    if constexpr (C::options.generatedType == DbGeneratedType::kNone) {
+                        selected = std::ranges::any_of(options.updateColumns, [](const auto& name) { return name == C::name.view(); });
+                    }
+                }
+                if (selected || custom != options.updateExpressions.end()) {
+                    auto value = custom == options.updateExpressions.end() ? query.excluded(C::name.view()) : query.importExpression(custom->value);
+                    conflict.update.push_back({std::string(C::name.view()), value});
+                    if (options.skipUpdateIfNoValuesChanged) {
+                        auto changed = query.binary(query.column(C::name.view(), Entity::tableName()), DbBinaryOperator::kIsDistinctFrom, value);
+                        conflict.updateWhere = conflict.updateWhere.empty() ? changed : query.binary(conflict.updateWhere, DbBinaryOperator::kOr, changed);
+                    }
+                }
+            });
+            if (conflict.update.empty() && executor_.queryDriver() == DbDriver::kPostgreSql) {
+                conflict.doNothing = true;
+            }
+        }
+        if (!options.updateWhere.empty()) {
+            auto condition = query.importExpression(options.updateWhere);
+            conflict.updateWhere = conflict.updateWhere.empty() ? condition : query.binary(conflict.updateWhere, DbBinaryOperator::kAnd, condition);
+        }
+        query.onConflict(conflict);
+        return query;
     }
     DbQuery insertQuery(std::span<const Entity> entities) const {
         if (entities.empty()) {
@@ -561,17 +1044,9 @@ DbRepository<Entity, DbHandle> DbHandle::getRepository() const {
     return DbRepository<Entity, DbHandle>(*this);
 }
 template <typename Entity>
-ScopedOperation<DbEntityRows<Entity>> DbHandle::query(const DbQuery& query) const {
-    return queryMapped<DbEntityRows<Entity>>(query, detail::DbMapEntityRows<Entity>{});
-}
-template <typename Entity>
 DbRepository<Entity, DbTransaction> DbTransaction::getRepository() & {
     (void)queryResource();
     return DbRepository<Entity, DbTransaction>(*this);
-}
-template <typename Entity>
-ScopedOperation<DbEntityRows<Entity>> DbTransaction::query(const DbQuery& query) & {
-    return queryMapped<DbEntityRows<Entity>>(query, detail::DbMapEntityRows<Entity>{});
 }
 
 }  // namespace ruvia

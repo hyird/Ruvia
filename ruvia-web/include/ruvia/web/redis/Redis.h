@@ -4,3 +4,7 @@
 #include "ruvia/web/redis/RedisPipeline.h"
 #include "ruvia/web/redis/RedisTransaction.h"
 #include "ruvia/web/redis/RedisTypes.h"
+
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/RedisRepository.h"
+#endif
