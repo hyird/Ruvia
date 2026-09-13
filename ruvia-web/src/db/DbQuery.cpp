@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/db/DbExpressionAccess.h"
 #include "ruvia/web/detail/db/DbSqlFormat.h"
 
 namespace ruvia::detail {
@@ -374,6 +375,111 @@ using detail::DbNodeKind;
 using detail::DbQueryKind;
 using detail::DbSourceKind;
 using detail::noDbNode;
+
+namespace detail {
+
+namespace {
+
+[[nodiscard]] const DbQueryNode& inspectNode(
+    const DbQueryStorage* owner, std::size_t index) {
+    if (owner == nullptr) {
+        throw std::invalid_argument("cannot inspect an empty database expression");
+    }
+    if (index >= owner->nodes.size()) {
+        throw std::invalid_argument("database expression node is out of range");
+    }
+    return owner->nodes[index];
+}
+
+[[nodiscard]] std::size_t childNode(
+    const DbQueryStorage* owner, std::size_t root, std::size_t index) {
+    const auto& node = inspectNode(owner, root);
+    std::size_t child = noDbNode;
+    switch (node.kind) {
+        case DbNodeKind::kBinary:
+            if (index == 0) {
+                child = node.left;
+            } else if (index == 1) {
+                child = node.right;
+            }
+            break;
+        case DbNodeKind::kUnary:
+            if (index == 0) {
+                child = node.left;
+            }
+            break;
+        case DbNodeKind::kBetween:
+        case DbNodeKind::kList:
+            if (index < node.args.size()) {
+                child = node.args[index];
+            }
+            break;
+        default:
+            break;
+    }
+    if (child == noDbNode || child >= owner->nodes.size()) {
+        throw std::out_of_range("database expression operand is out of range");
+    }
+    return child;
+}
+
+}  // namespace
+
+DbExpressionInspection DbExpressionAccess::inspect(DbExpression expression) {
+    const auto& node = inspectNode(expression.owner_, expression.node_);
+    DbExpressionInspection result;
+    switch (node.kind) {
+        case DbNodeKind::kColumn:
+            result.kind = DbExpressionInspection::Kind::kColumn;
+            result.column = node.text;
+            result.table = node.qualifier;
+            break;
+        case DbNodeKind::kValue:
+            result.kind = DbExpressionInspection::Kind::kValue;
+            result.value = &node.value;
+            break;
+        case DbNodeKind::kBinary:
+            result.kind = DbExpressionInspection::Kind::kBinary;
+            result.binary = node.binary;
+            break;
+        case DbNodeKind::kUnary:
+            result.kind = DbExpressionInspection::Kind::kUnary;
+            result.unary = node.unary;
+            break;
+        case DbNodeKind::kBetween:
+            result.kind = DbExpressionInspection::Kind::kBetween;
+            result.negated = node.flag;
+            break;
+        case DbNodeKind::kList:
+            result.kind = DbExpressionInspection::Kind::kList;
+            break;
+        default:
+            break;
+    }
+    return result;
+}
+
+DbExpression DbExpressionAccess::operand(DbExpression expression, std::size_t index) {
+    const auto child = childNode(expression.owner_, expression.node_, index);
+    return DbExpression(expression.owner_, child);
+}
+
+std::size_t DbExpressionAccess::operandCount(DbExpression expression) {
+    const auto& node = inspectNode(expression.owner_, expression.node_);
+    switch (node.kind) {
+        case DbNodeKind::kBinary:
+            return 2;
+        case DbNodeKind::kUnary:
+            return 1;
+        case DbNodeKind::kBetween:
+        case DbNodeKind::kList:
+            return node.args.size();
+        default:
+            return 0;
+    }
+}
+
+}  // namespace detail
 
 void DbQuery::StorageDeleter::operator()(detail::DbQueryStorage* storage) const noexcept {
     if (storage != nullptr) {

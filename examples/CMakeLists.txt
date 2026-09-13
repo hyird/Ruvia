@@ -39,4 +39,5 @@ endif()
 
 if(RUVIA_ENABLE_REDIS)
     ruvia_add_example(ruvia_example_redis web/redis.cpp)
+    ruvia_add_example(ruvia_example_redis_orm web/redis_orm.cpp)
 endif()

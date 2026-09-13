@@ -89,6 +89,10 @@ void RedisHandle::expireCapability(detail::ScopedCapabilityNode& capability) noe
 }
 
 ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_view> args) const {
+    return scoped(commandOwned(args));
+}
+
+Task<RedisValue> RedisHandle::commandOwned(std::span<const std::string_view> args) const {
     requireActive();
     const bool blocking = detail::validateRedisPooledCommand(args, true);
     auto& selectedPool = blocking ? *blockingPool_ : *pool_;
@@ -97,8 +101,8 @@ ScopedOperation<RedisValue> RedisHandle::command(std::span<const std::string_vie
         throw std::invalid_argument(
             "raw blocking redis command requires a StopToken or finite operation timeout");
     }
-    return scoped(detail::executeOwnedRedisCommand(
-        selectedPool, detail::ownRedisArgs(args, resource_), operationOptions_, resource_));
+    return detail::executeOwnedRedisCommand(
+        selectedPool, detail::ownRedisArgs(args, resource_), operationOptions_, resource_);
 }
 
 ScopedOperation<void> RedisHandle::ping() const {

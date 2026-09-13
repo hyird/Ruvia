@@ -42,6 +42,7 @@ protocol library do not require the full Web framework.
 - [Requirements](#requirements)
 - [Build](#build)
 - [Database Drivers](#database-drivers)
+- [Redis ORM](#redis-orm)
 - [Install and Consume](#install-and-consume)
 - [Web API Shape](#web-api-shape)
 - [HTTP Protocol Library](#http-protocol-library)
@@ -1264,6 +1265,125 @@ ruvia::DbMigration{{.id = "002_index",
 MariaDB commits DDL implicitly, so there the two statements are always separate
 and an interruption between them re-runs the migration on the next start: write
 MariaDB migrations to be re-applicable.
+
+## Redis ORM
+
+Enable `RUVIA_ENABLE_REDIS` and include `ruvia/web/redis/RedisRepository.h`.
+SQL and Redis repositories share the same `RUVIA_DB_ENTITY`, column predicates,
+`DbFindOptions`, `DbEntityRows` and `DbExecResult`. Redis prefix and indexes are
+configured separately:
+
+```cpp
+RUVIA_DB_ENTITY(User, "users",
+    RUVIA_DB_COLUMN(id, ruvia::String,
+        ruvia::DbColumnOptions{.primaryKey = true}),
+    RUVIA_DB_COLUMN(name, ruvia::String),
+    RUVIA_DB_COLUMN(age, std::uint32_t),
+    RUVIA_DB_COLUMN(note, ruvia::String,
+        ruvia::DbColumnOptions{.nullable = true}));
+
+const ruvia::RedisRepositoryConfig userRedisConfig{
+    .prefix = "app:users",
+    .indexes = {
+        {.column = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
+        {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric},
+    },
+};
+
+auto users = c.redis().getRepository<User>(userRedisConfig);
+// With a SQL feature enabled, the same entity also works with:
+// auto sqlUsers = c.db().getRepository<User>();
+User user(c.pool());
+user.set<"id">("u-42");
+user.set<"name">("Alice");
+user.set<"age">(25);
+const auto inserted = co_await users.insert(user, {.ttl = std::chrono::hours(1)});
+if (inserted.affectedRows() == 0) {
+    // The primary key already exists; neither fields nor TTL were changed.
+}
+
+auto loaded = co_await users.findOne({.where = User::column<"id">() == "u-42"});
+User changes(c.pool());
+changes.set<"name">("Alice Smith");
+changes.setNull<"note">();
+co_await users.update(User::column<"id">() == "u-42", changes);
+const auto expiration = co_await users.ttl(User::column<"id">() == "u-42");
+```
+
+Each Redis entity needs exactly one non-nullable string or integer primary key;
+applications supply it even if the SQL column is generated. The default Redis
+prefix is the entity's table name. Keys are
+`ruvia:orm:<hex-encoded-prefix>:<id>`, so namespaces remain isolated when IDs
+contain colons. Use a distinct prefix per entity schema and reserve its keys for
+the repository. Column names beginning with `__ruvia_` are reserved.
+
+Hash mapping supports owning strings (`ruvia::String` or `std::pmr::string`),
+booleans, supported native integer/floating types and Ruvia scalar wrappers.
+Array, JSON and nested columns are unsupported. Declared SQL relations remain
+unloaded; Redis rejects relation loading, SQL locking and enabled query caching.
+
+`insert` creates absent entities; `update` changes existing entities; `upsert`
+merges supplied fields and inserts when absent. `deleteBy` and `remove` delete an
+entity. Mutations return `DbExecResult`: `affectedRows()` is zero or one and
+`lastInsertId()` is empty. `update`, `deleteBy`, `expire` and `ttl` require an exact
+single-primary-key equality predicate. Unset fields are preserved on updates;
+`setNull` removes a nullable hash field. Empty strings remain values. New entities
+require all non-nullable fields. Updates cannot change their primary key.
+
+Writes and TTL changes execute atomically in one single-key Lua script. Omitted
+TTL preserves existing expiration; new entities are persistent. Set `.ttl` to a
+positive duration or `.persist = true` to remove expiration, but not both.
+`expire(predicate, seconds)` changes expiration and `ttl(predicate)` returns
+status-bearing `RedisTtl` with millisecond precision. There is no implicit dirty
+tracking, optimistic version check or cross-key transaction. Redis Cluster
+routing follows the capabilities of the existing Redis driver.
+
+### Redis Search queries
+
+Primary-key `findOne` and mutations work with ordinary Redis. Field queries
+require Redis Search with HASH indexing and query dialect 2. Create an index
+explicitly once during deployment through a request or `WebWorkerContext` handle:
+
+```cpp
+co_await users.createIndex();
+auto [matches, total] = co_await users.findAndCount({
+    .where = (User::column<"name">() == "Alice Smith")
+        && (User::column<"age">() >= 18),
+    .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},
+    .skip = 0,
+    .take = 20,
+});
+```
+
+`find` returns `DbEntityRows<User>`, `findOne` returns `std::optional<User>`, and
+`count` counts matches independently of pagination. `exists` accepts the same
+`DbFindOptions`. `findAndCount` returns the page and search engine total from one
+command. Results may omit documents that expire while Search loads them. Empty
+predicates match the whole index; `find` defaults to a page of 100. Search supports
+one sortable column per query; equal values do not guarantee stable page order.
+
+`kTag` provides exact case-sensitive string/boolean matching using encoded shadow
+fields, preserving punctuation, commas, empty strings and binary values.
+`kNumeric` provides comparisons and ranges; indexed values and query operands
+must be finite and within `[-(2^53-1), 2^53-1]`. Unindexed integer columns retain
+their full native range. `kText` creates a text index for external Search clients;
+SQL `like`/`ilike` are not translated into text-search semantics. Unsupported SQL
+expressions fail before sending a command. Null predicates use internal presence
+fields; inequality comparisons exclude absent fields.
+
+Index creation is explicit; an existing index or missing Search capability
+produces a Redis error. `dropIndex()` retains entity hashes. Repositories inherit
+the Redis handle's scope, worker affinity, timeout and cancellation. Configuration
+and operation inputs are copied into owned worker PMR storage before asynchronous
+execution. Results retain their own reclaimable storage independently of later
+operations and must be destroyed before that worker resource expires.
+
+[redis_orm.cpp](examples/web/redis_orm.cpp) demonstrates validated JSON input,
+insertion with TTL, primary-key lookup, indexed queries and response models.
+Build `ruvia_example_redis_orm`; run once with `--create-index` against Redis Search,
+then without arguments to serve on `127.0.0.1:8091`. It reads `RUVIA_REDIS_HOST`,
+`RUVIA_REDIS_PORT`, `RUVIA_REDIS_USER` and `RUVIA_REDIS_PASSWORD` from environment
+variables or `.env`.
 
 ## Install and Consume
 

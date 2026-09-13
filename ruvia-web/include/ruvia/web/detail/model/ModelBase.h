@@ -122,6 +122,19 @@ private:
         return modelFieldState<Field>(*this, ruviaSchema());
     }
 
+    template <FixedString Field>
+    [[nodiscard]] const auto& ruviaFieldValue() const {
+        constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
+        return std::get<index>(fields_).value();
+    }
+
+    template <FixedString Field>
+    [[nodiscard]] static constexpr bool ruviaFieldRequired() noexcept {
+        constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
+        using DescriptorT = std::tuple_element_t<index, std::tuple<DescriptorTs...>>;
+        return DescriptorT::required;
+    }
+
     std::tuple<typename DescriptorTs::field_type...> fields_;
 };
 

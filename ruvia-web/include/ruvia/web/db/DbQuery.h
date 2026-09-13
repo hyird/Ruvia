@@ -25,6 +25,7 @@ class DbQueryStorage;
 class DbQueryCompiler;
 class DbRelationPlan;
 class DbQueryCacheState;
+struct DbExpressionAccess;
 }  // namespace detail
 
 enum class DbParameterMode : std::uint8_t { kBound,
@@ -152,6 +153,7 @@ public:
 private:
     friend class DbQuery;
     friend class detail::DbQueryCompiler;
+    friend struct detail::DbExpressionAccess;
     DbExpression(const detail::DbQueryStorage* owner, std::size_t node) noexcept
         : owner_(owner),
           node_(node) {}

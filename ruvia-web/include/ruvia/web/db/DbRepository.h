@@ -12,27 +12,13 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/db/DbFindOptions.h"
 #include "ruvia/web/db/DbHandle.h"
-#include "ruvia/web/db/DbPredicate.h"
 #include "ruvia/web/detail/db/DbEntityCodec.h"
 #include "ruvia/web/detail/db/DbRelationQuery.h"
 
 namespace ruvia {
 
-struct DbFindOrder final {
-    std::string column{};
-    DbOrderDirection direction{DbOrderDirection::kAsc};
-    DbNullsOrder nulls{DbNullsOrder::kDefault};
-};
-struct DbFindOptions final {
-    DbPredicate where{};
-    std::vector<std::string> relations{};
-    std::vector<DbFindOrder> order{};
-    std::optional<std::uint64_t> skip{};
-    std::optional<std::uint64_t> take{};
-    std::optional<DbLockOptions> lock{};
-    DbCacheSetting cache{};
-};
 struct DbUpsertOptions final {
     std::vector<std::string> conflictPaths{};
     std::vector<std::string> updateColumns{};

@@ -10,6 +10,10 @@
 
 namespace ruvia {
 
+namespace detail {
+struct DbPredicateAccess;
+}  // namespace detail
+
 // An owning condition. Literal arguments are copied during construction, so a
 // condition may outlive the strings used to build it.
 class DbPredicate final {
@@ -48,6 +52,7 @@ public:
 private:
     template <typename, FixedString>
     friend class DbFieldReference;
+    friend struct detail::DbPredicateAccess;
     static DbPredicate combine(DbPredicate left, DbBinaryOperator op, const DbPredicate& right) {
         if (left.empty() || right.empty()) {
             throw std::invalid_argument("cannot combine empty database conditions");

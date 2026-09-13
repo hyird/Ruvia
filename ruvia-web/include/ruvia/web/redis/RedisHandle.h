@@ -15,9 +15,14 @@
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/detail/redis/RedisArgumentPack.h"
+#include "ruvia/web/detail/redis/RedisMappedCommand.h"
+#include "ruvia/web/redis/RedisRepositoryTypes.h"
 #include "ruvia/web/redis/RedisTransaction.h"
 
 namespace ruvia {
+
+template <typename Entity>
+class RedisRepository;
 
 class RedisHandle final : private detail::ScopedCapabilityNode {
 public:
@@ -235,6 +240,10 @@ public:
     [[nodiscard]] RedisPipeline pipeline() const;
     [[nodiscard]] RedisTransaction transaction() const;
 
+    template <typename Entity>
+    [[nodiscard]] RedisRepository<Entity> getRepository(
+        const RedisRepositoryConfig& config = {}) const;
+
 private:
     // Reassembles a flat alternating argument list into the pair sequence the
     // span overloads take.
@@ -250,6 +259,16 @@ private:
     }
 
     friend class detail::RedisRegistry;
+    template <typename Entity>
+    friend class RedisRepository;
+
+    [[nodiscard]] Task<RedisValue> commandOwned(std::span<const std::string_view> args) const;
+
+    template <typename Result, typename Mapper>
+    [[nodiscard]] ScopedOperation<Result> commandMapped(std::span<const std::string_view> args, Mapper mapper) const {
+        requireActive();
+        return scoped(detail::mapRedisCommand<Result>(commandOwned(args), resource_, std::move(mapper)));
+    }
 
     RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
         std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;

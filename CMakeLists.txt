@@ -219,7 +219,7 @@ endfunction()
 # stay build-private without requiring a second hand-maintained header list.
 function(ruvia_install_public_header_closure component relative_dir)
     cmake_parse_arguments(PARSE_ARGV 2 _ruvia_closure "" ""
-        "EXCLUDE_DIRECTORIES")
+        "EXCLUDE_DIRECTORIES;EXCLUDE_HEADERS")
     ruvia_assert_component_header_path(${component} "${relative_dir}")
 
     file(GLOB_RECURSE _ruvia_closure_candidates
@@ -230,6 +230,9 @@ function(ruvia_install_public_header_closure component relative_dir)
     set(_ruvia_closure_queue)
     foreach(_ruvia_candidate IN LISTS _ruvia_closure_candidates)
         set(_ruvia_candidate_excluded FALSE)
+        if(_ruvia_candidate IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
+            set(_ruvia_candidate_excluded TRUE)
+        endif()
         string(REPLACE "/" ";" _ruvia_candidate_components
             "${_ruvia_candidate}")
         foreach(_ruvia_excluded_dir IN LISTS _ruvia_closure_EXCLUDE_DIRECTORIES)
@@ -271,6 +274,9 @@ function(ruvia_install_public_header_closure component relative_dir)
             endif()
 
             set(_ruvia_included_excluded FALSE)
+            if(_ruvia_included_header IN_LIST _ruvia_closure_EXCLUDE_HEADERS)
+                set(_ruvia_included_excluded TRUE)
+            endif()
             string(REPLACE "/" ";" _ruvia_included_components
                 "${_ruvia_included_header}")
             foreach(_ruvia_excluded_dir IN LISTS

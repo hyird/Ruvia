@@ -109,16 +109,22 @@ if(RUVIA_BUILD_WEB)
         web/unit/db/schema.cpp
         web/unit/db/sql.cpp
         web/unit/db/transaction_options.cpp
+        web/unit/redis/entity.cpp
+        web/unit/redis/protocol.cpp
+        web/unit/redis/query.cpp
         web/unit/redis/redis_client.cpp
-        web/unit/redis/protocol.cpp)
+        web/unit/redis/repository.cpp)
 
     if(RUVIA_ENABLE_JWT)
         list(APPEND _ruvia_web_unit_sources web/unit/auth/jwt.cpp)
     endif()
     if(RUVIA_ENABLE_REDIS)
         list(APPEND _ruvia_web_unit_sources
+            web/unit/redis/entity.cpp
+            web/unit/redis/protocol.cpp
+            web/unit/redis/query.cpp
             web/unit/redis/redis_client.cpp
-            web/unit/redis/protocol.cpp)
+            web/unit/redis/repository.cpp)
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         list(APPEND _ruvia_web_unit_sources
