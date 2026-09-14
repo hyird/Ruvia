@@ -13,6 +13,7 @@
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbRepository.h"
@@ -123,6 +124,156 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_source) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource source;
+    detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    auto repository = registry.get(scope).getRepository<Entity>();
+    auto update = repository.createUpdateBuilder("i");
+    {
+        DbExpressions x(&source);
+        update.updateFrom<Entity>("incoming")
+            .set("name", x.column("name", "incoming"))
+            .where(x.binary(x.column("id", "i"), DbBinaryOperator::kEqual, x.column("id", "incoming")))
+            .andWhere(x.binary(x.column("name", "i"), DbBinaryOperator::kIsDistinctFrom, x.column("name", "incoming")))
+            .returning({{"id"}, {"label", x.column("name", "i")}});
+    }
+    RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+    const auto statement = update.getQueryAndParameters();
+    RUVIA_CHECK_EQ(statement.sql(), "UPDATE \"items\" AS \"i\" SET \"name\" = \"incoming\".\"name\" FROM \"items\" AS \"incoming\" WHERE ((\"i\".\"id\" = \"incoming\".\"id\") AND (\"i\".\"name\" IS DISTINCT FROM \"incoming\".\"name\")) RETURNING \"i\".\"id\" AS \"id\", \"i\".\"name\" AS \"label\"");
+    auto mapped = update.getMany<ItemSummary>();
+    RUVIA_CHECK(testing::throwsOn([&] { (void)update.execute(); }));
+    DbExpressions x;
+    Entity patch;
+    patch.set<"name">("next");
+    const auto condition = x.binary(x.column("name"), DbBinaryOperator::kIsDistinctFrom, x.value("next"));
+    auto ordinary = repository.update(condition, patch);
+    auto returned = repository.updateReturning(condition, patch);
+    auto expressionUpdate = repository.update(condition, {{"name", x.value("next")}});
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(DbExpression{}, patch); }));
+    auto unbounded = repository.createUpdateBuilder();
+    unbounded.set(patch);
+    RUVIA_CHECK(testing::throwsOn([&] { (void)unbounded.getQueryAndParameters(); }));
+    auto predicate = repository.createUpdateBuilder("target");
+    predicate.set(patch).where(Entity::column<"id">() == 7);
+    const auto predicateStatement = predicate.getQueryAndParameters();
+    RUVIA_CHECK(predicateStatement.sql().find("\"target\".\"id\"") != std::string_view::npos);
+    auto derived = repository.createUpdateBuilder("i");
+    {
+        auto sourceQuery = repository.createQueryBuilder("s");
+        sourceQuery.where(Entity::column<"id">() > 3);
+        derived.updateFrom(sourceQuery, "incoming").set("name", x.column("name", "incoming")).where(x.binary(x.column("id", "i"), DbBinaryOperator::kEqual, x.column("id", "incoming")));
+    }
+    const auto derivedStatement = derived.getQueryAndParameters();
+    RUVIA_CHECK(derivedStatement.sql().find("FROM (SELECT \"s\".\"id\", \"s\".\"name\" FROM \"items\" AS \"s\" WHERE (\"s\".\"id\" > $1)) AS \"incoming\"") != std::string_view::npos);
+    auto inserted = repository.createInsertBuilder(patch);
+    inserted.returning();
+    const auto insertStatement = inserted.getQueryAndParameters();
+    RUVIA_CHECK_EQ(insertStatement.sql(), "INSERT INTO \"items\" (\"name\") VALUES ($1) RETURNING \"items\".\"id\", \"items\".\"name\"");
+    auto removed = repository.createDeleteBuilder("old");
+    removed.where(Entity::column<"id">() == 9).returning();
+    auto outer = repository.createQueryBuilder("removed");
+    outer.with("removed", removed).fromCte("removed");
+    const auto deletion = outer.getQueryAndParameters();
+    RUVIA_CHECK(deletion.sql().find("WITH \"removed\" AS (DELETE FROM \"items\" AS \"old\" WHERE (\"old\".\"id\" = $1) RETURNING") == 0);
+}
+
+RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
+    using Archive = DbEntity<"archive", DbColumn<"id", std::int64_t>, DbColumn<"name", std::pmr::string>>;
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource resource, source;
+    detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    auto repository = registry.get(scope).getRepository<Entity>();
+    auto archive = registry.get(scope).getRepository<Archive>();
+    const auto baseline = resource.liveAllocations();
+    for (int i = 0; i < 8; ++i) {
+        {
+            auto insert = archive.createInsertBuilder();
+            {
+                DbExpressions x(&source);
+                auto candidates = repository.createQueryBuilder("c");
+                candidates.where(Entity::column<"name">() == "pending").orderBy("id").take(10).setLock({.mode = DbRowLock::kUpdate, .skipLocked = true});
+                auto claim = repository.createUpdateBuilder("t");
+                claim.updateFromCte("candidates", "c")
+                    .set("name", x.value(std::string(300, 'x')))
+                    .where(x.binary(x.column("id", "t"), DbBinaryOperator::kEqual, x.column("id", "c")))
+                    .returning();
+                auto claimed = repository.createQueryBuilder("claimed");
+                claimed.fromCte("claimed");
+                insert.with("candidates", candidates).with("claimed", claim).insertFrom({"id", "name"}, claimed).returning();
+                auto read = repository.createQueryBuilder("result");
+                read.with("candidates", candidates).with("claimed", claim).fromCte("claimed");
+                RUVIA_CHECK(testing::throwsOn([&] { (void)read.getManyAndCount(); }));
+                RUVIA_CHECK(testing::throwsOn([&] { (void)read.getCount(); }));
+                RUVIA_CHECK(testing::throwsOn([&] { (void)read.subquery(x); }));
+                auto result = read.getMany();
+                auto invalid = archive.createInsertBuilder();
+                RUVIA_CHECK(testing::throwsOn([&] { invalid.insertFrom({"id"}, claimed); }));
+                RUVIA_CHECK(testing::throwsOn([&] { invalid.insertFrom({"id", "unknown"}, claimed); }));
+            }
+            RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+            const auto statement = insert.getQueryAndParameters();
+            RUVIA_CHECK(statement.sql().find("WITH \"candidates\" AS (SELECT") == 0);
+            RUVIA_CHECK(statement.sql().find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
+            RUVIA_CHECK(statement.sql().find("\"claimed\" AS (UPDATE \"items\" AS \"t\"") != std::string_view::npos);
+            RUVIA_CHECK(statement.sql().find("INSERT INTO \"archive\" (\"id\", \"name\") SELECT \"claimed\".\"id\", \"claimed\".\"name\" FROM \"claimed\" AS \"claimed\" RETURNING \"archive\".\"id\", \"archive\".\"name\"") != std::string_view::npos);
+            RUVIA_CHECK_EQ(statement.params().size(), std::size_t{3});
+            RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[2]).size(), std::size_t{300});
+            auto operation = insert.getMany();
+        }
+        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    }
+}
+
+RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_snapshots) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource resource, input;
+    detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    StopSource stop;
+    stop.requestStop();
+    auto repository = registry.get(scope).withOptions({.stopToken = stop.token()}).getRepository<Entity>();
+    const auto baseline = resource.liveAllocations();
+    for (int i = 0; i < 8; ++i) {
+        bool cancelled = false;
+        auto exercise = [&]() -> Task<void> {
+            auto operation = [&] {
+                DbExpressions x(&input);
+                auto update = repository.createUpdateBuilder();
+                update.set("name", x.value(std::string(400, 'v')))
+                    .where(x.binary(x.column("id"), DbBinaryOperator::kIsDistinctFrom, x.value(1)))
+                    .returning();
+                auto outer = repository.createQueryBuilder("updated");
+                outer.with("updated", update).fromCte("updated");
+                return outer.getMany();
+            }();
+            RUVIA_CHECK_EQ(input.liveAllocations(), std::size_t{0});
+            try {
+                auto result = co_await std::move(operation);
+            } catch (const DbError& error) {
+                cancelled = error.code() == DbError::Code::kCancelled;
+            }
+        };
+        std::exception_ptr failure;
+        runtime.context.restart();
+        detail::asyncStartTask(exercise(), asio::bind_executor(runtime.context, [&](auto completion) {
+            if (completion.failure()) {
+                failure = completion.failure()->exception();
+            }
+        }));
+        runtime.context.run();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        RUVIA_CHECK(cancelled);
+        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    }
+}
+
 RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});

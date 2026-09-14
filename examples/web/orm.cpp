@@ -104,6 +104,17 @@ Task<void> demonstrate(DbClient& db) {
 
     auto transaction = co_await db.beginTransaction();
     auto transactional = transaction.getRepository<Device>();
+    auto candidates = transactional.createQueryBuilder("candidate");
+    candidates.where(Device::column<"id">() == 1).take(1).setLock({.mode = DbRowLock::kUpdate, .skipLocked = true});
+    auto claim = transactional.createUpdateBuilder("target");
+    claim.updateFromCte("candidates", "candidate")
+        .set("name", expressions.value("Claimed device"))
+        .where(expressions.binary(expressions.column("id", "target"), DbBinaryOperator::kEqual, expressions.column("id", "candidate")))
+        .returning();
+    auto claimed = transactional.createQueryBuilder("claimed");
+    claimed.with("candidates", candidates).with("claimed", claim).fromCte("claimed");
+    const auto claimedDevices = co_await claimed.getMany();
+    std::cout << "claimed=" << claimedDevices.size() << '\n';
     const DbFindOptions transactionPage{.where = Device::column<"id">() == 1, .skip = 10, .take = 1};
     auto [emptyPage, transactionTotal] = co_await transactional.findAndCount(transactionPage);
     std::cout << "empty page=" << emptyPage.size() << ", transaction total=" << transactionTotal << '\n';

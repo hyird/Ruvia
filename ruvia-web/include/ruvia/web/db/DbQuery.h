@@ -276,6 +276,7 @@ public:
     [[nodiscard]] DbQuery clone(std::pmr::memory_resource* resource) const;
     [[nodiscard]] bool returnsRows() const;
     [[nodiscard]] bool hasWhere() const;
+    [[nodiscard]] bool hasWrites() const;
     [[nodiscard]] bool hasGrouping() const;
     DbQuery& cache(const DbCacheSetting& setting);
     DbQuery& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {});
@@ -431,6 +432,8 @@ private:
     friend class DbHandle;
     template <typename, typename>
     friend class DbQueryBuilder;
+    template <typename, typename>
+    friend class DbWriteQueryBuilder;
     [[nodiscard]] bool cacheable() const;
     [[nodiscard]] std::optional<bool> cacheEnabled() const;
     [[nodiscard]] std::optional<std::chrono::milliseconds> cacheDuration() const;

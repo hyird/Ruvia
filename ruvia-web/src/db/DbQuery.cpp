@@ -532,6 +532,11 @@ void DbQuery::requireSelectQuery() const {
         storage().queries.at(cte.query).requireSelectQuery();
     }
 }
+bool DbQuery::hasWrites() const {
+    const auto& s = storage();
+    return (s.kind != DbQueryKind::kSelect && s.kind != DbQueryKind::kValues) ||
+           std::ranges::any_of(s.queries, [](const auto& query) { return query.hasWrites(); });
+}
 bool DbQuery::hasWhere() const {
     return storage().predicate != noDbNode;
 }

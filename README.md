@@ -1180,6 +1180,82 @@ without a fixed metadata length limit. Declared defaults are applied by
 Defaults remain database expressions and are not evaluated when constructing a
 C++ entity.
 
+### Composable entity writes
+
+`update` and `updateReturning` accept either `DbPredicate` or `DbExpression`
+conditions, including `IS DISTINCT FROM`, subquery conditions and trusted SQL
+expression fragments. Empty conditions are rejected. For example:
+
+```cpp
+ruvia::DbExpressions x;
+auto changed = x.binary(x.column("state"), ruvia::DbBinaryOperator::kIsDistinctFrom,
+    x.value(nextState));
+co_await commands.update(changed, patch);
+```
+
+Repositories provide `createUpdateBuilder(alias)`, `createDeleteBuilder(alias)`
+and `createInsertBuilder()`; the insert factory also accepts an entity or a span
+of entities. Each builder keeps its repository's target entity and executor.
+`set` accepts an entity patch or a declared column plus an expression. Update and
+delete builders require a nonempty `where`; `andWhere` and `orWhere` compose typed
+predicates or expressions. Inspect SQL with `getQueryAndParameters()`, call
+`execute()` for `DbExecResult`, or declare `returning(...)` and use
+`getMany<EntityOrDto>()` for owning typed results.
+
+`updateFrom<SourceEntity>(alias)` reads an entity table;
+`updateFrom(selectBuilder, alias)` reads a derived query; and
+`updateFromCte(name, alias)` reads a CTE. Expressions use these explicit aliases.
+`insertFrom({targetColumns...}, selectBuilder)` maps selected values by position,
+validates the column count and rejects unknown or computed target columns.
+The query builder's `fromCte(name)` reads a CTE using its existing root alias and
+result schema. These methods copy their inputs immediately.
+
+Both read and write builders accept another write builder in `with(name, writer)`.
+Attach all data-modifying CTEs to the outermost statement, in dependency order;
+read their `RETURNING` rows through CTE references. This follows the composable
+write-builder approach in [TypeORM's CTE API](https://typeorm.io/docs/query-builder/select-query-builder/#common-table-expressions).
+The following PostgreSQL statement claims pending commands and persists their
+returned fields into an archive atomically:
+
+```cpp
+ruvia::DbExpressions x;
+auto candidates = commands.createQueryBuilder("candidate");
+candidates.where(Command::column<"state">() == "pending")
+    .orderBy("id").take(100)
+    .setLock({.mode = ruvia::DbRowLock::kUpdate, .skipLocked = true});
+
+auto claim = commands.createUpdateBuilder("command");
+claim.updateFromCte("candidates", "candidate")
+    .set("state", x.value("claimed"))
+    .where(x.binary(x.column("id", "command"), ruvia::DbBinaryOperator::kEqual,
+        x.column("id", "candidate")))
+    .returning({{"id"}, {"state"}});
+
+auto claimed = commands.createQueryBuilder("claimed");
+claimed.fromCte("claimed").select({{"id"}, {"state"}});
+auto persist = archive.createInsertBuilder();
+persist.with("candidates", candidates)
+    .with("claimed", claim)
+    .insertFrom({"command_id", "state"}, claimed)
+    .returning();
+auto saved = co_await persist.getMany();
+```
+
+The outer `getMany()` submits one statement; constructing or attaching a builder
+does not execute it. The same builders work with transaction repositories.
+Use unique source keys when one source row must determine each updated target.
+`UPDATE FROM`, data-modifying CTEs and `RETURNING` require PostgreSQL in this API;
+unsupported dialects fail during compilation, before I/O.
+
+A read builder containing a write CTE supports flat `getMany`/`getOne` mapping.
+`getManyAndCount` rejects it because that API executes two statements. Count,
+existence and subquery wrappers also reject write CTEs; reference their returned
+rows explicitly in the outer query instead. A SELECT limit controls returned
+rows, not how many rows the CTE modifies. PostgreSQL executes data-modifying CTEs
+once to completion under one statement snapshot; pass data between writes through
+`RETURNING`, and avoid modifying the same row twice in one statement. See
+[PostgreSQL's data-modifying WITH rules](https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING).
+
 ### Direct SQL and structured queries
 
 This route operates on statements and raw rows independently of entity ORM:
