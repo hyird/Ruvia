@@ -85,11 +85,11 @@ private:
         co_return c.json(response);
     }
     ruvia::Task<ruvia::HttpResponse> adults(ruvia::Context& c) {
-        auto users = co_await c.redis().getRepository<CachedUser>(userRedisConfig).find({
+        const ruvia::DbFindOptions findOptions{
             .where = CachedUser::column<"age">() >= 18,
             .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},
-            .take = 20,
-        });
+            .take = 20};
+        auto users = co_await c.redis().getRepository<CachedUser>(userRedisConfig).find(findOptions);
         CachedUsersResponse response({.resource = c.arena()});
         auto& output = response.ensure<"users">();
         for (const auto& user : users) {
