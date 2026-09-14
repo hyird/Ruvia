@@ -25,6 +25,7 @@
 #include "ruvia/web/detail/redis/RedisRepositoryCommands.h"
 #include "ruvia/web/detail/redis/RedisRepositoryConfig.h"
 #include "ruvia/web/detail/redis/RedisRepositoryMapping.h"
+#include "ruvia/web/redis/RedisEntity.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
 
@@ -55,6 +56,8 @@ namespace ruvia {
 
 template <typename Entity>
 class RedisRepository final : private detail::ScopedCapabilityNode {
+    static_assert(requires { typename Entity::RedisEntityType; }, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
+
 public:
     RedisRepository(const RedisRepository&) = delete;
     RedisRepository& operator=(const RedisRepository&) = delete;

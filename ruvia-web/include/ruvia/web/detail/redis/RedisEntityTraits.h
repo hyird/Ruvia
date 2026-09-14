@@ -13,9 +13,7 @@
 
 namespace ruvia::detail {
 
-// Redis stores the scalar representation of a database entity column in a
-// hash.  Keep this vocabulary here instead of coupling Redis to a separate
-// public entity declaration: the same DbColumn type is used by SQL and Redis.
+// Redis hash fields support owning scalar values and one string/integer key.
 template <typename T>
 inline constexpr bool isRedisEntityString =
     std::is_same_v<std::remove_cvref_t<T>, String> ||
@@ -134,10 +132,11 @@ consteval bool redisEntityPrimaryKeyIsValid() {
 
 template <typename Entity>
 consteval void validateRedisEntity() {
+    static_assert(requires { typename Entity::RedisEntityType; }, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
     static_assert(redisEntityColumnsAreScalar<Entity>(),
-        "Redis repositories currently support only scalar database columns");
+        "Redis repositories support only scalar Redis columns");
     static_assert(redisEntityPrimaryKeyCount<Entity>() == 1,
-        "Redis entities must declare exactly one primary-key database column");
+        "Redis entities must declare exactly one primary-key Redis column");
     static_assert(redisEntityPrimaryKeyIsValid<Entity>(),
         "Redis primary keys must be non-nullable string or integer columns");
 }

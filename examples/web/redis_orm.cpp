@@ -9,12 +9,13 @@
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/redis/RedisEntity.h"
 #include "ruvia/web/redis/RedisRepository.h"
 
-RUVIA_DB_ENTITY(CachedUser, "users",
-    RUVIA_DB_COLUMN(id, ruvia::String, ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(name, ruvia::String),
-    RUVIA_DB_COLUMN(age, std::uint32_t));
+RUVIA_REDIS_ENTITY(CachedUser, "users",
+    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::String),
+    RUVIA_REDIS_COLUMN(age, std::uint32_t));
 
 const ruvia::RedisRepositoryConfig userRedisConfig{
     .prefix = "ruvia:example:users",

@@ -243,6 +243,13 @@ private:
             }
             type.array = true;
         }
+        if constexpr (!Column::options.enumName.view().empty()) {
+            if constexpr (Column::options.dataType != DbDataType::kInferred && Column::options.dataType != DbDataType::kArray) {
+                throw std::invalid_argument("enumName cannot also specify a scalar dataType");
+            }
+            type.customName = Column::options.enumName.view();
+            type.dataType = DbDataType::kInferred;
+        }
         return type;
     }
 
@@ -254,6 +261,7 @@ private:
 template <typename Entity>
 void DbSchema::createTable(const DbEntityTableOptions& options) {
     DbTableDefinition table{.name = std::string(Entity::tableName()), .constraints = options.constraints, .ifNotExists = options.ifNotExists, .temporary = options.temporary, .unlogged = options.unlogged};
+    DbQuery defaults(resource_);
     std::vector<std::string> primary;
     bool conflictingGeneration = false;
     [&]<std::size_t... I>(std::index_sequence<I...>) {
@@ -263,6 +271,14 @@ void DbSchema::createTable(const DbEntityTableOptions& options) {
                 .type = entityColumnType<C>(),
                 .nullable = C::options.nullable,
                 .generatedType = C::options.generatedType};
+            if constexpr (!C::options.enumName.view().empty()) {
+                if (driver_ != DbDriver::kPostgreSql) {
+                    throw std::invalid_argument("entity enumName requires PostgreSQL");
+                }
+            }
+            if constexpr (!C::options.defaultExpression.view().empty()) {
+                column.defaultValue = defaults.sql(C::options.defaultExpression.view());
+            }
             if constexpr (C::options.primaryKey) {
                 primary.push_back(column.name);
             }

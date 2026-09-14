@@ -224,6 +224,72 @@ RUVIA_TEST(db_mapped_query_repeated_results_release_temporaries_and_retain_field
     RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
+RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_results) {
+    using Output = ruvia::DbProjection<ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>>;
+    asio::io_context context;
+    ruvia::test::CountingMemoryResource resource;
+    const auto operation = [&](bool invalid, QueryGate* gate, bool partial) {
+        std::pmr::vector<std::pmr::string> names(&resource);
+        if (!partial) {
+            names.emplace_back("id");
+        }
+        names.emplace_back("name");
+        return ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Output>>(
+            ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource, invalid, gate), &resource,
+            ruvia::detail::DbMapProjection<Output>(names, &resource));
+    };
+    {
+        auto cold = operation(false, nullptr, false);
+        RUVIA_CHECK(resource.liveAllocations() > 0);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    std::optional<ruvia::DbEntityRows<Output>> retained;
+    ruvia::detail::asyncStartTask(operation(false, nullptr, true), asio::bind_executor(context, [&](auto completion) {
+        if (completion.failure()) {
+            std::rethrow_exception(completion.failure()->exception());
+        }
+        retained.emplace(std::move(*completion.success()).takeValue());
+    }));
+    context.run();
+    RUVIA_CHECK(retained.has_value());
+    RUVIA_CHECK(!(*retained)[0].isSet<"id">());
+    const auto baseline = resource.liveAllocations();
+    for (int i = 0; i < 12; ++i) {
+        for (int mode = 0; mode < 3; ++mode) {
+            context.restart();
+            QueryGate gate;
+            bool observed = false;
+            ruvia::detail::asyncStartTask(operation(mode == 1, mode == 2 ? &gate : nullptr, false), asio::bind_executor(context, [&](auto completion) {
+                if (mode == 0) {
+                    if (completion.failure()) {
+                        std::rethrow_exception(completion.failure()->exception());
+                    }
+                    auto result = std::move(*completion.success()).takeValue();
+                    observed = result[0].get<"id">() == 3;
+                } else if (completion.failure()) {
+                    try {
+                        std::rethrow_exception(completion.failure()->exception());
+                    } catch (const ruvia::DbConversionError&) {
+                        observed = mode == 1;
+                    } catch (const ruvia::DbError& error) {
+                        observed = mode == 2 && error.code() == ruvia::DbError::Code::kCancelled;
+                    }
+                }
+            }));
+            if (mode == 2) {
+                gate.resume(true);
+            }
+            context.run();
+            RUVIA_CHECK(observed);
+            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ((*retained)[0].get<"name">(), std::string_view(std::string(500, 'p')));
+        }
+    }
+    retained.reset();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
 RUVIA_TEST(db_mapped_query_cold_drop_conversion_failure_and_cancellation_release_storage) {
     asio::io_context context;
     ruvia::test::CountingMemoryResource resource;

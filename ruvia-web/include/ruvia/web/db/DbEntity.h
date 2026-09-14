@@ -170,6 +170,7 @@ enum class DbGeneratedType : unsigned char { kNone,
     kStored,
     kVirtual };
 
+template <typename EnumName = FixedString<1>, typename DefaultExpression = FixedString<1>>
 struct DbColumnOptions final {
     DbDataType dataType{DbDataType::kInferred};
     bool primaryKey{false};
@@ -179,6 +180,8 @@ struct DbColumnOptions final {
     std::size_t length{0};
     unsigned precision{0};
     unsigned scale{0};
+    EnumName enumName{""};
+    DefaultExpression defaultExpression{""};
     constexpr bool operator==(const DbColumnOptions&) const = default;
 };
 
@@ -390,7 +393,7 @@ void assignEntityValue(T& out, V&& value, std::pmr::memory_resource* resource) {
 
 }  // namespace detail
 
-template <FixedString Name, typename T, DbColumnOptions Options = {}>
+template <FixedString Name, typename T, DbColumnOptions Options = DbColumnOptions{}>
 struct DbColumn final {
     static_assert(!detail::is_optional<T>::value, "use nullable column options and setNull for entity fields; optional is only for array elements");
     static constexpr auto name = Name;
@@ -420,6 +423,8 @@ struct is_db_relation<DbManyToMany<Name, Target, Mapping>> : std::true_type {};
 
 template <FixedString Table, typename... Members>
 class DbEntity {
+    static_assert(((is_db_column<Members>::value || is_db_relation<Members>::value) && ...),
+        "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
     using ColumnsTuple = detail::tuple_filter_t<is_db_column, Members...>;
     using RelationsTuple = detail::tuple_filter_t<is_db_relation, Members...>;
     static_assert(detail::uniqueEntityColumns<Members...>(), "duplicate database entity member name");
@@ -504,6 +509,7 @@ class DbEntity {
     }
 
 public:
+    using SqlEntityType = DbEntity;
     using Columns = ColumnsTuple;
     using Relations = RelationsTuple;
     static constexpr std::string_view tableName() noexcept {

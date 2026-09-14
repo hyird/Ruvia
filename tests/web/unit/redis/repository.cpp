@@ -25,7 +25,6 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/web/db/DbEntity.h"
 #include "ruvia/web/db/DbExecResult.h"
 #include "ruvia/web/db/DbFindOptions.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
@@ -33,6 +32,7 @@
 #include "ruvia/web/detail/redis/RedisRepositoryCommands.h"
 #include "ruvia/web/detail/redis/RedisRepositoryMapping.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
+#include "ruvia/web/redis/RedisEntity.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/redis/RedisRepository.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
@@ -44,16 +44,16 @@ namespace {
 
 using ruvia::RedisIndexKind;
 
-RUVIA_DB_ENTITY(TestRedisUser, "users",
-    RUVIA_DB_COLUMN(id, ruvia::String, ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
-    RUVIA_DB_COLUMN(active, bool),
-    RUVIA_DB_COLUMN(role, std::pmr::string, ruvia::DbColumnOptions{.nullable = true}),
-    RUVIA_DB_COLUMN(age, std::int32_t, ruvia::DbColumnOptions{.nullable = true}),
-    RUVIA_DB_COLUMN(score, ruvia::Double, ruvia::DbColumnOptions{.nullable = true}));
+RUVIA_REDIS_ENTITY(TestRedisUser, "users",
+    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(name, std::pmr::string),
+    RUVIA_REDIS_COLUMN(active, bool),
+    RUVIA_REDIS_COLUMN(role, std::pmr::string, ruvia::RedisColumnOptions{.nullable = true}),
+    RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::RedisColumnOptions{.nullable = true}),
+    RUVIA_REDIS_COLUMN(score, ruvia::Double, ruvia::RedisColumnOptions{.nullable = true}));
 
-RUVIA_DB_ENTITY(TestRedisAdminUser, "users:admin",
-    RUVIA_DB_COLUMN(id, ruvia::String, ruvia::DbColumnOptions{.primaryKey = true}));
+RUVIA_REDIS_ENTITY(TestRedisAdminUser, "users:admin",
+    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}));
 
 const ruvia::RedisRepositoryConfig kTestRedisRepositoryConfig{
     .prefix = "users",

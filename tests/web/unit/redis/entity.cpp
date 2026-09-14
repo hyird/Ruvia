@@ -6,26 +6,26 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/db/DbEntity.h"
 #include "ruvia/web/detail/redis/RedisEntityCodec.h"
 #include "ruvia/web/detail/redis/RedisEntityKey.h"
 #include "ruvia/web/detail/redis/RedisRepositoryConfig.h"
+#include "ruvia/web/redis/RedisEntity.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
-RUVIA_DB_ENTITY(RedisUser, "user",
-    RUVIA_DB_COLUMN(id, ruvia::String, ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
-    RUVIA_DB_COLUMN(active, bool),
-    RUVIA_DB_COLUMN(age, std::int32_t, ruvia::DbColumnOptions{.nullable = true}),
-    RUVIA_DB_COLUMN(score, ruvia::Double, ruvia::DbColumnOptions{.nullable = true}));
+RUVIA_REDIS_ENTITY(RedisUser, "user",
+    RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(name, std::pmr::string),
+    RUVIA_REDIS_COLUMN(active, bool),
+    RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::RedisColumnOptions{.nullable = true}),
+    RUVIA_REDIS_COLUMN(score, ruvia::Double, ruvia::RedisColumnOptions{.nullable = true}));
 
-RUVIA_DB_ENTITY(IntegerRedisUser, "integer_user",
-    RUVIA_DB_COLUMN(id, std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(name, ruvia::String));
+RUVIA_REDIS_ENTITY(IntegerRedisUser, "integer_user",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::String));
 
 template <typename Fn>
 bool throwsRedisProtocolError(Fn&& function) {
@@ -154,7 +154,7 @@ RUVIA_TEST(redis_entity_codec_rejects_malformed_and_non_finite_scalars) {
     }));
 }
 
-RUVIA_TEST(redis_entity_codec_iterates_database_column_descriptors) {
+RUVIA_TEST(redis_entity_codec_iterates_redis_column_descriptors) {
     std::size_t count = 0;
     std::string_view first;
     ruvia::detail::forEachRedisField<RedisUser>([&]<typename Field>() {

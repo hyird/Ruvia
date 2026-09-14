@@ -280,6 +280,15 @@ public:
     DbQuery& cache(const DbCacheSetting& setting);
     DbQuery& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {});
 
+    // Trusted SQL syntax interleaved with expression arguments. Values belong in
+    // value() arguments, never in the syntax strings. parts.size() == args.size()+1.
+    Expr sql(std::span<const std::string_view> parts, std::span<const Expr> args);
+    Expr sql(std::initializer_list<std::string_view> parts, std::initializer_list<Expr> args) {
+        return sql(std::span<const std::string_view>(parts.begin(), parts.size()), std::span<const Expr>(args.begin(), args.size()));
+    }
+    Expr sql(std::string_view expression) {
+        return sql(std::span<const std::string_view>(&expression, 1), {});
+    }
     Expr column(std::string_view name, std::string_view table = {});
     Expr star(std::string_view table = {});
     Expr value(DbValue value);

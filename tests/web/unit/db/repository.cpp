@@ -81,6 +81,131 @@ void runVoid(Task<void> task) {
     }
 }
 
+RUVIA_DB_PROJECTION(ItemSummary,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
+
+RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource source, target;
+    detail::DbRegistry registry(runtime.context, runtime.worker, &target, databaseConfig());
+    detail::ScopedOperationScope scope;
+    auto repository = registry.get(scope).getRepository<Entity>();
+    const auto baseline = target.liveAllocations();
+    for (int i = 0; i < 8; ++i) {
+        {
+            auto builder = repository.createQueryBuilder("i");
+            {
+                DbExpressions expressions(&source);
+                auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::string(200, 'x'))});
+                auto rank = expressions.over(expressions.call("row_number"), {.orderBy = {{expressions.column("id", "i")}}});
+                builder.select({{"id"}, {"label", label}, {"rank", rank}});
+            }
+            RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+            const auto statement = builder.getQueryAndParameters();
+            RUVIA_CHECK(statement.sql().find(databaseConfig().driver == DbDriver::kPostgreSql ? "\"row_number\"() OVER (ORDER BY" : "row_number() OVER (ORDER BY") != std::string_view::npos);
+            RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[0]).size(), std::size_t{200});
+            auto many = builder.getMany<ItemSummary>();
+            auto one = builder.getOne<ItemSummary>();
+            auto page = builder.getManyAndCount<ItemSummary>();
+            RUVIA_CHECK(testing::throwsOn([&] { (void)builder.getMany(); }));
+        }
+        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK_EQ(target.liveAllocations(), baseline);
+    }
+    auto partial = repository.createQueryBuilder();
+    partial.select({{"name"}});
+    auto result = partial.getMany();
+    RUVIA_CHECK(testing::throwsOn([&] { partial.select({{"missing"}}); }));
+    RUVIA_CHECK(testing::throwsOn([&] { partial.select({{"id"}, {"id"}}); }));
+}
+
+#ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) {
+    RepositoryRuntime runtime;
+    detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    auto repository = registry.get(scope).getRepository<Entity>();
+    auto builder = repository.createQueryBuilder("i");
+    {
+        DbExpressions x;
+        auto source = repository.createQueryBuilder("s");
+        source.where(Entity::column<"id">() > 4);
+        builder.with("recent", source, {.materialization = DbMaterialization::kMaterialized});
+        builder.joinCte(DbJoinType::kInner, "recent", "r", x.binary(x.column("id", "i"), DbBinaryOperator::kEqual, x.column("id", "r")));
+        auto correlated = repository.createQueryBuilder("c");
+        correlated.where(x.binary(x.column("id", "c"), DbBinaryOperator::kEqual, x.column("id", "i"))).take(1);
+        builder.join(DbJoinType::kLeft, correlated, "l", x.value(true), {.lateral = true});
+        builder.join<Entity>(DbJoinType::kCross, "other");
+        builder.select({{"id"}, {"rank", x.aggregate("count", {x.star()})}});
+        builder.groupBy({x.column("id", "i")}).having(x.binary(x.aggregate("count", {x.star()}), DbBinaryOperator::kGreater, x.value(1)));
+        builder.andWhere(source.exists(x));
+    }
+    const auto statement = builder.getQueryAndParameters();
+    RUVIA_CHECK(statement.sql().find("WITH \"recent\" AS MATERIALIZED") != std::string_view::npos);
+    RUVIA_CHECK(statement.sql().find("LEFT JOIN LATERAL") != std::string_view::npos);
+    RUVIA_CHECK(statement.sql().find("CROSS JOIN \"items\" AS \"other\"") != std::string_view::npos);
+    RUVIA_CHECK(statement.sql().find("GROUP BY \"i\".\"id\" HAVING") != std::string_view::npos);
+    auto operation = builder.getMany<ItemSummary>();
+}
+
+RUVIA_TEST(db_repository_grouped_projection_reuses_imported_parameters) {
+    RepositoryRuntime runtime;
+    detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    auto builder = registry.get(scope).getRepository<Entity>().createQueryBuilder("i");
+    {
+        DbExpressions x;
+        const auto bucket = x.binary(x.column("id", "i"), DbBinaryOperator::kAdd, x.value(3));
+        builder.select({{"id", bucket}}).groupBy({bucket});
+        builder.having(x.binary(bucket, DbBinaryOperator::kGreater, x.value(10)));
+    }
+    const auto statement = builder.getQueryAndParameters();
+    RUVIA_CHECK_EQ(statement.sql(), "SELECT (\"i\".\"id\" + $1) AS \"id\" FROM \"items\" AS \"i\" GROUP BY (\"i\".\"id\" + $1) HAVING ((\"i\".\"id\" + $1) > $2)");
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{2});
+}
+
+RUVIA_TEST(db_repository_expression_writes_and_returning_release_cold_storage) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource resource, source;
+    detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
+    detail::ScopedOperationScope scope;
+    auto repository = registry.get(scope).getRepository<Entity>();
+    Entity entity;
+    entity.set<"id">(8);
+    entity.set<"name">("initial");
+    auto where = Entity::column<"id">() == 8;
+    const auto baseline = resource.liveAllocations();
+    for (int i = 0; i < 12; ++i) {
+        {
+            auto update = [&] {
+                DbExpressions x(&source);
+                const std::array changes{DbAssignment{"name", x.call("concat", {x.column("name"), x.value(std::string(400, 'z'))})}};
+                const std::array fields{DbSelection{"id"}, DbSelection{"label", x.call("upper", {x.column("name")})}};
+                return repository.updateReturning<ItemSummary>(where, changes, fields);
+            }();
+            RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+            auto insert = repository.insertReturning(entity);
+            auto erase = repository.deleteReturning(where);
+            auto plainUpdate = repository.updateReturning(where, entity);
+            DbExpressions x;
+            DbUpsertOptions options{.conflictPaths = {"id"}, .skipUpdateIfNoValuesChanged = true, .updateExpressions = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .updateWhere = x.binary(x.column("id", "items"), DbBinaryOperator::kGreater, x.value(0))};
+            auto upsert = repository.upsertReturning(entity, options);
+            auto directResult = repository.update(where, {{"name", x.value("replacement")}});
+            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
+            RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
+            options.updateExpressions.push_back(options.updateExpressions.front());
+            RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(entity, options); }));
+        }
+        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    }
+}
+#endif
+
 RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
     RepositoryRuntime runtime;
     const auto config = databaseConfig();

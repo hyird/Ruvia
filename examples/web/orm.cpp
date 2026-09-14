@@ -20,16 +20,18 @@ using namespace ruvia;
 RUVIA_DB_ENTITY(Device, "orm_demo_device",
     RUVIA_DB_COLUMN(id, std::int64_t, DbColumnOptions{.primaryKey = true}),
     RUVIA_DB_COLUMN(name, std::pmr::string),
-    RUVIA_DB_COLUMN(revision, std::int64_t),
-    RUVIA_DB_COLUMN(labels, std::pmr::vector<std::pmr::string>))
+    RUVIA_DB_COLUMN(revision, std::int64_t, DbColumnOptions{.defaultExpression = FixedString{"1"}}),
+    RUVIA_DB_COLUMN(labels, std::pmr::vector<std::pmr::string>, DbColumnOptions{.defaultExpression = FixedString{"ARRAY[]::text[]"}}))
+
+RUVIA_DB_PROJECTION(DeviceSummary,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
 
 auto migrations() {
-    DbQuery expressions;
+    DbExpressions expressions;
     DbSchema schema({.driver = DbDriver::kPostgreSql});
-    schema.createTable<Device>({.defaults = {
-                                    {"revision", expressions.value(1)},
-                                    {"labels", expressions.cast(expressions.array({}), {.dataType = DbDataType::kText, .array = true})}},
-        .ifNotExists = true});
+    schema.createTable<Device>({.ifNotExists = true});
     schema.createIndex({.name = "orm_demo_device_labels", .table = Device::tableName().data(), .keys = {{.column = "labels"}}, .ifNotExists = true, .method = DbIndexMethod::kGin});
 
     DbProcedure version;
@@ -83,6 +85,22 @@ Task<void> demonstrate(DbClient& db) {
     builder.take(1);
     auto [page, matching] = co_await builder.getManyAndCount();
     std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
+
+    DbExpressions expressions;
+    auto summary = devices.createQueryBuilder("d");
+    summary.select({{"id"},
+        {"label", expressions.call("upper", {expressions.column("name", "d")})},
+        {"rank", expressions.over(expressions.call("row_number"), {.orderBy = {{expressions.column("id", "d")}}})}});
+    const auto summaries = co_await summary.getMany<DeviceSummary>();
+    for (const auto& item : summaries) {
+        std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
+    }
+    const std::array changes{DbAssignment{"name", expressions.call("upper", {expressions.column("name")})}};
+    const std::array returning{DbSelection{"id"}, DbSelection{"label", expressions.column("name")}};
+    const auto changed = co_await devices.updateReturning<DeviceSummary>(Device::column<"id">() == 1, changes, returning);
+    for (const auto& item : changed) {
+        std::cout << "updated=" << item.get<"label">() << '\n';
+    }
 
     auto transaction = co_await db.beginTransaction();
     auto transactional = transaction.getRepository<Device>();

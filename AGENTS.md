@@ -268,7 +268,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## Controller API
 
-- SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
+- SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。ORM 可以组合 SQL 表达式、实体/子查询 JOIN、CTE 和显式类型投影；SQL 片段只作为表达式节点，不能替换 Repository 绑定的完整语句。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
+- SQL 与 Redis 的实体声明使用各自的宏、字段描述符和配置类型；不得把 Redis 宏实现成 SQL 宏的别名，也不得跨后端接受实体。内部可以复用值存储与生命周期实现。
 
 - 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`。
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。

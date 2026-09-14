@@ -7,30 +7,30 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/db/DbEntity.h"
 #include "ruvia/web/detail/redis/RedisQueryCompile.h"
+#include "ruvia/web/redis/RedisEntity.h"
 
 #include "test_harness.h"
 
 namespace {
 
-RUVIA_DB_ENTITY(RedisQueryUser, "query_users",
-    RUVIA_DB_COLUMN(id, std::int64_t,
-        ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(email, std::pmr::string),
-    RUVIA_DB_COLUMN(title, std::pmr::string),
-    RUVIA_DB_COLUMN(age, std::int32_t),
-    RUVIA_DB_COLUMN(ratio, float),
-    RUVIA_DB_COLUMN(active, bool,
-        ruvia::DbColumnOptions{.nullable = true}));
+RUVIA_REDIS_ENTITY(RedisQueryUser, "query_users",
+    RUVIA_REDIS_COLUMN(id, std::int64_t,
+        ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(email, std::pmr::string),
+    RUVIA_REDIS_COLUMN(title, std::pmr::string),
+    RUVIA_REDIS_COLUMN(age, std::int32_t),
+    RUVIA_REDIS_COLUMN(ratio, float),
+    RUVIA_REDIS_COLUMN(active, bool,
+        ruvia::RedisColumnOptions{.nullable = true}));
 
-RUVIA_DB_ENTITY(OtherRedisQueryUser, "other_query_users",
-    RUVIA_DB_COLUMN(id, std::int64_t,
-        ruvia::DbColumnOptions{.primaryKey = true}),
-    RUVIA_DB_COLUMN(email, std::pmr::string));
+RUVIA_REDIS_ENTITY(OtherRedisQueryUser, "other_query_users",
+    RUVIA_REDIS_COLUMN(id, std::int64_t,
+        ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(email, std::pmr::string));
 
-RUVIA_DB_ENTITY(RedisUnsignedKey, "unsigned_users",
-    RUVIA_DB_COLUMN(id, std::uint64_t, ruvia::DbColumnOptions{.primaryKey = true}));
+RUVIA_REDIS_ENTITY(RedisUnsignedKey, "unsigned_users",
+    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::RedisColumnOptions{.primaryKey = true}));
 
 ruvia::detail::RedisMapping makeMapping(std::pmr::memory_resource* resource) {
     ruvia::detail::RedisMapping result{

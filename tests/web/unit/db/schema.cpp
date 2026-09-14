@@ -19,6 +19,24 @@ using ruvia::DbTableDefinition;
 using ruvia::DbTableOption;
 using ruvia::testing::throwsOn;
 
+using EnumEntity = ruvia::DbEntity<"enum_events",
+    ruvia::DbColumn<"state", std::pmr::string,
+        ruvia::DbColumnOptions{.enumName = ruvia::FixedString{"app.event_state"}, .defaultExpression = ruvia::FixedString{"'pending'::app.event_state"}}>,
+    ruvia::DbColumn<"created_at", std::pmr::string,
+        ruvia::DbColumnOptions{.dataType = DbDataType::kTimestampTz, .defaultExpression = ruvia::FixedString{"now()"}}>>;
+
+RUVIA_TEST(db_schema_entity_named_enum_and_default_expressions) {
+    DbSchema schema({.driver = DbDriver::kPostgreSql});
+    schema.createTable<EnumEntity>();
+    const auto migrations = schema.compile("enum_defaults");
+    RUVIA_CHECK(migrations[0].sql().find("\"state\" \"app\".\"event_state\" NOT NULL DEFAULT ('pending'::app.event_state)") != std::string_view::npos);
+    RUVIA_CHECK(migrations[0].sql().find("DEFAULT (now())") != std::string_view::npos);
+    DbSchema maria({.driver = DbDriver::kMariaDb});
+    RUVIA_CHECK(throwsOn([&] { maria.createTable<EnumEntity>(); }));
+    ruvia::DbQuery defaults;
+    RUVIA_CHECK(throwsOn([&] { schema.createTable<EnumEntity>({.defaults = {{"state", defaults.value("ready")}}}); }));
+}
+
 using SchemaTarget = ruvia::DbEntity<"schema_targets", ruvia::DbColumn<"id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}>,
     ruvia::DbColumn<"tenant_id", std::int64_t, ruvia::DbColumnOptions{.primaryKey = true}>>;
 using SchemaOwner = ruvia::DbEntity<"schema_owners",

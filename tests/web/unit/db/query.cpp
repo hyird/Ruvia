@@ -19,6 +19,28 @@ using namespace ruvia;
 using Op = DbBinaryOperator;
 using Entity = DbEntity<"device", DbColumn<"id", std::int64_t>, DbColumn<"name", std::pmr::string>>;
 
+RUVIA_TEST(db_query_sql_expression_import_preserves_syntax_and_parameter_binding) {
+    test::CountingMemoryResource sourceResource, targetResource;
+    {
+        DbQuery target(&targetResource);
+        {
+            DbQuery source(&sourceResource);
+            auto expression = source.sql({"jsonb_set(", ", '{label}', to_jsonb(", "::text))"},
+                {source.column("payload"), source.value("x'); DELETE FROM device; --")});
+            target.update("device").set("payload", target.importExpression(expression));
+            target.returning({target.column("id")});
+        }
+        RUVIA_CHECK_EQ(sourceResource.liveAllocations(), std::size_t{0});
+        auto statement = target.compile(DbDriver::kPostgreSql, &targetResource);
+        RUVIA_CHECK_EQ(statement.sql(), "UPDATE \"device\" SET \"payload\" = (jsonb_set(\"payload\", '{label}', to_jsonb($1::text))) RETURNING \"id\"");
+        RUVIA_CHECK_EQ(statement.params().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[0]), "x'); DELETE FROM device; --");
+        RUVIA_CHECK(testing::throwsOn([&] { (void)target.sql({"one"}, {target.value(1)}); }));
+        RUVIA_CHECK(testing::throwsOn([&] { (void)target.sql(std::string_view("x\0y", 3)); }));
+    }
+    RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
+}
+
 template <typename Fn>
 std::string compileSql(Fn&& fn) {
     auto statement = fn();
