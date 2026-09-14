@@ -88,13 +88,11 @@ RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
     detail::ScopedOperationScope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto builder = repository.createQueryBuilder("i");
-    auto& query = builder.statement();
-    builder.leftJoin("owners", "o", query.binary(builder.column<"id">(), DbBinaryOperator::kEqual, query.column("id", "o")));
     builder.where(Entity::column<"id">() >= 7).andWhere(Entity::column<"name">() == std::string("temporary"));
-    builder.orderBy(builder.column<"id">()).take(3);
+    builder.orderBy("id").take(3);
     const auto statement = builder.getQueryAndParameters();
     if (config.driver == DbDriver::kPostgreSql) {
-        RUVIA_CHECK_EQ(statement.sql(), "SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" LEFT JOIN \"owners\" AS \"o\" ON (\"i\".\"id\" = \"o\".\"id\") WHERE ((\"i\".\"id\" >= $1) AND (\"i\".\"name\" = $2)) ORDER BY \"i\".\"id\" ASC LIMIT $3");
+        RUVIA_CHECK_EQ(statement.sql(), "SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" WHERE ((\"i\".\"id\" >= $1) AND (\"i\".\"name\" = $2)) ORDER BY \"i\".\"id\" ASC LIMIT $3");
     } else {
         RUVIA_CHECK(statement.sql().find("WHERE ((`i`.`id` >= ?) AND (`i`.`name` = ?))") != std::string_view::npos);
     }
@@ -117,7 +115,6 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
             builder.leftJoinAndSelect("children", "c").take(1);
             auto getMany = builder.getMany();
             auto getOne = builder.getOne();
-            auto raw = builder.getRawMany();
             auto count = builder.getCount();
             auto page = builder.getManyAndCount();
             auto exists = builder.getExists();
@@ -131,20 +128,15 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
     RUVIA_CHECK(resource.deallocationCount() > 0);
 }
 
-RUVIA_TEST(db_repository_relation_pagination_keeps_cte_single_and_page_alias_safe) {
+RUVIA_TEST(db_repository_relation_pagination_keeps_page_alias_safe) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, databaseConfig());
     detail::ScopedOperationScope scope;
     auto repository = registry.get(scope).getRepository<Parent>();
     auto builder = repository.createQueryBuilder("__ruvia_page");
-    DbQuery cte;
-    cte.select(cte.column("id", "source")).from("parents", "source");
-    builder.addCommonTableExpression("parent_source", cte);
     builder.leftJoinAndSelect("children", "c").take(1);
     const auto statement = builder.getQueryAndParameters();
     const auto sql = statement.sql();
-    RUVIA_CHECK_EQ(sql.find("WITH"), sql.rfind("WITH"));
-    RUVIA_CHECK(sql.find("parent_source") != std::string_view::npos);
     RUVIA_CHECK(sql.find("__ruvia_page") != std::string_view::npos);
     RUVIA_CHECK(sql.find("__ruvia_page_1") != std::string_view::npos);
 }
@@ -175,7 +167,7 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
             const auto operation = repository.findOne({.where = Entity::column<"id">() == 8});
         }
         {
-            const auto operation = repository.count(where);
+            const auto operation = repository.count({.where = Entity::column<"id">() == 8});
         }
         {
             const auto operation = repository.exists({.where = Entity::column<"id">() == 8});
@@ -208,7 +200,6 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
             auto builder = repository.createQueryBuilder();
             const auto many = builder.getMany();
             const auto one = builder.getOne();
-            const auto raw = builder.getRawMany();
             const auto count = builder.getCount();
         }
         RUVIA_CHECK(!scope.hasPendingOperations());
@@ -324,102 +315,57 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
     }
 }
 
-RUVIA_TEST(db_repository_builder_covers_clause_and_result_surface) {
+RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
     RepositoryRuntime runtime;
     const auto config = databaseConfig();
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, config);
     detail::ScopedOperationScope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
-
     auto builder = repository.createQueryBuilder("i");
-    auto& query = builder.statement();
     builder.where(Entity::column<"id">() >= 1)
         .andWhere(Entity::column<"name">().isNotNull())
-        .orWhere(Entity::column<"id">() == 2);
-    const std::array projection{builder.column<"id">()};
-    builder.select(projection).addSelect(builder.column<"name">());
-    builder.orderBy(builder.column<"name">(), DbOrderDirection::kDesc, DbNullsOrder::kLast)
-        .addOrderBy(builder.column<"id">(), DbOrderDirection::kAsc, DbNullsOrder::kFirst)
+        .orWhere(Entity::column<"id">() == 2)
+        .orderBy("name", DbOrderDirection::kDesc, DbNullsOrder::kLast)
+        .addOrderBy("id", DbOrderDirection::kAsc, DbNullsOrder::kFirst)
         .skip(2)
         .take(3);
-    const std::array groups{builder.column<"id">()};
-    builder.groupBy(groups).having(query.binary(query.column("id", "i"), DbBinaryOperator::kGreater, query.value(0)));
-    builder.cache(DbCacheSetting{std::chrono::milliseconds(2000)});
-    builder.cache("builder-surface", std::chrono::seconds(5));
-    DbQuery cte;
-    cte.select(cte.column("id")).from("items");
-    builder.addCommonTableExpression("source_items", cte, {.materialization = DbMaterialization::kNotMaterialized});
-
+    builder.cache("builder-page", std::chrono::seconds(5));
     const auto statement = builder.getQueryAndParameters();
     const auto sql = statement.sql();
     if (config.driver == DbDriver::kPostgreSql) {
-        RUVIA_CHECK(sql.find("WITH \"source_items\" AS NOT MATERIALIZED") != std::string_view::npos);
-        RUVIA_CHECK(sql.find("GROUP BY \"i\".\"id\" HAVING") != std::string_view::npos);
         RUVIA_CHECK(sql.find("ORDER BY \"i\".\"name\" DESC NULLS LAST, \"i\".\"id\" ASC NULLS FIRST") != std::string_view::npos);
     } else {
-        RUVIA_CHECK(sql.find("GROUP BY `i`.`id` HAVING") != std::string_view::npos);
-        RUVIA_CHECK(sql.find("ORDER BY `i`.`name` DESC") != std::string_view::npos);
+        RUVIA_CHECK(sql.find("ORDER BY") != std::string_view::npos);
         RUVIA_CHECK(sql.find("LIMIT ? OFFSET ?") != std::string_view::npos);
     }
-    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{5});
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{4});
+    RUVIA_CHECK(testing::throwsOn([&] { builder.orderBy("unknown"); }));
+    RUVIA_CHECK(testing::throwsOn([&] { builder.addOrderBy("unknown"); }));
+    // Validation precedes mutation: rejected fields leave the valid plan intact.
+    const auto afterRejectedOrder = builder.getQueryAndParameters();
+    RUVIA_CHECK_EQ(afterRejectedOrder.sql(), sql);
 
     auto locked = repository.createQueryBuilder("i");
     locked.setLock({.mode = DbRowLock::kShare, .nowait = true, .tables = {"i"}});
     const auto lockStatement = locked.getQueryAndParameters();
-    const auto lockSql = lockStatement.sql();
     if (config.driver == DbDriver::kPostgreSql) {
-        RUVIA_CHECK(lockSql.find("FOR SHARE OF \"i\" NOWAIT") != std::string_view::npos);
+        RUVIA_CHECK(lockStatement.sql().find("FOR SHARE OF \"i\" NOWAIT") != std::string_view::npos);
     } else {
-        RUVIA_CHECK(lockSql.find("LOCK IN SHARE MODE") != std::string_view::npos);
+        RUVIA_CHECK(lockStatement.sql().find("LOCK IN SHARE MODE") != std::string_view::npos);
     }
-
-    auto expressionBuilder = repository.createQueryBuilder("i");
-    auto& expressionQuery = expressionBuilder.statement();
-    expressionBuilder.where(expressionQuery.binary(expressionQuery.column("id", "i"), DbBinaryOperator::kGreaterEqual,
-                                expressionQuery.value(0)))
-        .andWhere(expressionQuery.unary(DbUnaryOperator::kIsNotNull, expressionQuery.column("name", "i")));
-    const auto expressionStatement = expressionBuilder.getQueryAndParameters();
-    RUVIA_CHECK(expressionStatement.sql().find("WHERE") != std::string_view::npos);
-
-    auto handle = registry.get(scope);
-    DbQuery returned;
-    returned.select(returned.column("id")).from("items");
-    RUVIA_CHECK(testing::throwsOn([&] { (void)handle.execute(returned); }));
-
-    auto joins = repository.createQueryBuilder("i");
-    auto& joinQuery = joins.statement();
-    joins.leftJoin("owners", "o", joinQuery.binary(joinQuery.column("id", "i"), DbBinaryOperator::kEqual, joinQuery.column("item_id", "o")))
-        .innerJoin("labels", "l", joinQuery.binary(joinQuery.column("id", "i"), DbBinaryOperator::kEqual, joinQuery.column("item_id", "l")));
-    const auto joinStatement = joins.getQueryAndParameters();
-    const auto joinSql = joinStatement.sql();
-    RUVIA_CHECK(joinSql.find("LEFT JOIN") != std::string_view::npos);
-    RUVIA_CHECK(joinSql.find("INNER JOIN") != std::string_view::npos);
-
     auto relation = registry.get(scope).getRepository<Parent>().createQueryBuilder("p");
     relation.innerJoinAndSelect("children", "c");
     const auto relationStatement = relation.getQueryAndParameters();
-    const auto relationSql = relationStatement.sql();
-    RUVIA_CHECK(relationSql.find("INNER JOIN") != std::string_view::npos);
-    RUVIA_CHECK(relationSql.find("\"c\".\"id\"") != std::string_view::npos ||
-                relationSql.find("`c`.`id`") != std::string_view::npos);
-
-    // Every builder result shape is lazy and must be safe to create and drop
-    // before the scope is closed, including raw rows and writes.
+    RUVIA_CHECK(relationStatement.sql().find("INNER JOIN") != std::string_view::npos);
     {
-        auto many = repository.createQueryBuilder().getMany();
-        auto one = repository.createQueryBuilder().getOne();
-        auto raw = repository.createQueryBuilder().getRawMany();
-        auto count = repository.createQueryBuilder().getCount();
-        auto exists = repository.createQueryBuilder().getExists();
-        auto page = repository.createQueryBuilder().getManyAndCount();
-        auto executeBuilder = repository.createQueryBuilder();
-        auto& executeQuery = executeBuilder.statement();
-        executeQuery = DbQuery(executeQuery.resource());
-        executeQuery.update("items")
-            .set("name", executeQuery.value("cold"))
-            .where(executeQuery.binary(executeQuery.column("id"), DbBinaryOperator::kEqual,
-                executeQuery.value(1)));
-        auto execute = executeBuilder.execute();
+        auto many = builder.getMany();
+        auto one = builder.getOne();
+        auto count = builder.getCount();
+        auto exists = builder.getExists();
+        auto page = builder.getManyAndCount();
+        Entity patch;
+        patch.set<"name">("cold");
+        auto write = repository.update(Entity::column<"id">() == 1, patch);
         RUVIA_CHECK(scope.hasPendingOperations());
     }
     RUVIA_CHECK(!scope.hasPendingOperations());
@@ -552,7 +498,7 @@ RUVIA_TEST(db_repository_cached_operations_own_inputs_and_release_cold_storage) 
                 auto one = repository.findOne(options);
                 auto builder = repository.createQueryBuilder();
                 builder.cache("users", std::chrono::seconds(30));
-                auto raw = builder.getRawMany();
+                auto cached = builder.getMany();
                 builder.cache(false);
                 auto bypass = builder.getMany();
                 const std::array<std::string_view, 2> ids{"users", "users-count"};

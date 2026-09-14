@@ -857,6 +857,33 @@ auto rows = co_await c.db().withOptions({
 
 ### ORM and QueryBuilder
 
+SQL and Redis each offer two independent data-access routes. They share connection
+configuration and operation lifetimes; choosing ORM does not require using the
+direct APIs, and choosing the direct APIs does not require declaring entities.
+
+| Route | SQL | Redis |
+| --- | --- | --- |
+| Entity ORM | `getRepository<Entity>()`, entity predicates and entity results | `getRepository<Entity>(config)`, the same entity/predicate/result types |
+| Direct API | `query`, `execute`, `queryStream` with SQL; `DbQuery` with raw rows | Key commands, pipelines, transactions and Lua through `RedisHandle` |
+
+ORM operations use repositories throughout. Direct SQL queries return `DbRows`
+and do not map rows into an entity. SQL ORM query builders retain their bound
+entity and return entities or scalar counts; use the direct SQL route for
+arbitrary projections, statement construction and raw results. Redis repositories
+own their hash keys, field encoding and indexes; direct Redis commands should use
+separate keys instead of editing repository-managed hashes.
+
+The common repository operations are `find`, `findOne`, `findAndCount`, `count`,
+`exists`, `insert`, `update`, `upsert`, `deleteBy` and `remove`. Both repositories
+use `DbFindOptions` for queries, including `count({.where = ...})`. SQL keeps
+relations, row locks and SQL-specific upsert options; Redis keeps TTL and Search
+index configuration. Neither route simulates unsupported backend features.
+
+The [SQL ORM example](examples/web/orm.cpp) and
+[Redis ORM example](examples/web/redis_orm.cpp) use entity repositories. The
+[direct SQL example](examples/web/database.cpp) and
+[direct Redis example](examples/web/redis.cpp) demonstrate the original APIs.
+
 Enable either database driver and include `ruvia/web/db/DbRepository.h`.
 Entities declare database columns; repositories are obtained from the same
 `DbClient`, `DbHandle`, or `DbTransaction` used for other database operations:
@@ -969,7 +996,7 @@ then call `createRelationTables<OwningEntity>()` for junction tables. See
 mapping forms and nested relation queries.
 
 Relations load data but do not persist it automatically. Write the owning
-foreign-key column yourself, or insert/delete junction rows with a `DbQuery`;
+foreign-key column yourself, or declare a junction entity and use its repository;
 there is no cascade, lazy/eager proxy, or schema-diff behavior. Loaded relations
 use the same `isSet`, `isNull`, and `get` state model as fields: to-one relations
 can be unset, NULL, or loaded, while a loaded collection is empty or contains
@@ -996,25 +1023,35 @@ use `std::pmr::vector<T>`, with `std::optional<T>` elements when array elements
 may be NULL. Column options select UUID, JSONB, timestamp, network, and other
 database types independently of their owning C++ representation.
 
-For joins, projections, aggregates, or more complex conditions, use
-`createQueryBuilder()` and its structured statement:
+Use the entity query builder for conditions, ordering, pagination and declared
+relation joins:
 
 ```cpp
 auto builder = devices.createQueryBuilder("d");
-auto& q = builder.statement();
-builder.leftJoin("device_group", "g",
-    q.binary(builder.column<"id">(), ruvia::DbBinaryOperator::kEqual,
-        q.column("device_id", "g")));
-builder.where(Device::column<"enabled">() == true);
-builder.addSelect(q.alias(q.column("name", "g"), "group_name"));
-auto joined = co_await builder.getRawMany();
+builder.where(Device::column<"enabled">() == true)
+    .orderBy("id", ruvia::DbOrderDirection::kDesc)
+    .take(20);
+auto selected = co_await builder.getMany();
 ```
 
-`getMany()` and `getOne()` map all declared entity columns. Use `getRawMany()`
-for arbitrary projections, or `db.query<ProjectionEntity>(query)` for an
-owning typed projection with matching column names. `getCount()` counts the
-query's result groups/distinct rows without pagination. Generated SQL and
-parameters can be inspected with `getQueryAndParameters()`.
+`getMany()` and `getOne()` map all declared entity columns. `orderBy` and
+`addOrderBy` accept declared entity column names and reject unknown names.
+`getCount()` counts matching root entities without pagination. Generated SQL and
+parameters can be inspected with `getQueryAndParameters()`; the inspection result
+does not expose a mutable ORM statement. Writes use repository methods such as
+`insert`, `update` and `deleteBy`.
+
+### Direct SQL and structured queries
+
+This route operates on statements and raw rows independently of entity ORM:
+
+```cpp
+ruvia::DbQuery query;
+query.select(query.column("name")).from("devices");
+query.where(query.binary(query.column("enabled"),
+    ruvia::DbBinaryOperator::kEqual, query.value(true)));
+auto rows = co_await c.db().query(query);
+```
 
 `DbQuery` owns a relational statement and generates SQL for the selected
 driver. Its input is identifiers, values, expressions, and nested statements:
@@ -1269,6 +1306,9 @@ MariaDB migrations to be re-applicable.
 ## Redis ORM
 
 Enable `RUVIA_ENABLE_REDIS` and include `ruvia/web/redis/RedisRepository.h`.
+This selects the entity ORM route. The original `RedisHandle` commands,
+pipelines, transactions and Lua API remain available as the separate direct
+route, illustrated in [redis.cpp](examples/web/redis.cpp).
 SQL and Redis repositories share the same `RUVIA_DB_ENTITY`, column predicates,
 `DbFindOptions`, `DbEntityRows` and `DbExecResult`. Redis prefix and indexes are
 configured separately:

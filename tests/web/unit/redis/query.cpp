@@ -217,19 +217,17 @@ RUVIA_TEST(redis_query_compiles_index_and_primary_key_fast_path) {
     RUVIA_CHECK_EQ(*unsignedKey, std::string_view("18446744073709551615"));
 }
 
-RUVIA_TEST(redis_query_reverses_literal_left_comparisons) {
+RUVIA_TEST(redis_query_compiles_open_and_closed_numeric_bounds) {
     auto* resource = std::pmr::get_default_resource();
     const auto mapping = makeMapping(resource);
-    const std::pair<ruvia::DbBinaryOperator, std::string_view> cases[] = {
-        {ruvia::DbBinaryOperator::kLess, "@age:[(5 +inf]"},
-        {ruvia::DbBinaryOperator::kLessEqual, "@age:[5 +inf]"},
-        {ruvia::DbBinaryOperator::kGreater, "@age:[-inf (5]"},
-        {ruvia::DbBinaryOperator::kGreaterEqual, "@age:[-inf 5]"},
+    std::pair<ruvia::DbPredicate, std::string_view> cases[] = {
+        {RedisQueryUser::column<"age">() > 5, "@age:[(5 +inf]"},
+        {RedisQueryUser::column<"age">() >= 5, "@age:[5 +inf]"},
+        {RedisQueryUser::column<"age">() < 5, "@age:[-inf (5]"},
+        {RedisQueryUser::column<"age">() <= 5, "@age:[-inf 5]"},
     };
-    for (const auto& [operation, expected] : cases) {
-        ruvia::DbQuery query(resource);
-        ruvia::DbFindOptions options{.where = ruvia::DbPredicate(query.binary(
-                                         query.value(5), operation, query.column("age", RedisQueryUser::tableName())))};
+    for (auto& [predicate, expected] : cases) {
+        ruvia::DbFindOptions options{.where = std::move(predicate)};
         const auto args = ruvia::detail::compileRedisFind<RedisQueryUser>(options, mapping, resource);
         RUVIA_CHECK_EQ(arg(args, 2), expected);
     }

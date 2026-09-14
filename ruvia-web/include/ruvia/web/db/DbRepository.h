@@ -137,46 +137,26 @@ public:
     DbQueryBuilder(DbQueryBuilder&&) = default;
     DbQueryBuilder& operator=(DbQueryBuilder&&) = delete;
 
-    [[nodiscard]] DbQuery& statement() & noexcept {
-        return query_;
-    }
-    DbQuery& statement() && = delete;
-    template <FixedString Name>
-    [[nodiscard]] DbExpression column() {
-        return query_.column(Entity::template columnName<Name>(), alias_);
-    }
     DbQueryBuilder& where(const DbPredicate& predicate) {
-        return where(predicate.expression(query_, Entity::tableName(), alias_));
-    }
-    DbQueryBuilder& where(DbExpression predicate) {
-        query_.where(predicate);
+        query_.where(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
     DbQueryBuilder& andWhere(const DbPredicate& predicate) {
-        return andWhere(predicate.expression(query_, Entity::tableName(), alias_));
-    }
-    DbQueryBuilder& andWhere(DbExpression predicate) {
-        query_.andWhere(predicate);
+        query_.andWhere(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
     DbQueryBuilder& orWhere(const DbPredicate& predicate) {
         query_.orWhere(predicate.expression(query_, Entity::tableName(), alias_));
         return *this;
     }
-    DbQueryBuilder& select(std::span<const DbExpression> projections) {
-        query_.select(projections);
+    DbQueryBuilder& orderBy(std::string_view column, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        detail::requireEntityColumn<Entity>(column);
+        query_.orderBy(query_.column(column, alias_), direction, nulls);
         return *this;
     }
-    DbQueryBuilder& addSelect(DbExpression projection) {
-        query_.addSelect(projection);
-        return *this;
-    }
-    DbQueryBuilder& orderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
-        query_.orderBy(expression, direction, nulls);
-        return *this;
-    }
-    DbQueryBuilder& addOrderBy(DbExpression expression, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
-        query_.addOrderBy(expression, direction, nulls);
+    DbQueryBuilder& addOrderBy(std::string_view column, DbOrderDirection direction = DbOrderDirection::kAsc, DbNullsOrder nulls = DbNullsOrder::kDefault) {
+        detail::requireEntityColumn<Entity>(column);
+        query_.addOrderBy(query_.column(column, alias_), direction, nulls);
         return *this;
     }
     DbQueryBuilder& skip(std::uint64_t count) {
@@ -187,27 +167,11 @@ public:
         query_.limit(count);
         return *this;
     }
-    DbQueryBuilder& leftJoin(std::string_view table, std::string_view alias, DbExpression on) {
-        query_.join(DbJoinType::kLeft, table, on, alias);
-        return *this;
-    }
-    DbQueryBuilder& innerJoin(std::string_view table, std::string_view alias, DbExpression on) {
-        query_.join(DbJoinType::kInner, table, on, alias);
-        return *this;
-    }
     DbQueryBuilder& leftJoinAndSelect(std::string_view relation, std::string_view alias) {
         return joinAndSelect(relation, alias, DbJoinType::kLeft);
     }
     DbQueryBuilder& innerJoinAndSelect(std::string_view relation, std::string_view alias) {
         return joinAndSelect(relation, alias, DbJoinType::kInner);
-    }
-    DbQueryBuilder& groupBy(std::span<const DbExpression> expressions) {
-        query_.groupBy(expressions);
-        return *this;
-    }
-    DbQueryBuilder& having(DbExpression predicate) {
-        query_.having(predicate);
-        return *this;
     }
     DbQueryBuilder& cache(const DbCacheSetting& setting) {
         query_.cache(setting);
@@ -221,17 +185,13 @@ public:
         query_.lock(options);
         return *this;
     }
-    DbQueryBuilder& addCommonTableExpression(std::string_view name, const DbQuery& query, const DbCteOptions& options = {}) {
-        query_.with(name, query, options);
-        return *this;
-    }
     [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> getMany() const {
         if (relations_ && !relations_->empty()) {
             auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
             return executor_.template queryMapped<DbEntityRows<Entity>>(prepared ? *prepared : query_,
                 detail::DbMapRelatedEntities<Entity>{relations_->clone()});
         }
-        return executor_.template query<Entity>(query_);
+        return executor_.template queryMapped<DbEntityRows<Entity>>(query_, detail::DbMapEntityRows<Entity>{});
     }
     [[nodiscard]] ScopedOperation<std::optional<Entity>> getOne() const {
         auto query = query_.clone(query_.resource());
@@ -242,13 +202,6 @@ public:
                 detail::DbMapOneRelatedEntity<Entity>{relations_->clone()});
         }
         return executor_.template queryMapped<std::optional<Entity>>(query, detail::DbMapOneEntity<Entity>{});
-    }
-    [[nodiscard]] ScopedOperation<DbRows> getRawMany() const {
-        if (relations_ && !relations_->empty()) {
-            auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-            return executor_.query(prepared ? *prepared : query_);
-        }
-        return executor_.query(query_);
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> getCount() const {
         const auto count = countQuery();
@@ -271,9 +224,6 @@ public:
                 detail::DbMapRelatedEntities<Entity>{relations_->clone()});
         }
         return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(query_, count, detail::DbMapEntityRows<Entity>{});
-    }
-    [[nodiscard]] ScopedOperation<DbExecResult> execute() const {
-        return executor_.execute(query_);
     }
     [[nodiscard]] DbStatement getQueryAndParameters() const {
         if (relations_ && !relations_->empty()) {
@@ -342,17 +292,6 @@ public:
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbFindOptions& options = {}) const {
         return findBuilder(options).getCount();
-    }
-    template <typename Predicate>
-        requires std::same_as<std::remove_cvref_t<Predicate>, DbPredicate>
-    [[nodiscard]] ScopedOperation<std::uint64_t> count(Predicate&& predicate) const {
-        DbQuery query(executor_.queryResource());
-        const std::array args{query.star()};
-        query.select(query.alias(query.aggregate("count", args), "count")).from(Entity::tableName());
-        if (!predicate.empty()) {
-            query.where(predicate.expression(query));
-        }
-        return executor_.template queryMapped<std::uint64_t>(query, detail::DbMapCount{});
     }
     [[nodiscard]] ScopedOperation<bool> exists(const DbFindOptions& options = {}) const {
         return findBuilder(options).getExists();
@@ -547,17 +486,9 @@ DbRepository<Entity, DbHandle> DbHandle::getRepository() const {
     return DbRepository<Entity, DbHandle>(*this);
 }
 template <typename Entity>
-ScopedOperation<DbEntityRows<Entity>> DbHandle::query(const DbQuery& query) const {
-    return queryMapped<DbEntityRows<Entity>>(query, detail::DbMapEntityRows<Entity>{});
-}
-template <typename Entity>
 DbRepository<Entity, DbTransaction> DbTransaction::getRepository() & {
     (void)queryResource();
     return DbRepository<Entity, DbTransaction>(*this);
-}
-template <typename Entity>
-ScopedOperation<DbEntityRows<Entity>> DbTransaction::query(const DbQuery& query) & {
-    return queryMapped<DbEntityRows<Entity>>(query, detail::DbMapEntityRows<Entity>{});
 }
 
 }  // namespace ruvia

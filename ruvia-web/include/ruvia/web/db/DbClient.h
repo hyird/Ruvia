@@ -60,12 +60,6 @@ public:
         return withOptions({}).query(query);
     }
     ScopedOperation<DbRows> query(const DbQuery&) const&& = delete;
-    template <typename Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) const& {
-        return withOptions({}).template query<Entity>(query);
-    }
-    template <typename Entity>
-    ScopedOperation<DbEntityRows<Entity>> query(const DbQuery&) const&& = delete;
     [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) const& {
         return withOptions({}).execute(query);
     }

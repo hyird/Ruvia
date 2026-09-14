@@ -1,5 +1,4 @@
-// PostgreSQL ORM example. With no arguments, print the generated migration and
-// queries. --migrate applies the demo migration; --run executes the demo on the
+// PostgreSQL ORM example. With no arguments, print the generated migration. --migrate applies the demo migration; --run executes the demo on the
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
 
 #include <array>
@@ -45,17 +44,6 @@ auto migrations() {
     return schema.compile("orm_demo_001");
 }
 
-DbQuery latestQuery() {
-    DbQuery ranked;
-    ranked.select({ranked.column("id"), ranked.column("name"), ranked.alias(ranked.over(ranked.call("row_number"), {.orderBy = {{ranked.column("revision"), DbOrderDirection::kDesc}}}), "rank")});
-    ranked.from(Device::tableName());
-    DbQuery query;
-    query.with("ranked", ranked, {.materialization = DbMaterialization::kMaterialized});
-    query.select({query.column("id"), query.column("name")}).from("ranked");
-    query.where(query.binary(query.column("rank"), DbBinaryOperator::kLessEqual, query.value(10)));
-    return query;
-}
-
 Task<void> demonstrate(DbClient& db) {
     auto devices = db.getRepository<Device>();
     Device input;
@@ -90,8 +78,7 @@ Task<void> demonstrate(DbClient& db) {
     }
 
     auto builder = devices.createQueryBuilder("d");
-    auto& query = builder.statement();
-    builder.where(query.binary(builder.column<"revision">(), DbBinaryOperator::kGreaterEqual, query.value(1)));
+    builder.where(Device::column<"revision">() >= 1);
     std::cout << "matching=" << co_await builder.getCount() << '\n';
     builder.take(1);
     auto [page, matching] = co_await builder.getManyAndCount();
@@ -109,9 +96,6 @@ Task<void> demonstrate(DbClient& db) {
     }
     co_await transaction.rollback();
     std::cout << "after rollback=" << co_await devices.count() << '\n';
-
-    const auto latest = co_await db.query(latestQuery());
-    std::cout << "ranked rows=" << latest.size() << '\n';
 }
 
 Task<void> demonstrateCache(DbClient& db) {
@@ -194,8 +178,6 @@ int main(int argc, char** argv) {
         for (const auto& migration : changes) {
             std::cout << migration.sql() << ";\n";
         }
-        const auto query = latestQuery().compile(DbDriver::kPostgreSql, nullptr);
-        std::cout << query.sql() << '\n';
         if (!migrate && !execute) {
             return 0;
         }

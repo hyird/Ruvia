@@ -591,8 +591,7 @@ RUVIA_TEST(db_predicate_public_overloads_cover_comparisons_membership_nulls_and_
     DbQuery query;
     RUVIA_CHECK(empty.empty());
     RUVIA_CHECK(empty.expression(query).empty());
-    DbQuery ownedSource;
-    DbPredicate owned(ownedSource.binary(ownedSource.column("id"), Op::kEqual, ownedSource.value(1)));
+    DbPredicate owned = Tagged::column<"id">() == 1;
     RUVIA_CHECK(!owned.empty());
     DbPredicate moved = std::move(owned);
     DbPredicate reassigned;

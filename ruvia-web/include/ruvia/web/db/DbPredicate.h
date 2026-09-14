@@ -19,12 +19,6 @@ struct DbPredicateAccess;
 class DbPredicate final {
 public:
     DbPredicate() = default;
-    explicit DbPredicate(DbExpression expression) {
-        if (!expression.empty()) {
-            query_.emplace();
-            expression_ = query_->importExpression(expression);
-        }
-    }
     DbPredicate(const DbPredicate&) = delete;
     DbPredicate& operator=(const DbPredicate&) = delete;
     DbPredicate(DbPredicate&&) noexcept = default;

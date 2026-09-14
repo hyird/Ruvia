@@ -60,10 +60,6 @@ public:
     ScopedOperation<DbRows> query(const DbQuery&) && = delete;
     [[nodiscard]] ScopedOperation<DbExecResult> execute(const DbQuery& query) &;
     ScopedOperation<DbExecResult> execute(const DbQuery&) && = delete;
-    template <typename Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> query(const DbQuery& query) &;
-    template <typename Entity>
-    ScopedOperation<DbEntityRows<Entity>> query(const DbQuery&) && = delete;
     ScopedOperation<DbRows> query(std::string_view sql, std::span<const DbValue> params = {}) &;
     ScopedOperation<DbRows> query(std::string_view, std::span<const DbValue> = {}) && = delete;
     ScopedOperation<DbRows> query(std::string_view, std::initializer_list<DbValue>) & = delete;
