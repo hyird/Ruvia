@@ -265,7 +265,7 @@ RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_resul
                         std::rethrow_exception(completion.failure()->exception());
                     }
                     auto result = std::move(*completion.success()).takeValue();
-                    observed = result[0].get<"id">() == 3;
+                    observed = result[0].template get<"id">() == 3;
                 } else if (completion.failure()) {
                     try {
                         std::rethrow_exception(completion.failure()->exception());
