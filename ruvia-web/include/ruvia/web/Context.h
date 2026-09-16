@@ -28,6 +28,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ContextRequest.h"
+#include "ruvia/web/Dispatch.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/HttpClientHandle.h"
@@ -248,6 +249,13 @@ public:
 
     [[nodiscard]] const Env& env() const noexcept;
 
+    // Re-enter the immutable route table on this worker. Authentication,
+    // validation and middleware run in a fresh request context and arena.
+    [[nodiscard]] ScopedOperation<DispatchResponse> dispatch(DispatchOptions options);
+    [[nodiscard]] bool isSubrequest() const noexcept {
+        return dispatchDepth_ != 0;
+    }
+
     // Builds a request path from a registered route pattern; the pattern is
     // the route's identity: c.urlFor("/users/:id", {"42"}) -> "/users/42".
     // ":name" values are percent-encoded path segments and must be non-empty;
@@ -358,6 +366,7 @@ private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
     [[nodiscard]] Task<HttpResponse> notFoundTask();
+    [[nodiscard]] Task<DispatchResponse> dispatchTask(std::pmr::string request, OperationOptions options);
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
@@ -437,6 +446,7 @@ private:
     bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
+    std::size_t dispatchDepth_{0};
     using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage,
         detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
     // One typed arena allocation owns request caches, response/session state,

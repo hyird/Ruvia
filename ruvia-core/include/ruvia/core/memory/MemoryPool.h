@@ -56,6 +56,11 @@ public:
     RequestMemory(const RequestMemory&) = delete;
     RequestMemory& operator=(const RequestMemory&) = delete;
 
+    // Independent arena with the same worker-owned upstream. The child may
+    // outlive this arena, but never the worker that owns its storage.
+    [[nodiscard]] RequestMemory fork() const&;
+    RequestMemory fork() const&& = delete;
+
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() & noexcept {
         return std::pmr::polymorphic_allocator<T>(&arena_);
@@ -76,6 +81,8 @@ public:
     [[nodiscard]] std::pmr::memory_resource* upstreamResource() const&& = delete;
 
 private:
+    struct ChildArena {};
+    RequestMemory(ChildArena, std::pmr::memory_resource* upstream);
     std::pmr::monotonic_buffer_resource arena_;
 };
 
