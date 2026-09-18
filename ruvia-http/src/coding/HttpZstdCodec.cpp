@@ -108,18 +108,19 @@ ContentEncodeAttempt encodeZstdContent(
         const auto offset = output.size();
         const auto writable = std::min<std::size_t>(8192, maxEncodedBytes - offset);
         const auto beforeInput = in.pos;
-        output.resize(offset + writable);
-        ZSTD_outBuffer out{output.data() + offset, writable, 0};
-        const auto result = ZSTD_compressStream2(context, &out, &in, ZSTD_e_end);
-        const auto produced = out.pos;
-        output.resize(offset + produced);
+        std::size_t result = 0;
+        output.resize_and_overwrite(offset + writable, [&](char* bytes, std::size_t) noexcept {
+            ZSTD_outBuffer out{bytes + offset, writable, 0};
+            result = ZSTD_compressStream2(context, &out, &in, ZSTD_e_end);
+            return offset + out.pos;
+        });
         if (ZSTD_isError(result) != 0) {
             return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
         if (result == 0 && in.pos == in.size) {
             return output;
         }
-        if (produced == 0 && in.pos == beforeInput) {
+        if (output.size() == offset && in.pos == beforeInput) {
             return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
     }

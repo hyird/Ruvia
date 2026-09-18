@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cstddef>
 #include <stdexcept>
 #include <string_view>
 
@@ -22,15 +24,21 @@ namespace {
 
 void appendUrlForValue(std::pmr::string& output, std::string_view value, bool keepSlashes) {
     static constexpr char kHexDigits[] = "0123456789ABCDEF";
-    for (const char byte : value) {
-        if (isUrlForSegmentByte(byte) || (keepSlashes && byte == '/')) {
-            output.push_back(byte);
-            continue;
+    while (!value.empty()) {
+        const auto escaped = std::ranges::find_if_not(value, [keepSlashes](char byte) noexcept {
+            return isUrlForSegmentByte(byte) || (keepSlashes && byte == '/');
+        });
+        const auto plainSize = static_cast<std::size_t>(escaped - value.begin());
+        if (plainSize != 0) {
+            output.append(value.data(), plainSize);
         }
-        const auto raw = static_cast<unsigned char>(byte);
-        output.push_back('%');
-        output.push_back(kHexDigits[raw >> 4]);
-        output.push_back(kHexDigits[raw & 0x0F]);
+        if (escaped == value.end()) {
+            return;
+        }
+        const auto raw = static_cast<unsigned char>(*escaped);
+        const char encoded[] = {'%', kHexDigits[raw >> 4], kHexDigits[raw & 0x0F]};
+        output.append(encoded, sizeof(encoded));
+        value.remove_prefix(plainSize + 1);
     }
 }
 

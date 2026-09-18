@@ -20,7 +20,7 @@ struct NoteCounter final {
     int stored{0};
 };
 
-class AuditMiddleware final : public ruvia::Middleware<AuditMiddleware> {
+class AuditMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();

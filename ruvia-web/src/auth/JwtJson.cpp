@@ -8,6 +8,7 @@
 #include "ruvia/core/detail/number/DecimalNumber.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/web/detail/json/JsonString.h"
 
@@ -51,16 +52,18 @@ template <typename Visitor>
         }
     }
 
-    double fractional = 0;
     auto fractionalText = value;
     while (!fractionalText.empty() &&
            (fractionalText.back() == ' ' || fractionalText.back() == '\t' ||
                fractionalText.back() == '\r' || fractionalText.back() == '\n')) {
         fractionalText.remove_suffix(1);
     }
-    if (!parseDecimalNumber(fractionalText, fractional) || !std::isfinite(fractional)) {
+    const auto parsedFractional = parseDecimalNumber(fractionalText);
+    if (!parsedFractional || !std::isfinite(*parsedFractional)) {
         return std::nullopt;
     }
+
+    const auto fractional = *parsedFractional;
 
     using Clock = std::chrono::system_clock;
     const auto maxSeconds = std::chrono::duration<long double>(Clock::duration::max()).count();
@@ -93,46 +96,8 @@ template <typename Visitor>
 }
 
 void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value) {
-    out.push_back('"');
-    for (const auto ch : value) {
-        const auto c = static_cast<unsigned char>(ch);
-        switch (ch) {
-            case '"':
-                out.append("\\\"");
-                break;
-            case '\\':
-                out.append("\\\\");
-                break;
-            case '\b':
-                out.append("\\b");
-                break;
-            case '\f':
-                out.append("\\f");
-                break;
-            case '\n':
-                out.append("\\n");
-                break;
-            case '\r':
-                out.append("\\r");
-                break;
-            case '\t':
-                out.append("\\t");
-                break;
-            default:
-                if (c < 0x20) {
-                    constexpr char hex[] = "0123456789abcdef";
-                    out.append("\\u00");
-                    out.push_back(hex[(c >> 4) & 0x0F]);
-                    out.push_back(hex[c & 0x0F]);
-                } else {
-                    out.push_back(ch);
-                }
-                break;
-        }
-    }
-    out.push_back('"');
+    appendJsonString<JsonHexCase::kLower>(out, value);
 }
-
 void jwtAppendJsonMember(
     std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
     if (!first) {

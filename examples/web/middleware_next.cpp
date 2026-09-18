@@ -20,7 +20,7 @@ static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!HasStorableNextAwaiter<ruvia::Next>);
 
-class ValueNextMiddleware final : public ruvia::Middleware<ValueNextMiddleware> {
+class ValueNextMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
@@ -28,7 +28,7 @@ public:
 };
 
 class ReusedNextAwaitableMiddleware final
-    : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
+    : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         auto downstream = next();

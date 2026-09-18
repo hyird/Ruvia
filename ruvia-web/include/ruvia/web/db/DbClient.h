@@ -13,6 +13,7 @@
 #include "ruvia/web/db/DbHandle.h"
 #include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/db/DbSqlLiteral.h"
 
 namespace ruvia {
 
@@ -90,6 +91,35 @@ public:
         std::string_view, std::initializer_list<DbValue>) const& = delete;
     ScopedOperation<DbStreamResult> queryStream(
         std::string_view, std::initializer_list<DbValue>) const&& = delete;
+
+    // Fixed SQL uses MariaDB placeholders by default; specify kPostgreSql
+    // for numbered parameters. Values are owned by the existing operation path.
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbRows> query(Params&&... params) const& {
+        return withOptions({}).template query<Sql, Driver>(std::forward<Params>(params)...);
+    }
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    ScopedOperation<DbRows> query(Params&&...) const&& = delete;
+
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(Params&&... params) const& {
+        return withOptions({}).template execute<Sql, Driver>(std::forward<Params>(params)...);
+    }
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    ScopedOperation<DbExecResult> execute(Params&&...) const&& = delete;
+
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(Params&&... params) const& {
+        return withOptions({}).template queryStream<Sql, Driver>(std::forward<Params>(params)...);
+    }
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    ScopedOperation<DbStreamResult> queryStream(Params&&...) const&& = delete;
 
     template <typename... Params>
         requires detail::DbParameterPack<Params...>

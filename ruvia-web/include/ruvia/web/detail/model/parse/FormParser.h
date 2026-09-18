@@ -1,6 +1,5 @@
 #pragma once
 
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,10 +7,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/Integer.h"
 #include "ruvia/core/detail/number/DecimalNumber.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
@@ -49,11 +48,11 @@ template <typename NumberT>
     }
     NumberT parsed{};
     if constexpr (std::is_floating_point_v<NumberT>) {
-        double value = 0;
-        if (!parseDecimalNumber(decoded, value)) {
+        const auto value = parseDecimalNumber<NumberT>(decoded);
+        if (!value) {
             return std::nullopt;
         }
-        parsed = static_cast<NumberT>(value);
+        parsed = *value;
         // Floating parsers accept "inf"/"nan", but the rest of the pipeline
         // cannot round-trip them: the JSON number grammar rejects them on input,
         // the model JSON writer replaces them with null, and the finite number
@@ -64,11 +63,11 @@ template <typename NumberT>
             return std::nullopt;
         }
     } else {
-        const auto [ptr, ec] =
-            std::from_chars(decoded.data(), decoded.data() + decoded.size(), parsed);
-        if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
+        const auto integer = parseInteger<NumberT>(decoded);
+        if (!integer) {
             return std::nullopt;
         }
+        parsed = *integer;
     }
     return parsed;
 }

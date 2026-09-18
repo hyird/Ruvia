@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -60,8 +61,14 @@ inline void http2EncodeWebSocketHandshakeHeaders(
     try {
         headerBlock.clear();
         HpackEncoder::encodeStatus(headerBlock, http_status::kOk);
-        HpackEncoder::encodeHeaderWithNameIndex(
-            headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+        const auto fields = negotiation.responseHeaders();
+        const bool hasDate = std::ranges::any_of(fields, [](const HttpHeader& field) {
+            return field.name() == "date";
+        });
+        if (!hasDate) {
+            HpackEncoder::encodeHeaderWithNameIndex(
+                headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+        }
         if (!negotiation.subprotocol().empty()) {
             HpackEncoder::encodeHeader(
                 headerBlock, "sec-websocket-protocol", negotiation.subprotocol());
@@ -69,6 +76,9 @@ inline void http2EncodeWebSocketHandshakeHeaders(
         if (!negotiation.extensions().empty()) {
             HpackEncoder::encodeHeader(
                 headerBlock, "sec-websocket-extensions", negotiation.extensions());
+        }
+        for (const auto& field : fields) {
+            HpackEncoder::encodeHeader(headerBlock, field.name(), field.value());
         }
     } catch (...) {
         headerBlock.clear();

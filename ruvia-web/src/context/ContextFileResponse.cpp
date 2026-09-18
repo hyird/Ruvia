@@ -163,8 +163,8 @@ struct FileResponseSource final {
 template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(const Context& context, const HttpRequest& request,
     FileResponseSource source, ApplyResponseState applyResponseState) {
-    std::pmr::string etagStorage(context.arena());
-    std::pmr::string lastModifiedStorage(context.arena());
+    std::pmr::string etagStorage(context.pool());
+    std::pmr::string lastModifiedStorage(context.pool());
     std::string_view etag;
     std::string_view lastModified;
     const bool honorRangeRequests = source.rangeRequests == StaticRangeRequestPolicy::kHonor;
@@ -184,14 +184,14 @@ template <typename ApplyResponseState>
     if (emitResponseValidators) {
         if (source.precomputedEtag.empty()) {
             etagStorage = detail::makeStaticFileSnapshotEtag(
-                context.arena(), source.size, source.modifiedToken, source.body.identity());
+                context.pool(), source.size, source.modifiedToken, source.body.identity());
             etag = etagStorage;
         } else {
             etag = source.precomputedEtag;
         }
         if (source.precomputedLastModified.empty() || !lastModifiedIsActual) {
             lastModifiedStorage =
-                detail::httpFormatDate(context.arena(), validatorModifiedSeconds);
+                detail::httpFormatDate(context.pool(), validatorModifiedSeconds);
             lastModified = lastModifiedStorage;
         } else {
             lastModified = source.precomputedLastModified;
@@ -399,7 +399,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     std::optional<std::pmr::string> decodedPath;
     if (detail::hasUrlEncoding(relativePath, detail::UrlDecodeMode::kPercent)) {
         decodedPath = detail::decodeUrlComponent(
-            relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = arena()});
+            relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = pool()});
     }
     const std::string_view lookupPath =
         decodedPath.has_value() ? std::string_view(*decodedPath) : relativePath;
@@ -408,7 +408,8 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
             .code = "forbidden",
             .message = "invalid static file path"});
     }
-    auto relative = detail::normalizeStaticRelativePath(lookupPath, allocator<char>());
+    auto relative = detail::normalizeStaticRelativePath(
+        lookupPath, std::pmr::polymorphic_allocator<char>(pool()));
 
     if (relative.empty() && !detail::StaticRootAccess::hasDirectoryIndex(root)) {
         throw HttpError({.status = ruvia::http_status::kForbidden,
@@ -435,7 +436,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     const auto served =
-        selectStaticFileRepresentation(root, relative, request_, arena(), baseEntry, mode);
+        selectStaticFileRepresentation(root, relative, request_, pool(), baseEntry, mode);
     if (!served.has_value()) {
         throw HttpError({.status = ruvia::http_status::kNotAcceptable,
             .code = "not_acceptable",

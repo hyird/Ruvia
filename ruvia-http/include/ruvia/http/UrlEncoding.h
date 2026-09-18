@@ -65,22 +65,27 @@ struct UrlDecodeOptions final {
 [[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(
     std::string_view input, UrlDecodeOptions options = {}) {
     std::pmr::string output(httpPmrResourceOrDefault(options.resource));
-    output.reserve(input.size());
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        const char c = input[i];
-        if (options.mode == UrlDecodeMode::kForm && c == '+') {
-            output.push_back(' ');
-            continue;
-        }
-        if (c == '%') {
-            const int byte = decodePercentByte(input, i);
-            if (byte < 0) {
-                return std::nullopt;
+    bool valid = true;
+    output.resize_and_overwrite(input.size(), [&](char* bytes, std::size_t) noexcept {
+        std::size_t written = 0;
+        for (std::size_t i = 0; i < input.size(); ++i) {
+            char c = input[i];
+            if (options.mode == UrlDecodeMode::kForm && c == '+') {
+                c = ' ';
+            } else if (c == '%') {
+                const int byte = decodePercentByte(input, i);
+                if (byte < 0) {
+                    valid = false;
+                    return std::size_t{0};
+                }
+                c = static_cast<char>(byte);
             }
-            output.push_back(static_cast<char>(byte));
-            continue;
+            bytes[written++] = c;
         }
-        output.push_back(c);
+        return written;
+    });
+    if (!valid) {
+        return std::nullopt;
     }
     return output;
 }

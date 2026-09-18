@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ruvia/web/db/DbEntity.h"
@@ -371,6 +372,28 @@ RUVIA_TEST(db_entity_array_encoding_rejects_embedded_nul) {
             (void)ruvia::detail::entityDbValue(values, &resource);
         }));
         RUVIA_CHECK(resource.liveAllocations() > 0);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(db_entity_array_encoding_preserves_string_segments_and_escapes) {
+    ruvia::test::CountingMemoryResource resource;
+    {
+        std::pmr::vector<std::pmr::string> values(&resource);
+        values.emplace_back(4096, 'x');
+        values.emplace_back("\"\\");
+        values.emplace_back(128, '\\');
+        values.emplace_back("NULL");
+        values.emplace_back("");
+        values.emplace_back("a,b{}\n\t");
+        const auto encoded = ruvia::detail::entityDbValue(values, &resource);
+        const auto text = ruvia::detail::DbValueAccess::text(encoded);
+        const std::string expected = "{\"" + std::string(4096, 'x') + "\",\"\\\"\\\\\",\"" +
+                                     std::string(256, '\\') + "\",\"NULL\",\"\",\"a,b{}\n\t\"}";
+        RUVIA_CHECK_EQ(text, std::string_view(expected));
+        std::pmr::vector<std::pmr::string> decoded(&resource);
+        ruvia::detail::decodeDbField(ruvia::detail::DbResultAccess::borrowedField(text, &resource), decoded, &resource);
+        RUVIA_CHECK_EQ(values, decoded);
     }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }

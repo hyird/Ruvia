@@ -380,6 +380,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = {}, .http = 8080}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "localhost", .http = 8080}); }));
+    RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = std::string("127.0.0.1\0bad", 13), .http = 8080}); }));
     RUVIA_CHECK(throwsInvalid([] { ruvia::app().listen({.address = "127.0.0.1", .http = 0}); }));
     RUVIA_CHECK(throwsInvalid(
         [] { ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .https = 8080}); }));

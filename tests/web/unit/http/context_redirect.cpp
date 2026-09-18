@@ -19,6 +19,7 @@
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 
 #include "context_services_fixture.h"
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 RUVIA_RESPONSE_MODEL(ContextJsonResponse, RUVIA_REQUIRED_FIELD(number, ruvia::Int64),
@@ -36,6 +37,32 @@ using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::responseBody;
 using ruvia::testing::throwsOn;
+
+class HeaderFailureResource final : public std::pmr::memory_resource {
+public:
+    std::optional<std::size_t> remainingHeaderAllocations{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        // Header bytes use alignment 1. Leave Debug iterator proxies alone:
+        // MSVC may allocate those inside noexcept container construction.
+        if (alignment == 1 && remainingHeaderAllocations) {
+            if (*remainingHeaderAllocations == 0) {
+                throw std::bad_alloc();
+            }
+            --*remainingHeaderAllocations;
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 // The Context holds the request by reference, so keep it in the test's scope
 // (this macro-free setup avoids a returning helper that would dangle).
@@ -271,6 +298,147 @@ RUVIA_TEST(context_body_applies_context_headers) {
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("data"));
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
     RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
+}
+
+RUVIA_TEST(context_response_merge_keeps_complete_headers_without_allocating) {
+    std::size_t moveAllocations = 0;
+    for (const bool withContextHeaders : {false, true}) {
+        ruvia::test::CountingMemoryResource resource;
+        {
+            RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+            if (withContextHeaders) {
+                context.header("Cache-Control", "no-store");
+                context.header("X-Custom", "context");
+                context.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+                context.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            }
+            ruvia::HttpResponse response({.resource = &resource});
+            response.header("Cache-Control", "private");
+            response.header("X-Custom", "response");
+            response.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            response.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            response.body(std::string(4096, 'x'));
+            const auto* bodyData = responseBody(response).bytes().data();
+            const auto allocations = resource.allocationCount();
+
+            ContextAccess::setResponse(context, std::move(response));
+
+            // Debug standard libraries may allocate iterator bookkeeping on move.
+            // Reconciliation must add nothing to the plain finalization cost.
+            const auto finalizationAllocations = resource.allocationCount() - allocations;
+            if (withContextHeaders) {
+                RUVIA_CHECK_EQ(finalizationAllocations, moveAllocations);
+            } else {
+                moveAllocations = finalizationAllocations;
+            }
+            RUVIA_CHECK_EQ(responseBody(*context.response()).bytes().data(), bodyData);
+            RUVIA_CHECK_EQ(context.response()->header("Cache-Control"), std::string_view("private"));
+            RUVIA_CHECK_EQ(context.response()->header("X-Custom"), std::string_view("response"));
+            RUVIA_CHECK_EQ(context.response()->headers().size(), std::size_t{4});
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(context_response_header_transactions_preserve_owned_body_storage) {
+    for (const bool assigned : {false, true}) {
+        ruvia::test::CountingMemoryResource resource;
+        {
+            RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+            context.header("X-Added", "context");
+            context.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            context.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            ruvia::HttpResponse response({.resource = &resource});
+            response.header("Content-Type", "application/octet-stream");
+            response.header("X-Tag", "same", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            response.body(std::string(4096, 'x'));
+            const auto* bodyData = responseBody(response).bytes().data();
+            if (assigned) {
+                context.respond(std::move(response));
+            } else {
+                ContextAccess::setResponse(context, std::move(response));
+            }
+            RUVIA_CHECK_EQ(responseBody(*context.response()).bytes().data(), bodyData);
+            RUVIA_CHECK_EQ(responseBody(*context.response()).bytes().size(), std::size_t{4096});
+            RUVIA_CHECK_EQ(context.response()->header("X-Added"), std::string_view("context"));
+            RUVIA_CHECK_EQ(context.response()->headers().size(), std::size_t{4});
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(context_response_header_transaction_failure_preserves_both_inputs) {
+    for (const bool assigned : {false, true}) {
+        for (const std::size_t successfulHeaders : {std::size_t{0}, std::size_t{1}}) {
+            HeaderFailureResource resource;
+            RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+            context.header("X-Added", "context");
+            ruvia::HttpResponse response({.resource = &resource});
+            response.header("X-Original", "response");
+            response.body(std::string(4096, 'x'));
+            const auto* bodyData = responseBody(response).bytes().data();
+            resource.remainingHeaderAllocations = successfulHeaders;
+            bool allocationFailed = false;
+            try {
+                if (assigned) {
+                    context.respond(std::move(response));
+                } else {
+                    ContextAccess::setResponse(context, std::move(response));
+                }
+            } catch (const std::bad_alloc&) {
+                allocationFailed = true;
+            }
+            RUVIA_CHECK(allocationFailed);
+            RUVIA_CHECK_EQ(responseBody(response).bytes().data(), bodyData);
+            RUVIA_CHECK_EQ(response.header("X-Original"), std::string_view("response"));
+            RUVIA_CHECK(!response.header("X-Added"));
+            resource.remainingHeaderAllocations.reset();
+            ContextAccess::setResponse(context, std::move(response));
+            RUVIA_CHECK_EQ(context.response()->header("X-Added"), std::string_view("context"));
+        }
+    }
+}
+
+RUVIA_TEST(context_response_header_transactions_preserve_cookie_policy_and_spilled_headers) {
+    for (const bool assigned : {false, true}) {
+        ruvia::test::CountingMemoryResource resource;
+        {
+            RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+            context.header("Set-Cookie", "session=new; Path=/");
+            context.header("Cache-Control", "no-store");
+            ruvia::HttpResponse response({.resource = &resource});
+            response.header("Set-Cookie", "session=old; Path=/");
+            response.header("Set-Cookie", "other=kept; Path=/", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            response.header("Content-Type", "application/octet-stream");
+            response.header("Cache-Control", "private");
+            for (int i = 0; i < 12; ++i) {
+                response.header("X-Field-" + std::to_string(i), "value");
+            }
+            response.body(std::string(4096, 'x'));
+            const auto* bodyData = responseBody(response).bytes().data();
+            if (assigned) {
+                context.respond(std::move(response));
+            } else {
+                ContextAccess::setResponse(context, std::move(response));
+            }
+            const auto& result = *context.response();
+            RUVIA_CHECK_EQ(responseBody(result).bytes().data(), bodyData);
+            RUVIA_CHECK_EQ(result.header("Content-Type"), std::string_view("application/octet-stream"));
+            RUVIA_CHECK_EQ(result.header("Cache-Control"), std::string_view(assigned ? "no-store" : "private"));
+            RUVIA_CHECK_EQ(result.header("Set-Cookie"), std::string_view("session=new; Path=/"));
+            std::size_t cookies = 0;
+            for (const auto& header : result.headers()) {
+                if (header.name() == "Set-Cookie") {
+                    ++cookies;
+                }
+            }
+            RUVIA_CHECK_EQ(cookies, assigned ? std::size_t{1} : std::size_t{2});
+            for (int i = 0; i < 12; ++i) {
+                RUVIA_CHECK_EQ(result.header("X-Field-" + std::to_string(i)), std::string_view("value"));
+            }
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
 }
 
 RUVIA_TEST(context_metadata_preserves_repeated_set_cookie_headers) {

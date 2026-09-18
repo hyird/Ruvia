@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -107,15 +108,21 @@ RUVIA_TEST(websocket_integer_readers) {
     RUVIA_CHECK_EQ(readWebSocketUint16(be16), std::uint16_t{0x1234});
 
     // 64-bit big-endian, most-significant bit clear -> 0x0100 = 256.
-    const char be64[] = {0, 0, 0, 0, 0, 0, static_cast<char>(0x01), 0};
-    std::uint64_t value = 0;
-    RUVIA_CHECK(readWebSocketUint64(be64, value));
-    RUVIA_CHECK_EQ(value, std::uint64_t{256});
+    constexpr char be64[] = {0, 0, 0, 0, 0, 0, static_cast<char>(0x01), 0};
+    constexpr auto value = readWebSocketUint64(be64);
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK_EQ(*value, std::uint64_t{256});
 
     // The MSB of a 64-bit length must be 0 (RFC 6455 5.2); otherwise rejected.
     const char msbSet[] = {static_cast<char>(0x80), 0, 0, 0, 0, 0, 0, 0};
-    std::uint64_t rejected = 123;
-    RUVIA_CHECK(!readWebSocketUint64(msbSet, rejected));
+    const auto rejected = readWebSocketUint64(msbSet);
+    RUVIA_CHECK(!rejected.has_value());
+    RUVIA_CHECK_EQ(rejected.error(), ruvia::detail::WebSocketProtocolFailure::kProtocolError);
+
+    const char maximum[] = {0x7f, '\xff', '\xff', '\xff', '\xff', '\xff', '\xff', '\xff'};
+    RUVIA_CHECK_EQ(*readWebSocketUint64(maximum), (std::uint64_t{1} << 63) - 1);
+    const char unaligned[] = {0, 0x01, 0x23, 0x45, 0x67, '\x89', '\xab', '\xcd', '\xef', 0};
+    RUVIA_CHECK_EQ(*readWebSocketUint64(std::span<const char, 8>(unaligned + 1, 8)), std::uint64_t{0x0123456789abcdef});
 }
 
 RUVIA_TEST(websocket_read_buffer_compaction) {

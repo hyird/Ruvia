@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/web/Attributes.h"
+
 // Request-side public API is owned independently from Context response/state
 // construction. Context.h remains the convenient umbrella, while request-only
 // consumers can depend on this narrower contract. Non-template facade methods
@@ -132,27 +134,27 @@ public:
         RequestFormField(RequestFormField&&) noexcept = default;
         RequestFormField& operator=(RequestFormField&&) = delete;
 
-        [[nodiscard]] std::string_view name() const& noexcept {
+        [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
             return name_;
         }
         [[nodiscard]] std::string_view name() const&& = delete;
 
-        [[nodiscard]] std::string_view value() const& noexcept {
+        [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
             return value_;
         }
         [[nodiscard]] std::string_view value() const&& = delete;
 
-        [[nodiscard]] std::string_view filename() const& noexcept {
+        [[nodiscard]] std::string_view filename() const& noexcept RUVIA_LIFETIMEBOUND {
             return filename_;
         }
         [[nodiscard]] std::string_view filename() const&& = delete;
 
-        [[nodiscard]] std::string_view contentType() const& noexcept {
+        [[nodiscard]] std::string_view contentType() const& noexcept RUVIA_LIFETIMEBOUND {
             return contentType_;
         }
         [[nodiscard]] std::string_view contentType() const&& = delete;
 
-        [[nodiscard]] std::span<const std::pmr::string> path() const& noexcept {
+        [[nodiscard]] std::span<const std::pmr::string> path() const& noexcept RUVIA_LIFETIMEBOUND {
             return path_;
         }
         [[nodiscard]] std::span<const std::pmr::string> path() const&& = delete;
@@ -165,7 +167,7 @@ public:
             return array_;
         }
 
-        [[nodiscard]] RequestBlob blob() const& noexcept {
+        [[nodiscard]] RequestBlob blob() const& noexcept RUVIA_LIFETIMEBOUND {
             return RequestBlob(std::as_bytes(std::span(value_)), std::string_view(contentType_));
         }
         [[nodiscard]] RequestBlob blob() const&& = delete;
@@ -218,7 +220,7 @@ public:
                 return fields_.back();
             }
 
-            [[nodiscard]] std::span<const RequestFormField* const> fields() const& noexcept {
+            [[nodiscard]] std::span<const RequestFormField* const> fields() const& noexcept RUVIA_LIFETIMEBOUND {
                 return fields_;
             }
             [[nodiscard]] std::span<const RequestFormField* const> fields() const&& = delete;
@@ -343,7 +345,7 @@ public:
                 return formEntry == nullptr ? 0 : formEntry->size();
             }
 
-            [[nodiscard]] std::span<const Group> groups() const& noexcept {
+            [[nodiscard]] std::span<const Group> groups() const& noexcept RUVIA_LIFETIMEBOUND {
                 return entries_;
             }
             [[nodiscard]] std::span<const Group> groups() const&& = delete;
@@ -396,22 +398,22 @@ public:
         RequestFormData(RequestFormData&&) noexcept = default;
         RequestFormData& operator=(RequestFormData&&) = delete;
 
-        [[nodiscard]] std::span<const RequestFormField> fields() const& noexcept {
+        [[nodiscard]] std::span<const RequestFormField> fields() const& noexcept RUVIA_LIFETIMEBOUND {
             return fields_;
         }
         [[nodiscard]] std::span<const RequestFormField> fields() const&& = delete;
 
-        [[nodiscard]] std::span<const Group> groups() const& noexcept {
+        [[nodiscard]] std::span<const Group> groups() const& noexcept RUVIA_LIFETIMEBOUND {
             return entries_;
         }
         [[nodiscard]] std::span<const Group> groups() const&& = delete;
 
-        [[nodiscard]] Value get(std::string_view name) const& noexcept {
+        [[nodiscard]] Value get(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND {
             return Value(findEntry(name));
         }
         [[nodiscard]] Value get(std::string_view) const&& = delete;
 
-        [[nodiscard]] Object object(std::string_view dotPath) const& {
+        [[nodiscard]] Object object(std::string_view dotPath) const& RUVIA_LIFETIMEBOUND {
             return Object(*this, dotPath);
         }
         [[nodiscard]] Object object(std::string_view) const&& = delete;
@@ -672,7 +674,7 @@ public:
 private:
     friend class Context;
 
-    explicit constexpr ContextRequest(const Context& context) noexcept
+    explicit constexpr ContextRequest(const Context& context RUVIA_LIFETIMEBOUND) noexcept
         : context_(&context) {}
 
     [[nodiscard]] bool contentTypeMatches(std::string_view expected) const noexcept;

@@ -18,6 +18,7 @@
 #include "ruvia/web/db/DbProjection.h"
 #include "ruvia/web/detail/db/DbEntityCodec.h"
 #include "ruvia/web/detail/db/DbRelationQuery.h"
+#include "ruvia/web/detail/db/DbResultAccess.h"
 
 namespace ruvia {
 
@@ -59,10 +60,14 @@ void forEachEntityColumn(Fn&& fn) {
     }(std::make_index_sequence<std::tuple_size_v<typename E::Columns>>{});
 }
 template <typename E>
+constexpr bool hasEntityColumn(std::string_view name) noexcept {
+    return [&]<typename... Columns>(std::tuple<Columns...>*) {
+        return ((name == Columns::name.view()) || ...);
+    }(static_cast<typename E::Columns*>(nullptr));
+}
+template <typename E>
 void requireEntityColumn(std::string_view name) {
-    bool found = false;
-    forEachEntityColumn<E>([&]<typename C> { found |= name == C::name.view(); });
-    if (!found) {
+    if (!hasEntityColumn<E>(name)) {
         throw std::invalid_argument("unknown database entity column");
     }
 }
@@ -148,30 +153,36 @@ DbExpression entityColumnValue(DbQuery& query, const E& entity) {
 template <typename E>
 struct DbMapProjection final {
     static_assert(requires { requires std::derived_from<E, typename E::SqlEntityType>; } || requires { requires std::derived_from<E, typename E::DbProjectionType>; }, "SQL results require a SQL entity or a DbProjection");
-    std::pmr::vector<std::pmr::string> columns;
-    explicit DbMapProjection(std::span<const std::pmr::string> selected, std::pmr::memory_resource* resource)
-        : columns(resource) {
+    explicit DbMapProjection(std::span<const std::pmr::string> selected) {
         for (const auto& name : selected) {
             requireEntityColumn<E>(name);
-            columns.emplace_back(name);
         }
+        std::size_t index = 0;
+        forEachEntityColumn<E>([&]<typename C> {
+            selectedColumns_[index++] = selected.empty() || std::ranges::contains(selected, C::name.view());
+        });
     }
     E decode(const DbRow& row, std::pmr::memory_resource* resource) const {
         E result(resource);
+        std::size_t index = 0;
         forEachEntityColumn<E>([&]<typename C> {
-            if (columns.empty() || std::ranges::find(columns, C::name.view()) != columns.end()) {
+            if (selectedColumns_[index++]) {
                 decodeEntityColumn<E, C>(result, row, resource);
             }
         });
         return result;
     }
     DbEntityRows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
-        DbEntityRows<E> result(resource);
+        auto result = DbResultAccess::makeEntityRows<E>(resource, rows.size());
+        DbEntityRowDecoder<E> decoder(selectedColumns_);
         for (const auto& row : rows) {
-            result.push_back(decode(row, resource));
+            result.push_back(decoder.decode(row, resource));
         }
         return result;
     }
+
+private:
+    std::array<bool, std::tuple_size_v<typename E::Columns>> selectedColumns_{};
 };
 template <typename E>
 struct DbMapOneProjection final {
@@ -462,7 +473,7 @@ private:
                 throw std::invalid_argument("DTO mapping requires an explicit projection");
             }
         }
-        return detail::DbMapProjection<Output>(selected_, query_.resource());
+        return detail::DbMapProjection<Output>(selected_);
     }
     DbQueryBuilder(detail::DbRepositoryInput<Executor> executor, std::string_view alias)
         : executor_(executor),
@@ -645,7 +656,7 @@ public:
                 throw std::invalid_argument("DTO returning requires an explicit projection");
             }
         }
-        return executor_.template queryMapped<DbEntityRows<Output>>(query_, detail::DbMapProjection<Output>(selected_, query_.resource()));
+        return executor_.template queryMapped<DbEntityRows<Output>>(query_, detail::DbMapProjection<Output>(selected_));
     }
     [[nodiscard]] DbStatement getQueryAndParameters() const {
         validate();
@@ -873,12 +884,18 @@ private:
         std::pmr::vector<std::pmr::string> columns(query.resource());
         if (fields.empty()) {
             static_assert(requires { typename Output::Columns; });
-            std::pmr::vector<DbExpression> values(query.resource());
-            detail::forEachEntityColumn<Output>([&]<typename C> {
-                detail::requireEntityColumn<Entity>(C::name.view());
-                values.push_back(query.column(C::name.view()));
-            });
-            query.returning(values);
+            constexpr bool entityColumnsOnly = []<typename... Columns>(std::tuple<Columns...>*) {
+                return (detail::hasEntityColumn<Entity>(Columns::name.view()) && ...);
+            }(static_cast<typename Output::Columns*>(nullptr));
+            if constexpr (entityColumnsOnly) {
+                std::pmr::vector<DbExpression> values(query.resource());
+                detail::forEachEntityColumn<Output>([&]<typename C> {
+                    values.push_back(query.column(C::name.view()));
+                });
+                query.returning(values);
+            } else {
+                throw std::invalid_argument("unknown database entity column");
+            }
         } else {
             for (const auto& field : fields) {
                 if (field.expression.empty()) {
@@ -887,7 +904,7 @@ private:
             }
             columns = detail::applyProjection(query, fields, {}, true);
         }
-        return executor_.template queryMapped<DbEntityRows<Output>>(query, detail::DbMapProjection<Output>(columns, query.resource()));
+        return executor_.template queryMapped<DbEntityRows<Output>>(query, detail::DbMapProjection<Output>(columns));
     }
     template <detail::DbWriteCondition Condition = DbPredicate>
     DbQuery updateQuery(const Condition& predicate, const Entity& changes) const {

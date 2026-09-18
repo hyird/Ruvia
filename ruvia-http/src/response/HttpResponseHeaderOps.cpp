@@ -1,6 +1,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -204,14 +205,16 @@ void HttpResponse::appendHeaderValidated(
     // not set it until the new descriptor has been published: headers_.add()
     // owns bytes before it may allocate the backing table, and a failed append
     // must leave the existing response exactly as it was.
-    const bool hadExisting = findHeaderForUpdate(key, knownBit) != nullptr;
+    const auto* const existing = findHeaderForRead(key, knownBit);
+    const auto existingIndex = existing == nullptr
+                                   ? std::optional<std::size_t>{}
+                                   : std::optional{static_cast<std::size_t>(existing - headers_.begin())};
     const auto index = headers_.size();
     auto& header = headers_.add(key, value, knownBit);
-    if (hadExisting) {
-        auto* const existing = findHeaderForUpdate(key, knownBit);
-        if (existing != nullptr) {
-            detail::setResponseHeaderAppend(*existing, true);
-        }
+    if (existingIndex) {
+        // add() may move the descriptor table. Preserve an index, not a pointer,
+        // to mark the existing entry without repeating the header lookup.
+        detail::setResponseHeaderAppend(headers_.begin()[*existingIndex], true);
     }
     // Mark the append flag so a later merge of this response keeps every appended
     // value instead of treating the field as single-valued and dropping all but the

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -44,16 +45,8 @@ inline char* http2Write32(char* out, std::uint32_t value) noexcept {
 
 inline void http2EncodeFrameHeader(char* out, std::uint32_t length, Http2FrameType type,
     std::uint8_t flags, std::uint32_t streamId) noexcept {
-    out[0] = static_cast<char>((length >> 16) & 0xff);
-    out[1] = static_cast<char>((length >> 8) & 0xff);
-    out[2] = static_cast<char>(length & 0xff);
-    out[3] = static_cast<char>(type);
-    out[4] = static_cast<char>(flags);
-    const auto id = streamId & 0x7fffffffU;
-    out[5] = static_cast<char>((id >> 24) & 0xff);
-    out[6] = static_cast<char>((id >> 16) & 0xff);
-    out[7] = static_cast<char>((id >> 8) & 0xff);
-    out[8] = static_cast<char>(id & 0xff);
+    writeHttp2FrameHeader(std::span<char, kHttp2FrameHeaderBytes>(out, kHttp2FrameHeaderBytes),
+        length, type, flags, streamId);
 }
 
 inline char* http2WriteFrameHeader(char* out, std::uint32_t length, Http2FrameType type,
@@ -63,11 +56,8 @@ inline char* http2WriteFrameHeader(char* out, std::uint32_t length, Http2FrameTy
 }
 
 [[nodiscard]] inline Http2FrameHeader http2ParseFrameHeader(std::string_view bytes) noexcept {
-    const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());
-    return Http2FrameHeader{.length = http2Read24(data),
-        .type = data[3],
-        .flags = data[4],
-        .streamId = http2Read31(data + 5)};
+    return decodeHttp2FrameHeader(
+        std::span<const char, kHttp2FrameHeaderBytes>(bytes.data(), kHttp2FrameHeaderBytes));
 }
 
 inline char* http2WriteSettingsEntry(char* out, Http2SettingId id, std::uint32_t value) noexcept {

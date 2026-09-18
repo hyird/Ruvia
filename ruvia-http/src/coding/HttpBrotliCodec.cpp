@@ -47,17 +47,22 @@ ContentDecodeAttempt decodeBrotliContent(
 
     const auto* nextInput = reinterpret_cast<const std::uint8_t*>(input.data());
     std::size_t availableInput = input.size();
-    std::uint8_t buffer[16384];
     for (;;) {
         const auto beforeInput = availableInput;
-        auto* nextOutput = buffer;
-        std::size_t availableOutput = sizeof(buffer);
+        std::size_t availableOutput = 0;
         const auto result = BrotliDecoderDecompressStream(
-            state, &availableInput, &nextInput, &availableOutput, &nextOutput, nullptr);
-        const auto produced = sizeof(buffer) - availableOutput;
-        if (!appendDecodedBytes(
-                output, reinterpret_cast<const char*>(buffer), produced, maxDecodedBytes)) {
-            return std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
+            state, &availableInput, &nextInput, &availableOutput, nullptr, nullptr);
+        bool producedOutput = false;
+        // The ring buffer can expose more than one contiguous block. Consume
+        // each borrow before the next decoder call invalidates it.
+        while (BrotliDecoderHasMoreOutput(state) == BROTLI_TRUE) {
+            std::size_t produced = 0;
+            const auto* bytes = BrotliDecoderTakeOutput(state, &produced);
+            if (!appendDecodedBytes(
+                    output, reinterpret_cast<const char*>(bytes), produced, maxDecodedBytes)) {
+                return std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
+            }
+            producedOutput = producedOutput || produced != 0;
         }
         if (result == BROTLI_DECODER_RESULT_SUCCESS) {
             // RFC 7932 defines one Brotli stream. Its decoder deliberately does
@@ -72,7 +77,7 @@ ContentDecodeAttempt decodeBrotliContent(
                                        ? HttpContentDecodeError::kDecoderFailure
                                        : HttpContentDecodeError::kInvalidContent);
         }
-        const bool progressed = produced != 0 || availableInput != beforeInput;
+        const bool progressed = producedOutput || availableInput != beforeInput;
         if (!progressed ||
             (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && availableInput == 0)) {
             return std::unexpected(HttpContentDecodeError::kInvalidContent);
@@ -100,20 +105,23 @@ ContentEncodeAttempt encodeBrotliContent(
 
     std::size_t availableInput = input.size();
     const auto* nextInput = reinterpret_cast<const std::uint8_t*>(input.data());
-    std::uint8_t buffer[8192];
     for (;;) {
         const auto beforeInput = availableInput;
-        std::size_t availableOutput = sizeof(buffer);
-        auto* nextOutput = buffer;
+        std::size_t availableOutput = 0;
         if (BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH, &availableInput, &nextInput,
-                &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
+                &availableOutput, nullptr, nullptr) != BROTLI_TRUE) {
             return std::unexpected(HttpContentEncodeError::kEncoderFailure);
         }
-        const auto produced = sizeof(buffer) - availableOutput;
+        std::size_t produced = 0;
+        const auto* bytes = BrotliEncoderTakeOutput(state, &produced);
         if (output.size() > maxEncodedBytes || produced > maxEncodedBytes - output.size()) {
             return std::unexpected(HttpContentEncodeError::kEncodedSizeExceeded);
         }
-        output.append(reinterpret_cast<const char*>(buffer), produced);
+        // The borrowed block expires on the next encoder call. Copy it directly
+        // into the result before checking or advancing the encoder state.
+        if (produced != 0) {
+            output.append(reinterpret_cast<const char*>(bytes), produced);
+        }
         if (BrotliEncoderIsFinished(state) == BROTLI_TRUE) {
             return output;
         }

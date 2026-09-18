@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/Attributes.h"
+
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. HttpOriginView and
@@ -140,12 +142,12 @@ public:
         const std::basic_string<char, Traits, Allocator>&&) = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestWithoutContent* withoutContent()
-        const& noexcept {
+        const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
     const HttpClientRequestWithoutContent* withoutContent() const&& = delete;
 
-    [[nodiscard]] constexpr const HttpClientRequestBytesView* borrowedBytes() const& noexcept {
+    [[nodiscard]] constexpr const HttpClientRequestBytesView* borrowedBytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<HttpClientRequestBytesView>(&content_);
     }
     const HttpClientRequestBytesView* borrowedBytes() const&& = delete;
@@ -192,7 +194,7 @@ public:
         return protocolVersion_;
     }
 
-    [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept {
+    [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }
     [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;

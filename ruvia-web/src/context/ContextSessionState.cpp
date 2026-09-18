@@ -4,15 +4,53 @@
 
 namespace ruvia::detail {
 
+void ContextSessionState::bind(const SessionMiddleware* owner) {
+    if (available_) {
+        throw std::logic_error("session middleware is already bound");
+    }
+    requireMutable();
+    owner_ = owner;
+    available_ = true;
+}
+
+void ContextSessionState::requireMutable() const {
+    if (phase_ != Phase::kActive) {
+        throw std::logic_error("session cannot change after response commit begins");
+    }
+}
+
+bool ContextSessionState::beginCommit() {
+    if (!available_ || phase_ == Phase::kCommitted) {
+        return false;
+    }
+    if (phase_ == Phase::kFailed) {
+        std::rethrow_exception(failure_);
+    }
+    requireMutable();
+    phase_ = Phase::kCommitting;
+    return true;
+}
+
+void ContextSessionState::finishCommit() noexcept {
+    phase_ = Phase::kCommitted;
+}
+
+void ContextSessionState::failCommit(std::exception_ptr exception) noexcept {
+    failure_ = std::move(exception);
+    phase_ = Phase::kFailed;
+}
+
 std::pmr::string ContextSessionState::copy(std::string_view value) const {
     return std::pmr::string(value, resource_);
 }
 
 void ContextSessionState::observePresentedId(std::string_view id) {
+    requireMutable();
     value_.template emplace<SessionUnrecognized>(copy(id));
 }
 
 void ContextSessionState::loadRecognized(std::string_view data) {
+    requireMutable();
     auto* presented = std::get_if<SessionUnrecognized>(&value_);
     if (presented == nullptr) {
         throw std::logic_error("recognized session requires a presented id");
@@ -23,6 +61,7 @@ void ContextSessionState::loadRecognized(std::string_view data) {
 }
 
 void ContextSessionState::set(std::string_view data) {
+    requireMutable();
     if (data.empty()) {
         clear();
         return;
@@ -63,6 +102,7 @@ void ContextSessionState::set(std::string_view data) {
 }
 
 void ContextSessionState::clear() {
+    requireMutable();
     // Already clearing: keep the id captured by the first call. Re-emplacing would
     // drop it, and the middleware only deletes the server-side blob when it is
     // present -- a second clear() would silently downgrade logout to cookie-only.
@@ -88,6 +128,7 @@ void ContextSessionState::clear() {
 }
 
 void ContextSessionState::regenerate() {
+    requireMutable();
     const auto regenerateExisting = [this](auto& state) {
         auto oldId = std::move(state.id);
         auto data = std::move(state.data);

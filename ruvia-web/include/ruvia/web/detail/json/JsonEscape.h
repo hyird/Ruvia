@@ -8,8 +8,13 @@
 
 namespace ruvia::detail {
 
+enum class JsonHexCase : std::uint8_t { kUpper,
+    kLower };
+
+template <JsonHexCase Case = JsonHexCase::kUpper>
 [[nodiscard]] inline char jsonHexDigit(std::uint8_t value) noexcept {
-    return static_cast<char>(value < 10 ? ('0' + value) : ('A' + value - 10));
+    constexpr char firstLetter = Case == JsonHexCase::kUpper ? 'A' : 'a';
+    return static_cast<char>(value < 10 ? ('0' + value) : (firstLetter + value - 10));
 }
 
 [[nodiscard]] inline bool jsonNeedsEscape(unsigned char value) noexcept {
@@ -46,7 +51,7 @@ namespace ruvia::detail {
 // the framework deliberately avoids. RFC 8259 8.1 requires interchanged JSON to
 // be UTF-8, so the caller must supply valid UTF-8 in string values; an ill-formed
 // sequence is emitted as-is and yields a non-UTF-8 body.
-template <typename StringT>
+template <JsonHexCase Case = JsonHexCase::kUpper, typename StringT>
 inline void appendJsonString(StringT& output, std::string_view value) {
     output.push_back('"');
     std::size_t chunkBegin = 0;
@@ -80,8 +85,8 @@ inline void appendJsonString(StringT& output, std::string_view value) {
                 break;
             default:
                 output.append("\\u00");
-                output.push_back(jsonHexDigit(static_cast<std::uint8_t>(c >> 4)));
-                output.push_back(jsonHexDigit(static_cast<std::uint8_t>(c & 0x0F)));
+                output.push_back(jsonHexDigit<Case>(static_cast<std::uint8_t>(c >> 4)));
+                output.push_back(jsonHexDigit<Case>(static_cast<std::uint8_t>(c & 0x0F)));
                 break;
         }
         chunkBegin = i + 1;

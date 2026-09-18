@@ -4,10 +4,10 @@
 #include <memory_resource>
 #include <stdexcept>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/detail/io/IpAddress.h"
 #include "ruvia/core/detail/util/NativePath.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
@@ -37,12 +37,11 @@ asio::ip::address normalizeListenAddress(std::string_view address) {
     if (address.empty()) {
         throw std::invalid_argument("listen address must not be empty");
     }
-    std::error_code error;
-    auto normalized = asio::ip::make_address(address, error);
-    if (error) {
+    const auto normalized = parseIpAddress(address);
+    if (!normalized) {
         throw std::invalid_argument("listen address must be a numeric IP address");
     }
-    return normalized;
+    return *normalized;
 }
 
 bool hasTlsConfiguration(const TlsConfig& config) noexcept {

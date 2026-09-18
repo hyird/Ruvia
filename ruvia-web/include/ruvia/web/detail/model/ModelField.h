@@ -13,6 +13,9 @@
 
 namespace ruvia::detail::model {
 
+template <typename DerivedT, typename... DescriptorTs>
+class ModelStorage;
+
 [[nodiscard]] constexpr std::uint64_t modelFieldNameHash(std::string_view name) noexcept {
     // FNV-1a is only a dispatch prefilter. The parser still compares the full
     // decoded key before binding, so collisions cannot change JSON semantics.
@@ -105,12 +108,31 @@ public:
         state_ = detail::ModelFieldState::kInvalidType;
     }
 
+private:
+    template <typename DerivedT, typename... DescriptorTs>
+    friend class ModelStorage;
+    friend struct ::ruvia::detail::ModelValueFactory;
+
     void emplaceParsed(ValueT&& value) {
         value_.emplace(std::move(value));
         state_ = detail::ModelFieldState::kParsed;
     }
 
-private:
+    [[nodiscard]] ModelField rebindForModel(
+        const ModelField& source, std::pmr::memory_resource* resource) const {
+        ModelField rebound;
+        rebound.state_ = source.state_;
+        if (source.value_) {
+            rebound.value_.emplace(detail::rebindModelValue(*source.value_, resource));
+        }
+        return rebound;
+    }
+
+    void resetAfterMove() noexcept {
+        value_.reset();
+        state_ = detail::ModelFieldState::kMissing;
+    }
+
     OptionsT options_;
     detail::ModelFieldState state_{detail::ModelFieldState::kMissing};
     std::optional<ValueT> value_;

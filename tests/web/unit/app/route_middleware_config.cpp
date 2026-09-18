@@ -21,7 +21,7 @@ namespace {
 // Configuration carried in the type, so the middleware stays default
 // constructible and the route macro needs no constructor arguments.
 template <int Level>
-class ConfiguredByType final : public ruvia::Middleware<ConfiguredByType<Level>> {
+class ConfiguredByType final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
@@ -30,7 +30,7 @@ public:
 };
 
 // Takes no configuration at all, so it is named bare in a route's list.
-class PlainMiddleware final : public ruvia::Middleware<PlainMiddleware> {
+class PlainMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
@@ -40,7 +40,7 @@ public:
 
 // Two NTTPs: the comma lives inside the template argument list.
 template <int A, int B>
-class ConfiguredByTwoValues final : public ruvia::Middleware<ConfiguredByTwoValues<A, B>> {
+class ConfiguredByTwoValues final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();

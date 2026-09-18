@@ -1,8 +1,11 @@
 #include <array>
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/WebSocketHandshake.h"
@@ -324,4 +327,83 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
     RUVIA_CHECK(handshake.compression() ==
                 ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
     RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
+}
+
+RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookies) {
+    const auto request = parseRequest(validHandshake());
+    std::string cookie = "sid=0123456789abcdef; HttpOnly";
+    const std::array fields{ruvia::HttpHeaderView("Set-Cookie", cookie),
+        ruvia::HttpHeaderView("Set-Cookie", "theme=dark"),
+        ruvia::HttpHeaderView("X-Request-Id", "request-1")};
+    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = fields});
+    cookie.assign(cookie.size(), 'x');
+    std::string response;
+    handshake.forEachResponsePart([&](std::string_view part) { response.append(part); });
+    RUVIA_CHECK(response.contains("set-cookie: sid=0123456789abcdef; HttpOnly\r\n"));
+    RUVIA_CHECK(response.contains("set-cookie: theme=dark\r\n"));
+    RUVIA_CHECK(response.contains("x-request-id: request-1\r\n"));
+    RUVIA_CHECK(response.ends_with("\r\n\r\n"));
+}
+
+RUVIA_TEST(ws_handshake_rejects_application_framing_and_invalid_fields) {
+    const auto request = parseRequest(validHandshake());
+    for (const auto name : {"Connection", "Upgrade", "Content-Length", "Transfer-Encoding",
+             "Sec-WebSocket-Accept", "Sec-WebSocket-Protocol", "TE", "Trailer", "bad name"}) {
+        const std::array fields{ruvia::HttpHeaderView(name, "value")};
+        bool rejected = false;
+        try {
+            (void)ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = fields});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    const std::array fields{ruvia::HttpHeaderView("Set-Cookie", "sid=a\r\nInjected: value")};
+    bool rejected = false;
+    try {
+        (void)ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = fields});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(ws_handshake_bounds_application_header_count_and_size) {
+    const auto request = parseRequest(validHandshake());
+    const std::vector<ruvia::HttpHeaderView> tooMany(ruvia::kMaxHttpHeaderFields, {"x", "v"});
+    bool countRejected = false;
+    try {
+        (void)ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = tooMany});
+    } catch (const std::length_error&) {
+        countRejected = true;
+    }
+    RUVIA_CHECK(countRejected);
+    const std::string oversized(ruvia::kMaxHttpHeaderBytes, 'a');
+    const std::array fields{ruvia::HttpHeaderView("x", oversized)};
+    bool sizeRejected = false;
+    try {
+        (void)ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = fields});
+    } catch (const std::length_error&) {
+        sizeRejected = true;
+    }
+    RUVIA_CHECK(sizeRejected);
+}
+
+RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {
+    const auto request = parseRequest(validHandshake());
+    for (const auto value : {" leading", "trailing ", "\tleading", "trailing\t"}) {
+        const std::array headers{ruvia::HttpHeaderView("X-Test", value)};
+        bool rejected = false;
+        try {
+            (void)ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = headers});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    const std::array headers{ruvia::HttpHeaderView("X-Test", "")};
+    const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = headers});
+    std::string response;
+    handshake.forEachResponsePart([&](std::string_view part) { response.append(part); });
+    RUVIA_CHECK(response.contains("x-test: \r\n"));
 }

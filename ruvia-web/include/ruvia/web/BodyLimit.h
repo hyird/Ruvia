@@ -32,7 +32,7 @@ namespace ruvia {
 // applies it to that controller's routes, and where both a controller-wide and
 // a route-specific one exist the stricter wins.
 template <std::size_t MaxBytes>
-class BodyLimit final : public Middleware<BodyLimit<MaxBytes>> {
+class BodyLimit final : public Middleware {
 public:
     static_assert(MaxBytes > 0, "body limit must be greater than 0");
 

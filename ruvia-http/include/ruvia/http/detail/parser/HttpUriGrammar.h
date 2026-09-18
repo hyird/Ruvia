@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <string_view>
+#include <system_error>
 
 // RFC 3986 syntax, one level below any HTTP-specific rule: which byte sequences
 // form a legal URI component, userinfo, port, IPv4 / IPv6 / IPvFuture literal or
@@ -21,12 +23,12 @@ namespace ruvia::detail {
            (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
-// Parse a decimal port, rejecting anything that does not fit 16 bits.
 // RFC 3986 pchar = unreserved / pct-encoded / sub-delims / ":" / "@" (the
 // percent sign itself is admitted; the encoding is checked by the caller).
 [[nodiscard]] bool isUriPchar(unsigned char byte) noexcept;
 
-[[nodiscard]] bool parsePortValue(std::string_view value, std::uint16_t& port) noexcept;
+// Parse a decimal port, rejecting anything that does not fit 16 bits.
+[[nodiscard]] std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) noexcept;
 
 // Validate a percent-encoded component: unreserved / sub-delims / pct-encoded,
 // plus ':' and '@', with '/' and '?' admitted only where the component allows them.

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
 #include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
 
 #include "test_harness.h"
@@ -322,6 +323,28 @@ RUVIA_TEST(hpack_long_value_round_trips) {
     RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
     RUVIA_CHECK_EQ(out.headers[0].first, std::string("x-long"));
     RUVIA_CHECK_EQ(out.headers[0].second, longValue);
+}
+
+RUVIA_TEST(hpack_huffman_decodes_every_byte_symbol) {
+    for (std::size_t symbol = 0; symbol < 256; ++symbol) {
+        const auto bitCount = ruvia::detail::kHpackHuffmanLengths[symbol];
+        const auto byteCount = (bitCount + 7) / 8;
+        const auto padding = byteCount * 8 - bitCount;
+        const auto encoded = (ruvia::detail::kHpackHuffmanCodes[symbol] << padding) |
+                             ((std::uint32_t{1} << padding) - 1);
+        std::string block;
+        block.push_back('\x41');
+        block.push_back(static_cast<char>(0x80 | byteCount));
+        for (int byte = byteCount - 1; byte >= 0; --byte) {
+            block.push_back(static_cast<char>((encoded >> (byte * 8)) & 0xff));
+        }
+        Collector out;
+        RUVIA_CHECK(decodeBlock(block, out));
+        RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
+        if (out.headers.size() == 1) {
+            RUVIA_CHECK_EQ(out.headers[0].second, std::string(1, static_cast<char>(symbol)));
+        }
+    }
 }
 
 RUVIA_TEST(hpack_huffman_rejects_bad_padding_and_eos) {

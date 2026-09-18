@@ -14,7 +14,6 @@ struct MiddlewareScopeOptions final {
 // detail/middleware/MiddlewareRegistration.h. This header stays free of
 // Context so App.h does not pull it in.
 
-template <typename MiddlewareT>
 class Middleware {
 protected:
     constexpr Middleware() noexcept = default;

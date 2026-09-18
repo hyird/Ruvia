@@ -18,6 +18,7 @@
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/web/Attributes.h"
 #include "ruvia/web/db/DbCache.h"
 
 namespace ruvia {
@@ -327,13 +328,13 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] const DbField& operator[](std::size_t index) const& noexcept;
+    [[nodiscard]] const DbField& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbField& operator[](std::size_t index) const&& = delete;
-    [[nodiscard]] const DbField& operator[](std::string_view column) const&;
+    [[nodiscard]] const DbField& operator[](std::string_view column) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbField& operator[](std::string_view column) const&& = delete;
-    [[nodiscard]] const DbField* begin() const& noexcept;
+    [[nodiscard]] const DbField* begin() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbField* begin() const&& = delete;
-    [[nodiscard]] const DbField* end() const& noexcept;
+    [[nodiscard]] const DbField* end() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbField* end() const&& = delete;
 
 private:

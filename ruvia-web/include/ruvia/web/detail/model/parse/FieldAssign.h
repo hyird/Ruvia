@@ -27,7 +27,7 @@ void assignFieldValue(
         field.assignOwned(std::string_view(std::forward<ValueT>(value)));
         target.emplace(std::move(field));
     } else {
-        target.emplace(std::forward<ValueT>(value));
+        target.emplace(detail::rebindModelValue(std::forward<ValueT>(value), resource));
     }
 }
 

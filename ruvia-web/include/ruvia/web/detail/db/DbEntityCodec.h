@@ -1,11 +1,17 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <charconv>
+#include <cstddef>
+#include <limits>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -175,15 +181,72 @@ void decodeEntity(E& entity, const DbRow& row, std::pmr::memory_resource* resour
 }
 
 template <typename E>
+class DbEntityRowDecoder final {
+    using Columns = typename E::Columns;
+    static constexpr auto kColumnCount = std::tuple_size_v<Columns>;
+    static constexpr auto kMissingColumn = (std::numeric_limits<std::size_t>::max)();
+
+public:
+    DbEntityRowDecoder() {
+        selected_.fill(true);
+    }
+    explicit DbEntityRowDecoder(const std::array<bool, kColumnCount>& selected)
+        : selected_(selected) {}
+
+    E decode(const DbRow& row, std::pmr::memory_resource* resource) {
+        const auto names = DbResultAccess::columnNames(row);
+        if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
+            [&]<std::size_t... I>(std::index_sequence<I...>) {
+                (bindColumn<I>(names), ...);
+            }(std::make_index_sequence<kColumnCount>{});
+            schema_ = names;
+        }
+        E result(resource);
+        [&]<std::size_t... I>(std::index_sequence<I...>) {
+            (decodeColumn<I>(result, row, resource), ...);
+        }(std::make_index_sequence<kColumnCount>{});
+        return result;
+    }
+
+private:
+    template <std::size_t I>
+    void bindColumn(std::span<const std::pmr::string> names) noexcept {
+        indices_[I] = kMissingColumn;
+        if (!selected_[I]) {
+            return;
+        }
+        using Column = std::tuple_element_t<I, Columns>;
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            if (names[index] == Column::name.view()) {
+                indices_[I] = index;
+                return;
+            }
+        }
+    }
+    template <std::size_t I>
+    void decodeColumn(E& result, const DbRow& row, std::pmr::memory_resource* resource) const {
+        if (!selected_[I]) {
+            return;
+        }
+        if (indices_[I] == kMissingColumn) {
+            throw std::out_of_range("database result has no such column");
+        }
+        decodeEntityField<E, std::tuple_element_t<I, Columns>>(result, row[indices_[I]], resource);
+    }
+
+    std::array<bool, kColumnCount> selected_{};
+    std::array<std::size_t, kColumnCount> indices_{};
+    // Used only while synchronously mapping a live, immutable DbRows result.
+    std::optional<std::span<const std::pmr::string>> schema_{};
+};
+
+template <typename E>
 DbEntityRows<E> mapDbEntityRows(DbRows&& rows, std::pmr::memory_resource* resource = nullptr) {
     auto* resolved = pmrResourceOrDefault(resource);
-    DbEntityRows<E> result(resolved);
-    using Columns = typename E::Columns;
+    auto result = DbResultAccess::makeEntityRows<E>(resolved, rows.size());
+    DbEntityRowDecoder<E> decoder;
     for (const auto& row : rows) {
-        E entity(resolved);
-        decodeEntity(entity, row, resolved, static_cast<Columns*>(nullptr),
-            std::make_index_sequence<std::tuple_size_v<Columns>>{});
-        result.push_back(std::move(entity));
+        result.push_back(decoder.decode(row, resolved));
     }
     return result;
 }
@@ -198,14 +261,31 @@ void appendEntityArrayValue(std::pmr::string& output, const T& value) {
         }
     } else if constexpr (std::is_same_v<T, std::pmr::string> || std::is_same_v<T, String>) {
         output.push_back('"');
-        for (const char ch : std::string_view(value)) {
-            if (ch == '\0') {
-                throw std::invalid_argument("PostgreSQL array text cannot contain NUL");
+        auto remaining = std::string_view(value);
+        while (!remaining.empty()) {
+            const auto next = std::ranges::find_if(remaining, [](char ch) noexcept {
+                return ch == '"' || ch == '\\' || ch == '\0';
+            });
+            if (next == remaining.end()) {
+                output.append(remaining);
+                break;
             }
-            if (ch == '\\' || ch == '"') {
+            const auto special = static_cast<std::size_t>(next - remaining.begin());
+            if (special != 0) {
+                output.append(remaining.data(), special);
+            }
+            auto escapedEnd = special;
+            do {
+                const char ch = remaining[escapedEnd];
+                if (ch == '\0') {
+                    throw std::invalid_argument("PostgreSQL array text cannot contain NUL");
+                }
                 output.push_back('\\');
-            }
-            output.push_back(ch);
+                output.push_back(ch);
+                ++escapedEnd;
+            } while (escapedEnd < remaining.size() &&
+                     (remaining[escapedEnd] == '"' || remaining[escapedEnd] == '\\' || remaining[escapedEnd] == '\0'));
+            remaining.remove_prefix(escapedEnd);
         }
         output.push_back('"');
     } else if constexpr (std::is_same_v<T, bool>) {

@@ -1,131 +1,89 @@
 #pragma once
 
-#include <cmath>
+#include <charconv>
+#include <concepts>
 #include <cstddef>
-#include <cstdint>
+#include <expected>
 #include <limits>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool parseDecimalNumber(std::string_view text, double& output) noexcept {
+enum class DecimalParseError { kInvalidFormat,
+    kOutOfRange };
+
+// Explicit inf/nan tokens are values; overflow or underflow of a finite
+// decimal is an error. Callers decide whether non-finite values are allowed.
+template <std::floating_point T = double>
+    requires std::same_as<T, std::remove_cv_t<T>>
+[[nodiscard]] std::expected<T, DecimalParseError> parseDecimalNumber(std::string_view text) noexcept {
     if (text == "inf" || text == "infinity") {
-        output = std::numeric_limits<double>::infinity();
-        return true;
+        return std::numeric_limits<T>::infinity();
     }
     if (text == "-inf" || text == "-infinity") {
-        output = -std::numeric_limits<double>::infinity();
-        return true;
+        return -std::numeric_limits<T>::infinity();
     }
     if (text == "nan" || text == "-nan") {
-        output = std::numeric_limits<double>::quiet_NaN();
-        return true;
+        return std::numeric_limits<T>::quiet_NaN();
     }
 
-    std::size_t index = 0;
-    bool negative = false;
-    if (index < text.size() && text[index] == '-') {
-        negative = true;
-        ++index;
-    }
-
-    std::uint64_t mantissa = 0;
-    std::size_t keptDigits = 0;
-    std::size_t droppedDigits = 0;
-    std::size_t fractionalDigits = 0;
-    int firstDroppedDigit = -1;
-    bool sawDigit = false;
+    // Keep the accepted grammar narrower than from_chars: no leading '+',
+    // whitespace, empty fraction, NaN payloads, or other non-finite spellings.
+    const bool negative = text.starts_with('-');
+    std::size_t index = negative ? 1 : 0;
     bool sawNonZero = false;
-
-    const auto consumeDigit = [&](char character, bool fractional) {
-        const auto digit = static_cast<unsigned>(character - '0');
-        sawDigit = true;
-        if (fractional) {
-            ++fractionalDigits;
-        }
-        if (!sawNonZero && digit == 0) {
-            return;
-        }
-        sawNonZero = true;
-        if (keptDigits < 19) {
-            mantissa = mantissa * 10 + digit;
-            ++keptDigits;
-            return;
-        }
-        if (firstDroppedDigit < 0) {
-            firstDroppedDigit = static_cast<int>(digit);
-        }
-        ++droppedDigits;
-    };
-
-    while (index < text.size() && text[index] >= '0' && text[index] <= '9') {
-        consumeDigit(text[index], false);
-        ++index;
-    }
-    if (index < text.size() && text[index] == '.') {
-        ++index;
-        const auto fractionBegin = index;
+    const auto consumeDigits = [&] {
+        const auto begin = index;
         while (index < text.size() && text[index] >= '0' && text[index] <= '9') {
-            consumeDigit(text[index], true);
+            sawNonZero = sawNonZero || text[index] != '0';
             ++index;
         }
-        if (index == fractionBegin) {
-            return false;
+        return index - begin;
+    };
+    const auto integralDigits = consumeDigits();
+    std::size_t fractionalDigits = 0;
+    if (index < text.size() && text[index] == '.') {
+        ++index;
+        fractionalDigits = consumeDigits();
+        if (fractionalDigits == 0) {
+            return std::unexpected(DecimalParseError::kInvalidFormat);
         }
     }
-    if (!sawDigit) {
-        return false;
+    if (integralDigits == 0 && fractionalDigits == 0) {
+        return std::unexpected(DecimalParseError::kInvalidFormat);
     }
-
-    int explicitExponent = 0;
     if (index < text.size() && (text[index] == 'e' || text[index] == 'E')) {
         ++index;
-        bool exponentNegative = false;
         if (index < text.size() && (text[index] == '+' || text[index] == '-')) {
-            exponentNegative = text[index] == '-';
             ++index;
         }
         const auto exponentBegin = index;
         while (index < text.size() && text[index] >= '0' && text[index] <= '9') {
-            if (explicitExponent < 10000) {
-                explicitExponent = explicitExponent * 10 + (text[index] - '0');
-            }
             ++index;
         }
         if (index == exponentBegin) {
-            return false;
-        }
-        if (exponentNegative) {
-            explicitExponent = -explicitExponent;
+            return std::unexpected(DecimalParseError::kInvalidFormat);
         }
     }
     if (index != text.size()) {
-        return false;
+        return std::unexpected(DecimalParseError::kInvalidFormat);
     }
     if (!sawNonZero) {
-        output = negative ? -0.0 : 0.0;
-        return true;
+        return negative ? -T{0} : T{0};
     }
 
-    auto decimalExponent = static_cast<long long>(explicitExponent) -
-                           static_cast<long long>(fractionalDigits) +
-                           static_cast<long long>(droppedDigits);
-    if (firstDroppedDigit >= 5) {
-        ++mantissa;
-        if (mantissa == 10000000000000000000ULL) {
-            mantissa = 1000000000000000000ULL;
-            ++decimalExponent;
-        }
+    T value = 0;
+    const auto* end = text.data() + text.size();
+    const auto converted = std::from_chars(text.data(), end, value, std::chars_format::general);
+    if (converted.ec == std::errc::result_out_of_range) {
+        return std::unexpected(DecimalParseError::kOutOfRange);
     }
-
-    const auto magnitude = static_cast<long double>(mantissa) *
-                           std::pow(10.0L, static_cast<long double>(decimalExponent));
-    const auto parsed = static_cast<double>(magnitude);
-    if (!std::isfinite(parsed) || parsed == 0.0) {
-        return false;
+    if (converted.ec != std::errc{} || converted.ptr != end) {
+        return std::unexpected(DecimalParseError::kInvalidFormat);
     }
-    output = negative ? -parsed : parsed;
-    return true;
+    return value;
 }
 
 }  // namespace ruvia::detail

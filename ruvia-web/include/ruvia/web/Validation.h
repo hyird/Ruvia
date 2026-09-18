@@ -35,7 +35,6 @@ struct ValidationErrorOptions final {
     HttpStatusCode status{http_status::kBadRequest};
     BorrowedText code{"validation_failed"};
     BorrowedText message{"request validation failed"};
-    std::pmr::memory_resource* resource{nullptr};
 };
 
 class ValidationError final : public std::exception {
@@ -43,26 +42,52 @@ public:
     using IssueList = std::pmr::vector<ValidationIssue>;
 
     explicit ValidationError(const IssueList& issues, ValidationErrorOptions options = {})
-        : resource_(detail::pmrResourceOrDefault(options.resource)),
-          issues_(resource_),
+        : issues_(copyIssues(issues)),
           statusCode_(options.status),
-          code_(options.code.view(), resource_),
-          message_(options.message.view(), resource_) {
-        issues_.reserve(issues.size());
-        for (const auto& issue : issues) {
-            issues_.push_back(ValidationIssue({.field = issue.field(),
-                .code = issue.code(),
-                .message = issue.message(),
-                .resource = resource_}));
-        }
-    }
+          code_(options.code.view(), detail::processResource()),
+          message_(options.message.view(), detail::processResource()) {}
 
     explicit ValidationError(IssueList&& issues, ValidationErrorOptions options = {})
-        : resource_(detail::pmrResourceOrDefault(options.resource)),
-          issues_(std::move(issues), resource_),
-          statusCode_(options.status),
-          code_(options.code.view(), resource_),
-          message_(options.message.view(), resource_) {}
+        : ValidationError(static_cast<const IssueList&>(issues), options) {}
+
+    ValidationError(const ValidationError& other)
+        : issues_(copyIssues(other.issues_)),
+          statusCode_(other.statusCode_),
+          code_(other.code_, detail::processResource()),
+          message_(other.message_, detail::processResource()) {}
+
+    ValidationError& operator=(const ValidationError& other) {
+        if (this == &other) {
+            return *this;
+        }
+
+        auto copiedIssues = copyIssues(other.issues_);
+        std::pmr::string copiedCode(other.code_, detail::processResource());
+        std::pmr::string copiedMessage(other.message_, detail::processResource());
+        issues_ = std::move(copiedIssues);
+        code_ = std::move(copiedCode);
+        message_ = std::move(copiedMessage);
+        statusCode_ = other.statusCode_;
+        return *this;
+    }
+
+    ValidationError(ValidationError&& other) noexcept
+        : issues_(std::move(other.issues_)),
+          statusCode_(other.statusCode_),
+          code_(std::move(other.code_)),
+          message_(std::move(other.message_)) {}
+
+    ValidationError& operator=(ValidationError&& other) {
+        if (this == &other) {
+            return *this;
+        }
+
+        issues_ = std::move(other.issues_);
+        statusCode_ = other.statusCode_;
+        code_ = std::move(other.code_);
+        message_ = std::move(other.message_);
+        return *this;
+    }
 
     [[nodiscard]] const char* what() const noexcept override {
         return message_.c_str();
@@ -82,11 +107,20 @@ public:
     [[nodiscard]] HttpErrorInfo info() const&& = delete;
 
 private:
-    std::pmr::memory_resource* resource_;
-    IssueList issues_;
+    [[nodiscard]] static IssueList copyIssues(const IssueList& issues) {
+        IssueList copied(detail::processResource());
+        copied.reserve(issues.size());
+        for (const auto& issue : issues) {
+            copied.push_back(detail::ValidationIssueAccess::copy(
+                issue, detail::processResource()));
+        }
+        return copied;
+    }
+
+    IssueList issues_{detail::processResource()};
     HttpStatusCode statusCode_{http_status::kBadRequest};
-    std::pmr::string code_;
-    std::pmr::string message_;
+    std::pmr::string code_{detail::processResource()};
+    std::pmr::string message_{detail::processResource()};
 };
 
 class Validator final {
@@ -184,18 +218,12 @@ public:
 
     void throwIfInvalid(ValidationErrorOptions options = {}) const& {
         if (!ok()) {
-            if (options.resource == nullptr) {
-                options.resource = resource_;
-            }
             throw ValidationError(issues_, options);
         }
     }
 
     void throwIfInvalid(ValidationErrorOptions options = {}) && {
         if (!ok()) {
-            if (options.resource == nullptr) {
-                options.resource = resource_;
-            }
             throw ValidationError(std::move(issues_), options);
         }
     }

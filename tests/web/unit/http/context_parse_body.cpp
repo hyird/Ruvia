@@ -1,4 +1,38 @@
+#include <cstddef>
+#include <memory_resource>
+#include <string>
+#include <string_view>
+
+#include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
+
 #include "context_request_fixture.h"
+
+RUVIA_TEST(context_form_groups_preserve_first_appearance_and_value_order) {
+    std::string body;
+    for (int index = 0; index < 64; ++index) {
+        if (index != 0) {
+            body += '&';
+        }
+        body += "z=" + std::to_string(index) + "&a=" + std::to_string(index);
+    }
+    const auto form = ruvia::detail::parseFormBodyFromView(
+        "application/x-www-form-urlencoded", body, std::pmr::get_default_resource(),
+        {.repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll});
+    const auto groups = form.groups();
+    RUVIA_CHECK_EQ(groups.size(), std::size_t{2});
+    if (groups.size() != 2) {
+        return;
+    }
+    RUVIA_CHECK_EQ(groups[0].name(), std::string_view("z"));
+    RUVIA_CHECK_EQ(groups[1].name(), std::string_view("a"));
+    for (const auto& group : groups) {
+        RUVIA_CHECK_EQ(group.size(), std::size_t{64});
+        for (std::size_t index = 0; index < group.size(); ++index) {
+            const auto expected = std::to_string(index);
+            RUVIA_CHECK_EQ(group.fields()[index]->value(), std::string_view(expected));
+        }
+    }
+}
 
 // Parsing a request body into form data: urlencoded and multipart, dotted names, arrays and the
 // limits on both.

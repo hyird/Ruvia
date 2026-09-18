@@ -11,6 +11,16 @@
 namespace ruvia::detail {
 
 struct HttpResponseHeaderStateAccess final {
+    [[nodiscard]] static HttpResponse cloneHeadersForTransaction(
+        const HttpResponse& response, std::size_t additionalHeaders) {
+        return response.cloneHeadersForTransaction(additionalHeaders);
+    }
+
+    // Staged headers must belong to the response's resource domain.
+    static void commitHeaders(HttpResponse& response, HttpResponse&& staged) noexcept {
+        response.commitHeadersFrom(std::move(staged));
+    }
+
     [[nodiscard]] static HttpResponse cloneForTransaction(const HttpResponse& response) {
         return response.cloneForTransaction();
     }

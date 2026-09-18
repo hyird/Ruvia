@@ -21,6 +21,10 @@ struct MemoryPoolConfig {
     std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};
 };
 
+// Explicit worker-local owner, not thread_local storage. All allocations and
+// deallocations are worker-affine; this pool has no internal synchronization.
+// Individual deallocations become reusable pool storage. The pool can retain
+// cached blocks until destruction and must outlive every object using it.
 class WorkerMemory final {
 public:
     explicit WorkerMemory(const MemoryPoolConfig& config = {});
@@ -47,6 +51,10 @@ private:
     std::pmr::unsynchronized_pool_resource resource_;
 };
 
+// Request/handshake lifetime arena borrowing its worker and optional initial
+// buffer. Both must outlive this object. Individual deallocation is a no-op;
+// destruction returns overflow blocks to the worker, not necessarily the OS.
+// Objects using the arena must be destroyed before the arena itself.
 class RequestMemory final {
 public:
     explicit RequestMemory(WorkerMemory& worker);

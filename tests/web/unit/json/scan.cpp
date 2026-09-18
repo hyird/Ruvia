@@ -1,3 +1,4 @@
+#include <cmath>
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
@@ -398,4 +399,19 @@ RUVIA_TEST(json_depth_beyond_limit_rejected) {
     deepObj.append(200, '}');
     std::string_view objIn(deepObj);
     RUVIA_CHECK(!ruvia::detail::skipJsonValue(objIn));
+}
+
+RUVIA_TEST(json_number_float_uses_target_precision_and_range) {
+    std::string_view input = "1.000000059604644775390626,";
+    float value = 0;
+    RUVIA_CHECK(ruvia::detail::parseJsonNumberValue(input, value));
+    RUVIA_CHECK_EQ(value, std::nextafter(1.0f, 2.0f));
+    RUVIA_CHECK_EQ(input, std::string_view(","));
+    for (const auto text : {"1e-46", "1e39"}) {
+        input = text;
+        value = 7;
+        RUVIA_CHECK(!ruvia::detail::parseJsonNumberValue(input, value));
+        RUVIA_CHECK_EQ(input, std::string_view(text));
+        RUVIA_CHECK_EQ(value, 7.0f);
+    }
 }

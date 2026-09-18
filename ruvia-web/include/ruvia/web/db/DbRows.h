@@ -13,6 +13,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/Attributes.h"
 #include "ruvia/web/db/DbExecResult.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbBackend.h"
@@ -32,13 +33,13 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
-    [[nodiscard]] const DbRow& operator[](std::size_t index) const& noexcept;
+    [[nodiscard]] const DbRow& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbRow& operator[](std::size_t index) const&& = delete;
-    [[nodiscard]] const DbRow* begin() const& noexcept;
+    [[nodiscard]] const DbRow* begin() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbRow* begin() const&& = delete;
-    [[nodiscard]] const DbRow* end() const& noexcept;
+    [[nodiscard]] const DbRow* end() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbRow* end() const&& = delete;
-    [[nodiscard]] const DbRow& front() const& noexcept;
+    [[nodiscard]] const DbRow& front() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const DbRow& front() const&& = delete;
 
 private:

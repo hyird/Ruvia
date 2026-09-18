@@ -83,14 +83,14 @@ using ruvia::detail::HttpResponseCodingSelection;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteResolution;
 
-ruvia::HttpResponse invalidStreamingHead(ruvia::Context&) {
+ruvia::Task<ruvia::HttpResponse> invalidStreamingHead(ruvia::Context&) {
     ruvia::HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.header("Content-Length", "not-a-number");
-    return response;
+    co_return response;
 }
 
-ruvia::HttpResponse okStreamingHead(ruvia::Context&) {
-    return ruvia::HttpResponse({.resource = std::pmr::new_delete_resource()});
+ruvia::Task<ruvia::HttpResponse> okStreamingHead(ruvia::Context&) {
+    co_return ruvia::HttpResponse({.resource = std::pmr::new_delete_resource()});
 }
 
 [[nodiscard]] HttpResponseCodingSelection identityResponseCoding() {

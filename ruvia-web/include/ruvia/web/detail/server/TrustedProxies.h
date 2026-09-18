@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory_resource>
 #include <string_view>
 #include <vector>
@@ -26,7 +27,7 @@
 namespace ruvia::detail {
 
 // One trusted CIDR block, parsed and validated at startup, so matching a peer on
-// the request path is a masked compare with no parsing and no allocation.
+// the request path parses each peer once before comparing the configured blocks.
 struct TrustedProxyBlock final {
     // IPv4 is held in its IPv4-mapped IPv6 form, so one comparison path serves
     // both families and 10.0.0.0/8 still matches ::ffff:10.1.2.3.
@@ -34,10 +35,13 @@ struct TrustedProxyBlock final {
     std::uint8_t prefixBits{0};
 };
 
+enum class TrustedProxyParseError : std::uint8_t { kInvalidAddress,
+    kInvalidPrefix };
+
 // Parses "10.0.0.0/8", "2001:db8::/32" or a bare address (an implicit full-width
-// prefix). Returns false for anything malformed, so a typo in deployment config
+// prefix). Returns an error for anything malformed, so a typo in deployment config
 // fails startup instead of silently trusting nothing.
-[[nodiscard]] bool parseTrustedProxyBlock(std::string_view cidr, TrustedProxyBlock& out) noexcept;
+[[nodiscard]] std::expected<TrustedProxyBlock, TrustedProxyParseError> parseTrustedProxyBlock(std::string_view cidr) noexcept;
 
 [[nodiscard]] bool trustedProxyBlockContains(
     const TrustedProxyBlock& block, std::string_view peerAddress) noexcept;
@@ -56,17 +60,7 @@ public:
         return blocks_.empty();
     }
 
-    [[nodiscard]] bool trusts(std::string_view peerAddress) const noexcept {
-        if (blocks_.empty() || peerAddress.empty()) {
-            return false;
-        }
-        for (const auto& block : blocks_) {
-            if (trustedProxyBlockContains(block, peerAddress)) {
-                return true;
-            }
-        }
-        return false;
-    }
+    [[nodiscard]] bool trusts(std::string_view peerAddress) const noexcept;
 
 private:
     TrustedProxySet(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)

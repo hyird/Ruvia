@@ -25,11 +25,11 @@ namespace {
 }  // namespace
 
 double parseRedisDouble(std::string_view value, std::string_view context) {
-    double output = 0;
-    if (!parseDecimalNumber(value, output) || !std::isfinite(output)) {
+    const auto output = parseDecimalNumber(value);
+    if (!output || !std::isfinite(*output)) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }
-    return output;
+    return *output;
 }
 
 std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(

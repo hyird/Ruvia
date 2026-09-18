@@ -18,7 +18,7 @@ namespace ruvia::detail {
 template <typename Stream>
 Task<std::error_code> writeWebSocketHandshake(
     Stream& stream, const WebSocketServerHandshake& handshake) {
-    std::array<asio::const_buffer, 10> buffers;
+    std::array<asio::const_buffer, 10 + 4 * kMaxHttpHeaderFields> buffers;
     std::size_t count = 0;
     handshake.forEachResponsePart(
         [&buffers, &count](std::string_view part) { buffers[count++] = asio::buffer(part); });

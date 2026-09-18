@@ -43,7 +43,7 @@ struct AuthenticatedUser final {
     std::string_view subject;
 };
 
-class JwtAuthMiddleware final : public ruvia::Middleware<JwtAuthMiddleware> {
+class JwtAuthMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));

@@ -309,3 +309,25 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     RUVIA_CHECK(hasHeaderName(fields, "date"));
     RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }
+
+RUVIA_TEST(websocket_h2_handshake_encodes_owned_cookies_and_application_date) {
+    std::string cookie = "sid=0123456789abcdef; HttpOnly";
+    const std::array fields{ruvia::HttpHeaderView("Set-Cookie", cookie),
+        ruvia::HttpHeaderView("Set-Cookie", "theme=dark"),
+        ruvia::HttpHeaderView("Date", "Wed, 21 Oct 2015 07:28:00 GMT")};
+    const auto negotiation = makeWebSocketServerNegotiation(requestWithVersion(), {.responseHeaders = fields});
+    cookie.assign(cookie.size(), 'x');
+    std::pmr::string block(std::pmr::get_default_resource());
+    http2EncodeWebSocketHandshakeHeaders(block, negotiation);
+    Collector decoded;
+    HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+    const auto result = decoder.decode(block, &decoded, &collect);
+    RUVIA_CHECK(result.decoded() != nullptr);
+    RUVIA_CHECK(hasHeader(decoded, ":status", "200"));
+    RUVIA_CHECK(hasHeader(decoded, "set-cookie", "sid=0123456789abcdef; HttpOnly"));
+    RUVIA_CHECK(hasHeader(decoded, "set-cookie", "theme=dark"));
+    RUVIA_CHECK(hasHeader(decoded, "date", "Wed, 21 Oct 2015 07:28:00 GMT"));
+    RUVIA_CHECK_EQ(decoded.headers.size(), std::size_t{4});
+    RUVIA_CHECK(!hasHeaderName(decoded, "connection"));
+    RUVIA_CHECK(!hasHeaderName(decoded, "upgrade"));
+}

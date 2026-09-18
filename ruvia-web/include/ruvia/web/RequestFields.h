@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/Attributes.h"
 
 namespace ruvia {
 
@@ -50,22 +51,22 @@ public:
     RequestNameValueList(RequestNameValueList&&) noexcept = default;
     RequestNameValueList& operator=(RequestNameValueList&&) = delete;
 
-    [[nodiscard]] const_iterator begin() const& noexcept {
+    [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
         return items_.data();
     }
     [[nodiscard]] const_iterator begin() const&& = delete;
 
-    [[nodiscard]] const_iterator cbegin() const& noexcept {
+    [[nodiscard]] const_iterator cbegin() const& noexcept RUVIA_LIFETIMEBOUND {
         return begin();
     }
     [[nodiscard]] const_iterator cbegin() const&& = delete;
 
-    [[nodiscard]] const_iterator end() const& noexcept {
+    [[nodiscard]] const_iterator end() const& noexcept RUVIA_LIFETIMEBOUND {
         return items_.data() + items_.size();
     }
     [[nodiscard]] const_iterator end() const&& = delete;
 
-    [[nodiscard]] const_iterator cend() const& noexcept {
+    [[nodiscard]] const_iterator cend() const& noexcept RUVIA_LIFETIMEBOUND {
         return end();
     }
     [[nodiscard]] const_iterator cend() const&& = delete;
@@ -78,12 +79,12 @@ public:
         return items_.empty();
     }
 
-    [[nodiscard]] const RequestNameValueView* data() const& noexcept {
+    [[nodiscard]] const RequestNameValueView* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return items_.data();
     }
     [[nodiscard]] const RequestNameValueView* data() const&& = delete;
 
-    [[nodiscard]] const RequestNameValueView& operator[](std::size_t index) const& noexcept {
+    [[nodiscard]] const RequestNameValueView& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return items_[index];
     }
     [[nodiscard]] const RequestNameValueView& operator[](std::size_t) const&& = delete;
@@ -109,7 +110,7 @@ public:
         return result;
     }
 
-    [[nodiscard]] std::span<const RequestNameValueView> entries() const& noexcept {
+    [[nodiscard]] std::span<const RequestNameValueView> entries() const& noexcept RUVIA_LIFETIMEBOUND {
         return items_;
     }
     [[nodiscard]] std::span<const RequestNameValueView> entries() const&& = delete;

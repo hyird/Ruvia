@@ -104,7 +104,7 @@ inline ruvia::Task<ruvia::TimerSleepResult> sleepStream(
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 
-inline void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {
+inline void bindContext(void*, ruvia::Context*, ruvia::Task<ruvia::HttpResponse> (*)(ruvia::Context&)) noexcept {
 }
 inline void releaseContext(void*) noexcept {}
 
@@ -116,8 +116,8 @@ inline bool aborted(void*) noexcept {
     return false;
 }
 
-inline ruvia::HttpResponse unusedStreamingHead(ruvia::Context&) {
-    return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});
+inline ruvia::Task<ruvia::HttpResponse> unusedStreamingHead(ruvia::Context&) {
+    co_return ruvia::HttpResponse({.resource = std::pmr::get_default_resource()});
 }
 
 inline ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
