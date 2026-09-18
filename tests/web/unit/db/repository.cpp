@@ -327,6 +327,7 @@ RUVIA_TEST(db_repository_expression_writes_and_returning_release_cold_storage) {
     Entity entity;
     entity.set<"id">(8);
     entity.set<"name">("initial");
+    RUVIA_CHECK(testing::throwsOn([&] { (void)repository.insertReturning<ItemSummary>(entity); }));
     auto where = Entity::column<"id">() == 8;
     const auto baseline = resource.liveAllocations();
     for (int i = 0; i < 12; ++i) {

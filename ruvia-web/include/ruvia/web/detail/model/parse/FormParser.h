@@ -48,11 +48,11 @@ template <typename NumberT>
     }
     NumberT parsed{};
     if constexpr (std::is_floating_point_v<NumberT>) {
-        double value = 0;
-        if (!parseDecimalNumber(decoded, value)) {
+        const auto value = parseDecimalNumber<NumberT>(decoded);
+        if (!value) {
             return std::nullopt;
         }
-        parsed = static_cast<NumberT>(value);
+        parsed = *value;
         // Floating parsers accept "inf"/"nan", but the rest of the pipeline
         // cannot round-trip them: the JSON number grammar rejects them on input,
         // the model JSON writer replaces them with null, and the finite number

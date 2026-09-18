@@ -11,8 +11,15 @@
 namespace ruvia::detail {
 
 template <std::size_t N>
-[[nodiscard]] constexpr HttpResponseHeader staticResponseHeader(
-    const char (&bytes)[N], std::uint32_t nameSize, std::uint32_t knownBit) noexcept {
+[[nodiscard]] consteval HttpResponseHeader staticResponseHeader(
+    const char (&bytes)[N], std::uint32_t nameSize, std::uint32_t knownBit) {
+    static_assert(N > 1 && responseHeaderStorageSizeFits(0, N - 1));
+    if (nameSize == 0 || nameSize > N - 1 || bytes[N - 1] != '\0') {
+        throw "invalid static response header storage";
+    }
+    if (responseKnownHeaderSlot(knownBit) == kResponseKnownHeaderCount) {
+        throw "static response header requires one known header bit";
+    }
     return makeResponseHeader(
         bytes, nameSize, static_cast<std::uint32_t>(N - 1 - nameSize), knownBit, false);
 }
@@ -50,93 +57,93 @@ template <std::size_t N>
     switch (knownBit) {
         case kResponseHeaderContentType:
             if (value == "text/plain; charset=UTF-8") {
-                return staticResponseHeader(kTextContentType, 12, knownBit);
+                return staticResponseHeader(kTextContentType, 12, kResponseHeaderContentType);
             }
             if (value == "application/json") {
-                return staticResponseHeader(kJsonContentType, 12, knownBit);
+                return staticResponseHeader(kJsonContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/html; charset=UTF-8") {
-                return staticResponseHeader(kHtmlContentType, 12, knownBit);
+                return staticResponseHeader(kHtmlContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/plain; charset=utf-8") {
-                return staticResponseHeader(kLowercaseUtf8TextContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8TextContentType, 12, kResponseHeaderContentType);
             }
             if (value == "application/json; charset=utf-8") {
-                return staticResponseHeader(kLowercaseUtf8JsonContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8JsonContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/html; charset=utf-8") {
-                return staticResponseHeader(kLowercaseUtf8HtmlContentType, 12, knownBit);
+                return staticResponseHeader(kLowercaseUtf8HtmlContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/css; charset=utf-8") {
-                return staticResponseHeader(kCssContentType, 12, knownBit);
+                return staticResponseHeader(kCssContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/javascript; charset=utf-8") {
-                return staticResponseHeader(kJsContentType, 12, knownBit);
+                return staticResponseHeader(kJsContentType, 12, kResponseHeaderContentType);
             }
             if (value == "text/event-stream") {
-                return staticResponseHeader(kEventStreamContentType, 12, knownBit);
+                return staticResponseHeader(kEventStreamContentType, 12, kResponseHeaderContentType);
             }
             if (value == "image/png") {
-                return staticResponseHeader(kPngContentType, 12, knownBit);
+                return staticResponseHeader(kPngContentType, 12, kResponseHeaderContentType);
             }
             if (value == "image/jpeg") {
-                return staticResponseHeader(kJpegContentType, 12, knownBit);
+                return staticResponseHeader(kJpegContentType, 12, kResponseHeaderContentType);
             }
             if (value == "image/gif") {
-                return staticResponseHeader(kGifContentType, 12, knownBit);
+                return staticResponseHeader(kGifContentType, 12, kResponseHeaderContentType);
             }
             if (value == "image/svg+xml") {
-                return staticResponseHeader(kSvgContentType, 12, knownBit);
+                return staticResponseHeader(kSvgContentType, 12, kResponseHeaderContentType);
             }
             if (value == "application/wasm") {
-                return staticResponseHeader(kWasmContentType, 12, knownBit);
+                return staticResponseHeader(kWasmContentType, 12, kResponseHeaderContentType);
             }
             if (value == "application/octet-stream") {
-                return staticResponseHeader(kOctetStreamContentType, 12, knownBit);
+                return staticResponseHeader(kOctetStreamContentType, 12, kResponseHeaderContentType);
             }
             return std::nullopt;
         case kResponseHeaderConnection:
             if (value == "close") {
-                return staticResponseHeader(kConnectionClose, 10, knownBit);
+                return staticResponseHeader(kConnectionClose, 10, kResponseHeaderConnection);
             }
             return std::nullopt;
         case kResponseHeaderAcceptRanges:
             if (value == "bytes") {
-                return staticResponseHeader(kAcceptRangesBytes, 13, knownBit);
+                return staticResponseHeader(kAcceptRangesBytes, 13, kResponseHeaderAcceptRanges);
             }
             return std::nullopt;
         case kResponseHeaderContentEncoding:
             if (value == "gzip") {
-                return staticResponseHeader(kContentEncodingGzip, 16, knownBit);
+                return staticResponseHeader(kContentEncodingGzip, 16, kResponseHeaderContentEncoding);
             }
             return std::nullopt;
         case kResponseHeaderTransferEncoding:
             if (value == "chunked") {
-                return staticResponseHeader(kTransferEncodingChunked, 17, knownBit);
+                return staticResponseHeader(kTransferEncodingChunked, 17, kResponseHeaderTransferEncoding);
             }
             return std::nullopt;
         case kResponseHeaderCacheControl:
             if (value == "no-store") {
-                return staticResponseHeader(kCacheControlNoStore, 13, knownBit);
+                return staticResponseHeader(kCacheControlNoStore, 13, kResponseHeaderCacheControl);
             }
             return std::nullopt;
         case kResponseHeaderVary:
             if (value == "Accept-Encoding") {
-                return staticResponseHeader(kVaryAcceptEncoding, 4, knownBit);
+                return staticResponseHeader(kVaryAcceptEncoding, 4, kResponseHeaderVary);
             }
             if (value == "Origin") {
-                return staticResponseHeader(kVaryOrigin, 4, knownBit);
+                return staticResponseHeader(kVaryOrigin, 4, kResponseHeaderVary);
             }
             if (value == "Access-Control-Request-Headers") {
-                return staticResponseHeader(kVaryAccessControlRequestHeaders, 4, knownBit);
+                return staticResponseHeader(kVaryAccessControlRequestHeaders, 4, kResponseHeaderVary);
             }
             if (value == "Access-Control-Request-Method") {
-                return staticResponseHeader(kVaryAccessControlRequestMethod, 4, knownBit);
+                return staticResponseHeader(kVaryAccessControlRequestMethod, 4, kResponseHeaderVary);
             }
             return std::nullopt;
         case kResponseHeaderAccessControlAllowCredentials:
             if (value == "true") {
-                return staticResponseHeader(kAccessControlAllowCredentialsTrue, 32, knownBit);
+                return staticResponseHeader(kAccessControlAllowCredentialsTrue, 32, kResponseHeaderAccessControlAllowCredentials);
             }
             return std::nullopt;
         default:

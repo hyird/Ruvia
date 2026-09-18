@@ -1762,9 +1762,17 @@ if (value) {
 }
 ```
 
-When constructing temporary PMR data yourself, use `c.pool()`.
-It uses the same worker pool, so each object's destruction returns its storage
-for reuse without invalidating other live objects. Moving an object originally
+When constructing temporary owning PMR data yourself, use `c.pool()`.
+Choose by storage lifetime: request metadata and response storage use the arena;
+scratch buffers that can be discarded after a call or loop iteration use the
+pool.
+
+Each pool-backed object's destruction returns its storage for reuse without
+invalidating other live objects. Cached pool storage may remain allocated until
+the pool is destroyed; reclamation does not promise a drop in process RSS.
+Clients can own separate worker-local pools, so `c.pool()` is not guaranteed to
+equal a client's result resource. A transfer avoids copying only when the source
+and destination resources are compatible. Moving an object originally
 allocated in the request arena does not reclaim its arena storage.
 Both `c.arena()` and `c.pool()` return `std::pmr::memory_resource*` for use
 with PMR containers. Objects allocated from either must stay on the owning

@@ -203,10 +203,12 @@ public:
         return memory_.resource();
     }
 
-    // Same worker resource used by operation results and handles. Objects
-    // allocated here may be reclaimed individually, but must be destroyed in
-    // the owning worker and while this Context is in scope. Results may outlive
-    // other operations without being invalidated.
+    // Reclaimable worker-local storage for temporary owning objects. Destroy
+    // them on this worker within the Context's scope. Deallocation returns
+    // storage to the pool for reuse without invalidating other live objects;
+    // it need not return memory to the OS. Clients may own distinct pools, so
+    // transferring owned data to an operation only avoids copying when its
+    // destination resource is compatible.
     [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
         return memory_.upstreamResource();
     }

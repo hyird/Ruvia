@@ -475,6 +475,13 @@ RUVIA_TEST(url_for_builds_paths_from_registered_patterns) {
     RUVIA_CHECK_EQ(urlFor("/files/*", {""}), std::string("/files"));
     RUVIA_CHECK_EQ(urlFor("/about", {}), std::string("/about"));
     RUVIA_CHECK_EQ(urlFor("/a/:x/b/:y", {"1", "2"}), std::string("/a/1/b/2"));
+    const std::string plain(4096, 'a');
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {plain}), "/users/" + plain);
+    const std::string mixed = "%" + plain + "/?#";
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {mixed}), "/users/%25" + plain + "%2F%3F%23");
+    RUVIA_CHECK_EQ(urlFor("/files/*", {mixed}), "/files/%25" + plain + "/%3F%23");
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {std::string_view("\0\xff", 2)}), std::string("/users/%00%FF"));
+    RUVIA_CHECK_EQ(urlFor("/users/:id", {"-._~!$&'()*+,;=:@"}), std::string("/users/-._~!$&'()*+,;=:@"));
 
     const auto throws = [&](std::string_view pattern,
                             std::initializer_list<std::string_view> values) {

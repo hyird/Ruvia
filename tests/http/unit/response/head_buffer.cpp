@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -116,6 +117,43 @@ RUVIA_TEST(head_buffer_reset_and_reuse) {
     // After reset a small append is served from the stack again.
     buffer.append("small");
     RUVIA_CHECK_EQ(buffer.view(), std::string_view("small"));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+}
+
+RUVIA_TEST(head_buffer_generated_appends_preserve_prefix_across_storage_boundaries) {
+    ResponseHeadBuffer buffer(std::pmr::get_default_resource());
+    buffer.append("prefix:");
+    buffer.appendGenerated(3, [](char* bytes) noexcept { std::fill_n(bytes, 3, 'a'); });
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix:aaa"));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+
+    buffer.appendGenerated(kResponseHeadStackBytes, [](char* bytes) noexcept {
+        std::fill_n(bytes, kResponseHeadStackBytes, 'b');
+    });
+    std::string expected = "prefix:aaa" + std::string(kResponseHeadStackBytes, 'b');
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    RUVIA_CHECK(!buffer.canAppendOnStack(0));
+
+    buffer.appendGenerated(2, [](char* bytes) noexcept { std::fill_n(bytes, 2, 'c'); });
+    expected += "cc";
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    buffer.appendGenerated(0, [](char*) noexcept {});
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+
+    bool invoked = false;
+    bool rejected = false;
+    try {
+        buffer.appendGenerated(std::numeric_limits<std::size_t>::max(),
+            [&](char*) noexcept { invoked = true; });
+    } catch (const std::length_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(!invoked);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    buffer.reset();
+    buffer.appendGenerated(1, [](char* bytes) noexcept { *bytes = 'z'; });
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("z"));
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }
 

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -16,10 +17,11 @@ void ContextRequest::RequestFormData::buildGroups(const std::pmr::vector<Request
     if (order.empty()) {
         return;
     }
-    std::ranges::stable_sort(order, [&](std::size_t left, std::size_t right) noexcept {
+    std::ranges::sort(order, [&](std::size_t left, std::size_t right) noexcept {
         const auto leftName = entryName(fields[left]);
         const auto rightName = entryName(fields[right]);
-        return leftName == rightName ? left < right : leftName < rightName;
+        const auto comparison = leftName <=> rightName;
+        return comparison == 0 ? left < right : comparison < 0;
     });
 
     struct GroupRange final {
@@ -38,7 +40,7 @@ void ContextRequest::RequestFormData::buildGroups(const std::pmr::vector<Request
         } while (offset < order.size() && entryName(fields[order[offset]]) == name);
         ranges.push_back(GroupRange{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
-    std::ranges::stable_sort(ranges, [](const GroupRange& left, const GroupRange& right) noexcept {
+    std::ranges::sort(ranges, [](const GroupRange& left, const GroupRange& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
@@ -47,6 +49,7 @@ void ContextRequest::RequestFormData::buildGroups(const std::pmr::vector<Request
         groups.push_back(Group::make(
             groups.get_allocator().resource(), entryName(fields[range.firstIndex]), false));
         auto& group = groups.back();
+        group.fields_.reserve(range.end - range.begin);
         for (std::size_t index = range.begin; index < range.end; ++index) {
             group.add(fields[order[index]]);
         }

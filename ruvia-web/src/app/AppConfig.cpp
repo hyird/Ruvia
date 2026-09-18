@@ -180,14 +180,14 @@ App& App::trustedProxies(TrustedProxyConfig config) {
         [config = std::move(config)](detail::AppState& state) {
             detail::TrustedProxySet parsed(detail::appResource());
             for (const auto& cidr : config.cidrs) {
-                detail::TrustedProxyBlock block;
-                if (!detail::parseTrustedProxyBlock(cidr, block)) {
+                const auto block = detail::parseTrustedProxyBlock(cidr);
+                if (!block) {
                     // A typo here would silently trust nothing and leave every
                     // client identified as the proxy, so it fails startup instead.
                     throw std::invalid_argument(
                         "trusted proxy must be an IP address or CIDR block");
                 }
-                parsed.add(block);
+                parsed.add(*block);
             }
             state.options.trustedProxies = std::move(parsed);
         });

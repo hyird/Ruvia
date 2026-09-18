@@ -49,6 +49,29 @@ RUVIA_TEST(url_decode_invalid) {
     RUVIA_CHECK(!urlDecode("%g0", M::kPercent).has_value());
 }
 
+RUVIA_TEST(url_decode_all_bytes_and_malformed_suffix) {
+    using M = ruvia::detail::UrlDecodeMode;
+    constexpr std::string_view hex = "0123456789aBcDeF";
+    std::string encoded;
+    std::string expected;
+    for (unsigned int byte = 0; byte < 256; ++byte) {
+        encoded.push_back('%');
+        encoded.push_back(hex[byte >> 4]);
+        encoded.push_back(hex[byte & 15]);
+        expected.push_back(static_cast<char>(byte));
+    }
+    for (const auto mode : {M::kPercent, M::kForm}) {
+        const auto result = urlDecode(encoded, mode);
+        RUVIA_CHECK(result.has_value());
+        if (result) {
+            RUVIA_CHECK_EQ(*result, expected);
+        }
+        RUVIA_CHECK(!urlDecode(encoded + "%", mode).has_value());
+        RUVIA_CHECK(!urlDecode(encoded + "%0", mode).has_value());
+        RUVIA_CHECK(!urlDecode(encoded + "%xz", mode).has_value());
+    }
+}
+
 RUVIA_TEST(url_validate_encoding) {
     using ruvia::detail::validateUrlEncoding;
     RUVIA_CHECK(validateUrlEncoding("plain"));

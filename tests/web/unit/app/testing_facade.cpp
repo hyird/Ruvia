@@ -453,8 +453,10 @@ RUVIA_TEST(testing_facade_retains_startup_failure_without_retrying) {
     int factoryCalls = 0;
     app.useWorkerState<TestingFacadeStartupFailureState>([&]()
                                                              -> TestingFacadeStartupFailureState {
-        ++factoryCalls;
-        throw std::runtime_error("testing facade startup failed");
+        if (++factoryCalls == 1) {
+            throw std::runtime_error("testing facade startup failed");
+        }
+        return {};
     });
 
     for (int attempt = 0; attempt != 2; ++attempt) {

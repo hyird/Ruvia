@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -153,9 +154,12 @@ private:
         if (available < headerSize + 8) {
             return WebSocketFrameReadResult::makeNeedInput();
         }
-        if (!readWebSocketUint64(buffer.data() + offset + headerSize, length)) {
-            return WebSocketFrameReadResult::makeFailure(WebSocketProtocolFailure::kProtocolError);
+        const auto decodedLength = readWebSocketUint64(
+            std::span<const char, 8>(buffer.data() + offset + headerSize, 8));
+        if (!decodedLength) {
+            return WebSocketFrameReadResult::makeFailure(decodedLength.error());
         }
+        length = *decodedLength;
         headerSize += 8;
         // RFC 6455 §5.2 minimal-length rule: a value fitting the 16-bit form may
         // not use the 64-bit form.

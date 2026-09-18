@@ -1,9 +1,12 @@
+#include <array>
 #include <coroutine>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include <asio/bind_executor.hpp>
@@ -224,6 +227,128 @@ RUVIA_TEST(db_mapped_query_repeated_results_release_temporaries_and_retain_field
     RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
+RUVIA_TEST(db_mapping_rebinds_column_positions_when_row_schema_changes) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::array firstNames{std::pmr::string("id"), std::pmr::string("name")};
+    const std::array reversedNames{std::pmr::string("name"), std::pmr::string("id")};
+    const std::array firstFields{ruvia::detail::DbResultAccess::ownedField("3", resource), ruvia::detail::DbResultAccess::ownedField("first", resource)};
+    const std::array secondFields{ruvia::detail::DbResultAccess::ownedField("second", resource), ruvia::detail::DbResultAccess::ownedField("4", resource)};
+    const std::array thirdFields{ruvia::detail::DbResultAccess::ownedField("third", resource), ruvia::detail::DbResultAccess::ownedField("5", resource)};
+    auto rows = ruvia::detail::DbResultAccess::makeResult(resource);
+    auto& resultRows = ruvia::detail::DbResultAccess::rows(rows);
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(firstFields.data(), firstFields.size(), firstNames.data(), firstNames.size(), resource));
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(secondFields.data(), secondFields.size(), reversedNames.data(), reversedNames.size(), resource));
+    resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(thirdFields.data(), thirdFields.size(), reversedNames.data(), reversedNames.size(), resource));
+    const auto mapped = ruvia::detail::mapDbEntityRows<Entity>(std::move(rows), resource);
+    RUVIA_CHECK_EQ(mapped.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(mapped[0].get<"id">(), 3);
+    RUVIA_CHECK_EQ(mapped[0].get<"name">(), std::string_view("first"));
+    RUVIA_CHECK_EQ(mapped[1].get<"id">(), 4);
+    RUVIA_CHECK_EQ(mapped[1].get<"name">(), std::string_view("second"));
+    RUVIA_CHECK_EQ(mapped[2].get<"id">(), 5);
+    RUVIA_CHECK_EQ(mapped[2].get<"name">(), std::string_view("third"));
+}
+
+RUVIA_TEST(db_mapping_preserves_field_error_order_with_missing_columns) {
+    auto* resource = std::pmr::get_default_resource();
+    const std::array names{std::pmr::string("id")};
+    ruvia::detail::DbEntityRowDecoder<Entity> decoder;
+    for (const bool invalid : {true, false}) {
+        const std::array fields{ruvia::detail::DbResultAccess::ownedField(invalid ? "invalid" : "7", resource)};
+        const auto row = ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(), resource);
+        bool rejected = false;
+        try {
+            (void)decoder.decode(row, resource);
+        } catch (const ruvia::DbConversionError& error) {
+            rejected = true;
+            RUVIA_CHECK(invalid);
+            RUVIA_CHECK(error.code() == ruvia::DbConversionError::Code::kInvalidFormat);
+        } catch (const std::out_of_range& error) {
+            rejected = true;
+            RUVIA_CHECK(!invalid);
+            RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("database result has no such column"));
+        }
+        RUVIA_CHECK(rejected);
+    }
+}
+
+RUVIA_TEST(db_mapping_reserves_known_row_count_once) {
+    using Numeric = ruvia::DbEntity<"numbers", ruvia::DbColumn<"id", int>>;
+    using Projection = ruvia::DbProjection<ruvia::DbColumn<"id", int>>;
+    for (const std::size_t count : {std::size_t{0}, std::size_t{1}, std::size_t{128}}) {
+        const auto makeRows = [count] {
+            auto* source = std::pmr::get_default_resource();
+            auto rows = ruvia::detail::DbResultAccess::makeResult(source);
+            auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
+            names.emplace_back("id");
+            auto& fields = ruvia::detail::DbResultAccess::fields(rows);
+            fields.push_back(ruvia::detail::DbResultAccess::ownedField("7", source));
+            for (std::size_t i = 0; i < count; ++i) {
+                ruvia::detail::DbResultAccess::rows(rows).push_back(
+                    ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(), source));
+            }
+            return rows;
+        };
+        ruvia::test::CountingMemoryResource resource;
+        // Debug standard libraries may allocate iterator-tracking storage even
+        // for an empty vector. Compare against one reserve on the same type.
+        const auto reservedAllocations = [count]<typename T>() {
+            ruvia::test::CountingMemoryResource baseline;
+            {
+                std::pmr::vector<T> rows(&baseline);
+                rows.reserve(count);
+            }
+            return baseline.allocationCount();
+        };
+        const auto entityAllocations = reservedAllocations.template operator()<Numeric>();
+        const auto projectionAllocations = reservedAllocations.template operator()<Projection>();
+        {
+            const auto mapped = ruvia::detail::mapDbEntityRows<Numeric>(makeRows(), &resource);
+            RUVIA_CHECK_EQ(mapped.size(), count);
+            RUVIA_CHECK_EQ(resource.allocationCount(), entityAllocations);
+            for (const auto& entity : mapped) {
+                RUVIA_CHECK_EQ(entity.get<"id">(), 7);
+            }
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        {
+            const ruvia::detail::DbMapProjection<Projection> mapper({});
+            const auto mapped = mapper(makeRows(), &resource);
+            RUVIA_CHECK_EQ(mapped.size(), count);
+            RUVIA_CHECK_EQ(resource.allocationCount(), entityAllocations + projectionAllocations);
+            for (const auto& entity : mapped) {
+                RUVIA_CHECK_EQ(entity.get<"id">(), 7);
+            }
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(db_projection_selection_does_not_allocate_or_borrow_field_names) {
+    using Output = ruvia::DbProjection<ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>>;
+    ruvia::test::CountingMemoryResource source;
+    std::optional<ruvia::detail::DbMapProjection<Output>> mapper;
+    {
+        std::pmr::vector<std::pmr::string> selection(&source);
+        selection.emplace_back("name");
+        const auto allocations = source.allocationCount();
+        mapper.emplace(selection);
+        RUVIA_CHECK_EQ(source.allocationCount(), allocations);
+        selection.front() = "id";
+    }
+    RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+
+    auto* resource = std::pmr::get_default_resource();
+    const std::array names{std::pmr::string("id", resource), std::pmr::string("name", resource)};
+    const std::array fields{
+        ruvia::detail::DbResultAccess::ownedField("not-an-integer", resource),
+        ruvia::detail::DbResultAccess::ownedField("selected", resource)};
+    const auto row = ruvia::detail::DbResultAccess::borrowedRow(fields.data(), fields.size(), names.data(), names.size(), resource);
+    const auto result = mapper->decode(row, resource);
+    RUVIA_CHECK(!result.isSet<"id">());
+    RUVIA_CHECK_EQ(result.get<"name">(), std::string_view("selected"));
+}
+
 RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_results) {
     using Output = ruvia::DbProjection<ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>>;
     asio::io_context context;
@@ -236,7 +361,7 @@ RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_resul
         names.emplace_back("name");
         return ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Output>>(
             ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource, invalid, gate), &resource,
-            ruvia::detail::DbMapProjection<Output>(names, &resource));
+            ruvia::detail::DbMapProjection<Output>(names));
     };
     {
         auto cold = operation(false, nullptr, false);

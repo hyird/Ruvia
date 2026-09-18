@@ -53,7 +53,7 @@ inline constexpr std::string_view kChunkedTransferEncodingHeader = "Transfer-Enc
 }
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
-// via ResponseHeadBuffer::stackCursor. Constant-size appends inline to stores.
+// via ResponseHeadBuffer::appendGenerated. Constant-size appends inline to stores.
 struct RawHeadSink {
     char* out;
 
@@ -136,9 +136,8 @@ void addResponseHeadBytes(std::size_t& total, std::size_t bytes) {
     return true;
 }
 
-template <typename Sink>
-void emitResponseHead(const HttpResponse& response, Sink& sink, HttpStatusCode responseStatus,
-    std::string_view reasonPhrase, std::string_view dateHeader, ResponseHeadFlags flags) {
+void emitResponseHead(const HttpResponse& response, RawHeadSink& sink, HttpStatusCode responseStatus,
+    std::string_view reasonPhrase, std::string_view dateHeader, ResponseHeadFlags flags) noexcept {
     sink.append(flags.protocolVersion == HttpProtocolVersion::kHttp10
                     ? std::string_view("HTTP/1.0 ")
                     : std::string_view("HTTP/1.1 "));
@@ -274,14 +273,10 @@ void appendResponseHead(
     }
     addResponseHeadBytes(headBytes, 2);
 
-    if (char* cursor = head.stackCursor(headBytes); cursor != nullptr) {
+    head.appendGenerated(headBytes, [&](char* cursor) noexcept {
         RawHeadSink sink{cursor};
         emitResponseHead(response, sink, responseStatus, reasonPhrase, dateHeader, flags);
-        head.commitStack(sink.out);
-        return;
-    }
-    head.reserveAdditional(headBytes);
-    emitResponseHead(response, head, responseStatus, reasonPhrase, dateHeader, flags);
+    });
 }
 
 }  // namespace ruvia::detail

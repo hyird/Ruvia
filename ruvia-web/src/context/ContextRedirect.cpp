@@ -219,7 +219,7 @@ HttpResponse Context::redirect(RedirectResponseOptions options) const {
     HttpResponse response({.resource = arena()});
     applyResponseState(response, statusCode);
     if (redirectLocationNeedsEncoding(location)) {
-        auto encodedLocation = encodeRedirectLocation(location, arena());
+        auto encodedLocation = encodeRedirectLocation(location, pool());
         response.header("Location", encodedLocation);
     } else {
         response.header("Location", location);

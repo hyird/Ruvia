@@ -1,10 +1,16 @@
 #pragma once
 
+#include <cstddef>
 #include <exception>
 #include <memory_resource>
 #include <string_view>
 
 #include "ruvia/web/db/DbRows.h"
+
+namespace ruvia {
+template <typename Entity>
+class DbEntityRows;
+}
 
 namespace ruvia::detail {
 
@@ -12,6 +18,13 @@ namespace ruvia::detail {
 // them through this single internal access point instead of accumulating one
 // friend declaration per driver.
 struct DbResultAccess final {
+    template <typename Entity>
+    [[nodiscard]] static DbEntityRows<Entity> makeEntityRows(std::pmr::memory_resource* resource, std::size_t size) {
+        DbEntityRows<Entity> result(resource);
+        result.rows_.reserve(size);
+        return result;
+    }
+
     [[nodiscard]] static DbRows makeResult(std::pmr::memory_resource* resource) {
         return DbRows(resource);
     }

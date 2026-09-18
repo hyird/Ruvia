@@ -227,7 +227,8 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 框架内部拥有动态内存的对象默认使用 PMR 容器。
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 公开启动配置的拥有型字段使用标准 `std::string`/`std::vector`，不得要求调用方提供 PMR allocator；App/worker 留存时再复制到所属 PMR 存储。
-- 请求/响应及握手状态使用请求 arena；Worker 层容器使用 `WorkerMemory`。
+- 请求/响应及握手状态使用请求 arena；Worker 层容器使用 `WorkerMemory`。仅在单次调用或循环迭代内使用的拥有型中间缓冲使用所属 worker 的可回收 pool，写入响应后必须可独立归还。
+- worker-local 表达显式所有权与线程亲和，不要求 `thread_local`；不同 client 可以拥有独立 pool，不得假设同 worker 的资源必然兼容。归还 pool 与归还操作系统是不同边界。
 - 可独立结束的操作参数、结果和临时输出块使用可逐项回收的 worker PMR，由对应 client 或 writer 的 owner 固定绑定，获取 handle 时不得透传任意 allocator。操作或结果对象通过 RAII 归还各自存储；长连接重复操作不得累积到握手/会话 arena，也不得清空仍被存活对象引用的 arena。
 - 面向业务的异步操作接收借用的数据输入时，必须在返回操作前完成拥有化；输出接受拥有型 PMR 数据时，兼容资源直接移动，不兼容资源在返回操作前复制到 owner 的资源，不能把输入 allocator 的寿命隐式延长到异步执行期。
 - 新增拥有型对象或异步接口时，必须明确对象 owner、分配器 owner、释放时点和借用有效期；分配器必须活到最后一个使用它的对象析构，借用不得跨出 owner 的有效期。

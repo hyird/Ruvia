@@ -1,7 +1,9 @@
 #include "ruvia/web/auth/Jwt.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -13,6 +15,7 @@
 
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -75,6 +78,35 @@ std::string signedTokenWithPayload(std::string_view secret, std::string_view pay
 }
 
 }  // namespace
+
+RUVIA_TEST(jwt_json_escape_preserves_exact_bytes) {
+    std::string controls;
+    for (unsigned byte = 0; byte < 32; ++byte) {
+        controls.push_back(static_cast<char>(byte));
+    }
+    std::pmr::string output("prefix:");
+    ruvia::detail::jwtAppendJsonEscaped(output, controls);
+    RUVIA_CHECK_EQ(output, std::string_view(
+                               R"(prefix:"\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f")"));
+
+    for (const std::size_t size : {0u, 15u, 16u, 17u, 4096u}) {
+        const std::string plain(size, 'x');
+        output.clear();
+        ruvia::detail::jwtAppendJsonEscaped(output, plain);
+        RUVIA_CHECK_EQ(output, std::string_view('"' + plain + '"'));
+        output.clear();
+        ruvia::detail::jwtAppendJsonEscaped(output, plain + "\"\\\n" + plain);
+        RUVIA_CHECK_EQ(output, std::string_view('"' + plain + R"(\"\\\n)" + plain + '"'));
+    }
+
+    std::string highBytes;
+    for (unsigned byte = 0x80; byte <= 0xff; ++byte) {
+        highBytes.push_back(static_cast<char>(byte));
+    }
+    output.clear();
+    ruvia::detail::jwtAppendJsonEscaped(output, highBytes);
+    RUVIA_CHECK_EQ(output, std::string_view('"' + highBytes + '"'));
+}
 
 RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
     auto options = signOptions("supersecret");
@@ -502,6 +534,50 @@ RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {
 
     // A length of 1 (mod 4) cannot encode a whole byte group.
     RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("abcde", res); }));
+}
+
+RUVIA_TEST(jwt_base64url_preserves_binary_values_and_releases_output_storage) {
+    ruvia::test::CountingMemoryResource resource;
+    std::string input;
+    for (std::size_t size = 0; size <= 257; ++size) {
+        {
+            const auto encoded = ruvia::detail::jwtBase64UrlEncode(input, &resource);
+            const auto remainder = input.size() % 3;
+            RUVIA_CHECK_EQ(encoded.size(), (input.size() / 3) * 4 + (remainder == 0 ? 0 : remainder + 1));
+            const auto decoded = ruvia::detail::jwtBase64UrlDecode(encoded, &resource);
+            RUVIA_CHECK_EQ(std::string_view(decoded), std::string_view(input));
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        input.push_back(static_cast<char>(size));
+    }
+    {
+        const auto encoded = ruvia::detail::jwtBase64UrlEncode("\xfb\xff\xbf", &resource);
+        RUVIA_CHECK_EQ(std::string_view(encoded), std::string_view("-_-_"));
+    }
+    const std::string invalid = std::string(128, 'A') + '?';
+    RUVIA_CHECK(throwsOn([&] { (void)ruvia::detail::jwtBase64UrlDecode(invalid, &resource); }));
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(jwt_base64url_decode_preserves_error_categories) {
+    const struct {
+        std::string_view input;
+        std::string_view message;
+    } cases[] = {
+        {"AA=", "JWT base64url value is invalid"},
+        {"A", "JWT base64url has invalid length"},
+        {"QR", "JWT base64url is not canonical"},
+    };
+    for (const auto& test : cases) {
+        bool rejected = false;
+        try {
+            (void)ruvia::detail::jwtBase64UrlDecode(test.input, std::pmr::get_default_resource());
+        } catch (const std::invalid_argument& error) {
+            rejected = true;
+            RUVIA_CHECK_EQ(std::string_view(error.what()), test.message);
+        }
+        RUVIA_CHECK(rejected);
+    }
 }
 
 RUVIA_TEST(jwt_base64url_rejects_unrepresentable_capacity_hint) {

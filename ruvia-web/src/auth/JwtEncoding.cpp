@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <expected>
 #include <limits>
 #include <stdexcept>
 
@@ -8,6 +9,10 @@
 namespace ruvia::detail {
 
 namespace {
+
+enum class Base64UrlDecodeError { kInvalidValue,
+    kInvalidLength,
+    kNonCanonical };
 
 [[nodiscard]] std::size_t jwtBase64UrlEncodedSize(std::size_t inputSize) {
     constexpr auto kMax = std::numeric_limits<std::size_t>::max();
@@ -21,10 +26,11 @@ namespace {
     if (remainder == 0) {
         return fullGroupSize;
     }
-    if (fullGroupSize > kMax - 4) {
+    const auto suffixSize = remainder + 1;
+    if (fullGroupSize > kMax - suffixSize) {
         throw std::length_error("JWT base64url output is too large");
     }
-    return fullGroupSize + 4;
+    return fullGroupSize + suffixSize;
 }
 
 [[nodiscard]] constexpr std::size_t jwtBase64UrlDecodedSize(std::size_t inputSize) noexcept {
@@ -38,49 +44,67 @@ namespace {
 
 std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string out(pmrResourceOrDefault(resource));
-    out.reserve(jwtBase64UrlEncodedSize(input.size()));
-    std::uint32_t buffer = 0;
-    int bits = 0;
-    for (const auto ch : input) {
-        buffer = (buffer << 8) | static_cast<unsigned char>(ch);
-        bits += 8;
-        while (bits >= 6) {
-            bits -= 6;
-            out.push_back(kBase64UrlAlphabet[(buffer >> bits) & 0x3F]);
+    out.resize_and_overwrite(jwtBase64UrlEncodedSize(input.size()), [&](char* bytes, std::size_t) noexcept {
+        std::size_t written = 0;
+        std::uint32_t buffer = 0;
+        int bits = 0;
+        for (const auto ch : input) {
+            buffer = (buffer << 8) | static_cast<unsigned char>(ch);
+            bits += 8;
+            while (bits >= 6) {
+                bits -= 6;
+                bytes[written++] = kBase64UrlAlphabet[(buffer >> bits) & 0x3F];
+            }
         }
-    }
-    if (bits > 0) {
-        out.push_back(kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F]);
-    }
+        if (bits > 0) {
+            bytes[written++] = kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F];
+        }
+        return written;
+    });
     return out;
 }
 
 std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string out(pmrResourceOrDefault(resource));
-    out.reserve(jwtBase64UrlDecodedSize(input.size()));
-    std::uint32_t buffer = 0;
-    int bits = 0;
-    for (const auto ch : input) {
-        const auto value = decodeBase64UrlChar(ch);
-        if (value < 0) {
-            throw std::invalid_argument("JWT base64url value is invalid");
+    std::expected<void, Base64UrlDecodeError> result;
+    out.resize_and_overwrite(jwtBase64UrlDecodedSize(input.size()), [&](char* bytes, std::size_t) noexcept {
+        std::size_t written = 0;
+        std::uint32_t buffer = 0;
+        int bits = 0;
+        for (const auto ch : input) {
+            const auto value = decodeBase64UrlChar(ch);
+            if (value < 0) {
+                result = std::unexpected(Base64UrlDecodeError::kInvalidValue);
+                return std::size_t{0};
+            }
+            buffer = (buffer << 6) | static_cast<std::uint32_t>(value);
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                bytes[written++] = static_cast<char>((buffer >> bits) & 0xFF);
+            }
         }
-        buffer = (buffer << 6) | static_cast<std::uint32_t>(value);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+        // A length of 1 (mod 4) cannot encode any byte group.
+        if (bits >= 6) {
+            result = std::unexpected(Base64UrlDecodeError::kInvalidLength);
+            return std::size_t{0};
         }
-    }
-    // A length of 1 (mod 4) cannot encode any byte group; reject it rather than
-    // silently dropping the stray 6 bits.
-    if (bits >= 6) {
-        throw std::invalid_argument("JWT base64url has invalid length");
-    }
-    // Require canonical encoding: the trailing unused bits of the final char must
-    // be zero, so a given input maps to exactly one byte string.
-    if (bits > 0 && (buffer & ((std::uint32_t{1} << bits) - 1)) != 0) {
-        throw std::invalid_argument("JWT base64url is not canonical");
+        // Unused trailing bits must be zero for a canonical representation.
+        if (bits > 0 && (buffer & ((std::uint32_t{1} << bits) - 1)) != 0) {
+            result = std::unexpected(Base64UrlDecodeError::kNonCanonical);
+            return std::size_t{0};
+        }
+        return written;
+    });
+    if (!result) {
+        switch (result.error()) {
+            case Base64UrlDecodeError::kInvalidValue:
+                throw std::invalid_argument("JWT base64url value is invalid");
+            case Base64UrlDecodeError::kInvalidLength:
+                throw std::invalid_argument("JWT base64url has invalid length");
+            case Base64UrlDecodeError::kNonCanonical:
+                throw std::invalid_argument("JWT base64url is not canonical");
+        }
     }
     return out;
 }

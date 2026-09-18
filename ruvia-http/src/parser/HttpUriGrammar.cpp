@@ -91,20 +91,22 @@ template <typename IsAllowed>
     return isUriUnreserved(byte) || isUriSubDelimiter(byte) || byte == ':' || byte == '@';
 }
 
-[[nodiscard]] bool parsePortValue(std::string_view value, std::uint16_t& port) noexcept {
+std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) noexcept {
     if (value.empty()) {
-        return false;
+        return std::unexpected(std::errc::invalid_argument);
     }
 
-    unsigned int parsed = 0;
+    std::uint16_t parsed = 0;
     const auto* begin = value.data();
     const auto* end = value.data() + value.size();
     const auto [ptr, ec] = std::from_chars(begin, end, parsed);
-    if (ec != std::errc{} || ptr != end || parsed > 65535) {
-        return false;
+    if (ec != std::errc{}) {
+        return std::unexpected(ec);
     }
-    port = static_cast<std::uint16_t>(parsed);
-    return true;
+    if (ptr != end) {
+        return std::unexpected(std::errc::invalid_argument);
+    }
+    return parsed;
 }
 
 [[nodiscard]] bool isValidUriComponent(

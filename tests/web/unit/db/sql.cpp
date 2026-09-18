@@ -61,6 +61,26 @@ RUVIA_TEST(db_interpolate_sql_quotes_and_escapes_strings) {
     mysql_close(&mysql);
 }
 
+RUVIA_TEST(db_interpolate_sql_preserves_binary_strings_and_full_escape_expansion) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    RUVIA_CHECK_EQ(interp(mysql, "SELECT ?, ?, ?", {DbValue(std::string_view{}), DbValue(std::string_view("\0\n\r\\'\"\x1a", 7)), DbValue(42)}),
+        std::string("SELECT '', '\\0\\n\\r\\\\\\'\\\"\\Z', 42"));
+
+    for (const std::size_t size : {15, 16, 4096, 65536}) {
+        const std::string value(size, '\'');
+        std::string expected = "SELECT '";
+        for (std::size_t index = 0; index < size; ++index) {
+            expected.append("\\'");
+        }
+        expected.append("', 'tail'");
+        RUVIA_CHECK_EQ(interp(mysql, "SELECT ?, ?", {DbValue(std::string_view(value)), DbValue(std::string_view("tail"))}), expected);
+    }
+
+    mysql_close(&mysql);
+}
+
 RUVIA_TEST(db_interpolate_sql_renders_typed_literals) {
     MYSQL mysql;
     mysql_init(&mysql);

@@ -31,13 +31,14 @@ void appendStringLiteral(st_mysql& connection, std::pmr::string& output, std::st
     if (output.size() > (std::numeric_limits<std::size_t>::max)() - literalSizeHint) {
         throw std::length_error("MariaDB SQL is too large");
     }
-    output.push_back('\'');
     const auto offset = output.size();
-    output.resize(offset + literalSizeHint - 1);
-    const auto length = mysql_real_escape_string(&connection, output.data() + offset,
-        value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
-    output.resize(offset + length);
-    output.push_back('\'');
+    output.resize_and_overwrite(offset + literalSizeHint, [&](char* bytes, std::size_t) noexcept {
+        bytes[offset] = '\'';
+        const auto length = mysql_real_escape_string(&connection, bytes + offset + 1,
+            value.empty() ? "" : value.data(), static_cast<unsigned long>(value.size()));
+        bytes[offset + 1 + length] = '\'';
+        return offset + length + 2;
+    });
 }
 
 [[nodiscard]] std::size_t valueLiteralSizeHint(const DbValue& value) {

@@ -78,7 +78,11 @@ HttpResponse HttpResponse::cloneHeadersForTransaction(std::size_t additionalHead
 
     clone.headers_.reserve(headers_.size() + additionalHeaders);
     for (const auto& header : headers_) {
-        auto copy = clone.headers_.makeOwnedHeader(header.name(), header.value(), header.knownBit);
+        // Static descriptors can be shared; owning descriptors must keep an
+        // independent allocation so either response may be changed or destroyed.
+        auto copy = header.owned
+                        ? clone.headers_.makeOwnedHeader(header.name(), header.value(), header.knownBit)
+                        : header;
         detail::setResponseHeaderAppend(copy, detail::responseHeaderAppend(header));
         (void)clone.headers_.appendPreparedHeader(copy);
     }

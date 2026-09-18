@@ -78,14 +78,11 @@ template <typename NumberT>
 
     const auto number = input.substr(0, length);
     if constexpr (std::is_floating_point_v<NumberT>) {
-        double parsed = 0;
-        if (!parseDecimalNumber(number, parsed)) {
+        const auto parsed = parseDecimalNumber<NumberT>(number);
+        if (!parsed || !std::isfinite(*parsed)) {
             return false;
         }
-        value = static_cast<NumberT>(parsed);
-        if (!std::isfinite(value)) {
-            return false;
-        }
+        value = *parsed;
     } else {
         const auto [ptr, ec] = std::from_chars(number.data(), number.data() + number.size(), value);
         if (ec != std::errc{} || ptr != number.data() + number.size()) {

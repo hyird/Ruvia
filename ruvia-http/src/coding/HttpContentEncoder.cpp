@@ -103,7 +103,7 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     HttpContentEncoder::Impl& impl, std::string_view input, std::pmr::string& output, bool flush) {
     std::size_t supplied = 0;
     const auto operation = flush ? Z_SYNC_FLUSH : Z_NO_FLUSH;
-    std::array<char, 16384> buffer{};
+    std::array<char, 16384> buffer;
     for (;;) {
         if (impl.gzip.avail_in == 0 && supplied < input.size()) {
             const auto count = static_cast<uInt>(
@@ -135,7 +135,7 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
 
 [[nodiscard]] HttpContentEncodeStep finishGzip(
     HttpContentEncoder::Impl& impl, std::pmr::string& output) {
-    std::array<char, 16384> buffer{};
+    std::array<char, 16384> buffer;
     for (;;) {
         impl.gzip.next_in = nullptr;
         impl.gzip.avail_in = 0;
@@ -159,17 +159,17 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
     std::string_view input, std::pmr::string& output, BrotliEncoderOperation operation) {
     std::size_t availableInput = input.size();
     const auto* nextInput = reinterpret_cast<const std::uint8_t*>(input.data());
-    std::array<std::uint8_t, 16384> buffer{};
     for (;;) {
-        std::size_t availableOutput = buffer.size();
-        auto* nextOutput = buffer.data();
+        std::size_t availableOutput = 0;
         const auto beforeInput = availableInput;
         if (BrotliEncoderCompressStream(impl.brotli, operation, &availableInput, &nextInput,
-                &availableOutput, &nextOutput, nullptr) != BROTLI_TRUE) {
+                &availableOutput, nullptr, nullptr) != BROTLI_TRUE) {
             return HttpContentEncodeStep::kFailure;
         }
-        const auto produced = buffer.size() - availableOutput;
-        if (!appendOutput(output, reinterpret_cast<const char*>(buffer.data()), produced)) {
+        std::size_t produced = 0;
+        const auto* bytes = BrotliEncoderTakeOutput(impl.brotli, &produced);
+        // Copy the borrowed block before the next encoder call invalidates it.
+        if (produced != 0 && !appendOutput(output, reinterpret_cast<const char*>(bytes), produced)) {
             return HttpContentEncodeStep::kFailure;
         }
         const bool pending = BrotliEncoderHasMoreOutput(impl.brotli) == BROTLI_TRUE;
@@ -189,7 +189,7 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
 [[nodiscard]] HttpContentEncodeStep encodeZstd(HttpContentEncoder::Impl& impl,
     std::string_view input, std::pmr::string& output, ZSTD_EndDirective operation) {
     ZSTD_inBuffer inputBuffer{input.data(), input.size(), 0};
-    std::array<char, 16384> buffer{};
+    std::array<char, 16384> buffer;
     for (;;) {
         ZSTD_outBuffer outputBuffer{buffer.data(), buffer.size(), 0};
         const auto beforeInput = inputBuffer.pos;
