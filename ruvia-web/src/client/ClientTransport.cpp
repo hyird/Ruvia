@@ -127,6 +127,7 @@ void validateClientTransportConfig(ClientTransportConfigView config) {
 }
 
 void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfigView config) {
+    context.set_options(asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1);
     if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
         context.set_verify_mode(asio::ssl::verify_peer);
         if (config.caFile.empty()) {
