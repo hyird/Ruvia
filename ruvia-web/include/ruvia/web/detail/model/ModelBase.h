@@ -128,13 +128,6 @@ private:
         return std::get<index>(fields_).value();
     }
 
-    template <FixedString Field>
-    [[nodiscard]] static constexpr bool ruviaFieldRequired() noexcept {
-        constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
-        using DescriptorT = std::tuple_element_t<index, std::tuple<DescriptorTs...>>;
-        return DescriptorT::required;
-    }
-
     std::tuple<typename DescriptorTs::field_type...> fields_;
 };
 
@@ -437,6 +430,8 @@ private:
     static consteval void validateFieldTypes() {
         static_assert((detail::isResponseModelField<typename DescriptorTs::value_type> && ...),
             "response model fields must use Ruvia values or nested response models");
+        static_assert(((!DescriptorTs::hasFieldRules) && ... && true),
+            "RUVIA_RESPONSE_MODEL fields cannot carry validation rules");
     }
 };
 

@@ -9,19 +9,53 @@
 
 #include "ruvia/web/detail/model/ModelField.h"
 #include "ruvia/web/detail/model/Traits.h"
+#include "ruvia/web/detail/model/rule/RulePack.h"
 
 namespace ruvia::detail::model {
 
+template <typename T>
+using FieldOptionTuple =
+    std::conditional_t<isModelOption<T>(), std::tuple<T>, std::tuple<>>;
+
+template <typename T>
+using FieldRuleTuple =
+    std::conditional_t<isValidationRule<T>(), std::tuple<T>, std::tuple<>>;
+
+template <typename Tuple>
+struct TupleModelOptions;
+
+template <typename... Ts>
+struct TupleModelOptions<std::tuple<Ts...>> {
+    using type = ModelOptions<Ts...>;
+};
+
+template <typename Tuple>
+struct TupleRules;
+
+template <typename... Ts>
+struct TupleRules<std::tuple<Ts...>> {
+    using type = Rules<Ts...>;
+};
+
 template <FixedString SourceName, FixedString WireName, typename ValueT, bool Required,
-    typename... OptionTs>
+    typename... ArgTs>
 struct ModelFieldDescriptor final {
+    static_assert(((isModelOption<ArgTs>() || isValidationRule<ArgTs>()) && ... && true),
+        "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept model options (RUVIA_DEFAULT, "
+        "RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL) and validation rules (RUVIA_MIN, RUVIA_EMAIL, ...)");
+
     using value_type = ValueT;
-    using field_type = ModelField<ValueT, Required, ModelOptions<OptionTs...>, WireName>;
+    using options_type = typename TupleModelOptions<decltype(std::tuple_cat(std::tuple<>{},
+        std::declval<FieldOptionTuple<ArgTs>>()...))>::type;
+    using rules_type = typename TupleRules<decltype(std::tuple_cat(std::tuple<>{},
+        std::declval<FieldRuleTuple<ArgTs>>()...))>::type;
+    using field_type = ModelField<ValueT, Required, options_type, WireName>;
 
     static constexpr auto sourceName = SourceName;
     static constexpr auto wireName = WireName;
     static constexpr auto wireHash = modelFieldNameHash(WireName.view());
     static constexpr bool required = Required;
+    static constexpr bool hasFieldRules = !std::is_same_v<rules_type, Rules<>>;
 };
 
 template <typename... DescriptorTs>

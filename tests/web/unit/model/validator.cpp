@@ -20,32 +20,19 @@ using ruvia::Validator;
 RUVIA_REQUEST_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
     RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
 
-RUVIA_REQUEST_MODEL(RequiredRulesModel, RUVIA_REQUIRED_FIELD(id, ruvia::String),
-    RUVIA_REQUIRED_FIELD(name, ruvia::String), RUVIA_REQUIRED_FIELD(age, ruvia::UInt32));
+RUVIA_REQUEST_MODEL(RequiredRulesModel,
+    RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is too short"),
+        RUVIA_MAX(64, "id is too long")),
+    RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is too short"),
+        RUVIA_MAX(120, "name is too long")),
+    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
 
-class RequiredRulesValidator final {
-public:
-    RUVIA_VALIDATE_JSON(RequiredRulesModel,
-        RUVIA_RULE(id, RUVIA_REQUIRED("id is required"), RUVIA_MIN(1, "id is too short"),
-            RUVIA_MAX(64, "id is too long")),
-        RUVIA_RULE(name, RUVIA_REQUIRED("name is required"), RUVIA_MIN(1, "name is too short"),
-            RUVIA_MAX(120, "name is too long")),
-        RUVIA_RULE(age, RUVIA_REQUIRED("age is required"), RUVIA_MAX(130, "age is too large")))
-};
-
-RUVIA_REQUEST_MODEL(OptionalRulesModel, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
-
-class OptionalRulesValidator final {
-public:
-    RUVIA_VALIDATE_JSON(OptionalRulesModel,
-        RUVIA_RULE(value, RUVIA_REQUIRED("value is required"), RUVIA_MIN(1, "value is empty")))
-};
+RUVIA_REQUEST_MODEL(OptionalRulesModel,
+    RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_MIN(1, "value is empty")));
 
 }  // namespace
 
 RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
-    RequiredRulesValidator rules;
-
     const auto valid = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRulesModel>(
         R"({"id":"u-1","name":"Alice","age":32})", std::pmr::get_default_resource());
     RUVIA_CHECK(valid.has_value());
@@ -53,7 +40,7 @@ RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
         return;
     }
     Validator validValidator;
-    rules.validate(*valid, validValidator);
+    ruvia::detail::ModelValidationAccess::validateModel(*valid, validValidator);
     RUVIA_CHECK(validValidator.ok());
 
     const auto invalidType =
@@ -62,7 +49,7 @@ RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
     RUVIA_CHECK(invalidType.has_value());
     if (invalidType) {
         Validator validator;
-        rules.validate(*invalidType, validator);
+        ruvia::detail::ModelValidationAccess::validateModel(*invalidType, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("invalid_type"));
@@ -75,7 +62,7 @@ RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
     RUVIA_CHECK(duplicate.has_value());
     if (duplicate) {
         Validator validator;
-        rules.validate(*duplicate, validator);
+        ruvia::detail::ModelValidationAccess::validateModel(*duplicate, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("duplicate"));
@@ -87,7 +74,7 @@ RUVIA_TEST(model_rules_validate_required_values_and_preserve_parse_errors) {
     RUVIA_CHECK(missing.has_value());
     if (missing) {
         Validator validator;
-        rules.validate(*missing, validator);
+        ruvia::detail::ModelValidationAccess::validateModel(*missing, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{1});
         RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
         RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("required"));
@@ -416,7 +403,7 @@ RUVIA_TEST(model_rules_enforce_bounds_on_required_values) {
         return;
     }
     Validator validator;
-    RequiredRulesValidator{}.validate(*parsed, validator);
+    ruvia::detail::ModelValidationAccess::validateModel(*parsed, validator);
     RUVIA_CHECK_EQ(validator.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("id"));
     RUVIA_CHECK_EQ(validator.issues()[0].code(), std::string_view("too_small"));
@@ -441,7 +428,7 @@ RUVIA_TEST(model_rules_require_optional_fields_without_duplicate_parse_errors) {
             continue;
         }
         Validator validator;
-        OptionalRulesValidator{}.validate(*parsed, validator);
+        ruvia::detail::ModelValidationAccess::validateModel(*parsed, validator);
         RUVIA_CHECK_EQ(validator.issues().size(), expected.empty() ? std::size_t{0} : std::size_t{1});
         if (!expected.empty() && !validator.issues().empty()) {
             RUVIA_CHECK_EQ(validator.issues()[0].field(), std::string_view("value"));

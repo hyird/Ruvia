@@ -48,6 +48,22 @@ ruvia::Task<void> emptyTask(ruvia::WebWorkerContext&) {
 
 }  // namespace
 
+RUVIA_TEST(web_worker_context_pool_is_worker_resource) {
+    WorkerDispatchFixture fixture;
+    std::pmr::memory_resource* observed = nullptr;
+
+    const auto result = fixture.dispatch->handle().post([&observed](ruvia::WebWorkerContext& context) {
+        observed = context.pool();
+        return emptyTask(context);
+    });
+    RUVIA_CHECK(result.accepted());
+
+    fixture.ioContext.run();
+
+    RUVIA_CHECK(observed == fixture.memory.resource());
+    fixture.retire();
+}
+
 RUVIA_TEST(web_worker_dispatch_completes_started_task_and_releases_reservation) {
     WorkerDispatchFixture fixture;
     std::atomic_bool ran{false};

@@ -7,6 +7,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/detail/model/Traits.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
 
 namespace ruvia {
@@ -41,7 +42,7 @@ private:
 };
 
 template <typename T>
-    requires JsonBody<T>::value
+    requires detail::isRequestModel<T>
 [[nodiscard]] std::optional<T> fromJson(std::string_view body, ModelParseOptions options = {}) {
     return detail::ModelJsonAccess::parseOwned<T>(
         body, detail::pmrResourceOrDefault(options.resource));

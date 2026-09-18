@@ -14,3 +14,11 @@ RUVIA_TEST(http_trim_weak_etag_prefix) {
     RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/"), std::string_view(""));
     RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W"), std::string_view("W"));  // needs both prefix chars
 }
+
+RUVIA_TEST(http_strong_etag_is_quoted_opaque_tag) {
+    using ruvia::detail::httpIsStrongEtag;
+    RUVIA_CHECK(httpIsStrongEtag(R"("abc")"));
+    RUVIA_CHECK(!httpIsStrongEtag(R"(W/"abc")"));
+    RUVIA_CHECK(!httpIsStrongEtag("abc"));
+    RUVIA_CHECK(!httpIsStrongEtag(""));
+}

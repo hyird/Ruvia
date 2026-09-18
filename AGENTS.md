@@ -60,7 +60,7 @@ tests/support/
 `core` 只有单元测试，直接平铺。
 
 测试文件名只描述被测对象，不重复所在目录已经表达的信息：
-`http/http2/hpack.cpp`，不是 `http/http2/unit_hpack.cpp`；
+`http/http2/hpack/codec.cpp`，不是 `http/http2/hpack/unit_hpack.cpp`；
 `web/unit/router/routing_matching.cpp`，不是 `web/unit/router/unit_routing_matching.cpp`。
 单元测试 target 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
@@ -231,7 +231,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 可独立结束的操作参数、结果和临时输出块使用可逐项回收的 worker PMR，由对应 client 或 writer 的 owner 固定绑定，获取 handle 时不得透传任意 allocator。操作或结果对象通过 RAII 归还各自存储；长连接重复操作不得累积到握手/会话 arena，也不得清空仍被存活对象引用的 arena。
 - 面向业务的异步操作接收借用的数据输入时，必须在返回操作前完成拥有化；输出接受拥有型 PMR 数据时，兼容资源直接移动，不兼容资源在返回操作前复制到 owner 的资源，不能把输入 allocator 的寿命隐式延长到异步执行期。
 - 新增拥有型对象或异步接口时，必须明确对象 owner、分配器 owner、释放时点和借用有效期；分配器必须活到最后一个使用它的对象析构，借用不得跨出 owner 的有效期。
-- `Context::arena()` / `allocator()` 只用于请求或握手寿命的数据；重复操作的临时数据使用 `pool()`。框架操作入口必须默认选择正确资源，不得要求调用方每次手动换 allocator，也不得在 WebSocket 升级后才切换而遗漏此前取得的 handle。
+- `Context::arena()` / `allocator()` 只用于请求或握手寿命的数据；重复操作的临时数据使用 `pool()`。posted job 用 `WebWorkerContext::pool()` 取得同一 worker 池，不提供 arena。框架操作入口必须默认选择正确资源，不得要求调用方每次手动换 allocator，也不得在 WebSocket 升级后才切换而遗漏此前取得的 handle。
 - 操作完成与结果销毁是两个释放边界；结果可以跨后续操作存活，其内存必须由结果对象持有到析构。不得用操作完成、下一条消息或定时器触发的 arena reset 代替对象所有权。
 - `RequestMemory` 只管理请求 arena 并借用 worker 上游资源，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
 - 启动期容器使用进程级同步 PMR pool。
@@ -271,7 +271,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。ORM 可以组合 SQL 表达式、实体/子查询 JOIN、CTE 和显式类型投影；SQL 片段只作为表达式节点，不能替换 Repository 绑定的完整语句。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
 - SQL 与 Redis 的实体声明使用各自的宏、字段描述符和配置类型；不得把 Redis 宏实现成 SQL 宏的别名，也不得跨后端接受实体。内部可以复用值存储与生命周期实现。
 
-- 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`。
+- 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`，或返回 `RUVIA_RESPONSE_MODEL` 的 `ruvia::Task<Model>(Context&)`（自动 `c.json()`）。
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
 - 公开协程返回类型统一是 `ruvia::Task<T>`，不暴露 `asio::awaitable<T>`。
 - 请求统一走 `c.req()`；连接元数据通过 `getConnInfo(c)` 读取。
@@ -289,7 +289,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `RUVIA_REQUIRED_FIELD` 是必填字段，`RUVIA_OPTIONAL_FIELD` 是可选字段；自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，不生成逐字段成员函数别名。
 - Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
-- 校验规则通过 route validation middleware 声明，不写进 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`。
+- 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套请求模型和 `Array<请求模型>` 自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`jsonIf`/`formIf` 只做内容协商探测，不跑字段规则。
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
 - 可选请求字段缺失时保持 `std::nullopt`，显式 JSON `null` 默认是 `invalid_type`，optional 不等于 nullable。可选响应字段未设置时默认省略；只有 `RUVIA_EMIT_NULL` 输出 `null`，`RUVIA_OMIT_EMPTY` 处理已设置的空值。
 - JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。

@@ -84,41 +84,6 @@ namespace detail {
 
 }  // namespace detail
 
-Task<JsonValue> ContextRequest::jsonValueTask(const Context* context) {
-    if (!contextContentTypeMatches(context, "application/json")) {
-        detail::throwInvalidJsonContentType();
-    }
-    const auto requestBody = co_await contextTextTask(context);
-    auto parsed = JsonValue::parse(requestBody, {.resource = contextResource(context)});
-    if (!parsed) {
-        detail::throwInvalidJsonBody();
-    }
-    co_return std::move(*parsed);
-}
-
-ScopedOperation<JsonValue> ContextRequest::jsonValue() const {
-    return detail::makeScopedOperation(context_->operationScope_, jsonValueTask(context_));
-}
-
-Task<std::optional<JsonValue>> ContextRequest::jsonValueIfTask(const Context* context) {
-    if (!contextContentTypeMatches(context, "application/json")) {
-        co_return std::nullopt;
-    }
-    const auto requestBody = co_await contextTextTask(context);
-    auto parsed = JsonValue::parse(requestBody, {.resource = contextResource(context)});
-    if (!parsed) {
-        // The media type selected JSON, so a malformed body is a client error,
-        // not an absent optional format. Treating it as nullopt lets a handler
-        // silently accept a request that explicitly claimed to be JSON.
-        detail::throwInvalidJsonBody();
-    }
-    co_return std::move(*parsed);
-}
-
-ScopedOperation<std::optional<JsonValue>> ContextRequest::jsonValueIf() const {
-    return detail::makeScopedOperation(context_->operationScope_, jsonValueIfTask(context_));
-}
-
 const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
     if (!cache) {

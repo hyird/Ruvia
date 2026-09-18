@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/http/detail/http1/Http1CleartextInput.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"

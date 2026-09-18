@@ -46,7 +46,7 @@ const WorkerHandle& WebWorkerContext::worker() const& noexcept {
     return worker_;
 }
 
-std::pmr::memory_resource* WebWorkerContext::resource() const noexcept {
+std::pmr::memory_resource* WebWorkerContext::pool() const noexcept {
     return resource_;
 }
 

@@ -64,6 +64,10 @@ struct HttpResponseHeaderStateAccess final {
         response.reserveHeaders(count);
     }
 
+    static void applyContentEncoding(HttpResponse& response, std::string_view contentEncoding) {
+        response.applyContentEncoding(contentEncoding);
+    }
+
     static void replaceBodyWithContentEncoding(
         HttpResponse& response, std::pmr::string&& value, std::string_view contentEncoding) {
         response.replaceBodyWithContentEncoding(std::move(value), contentEncoding);
@@ -135,6 +139,15 @@ inline void setResponseContentRangeUnsatisfied(HttpResponse& response, std::uint
 
 inline void reserveResponseHeaders(HttpResponse& response, std::size_t count) {
     HttpResponseHeaderStateAccess::reserve(response, count);
+}
+
+// Announces a non-identity content-coding whose encoded body is not yet known
+// (streaming). Sets Content-Encoding, drops identity Content-Length, and
+// weakens a strong ETag. Vary is a negotiation/product header and is left to
+// the caller.
+inline void applyResponseContentEncoding(
+    HttpResponse& response, std::string_view contentEncoding) {
+    HttpResponseHeaderStateAccess::applyContentEncoding(response, contentEncoding);
 }
 
 // Atomically prepares the three representation fields affected by buffered

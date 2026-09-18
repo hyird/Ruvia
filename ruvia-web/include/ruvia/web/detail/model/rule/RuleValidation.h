@@ -12,120 +12,74 @@
 
 namespace ruvia::detail::model {
 
-template <typename ValueT, typename ValidatorT>
+template <typename ValueT, typename ValidatorT, long double Bound, FixedString Message>
 void validateRule(
-    const ValueT& value, std::string_view path, ValidatorT& validator, const Required&) {
-    (void)value;
-    (void)path;
-    (void)validator;
-}
-
-template <typename ValueT, typename ValidatorT>
-void validateRule(
-    const ValueT& value, std::string_view path, ValidatorT& validator, const Min& rule) {
+    const ValueT& value, std::string_view path, ValidatorT& validator, const Min<Bound, Message>&) {
     if constexpr (modelHasSizeRule<ValueT>()) {
-        if (modelSize(value) < static_cast<std::size_t>(rule.value)) {
-            validator.add(path, "too_small", rule.message);
+        if (modelSize(value) < static_cast<std::size_t>(Bound)) {
+            validator.add(path, "too_small", Message.view());
         }
     } else if constexpr (modelHasNumberRule<ValueT>()) {
-        if (modelNumber(value) < rule.value) {
-            validator.add(path, "too_small", rule.message);
+        if (modelNumber(value) < Bound) {
+            validator.add(path, "too_small", Message.view());
         }
     }
 }
 
-template <typename ValueT, typename ValidatorT>
+template <typename ValueT, typename ValidatorT, long double Bound, FixedString Message>
 void validateRule(
-    const ValueT& value, std::string_view path, ValidatorT& validator, const Max& rule) {
+    const ValueT& value, std::string_view path, ValidatorT& validator, const Max<Bound, Message>&) {
     if constexpr (modelHasSizeRule<ValueT>()) {
-        if (modelSize(value) > static_cast<std::size_t>(rule.value)) {
-            validator.add(path, "too_big", rule.message);
+        if (modelSize(value) > static_cast<std::size_t>(Bound)) {
+            validator.add(path, "too_big", Message.view());
         }
     } else if constexpr (modelHasNumberRule<ValueT>()) {
-        if (modelNumber(value) > rule.value) {
-            validator.add(path, "too_big", rule.message);
+        if (modelNumber(value) > Bound) {
+            validator.add(path, "too_big", Message.view());
         }
     }
 }
 
-template <typename ValueT, typename ValidatorT, FixedString... Values>
+template <typename ValueT, typename ValidatorT, FixedString Message, FixedString... Values>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const OneOf<Values...>& rule) {
+    const OneOf<Message, Values...>&) {
     const auto actual = modelString(value);
     if (!((actual == Values.view()) || ...)) {
-        validator.add(path, "one_of", rule.message);
+        validator.add(path, "one_of", Message.view());
     }
 }
 
-template <typename ValueT, typename ValidatorT>
+template <typename ValueT, typename ValidatorT, FixedString Message>
 void validateRule(
-    const ValueT& value, std::string_view path, ValidatorT& validator, const Email& rule) {
+    const ValueT& value, std::string_view path, ValidatorT& validator, const Email<Message>&) {
     if (!isEmailLike(modelString(value))) {
-        validator.add(path, "email", rule.message);
+        validator.add(path, "email", Message.view());
     }
 }
 
-template <typename ValueT, typename ValidatorT, FixedString Pattern>
+template <typename ValueT, typename ValidatorT, FixedString Pattern, FixedString Message>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const PatternRule<Pattern>& rule) {
+    const PatternRule<Pattern, Message>&) {
     const auto actual = modelString(value);
     if (!matchPatternPlan<Pattern>(actual)) {
-        validator.add(path, "pattern", rule.message);
+        validator.add(path, "pattern", Message.view());
     }
 }
 
-template <typename ValueT, typename ValidatorT, FixedString Pattern>
+template <typename ValueT, typename ValidatorT, FixedString Pattern, FixedString Message>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const RegexRule<Pattern>& rule) {
+    const RegexRule<Pattern, Message>&) {
     const auto actual = modelString(value);
     if (!matchRegexPattern<Pattern>(actual)) {
-        validator.add(path, "regex", rule.message);
+        validator.add(path, "regex", Message.view());
     }
 }
 
-template <typename ValueT, typename ValidatorT, typename PredicateT>
+template <typename ValueT, typename ValidatorT, auto Predicate, FixedString Message>
 void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const Custom<PredicateT>& rule) {
-    if (!rule.predicate(value)) {
-        validator.add(path, "custom", rule.message);
-    }
-}
-
-template <typename ValueT, typename ValidatorT, typename ValidationSchemaT>
-void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const Nested<ValidationSchemaT>&) {
-    static_assert(
-        requires(const ValidationSchemaT& schema, const ValueT& nested, std::string_view nestedPath,
-            ValidatorT& nestedValidator) {
-            schema.validateNested(nested, nestedPath, nestedValidator);
-        },
-        "RUVIA_NESTED validator must provide validateNested(const FieldT&, std::string_view, "
-        "ruvia::Validator&)");
-    ValidationSchemaT schema;
-    schema.validateNested(value, path, validator);
-}
-
-template <typename ValueT, typename ValidatorT, typename ValidationSchemaT>
-void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator,
-    const Each<ValidationSchemaT>&) {
-    static_assert(detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>,
-        "RUVIA_EACH can only validate ruvia::Array<T> or ruvia::BoxedArray<T> fields");
-    static_assert(
-        requires(const ValidationSchemaT& schema,
-            const typename std::remove_cvref_t<ValueT>::value_type& item, std::string_view itemPath,
-            ValidatorT& nestedValidator) {
-            schema.validateNested(item, itemPath, nestedValidator);
-        },
-        "RUVIA_EACH validator must provide validateNested(const ItemT&, std::string_view, "
-        "ruvia::Validator&)");
-
-    ValidationSchemaT schema;
-    std::size_t index = 0;
-    for (const auto& item : value) {
-        std::pmr::string itemPath(validator.resource());
-        appendIndexPath(itemPath, path, index);
-        schema.validateNested(item, itemPath, validator);
-        ++index;
+    const Custom<Predicate, Message>&) {
+    if (!Predicate(value)) {
+        validator.add(path, "custom", Message.view());
     }
 }
 

@@ -10,6 +10,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_models_validation` | `web/models_validation.cpp` | Unified JSON models, form bodies, nested models, arrays, recursive lists, defaults, validation middleware and rules, `jsonIf`/`formIf` fallbacks on media-type mismatch. |
 | `ruvia_example_streaming` | `web/streaming.cpp` | Streaming request bodies, typed multipart chunk phases, chunked response streaming and SSE. |
 | `ruvia_example_files_static` | `web/files_static.cpp` | `c.file(...)`, `c.staticFile(...)`, `StaticRoot`, document-root refresh configuration, response-validator/range-request policies and gzip configuration. |
+| `ruvia_example_http_client` | `web/http_client.cpp` | Outbound HTTP client registration, origin-bound `send()`, redirects, and response body reads. |
 | `ruvia_example_websocket` | `web/websocket.cpp` | WebSocket upgrade routes, subprotocol options, lifecycle timeouts, text/binary echo and RFC close handshake. |
 | `ruvia_example_ops` | `web/ops.cpp` | Security headers middleware, route-level per-IP rate limiting, and health/readiness response helpers wired through controller macros. |
 | `ruvia_example_middleware_next` | `web/middleware_next.cpp` | Middleware value `Next` and one-shot `co_await next()` signature coverage. |
@@ -17,7 +18,11 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_testing` | `web/testing.cpp` | In-memory application testing with `TestApp`/`TestRequest`/`TestResponse`: production routing, middleware, model bodies, fallbacks, urlFor and worker state without a socket. |
 | `ruvia_example_auth_jwt` | `web/auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
 | `ruvia_example_database` | `web/database.cpp` | Unified MariaDB/PostgreSQL configuration, query, execute, streaming query, transaction and optional migration. Built with either database feature. |
+| `ruvia_example_orm` | `web/orm.cpp` | SQL entity repositories, typed queries, transactions and schema compilation. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |
+| `ruvia_example_orm_columns` | `web/orm_columns.cpp` | Generated columns, CHAR/VARCHAR length, and computed field writes. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |
+| `ruvia_example_orm_relations` | `web/orm_relations.cpp` | Entity relations, join tables and nested relation queries. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |
 | `ruvia_example_redis` | `web/redis.cpp` | Redis configuration, aliases, strings, hashes, lists, sets, sorted sets, scans, scripts, blocking pops, pipelines and transactions. Built only with `RUVIA_ENABLE_REDIS=ON`. |
+| `ruvia_example_redis_orm` | `web/redis_orm.cpp` | Redis entity repositories, indexes and typed commands. Built only with `RUVIA_ENABLE_REDIS=ON`. |
 | `ruvia_example_runtime_config` | `web/runtime_config.cpp` | Dotenv, app-wide middleware via `App::use`, memory pool, timeouts, limits, compression and optional TLS. |
 
 Build all examples by enabling the examples option:

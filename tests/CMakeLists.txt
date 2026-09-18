@@ -97,7 +97,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/unit/*.cpp)
     list(REMOVE_ITEM _ruvia_web_unit_sources
         web/unit/auth/jwt.cpp
-        web/unit/db/db_client.cpp
+        web/unit/db/client.cpp
         web/unit/db/entity.cpp
         web/unit/db/mapped_query.cpp
         web/unit/db/migration.cpp
@@ -112,7 +112,7 @@ if(RUVIA_BUILD_WEB)
         web/unit/redis/entity.cpp
         web/unit/redis/protocol.cpp
         web/unit/redis/query.cpp
-        web/unit/redis/redis_client.cpp
+        web/unit/redis/client.cpp
         web/unit/redis/repository.cpp)
 
     if(RUVIA_ENABLE_JWT)
@@ -123,12 +123,12 @@ if(RUVIA_BUILD_WEB)
             web/unit/redis/entity.cpp
             web/unit/redis/protocol.cpp
             web/unit/redis/query.cpp
-            web/unit/redis/redis_client.cpp
+            web/unit/redis/client.cpp
             web/unit/redis/repository.cpp)
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         list(APPEND _ruvia_web_unit_sources
-            web/unit/db/db_client.cpp
+            web/unit/db/client.cpp
             web/unit/db/entity.cpp
             web/unit/db/mapped_query.cpp
             web/unit/db/migration.cpp

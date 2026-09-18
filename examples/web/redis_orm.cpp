@@ -25,9 +25,11 @@ const ruvia::RedisRepositoryConfig userRedisConfig{
     },
 };
 RUVIA_REQUEST_MODEL(CreateCachedUser,
-    RUVIA_REQUIRED_FIELD(id, ruvia::String),
-    RUVIA_REQUIRED_FIELD(name, ruvia::String),
-    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32));
+    RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is required"),
+        RUVIA_MAX(64, "id is too long")),
+    RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is required"),
+        RUVIA_MAX(120, "name is too long")),
+    RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
 
 RUVIA_RESPONSE_MODEL(CachedUserResponse,
     RUVIA_REQUIRED_FIELD(id, ruvia::String),
@@ -37,19 +39,11 @@ RUVIA_RESPONSE_MODEL(CachedUserResponse,
 RUVIA_RESPONSE_MODEL(CachedUsersResponse,
     RUVIA_REQUIRED_FIELD(users, ruvia::Array<CachedUserResponse>));
 
-class CachedUserValidator final : public ruvia::Middleware<CachedUserValidator> {
-public:
-    RUVIA_VALIDATE_JSON(CreateCachedUser,
-        RUVIA_RULE(id, RUVIA_MIN(1, "id is required"), RUVIA_MAX(64, "id is too long")),
-        RUVIA_RULE(name, RUVIA_MIN(1, "name is required"), RUVIA_MAX(120, "name is too long")),
-        RUVIA_RULE(age, RUVIA_MAX(130, "age is too large")))
-};
-
 class CachedUserController final : public ruvia::Controller<CachedUserController> {
 public:
     RUVIA_CONTROLLER_GROUP("/users")
     RUVIA_ROUTES_BEGIN
-    RUVIA_POST("", create, CachedUserValidator);
+    RUVIA_POST("", create, ruvia::JsonBody<CreateCachedUser>);
     RUVIA_GET("", adults);
     RUVIA_GET("/:id", find);
     RUVIA_ROUTES_END

@@ -2,63 +2,46 @@
 
 #include <type_traits>
 
-#include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/detail/model/pattern/PatternCompiler.h"
 
 namespace ruvia::detail::model {
 
-using ::ruvia::BorrowedText;
-static_assert(std::is_same_v<BorrowedText, ::ruvia::BorrowedText>);
-
-struct Required final {
-    using RuviaValidationRuleMarker = void;
-
-    BorrowedText message{"is required"};
-};
-
+template <long double Value, FixedString Message>
 struct Min final {
     using RuviaValidationRuleMarker = void;
 
-    long double value{0};
-    BorrowedText message{"is too small"};
+    static constexpr long double value = Value;
+    static constexpr auto message = Message;
 };
 
+template <long double Value, FixedString Message>
 struct Max final {
     using RuviaValidationRuleMarker = void;
 
-    long double value{0};
-    BorrowedText message{"is too big"};
+    static constexpr long double value = Value;
+    static constexpr auto message = Message;
 };
 
-template <FixedString... Values>
+template <FixedString Message, FixedString... Values>
 struct OneOf final {
     using RuviaValidationRuleMarker = void;
 
-    BorrowedText message{"is not allowed"};
+    static constexpr auto message = Message;
 };
 
+template <FixedString Message>
 struct Email final {
     using RuviaValidationRuleMarker = void;
 
-    BorrowedText message{"must be a valid email"};
+    static constexpr auto message = Message;
 };
 
-template <typename PredicateT>
+template <auto Predicate, FixedString Message>
 struct Custom final {
     using RuviaValidationRuleMarker = void;
 
-    BorrowedText message{"is invalid"};
-    PredicateT predicate;
-};
-
-template <typename ValidatorT>
-struct Nested final {
-    using RuviaValidationRuleMarker = void;
-};
-
-template <typename ValidatorT>
-struct Each final {
-    using RuviaValidationRuleMarker = void;
+    static constexpr auto predicate = Predicate;
+    static constexpr auto message = Message;
 };
 
 template <typename ValueT>
@@ -89,20 +72,19 @@ struct EmitNull final {
     using RuviaModelOptionMarker = void;
 };
 
-template <FixedString Pattern>
+template <FixedString Pattern, FixedString Message>
 struct PatternRule final {
     using RuviaValidationRuleMarker = void;
 
     static constexpr auto plan = CompiledPatternPlan<Pattern>::value;
-
-    BorrowedText message{"has invalid format"};
+    static constexpr auto message = Message;
 };
 
-template <FixedString Pattern>
+template <FixedString Pattern, FixedString Message>
 struct RegexRule final {
     using RuviaValidationRuleMarker = void;
 
-    BorrowedText message{"has invalid format"};
+    static constexpr auto message = Message;
 };
 
 }  // namespace ruvia::detail::model

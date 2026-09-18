@@ -4,17 +4,33 @@
 #include <charconv>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
+namespace {
+
+[[nodiscard]] std::pmr::string weakEtagForNewRepresentation(
+    std::string_view currentEtag, std::pmr::memory_resource* resource) {
+    std::pmr::string weakEtag(resource);
+    if (detail::httpIsStrongEtag(currentEtag)) {
+        weakEtag.reserve(currentEtag.size() + 2);
+        weakEtag.append("W/");
+        weakEtag.append(currentEtag.data(), currentEtag.size());
+    }
+    return weakEtag;
+}
+
+}  // namespace
 
 HttpResponse::HttpResponse()
     : HttpResponse(Options{}) {}
@@ -120,6 +136,87 @@ void HttpResponse::setBodyOwned(std::pmr::string&& value) {
     body_.setOwned(resource(), std::move(value));
 }
 
+void HttpResponse::applyContentEncoding(std::string_view contentEncoding) {
+    if (contentEncoding.empty()) {
+        throw std::invalid_argument("encoded response requires a content coding");
+    }
+
+    constexpr std::size_t kEncodingHeader = 0;
+    constexpr std::size_t kEtagHeader = 1;
+    std::array<HttpResponseHeader, 2> prepared{};
+    std::array<bool, 2> preparedActive{};
+    const auto releasePrepared = [&]() noexcept {
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            if (preparedActive[i]) {
+                headers_.releaseHeader(prepared[i]);
+                preparedActive[i] = false;
+            }
+        }
+    };
+
+    auto weakEtag = weakEtagForNewRepresentation(
+        knownHeaderValue(detail::kResponseHeaderEtag), resource());
+
+    const std::array<std::pair<std::string_view, std::uint32_t>, 2> fields{{
+        {"Content-Encoding", detail::kResponseHeaderContentEncoding},
+        {"ETag", detail::kResponseHeaderEtag},
+    }};
+    std::size_t missingHeaders = 0;
+    for (const auto& [name, knownBit] : fields) {
+        if (knownBit == detail::kResponseHeaderEtag && weakEtag.empty()) {
+            continue;
+        }
+        if (findHeaderForRead(name, knownBit) == nullptr) {
+            ++missingHeaders;
+        }
+    }
+    headers_.reserve(headers_.size() + missingHeaders);
+
+    try {
+        const auto stage = [&](std::size_t slot, std::string_view name, std::string_view fieldValue,
+                               std::uint32_t knownBit) {
+            const auto builtin = HttpResponseHeaders::makeStaticHeader(name, fieldValue, knownBit);
+            prepared[slot] =
+                builtin ? *builtin : headers_.makeOwnedHeader(name, fieldValue, knownBit);
+            preparedActive[slot] = true;
+        };
+
+        stage(kEncodingHeader, fields[kEncodingHeader].first, contentEncoding,
+            fields[kEncodingHeader].second);
+        if (!weakEtag.empty()) {
+            stage(kEtagHeader, fields[kEtagHeader].first, weakEtag, fields[kEtagHeader].second);
+        }
+
+        const auto commit = [&](std::size_t slot, std::string_view name,
+                                std::uint32_t knownBit) noexcept {
+            if (auto* const existing = findHeaderForUpdate(name, knownBit)) {
+                const bool wasAppended = detail::responseHeaderAppend(*existing);
+                headers_.releaseHeader(*existing);
+                *existing = prepared[slot];
+                preparedActive[slot] = false;
+                if (wasAppended) {
+                    (void)collapseResponseHeaders(*existing, name, knownBit);
+                }
+                return;
+            }
+
+            const auto index = headers_.size();
+            (void)headers_.appendPreparedHeader(prepared[slot]);
+            preparedActive[slot] = false;
+            recordKnownHeaderIndex(knownBit, index);
+        };
+
+        commit(kEncodingHeader, fields[kEncodingHeader].first, fields[kEncodingHeader].second);
+        (void)removeHeaderValidated("Content-Length", detail::kResponseHeaderContentLength);
+        if (!weakEtag.empty()) {
+            commit(kEtagHeader, fields[kEtagHeader].first, fields[kEtagHeader].second);
+        }
+    } catch (...) {
+        releasePrepared();
+        throw;
+    }
+}
+
 void HttpResponse::replaceBodyWithContentEncoding(
     std::pmr::string&& value, std::string_view contentEncoding) {
     if (contentEncoding.empty()) {
@@ -144,13 +241,8 @@ void HttpResponse::replaceBodyWithContentEncoding(
     // response still owns its identity body. Header vector growth is reserved
     // before any descriptor is published; every later commit operation is a
     // descriptor replacement or an append into already-reserved storage.
-    std::pmr::string weakEtag(resource());
-    const auto currentEtag = knownHeaderValue(detail::kResponseHeaderEtag);
-    if (!currentEtag.empty() && currentEtag.front() == '"') {
-        weakEtag.reserve(currentEtag.size() + 2);
-        weakEtag.append("W/");
-        weakEtag.append(currentEtag.data(), currentEtag.size());
-    }
+    auto weakEtag = weakEtagForNewRepresentation(
+        knownHeaderValue(detail::kResponseHeaderEtag), resource());
 
     const std::array<std::pair<std::string_view, std::uint32_t>, 3> fields{{
         {"Content-Encoding", detail::kResponseHeaderContentEncoding},

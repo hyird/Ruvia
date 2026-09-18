@@ -16,6 +16,22 @@
 
 namespace ruvia {
 
+namespace detail {
+
+template <typename MemberT>
+struct ContextTaskResult {
+    static constexpr bool ok = false;
+    using type = void;
+};
+
+template <typename ControllerT, typename ResultT>
+struct ContextTaskResult<Task<ResultT> (ControllerT::*)(Context&)> {
+    static constexpr bool ok = true;
+    using type = ResultT;
+};
+
+}  // namespace detail
+
 template <typename ControllerT>
 class Controller {
 public:
@@ -94,9 +110,18 @@ class ControllerRegistrationAccess final {
             method, path, handler, middlewares, std::move(webSocketConfig));
     }
 
-    template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
+    template <auto Handler>
     [[nodiscard]] static ControllerRouteHandler bind(ControllerT* instance) noexcept {
-        return ControllerRouteHandler(instance, &invoke<Handler>);
+        using ResultT = typename ContextTaskResult<decltype(Handler)>::type;
+        static_assert(ContextTaskResult<decltype(Handler)>::ok,
+            "handler must take Context& and return Task<HttpResponse> or Task<ResponseModel>");
+        if constexpr (std::is_same_v<ResultT, HttpResponse>) {
+            return ControllerRouteHandler(instance, &invoke<Handler>);
+        } else {
+            static_assert(isResponseModel<ResultT>,
+                "non-HttpResponse handler result must be a RUVIA_RESPONSE_MODEL");
+            return ControllerRouteHandler(instance, &invokeModel<Handler>);
+        }
     }
 
     template <Task<void> (ControllerT::*Handler)(Context&)>
@@ -123,9 +148,15 @@ class ControllerRegistrationAccess final {
         controller.registerRoutes(router);
     }
 
-    template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
+    template <auto Handler>
     [[nodiscard]] static Task<HttpResponse> invoke(void* target, Context& context) {
         return (static_cast<ControllerT*>(target)->*Handler)(context);
+    }
+
+    template <auto Handler>
+    [[nodiscard]] static Task<HttpResponse> invokeModel(void* target, Context& context) {
+        auto model = co_await (static_cast<ControllerT*>(target)->*Handler)(context);
+        co_return context.json(model);
     }
 
     template <Task<void> (ControllerT::*Handler)(Context&)>
@@ -152,7 +183,7 @@ template <ValidationTarget Target>
 
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
-    static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_REQUEST_MODEL");
+    static_assert(isRequestModel<BodyT>, "field validator body type must use RUVIA_REQUEST_MODEL");
     auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(fields, c.arena());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();

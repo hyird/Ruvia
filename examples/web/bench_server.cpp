@@ -36,7 +36,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", hello);
     RUVIA_GET("/api/status", status);
-    RUVIA_POST("/api/echo", echo);
+    RUVIA_POST("/api/echo", echo, ruvia::JsonBody<UserDTO>);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/middleware/0", middleware0);
     RUVIA_GET("/middleware/3", middleware3, Passthrough<0>, Passthrough<1>, Passthrough<2>);
@@ -57,7 +57,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto user = co_await c.req().json<UserDTO>();
+        const auto& user = c.req().validated<UserDTO>();
         UserEcho response({.resource = c.arena()});
         if (const auto& name = user.get<"name">()) {
             response.set<"name">(name->view());

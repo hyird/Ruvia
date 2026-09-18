@@ -10,8 +10,10 @@
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
@@ -65,9 +67,7 @@ struct BufferedCompressionAttempt final {
     if (contentType.empty()) {
         return false;
     }
-    const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(
-        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = httpMediaTypeOnly(contentType);
     if (mediaType.empty()) {
         return false;
     }
@@ -100,33 +100,6 @@ struct BufferedCompressionAttempt final {
         }
     }
     return parser.finish();
-}
-
-// The handler's ETag validates its (identity) representation. Once the body is
-// replaced with a content-coding, that is a different representation -- RFC 9110
-// 8.8.1: "A strong validator ... changes ... whenever a change occurs to the
-// representation data", and Content-Encoding is part of the representation. So a
-// STRONG ETag must not remain attached byte-for-byte to the compressed body:
-// otherwise a client holding the identity validator could issue a ranged
-// If-Range and have the server splice compressed bytes into an identity copy, or
-// a shared cache could treat the two encodings as interchangeable under strong
-// comparison. Weaken it to a "W/"-prefixed weak validator -- the gzip and
-// identity bodies are semantically equivalent, so If-None-Match revalidation
-// still works, but strong (byte-exact) comparison is now forbidden. A tag that
-// is already weak ("W/..."), malformed, or absent is left untouched.
-void weakenStrongResponseEtag(HttpResponse& response) {
-    if (!responseHasKnownHeader(response, kResponseHeaderEtag)) {
-        return;
-    }
-    const auto etag = responseKnownHeader(response, kResponseHeaderEtag);
-    if (etag.empty() || etag.front() != '"') {
-        return;
-    }
-    std::pmr::string weak(responseResource(response));
-    weak.reserve(etag.size() + 2);
-    weak.append("W/");
-    weak.append(etag.data(), etag.size());
-    setResponseHeaderValidated(response, "ETag", weak, kResponseHeaderEtag);
 }
 
 }  // namespace
@@ -289,13 +262,7 @@ bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& sele
     }
 
     addVaryToken(response, "Accept-Encoding");
-
-    // The encoded length is not known until finish(), so a handler-provided
-    // identity Content-Length cannot survive selecting a coding.
-    response.removeHeader("Content-Length");
-    setResponseHeaderStableView(
-        response, "Content-Encoding", httpContentCodingToken(selection.coding()));
-    weakenStrongResponseEtag(response);
+    applyResponseContentEncoding(response, httpContentCodingToken(selection.coding()));
     return true;
 }
 

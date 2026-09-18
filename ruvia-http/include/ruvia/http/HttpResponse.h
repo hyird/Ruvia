@@ -210,6 +210,7 @@ private:
     void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
+    void applyContentEncoding(std::string_view contentEncoding);
     void replaceBodyWithContentEncoding(std::pmr::string&& value, std::string_view contentEncoding);
     void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
