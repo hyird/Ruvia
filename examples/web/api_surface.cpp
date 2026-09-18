@@ -67,8 +67,6 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     }
 }
 
-
-
 RUVIA_RESPONSE_MODEL(SurfaceJsonResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
 }  // namespace

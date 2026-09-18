@@ -68,8 +68,6 @@ public:
     }
 };
 
-
-
 class ValidationScopeProbe final : public ruvia::Middleware<ValidationScopeProbe> {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {

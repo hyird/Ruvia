@@ -1,9 +1,9 @@
+#include "ruvia/http/Sse.h"
+
 #include <chrono>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-
-#include "ruvia/http/Sse.h"
 
 #include "test_harness.h"
 
@@ -18,9 +18,9 @@ std::string render(const ruvia::SseMessage& message) {
 
 RUVIA_TEST(sse_formats_event_id_retry_and_multiline_data) {
     RUVIA_CHECK_EQ(render({.data = "line1\nline2",
-                        .event = "update",
-                        .id = "7",
-                        .retry = std::chrono::milliseconds{3000}}),
+                       .event = "update",
+                       .id = "7",
+                       .retry = std::chrono::milliseconds{3000}}),
         std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
 }
 

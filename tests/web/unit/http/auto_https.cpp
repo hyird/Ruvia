@@ -14,8 +14,8 @@ using ruvia::HttpRequest;
 using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::makeAutoHttpsRedirectResponse;
+using ruvia::detail::RequestKnownHeader;
 
 HttpRequest makeRequest(RequestMemory& memory, std::string_view host, std::string_view path,
     std::string_view query = {}) {

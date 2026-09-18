@@ -136,9 +136,9 @@ RUVIA_TEST(http_if_range_requires_exact_validator) {
 
 RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     using ruvia::HttpHeaderView;
+    using ruvia::detail::httpEtagPreconditions;
     using ruvia::detail::HttpRequestAccess;
     using ruvia::detail::RequestKnownHeader;
-    using ruvia::detail::httpEtagPreconditions;
 
     auto request = HttpRequestAccess::make();
     const auto noneMatchSlot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfNoneMatch);

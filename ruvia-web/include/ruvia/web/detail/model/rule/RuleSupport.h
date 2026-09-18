@@ -135,8 +135,6 @@ inline void appendIndexPath(std::pmr::string& output, std::string_view prefix, s
     output.push_back(']');
 }
 
-
-
 template <typename Rule>
 [[nodiscard]] constexpr bool isDefaultRule() noexcept {
     using RuleT = std::remove_cvref_t<Rule>;

@@ -102,9 +102,9 @@ private:
             return structureValid(value);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
+            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 for (const auto& element : value) {
-                    if (!structureValid(element)) {
+                    if (!valueStructureValid(element)) {
                         return false;
                     }
                 }
@@ -123,12 +123,12 @@ private:
             validateStructure(value, path, validator);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
+            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     std::pmr::string itemPath(validator.resource());
                     model::appendIndexPath(itemPath, path, index++);
-                    validateStructure(element, itemPath, validator);
+                    validateValueStructure(element, itemPath, validator);
                 }
             }
         }
@@ -142,12 +142,12 @@ private:
             validateFieldRules(value, path, validator);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
+            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     std::pmr::string itemPath(validator.resource());
                     model::appendIndexPath(itemPath, path, index++);
-                    validateFieldRules(element, itemPath, validator);
+                    validateNestedFieldRules(element, itemPath, validator);
                 }
             }
         }

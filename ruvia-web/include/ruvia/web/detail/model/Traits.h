@@ -116,8 +116,6 @@ template <typename T>
 inline constexpr bool isRequestModelField =
     RuviaRequestModelFieldTraits<std::remove_cvref_t<T>>::value;
 
-
-
 template <typename T>
 inline constexpr bool isResponseModel = ResponseModel<std::remove_cvref_t<T>>::value;
 
