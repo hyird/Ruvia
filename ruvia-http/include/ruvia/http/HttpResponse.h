@@ -262,6 +262,8 @@ private:
         std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
     void recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
     [[nodiscard]] HttpResponse cloneForTransaction() const;
+    [[nodiscard]] HttpResponse cloneHeadersForTransaction(std::size_t additionalHeaders = 0) const;
+    void commitHeadersFrom(HttpResponse&& staged) noexcept;
 
     HttpStatusCode statusCode_{http_status::kOk};
     std::uint32_t knownHeaderBits_{0};

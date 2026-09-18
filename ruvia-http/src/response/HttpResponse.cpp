@@ -3,6 +3,7 @@
 #include <array>
 #include <charconv>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -71,11 +72,11 @@ std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
 }
 
-HttpResponse HttpResponse::cloneForTransaction() const {
+HttpResponse HttpResponse::cloneHeadersForTransaction(std::size_t additionalHeaders) const {
     HttpResponse clone(detail::HttpResolvedPmrResourceTag{}, resource());
     clone.statusCode_ = statusCode_;
 
-    clone.headers_.reserve(headers_.size());
+    clone.headers_.reserve(headers_.size() + additionalHeaders);
     for (const auto& header : headers_) {
         auto copy = clone.headers_.makeOwnedHeader(header.name(), header.value(), header.knownBit);
         detail::setResponseHeaderAppend(copy, detail::responseHeaderAppend(header));
@@ -83,6 +84,19 @@ HttpResponse HttpResponse::cloneForTransaction() const {
     }
     clone.knownHeaderBits_ = knownHeaderBits_;
     clone.knownHeaderIndexes_ = knownHeaderIndexes_;
+
+    return clone;
+}
+
+void HttpResponse::commitHeadersFrom(HttpResponse&& staged) noexcept {
+    std::destroy_at(&headers_);
+    ::new (static_cast<void*>(&headers_)) HttpResponseHeaders(std::move(staged.headers_));
+    knownHeaderBits_ = staged.knownHeaderBits_;
+    knownHeaderIndexes_ = staged.knownHeaderIndexes_;
+}
+
+HttpResponse HttpResponse::cloneForTransaction() const {
+    auto clone = cloneHeadersForTransaction();
 
     if (const auto* const borrowedBytes = body_.borrowedBytes()) {
         clone.body_.setBorrowed(borrowedBytes->bytes());

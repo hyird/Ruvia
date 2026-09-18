@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -24,7 +26,10 @@ namespace {
 }
 
 [[nodiscard]] bool responseHasHeaderName(
-    const HttpResponse& response, std::string_view name) noexcept {
+    const HttpResponse& response, std::string_view name, std::uint32_t knownBit) noexcept {
+    if (knownBit != 0) {
+        return detail::responseHasKnownHeader(response, knownBit);
+    }
     return std::ranges::any_of(response.headers(), [name](const auto& header) noexcept {
         return detail::httpAsciiEqualsIgnoreCase(header.name(), name);
     });
@@ -56,37 +61,58 @@ namespace {
     return count;
 }
 
+// Keep the body in its original owner, and clone headers only on first mutation.
+class ResponseHeaderTransaction final {
+public:
+    ResponseHeaderTransaction(HttpResponse& response, std::size_t additionalHeaders)
+        : response_(response),
+          additionalHeaders_(additionalHeaders) {}
+
+    [[nodiscard]] const HttpResponse& current() const noexcept {
+        return staged_ ? *staged_ : response_;
+    }
+
+    HttpResponse& writable() {
+        if (!staged_) {
+            staged_.emplace(detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response_, additionalHeaders_));
+        }
+        return *staged_;
+    }
+
+    void commit() noexcept {
+        if (staged_) {
+            detail::HttpResponseHeaderStateAccess::commitHeaders(response_, std::move(*staged_));
+        }
+    }
+
+private:
+    HttpResponse& response_;
+    std::size_t additionalHeaders_;
+    std::optional<HttpResponse> staged_;
+};
+
 // A Context-built response already contains the active state. A raw response
 // does not. Merge by occurrence count so both paths converge without treating
 // repeated equal append fields as a set.
-void mergeActiveResponseHeaders(HttpResponse& response, const HttpResponse& active) {
-    const auto activeHeaderCount = active.headers().size();
-    if (activeHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + activeHeaderCount);
-    }
+void mergeActiveResponseHeaders(ResponseHeaderTransaction& transaction, const HttpResponse& active) {
     for (const auto& header : active.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         const auto name = header.name();
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie) {
-            detail::upsertResponseSetCookieValidated(response, value);
+            detail::upsertResponseSetCookieValidated(transaction.writable(), value);
         } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(response, name, value) <
+            if (responseHeaderValueCount(transaction.current(), name, value) <
                 headerOccurrenceThrough(active, header)) {
-                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+                detail::appendResponseHeaderValidated(transaction.writable(), name, value, knownBit);
             }
-        } else if (!responseHasHeaderName(response, name)) {
-            detail::setResponseHeaderValidated(response, name, value, knownBit);
+        } else if (!responseHasHeaderName(transaction.current(), name, knownBit)) {
+            detail::setResponseHeaderValidated(transaction.writable(), name, value, knownBit);
         }
     }
 }
 
-void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& active) {
-    const auto activeHeaderCount = active.headers().size();
-    if (activeHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + activeHeaderCount);
-    }
-
+void assignActiveResponseHeaders(ResponseHeaderTransaction& transaction, const HttpResponse& active) {
     bool replacedSetCookie = false;
     for (const auto& header : active.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
@@ -97,17 +123,17 @@ void assignActiveResponseHeaders(HttpResponse& response, const HttpResponse& act
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie) {
             if (!replacedSetCookie) {
-                response.removeHeader("Set-Cookie");
+                transaction.writable().removeHeader("Set-Cookie");
                 replacedSetCookie = true;
             }
-            detail::upsertResponseSetCookieValidated(response, value);
+            detail::upsertResponseSetCookieValidated(transaction.writable(), value);
         } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(response, name, value) <
+            if (responseHeaderValueCount(transaction.current(), name, value) <
                 headerOccurrenceThrough(active, header)) {
-                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+                detail::appendResponseHeaderValidated(transaction.writable(), name, value, knownBit);
             }
         } else {
-            detail::setResponseHeaderValidated(response, name, value, knownBit);
+            detail::setResponseHeaderValidated(transaction.writable(), name, value, knownBit);
         }
     }
 }
@@ -122,10 +148,9 @@ void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&&
         state.finalize(std::move(response));
         return;
     }
-    // Keep the clone disposable until the complete header transaction succeeds.
-    HttpResponse staged = detail::HttpResponseHeaderStateAccess::cloneForTransaction(response);
-    ApplyActiveHeaders(staged, state.activeResponse());
-    response = std::move(staged);
+    ResponseHeaderTransaction transaction(response, state.activeResponse().headers().size());
+    ApplyActiveHeaders(transaction, state.activeResponse());
+    transaction.commit();
     state.finalize(std::move(response));
 }
 
