@@ -15,6 +15,7 @@
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/detail/db/DbMappedQuery.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
+#include "ruvia/web/detail/db/DbSqlLiteral.h"
 
 namespace ruvia {
 
@@ -60,6 +61,29 @@ public:
     //
     // A caller that already holds a contiguous parameter sequence passes it as a
     // span instead; a span cannot construct a DbValue, so it never reaches here.
+    // Fixed SQL uses MariaDB placeholders by default; specify kPostgreSql
+    // for numbered parameters. Values are owned by the existing operation path.
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbRows> query(Params&&... params) const {
+        detail::validateDbSqlLiteral<Sql, Driver, sizeof...(Params)>(queryDriver());
+        return query(Sql.view(), std::forward<Params>(params)...);
+    }
+
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(Params&&... params) const {
+        detail::validateDbSqlLiteral<Sql, Driver, sizeof...(Params)>(queryDriver());
+        return execute(Sql.view(), std::forward<Params>(params)...);
+    }
+
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbStreamResult> queryStream(Params&&... params) const {
+        detail::validateDbSqlLiteral<Sql, Driver, sizeof...(Params)>(queryDriver());
+        return queryStream(Sql.view(), std::forward<Params>(params)...);
+    }
+
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) const {

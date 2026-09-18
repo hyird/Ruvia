@@ -50,7 +50,7 @@ using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
 
-class FirstIntValidator final : public ruvia::Middleware<FirstIntValidator> {
+class FirstIntValidator final : public ruvia::Middleware {
 public:
     using RuviaValidationBody = int;
 
@@ -59,7 +59,7 @@ public:
     }
 };
 
-class SecondIntValidator final : public ruvia::Middleware<SecondIntValidator> {
+class SecondIntValidator final : public ruvia::Middleware {
 public:
     using RuviaValidationBody = int;
 
@@ -68,7 +68,7 @@ public:
     }
 };
 
-class ValidationScopeProbe final : public ruvia::Middleware<ValidationScopeProbe> {
+class ValidationScopeProbe final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -180,7 +180,7 @@ namespace routing_test {
 // next()), negative on unwind (after next()), 0 for the handler.
 inline std::vector<int> g_chainOrder;
 
-class ChainMwA final : public ruvia::Middleware<ChainMwA> {
+class ChainMwA final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         g_chainOrder.push_back(1);
@@ -189,7 +189,7 @@ public:
     }
 };
 
-class ChainMwB final : public ruvia::Middleware<ChainMwB> {
+class ChainMwB final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         g_chainOrder.push_back(2);
@@ -198,7 +198,7 @@ public:
     }
 };
 
-class ChainMwOverrideAfterNext final : public ruvia::Middleware<ChainMwOverrideAfterNext> {
+class ChainMwOverrideAfterNext final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -207,7 +207,7 @@ public:
 };
 
 // Short-circuits: sets a response and does NOT call next().
-class ChainMwStop final : public ruvia::Middleware<ChainMwStop> {
+class ChainMwStop final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next&) {
         g_chainOrder.push_back(9);
@@ -218,7 +218,7 @@ public:
 
 // Misuse: respond() ends the middleware chain, so a later next() must not run
 // downstream handlers and silently replace the response.
-class ChainMwRespondThenNext final : public ruvia::Middleware<ChainMwRespondThenNext> {
+class ChainMwRespondThenNext final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         context.respond(context.body("early"));
@@ -229,7 +229,7 @@ public:
 // Misuse: calls next() twice. The second invocation must be rejected rather than
 // re-entering the downstream chain (which would run the handler -- and its side
 // effects -- a second time).
-class ChainMwDoubleNext final : public ruvia::Middleware<ChainMwDoubleNext> {
+class ChainMwDoubleNext final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
@@ -240,7 +240,7 @@ public:
 inline bool g_webSocketUnavailableAfterNext = false;
 
 class ChainMwProbeWebSocketAfterNext final
-    : public ruvia::Middleware<ChainMwProbeWebSocketAfterNext> {
+    : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
@@ -252,7 +252,7 @@ public:
     }
 };
 
-class ChainMwThrowsAfterNext final : public ruvia::Middleware<ChainMwThrowsAfterNext> {
+class ChainMwThrowsAfterNext final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
@@ -262,7 +262,7 @@ public:
 
 // Throws before calling next(): the chain is short-circuited and the exception
 // must be mapped to an error response (never escaping the dispatch).
-class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
+class ChainMwThrows final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
         throw ruvia::HttpError({.status = ruvia::http_status::kUnauthorized,

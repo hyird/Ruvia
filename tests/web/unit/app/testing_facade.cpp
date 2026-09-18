@@ -45,7 +45,7 @@ public:
 };
 
 class TestingFacadeThrowingMiddleware final
-    : public ruvia::Middleware<TestingFacadeThrowingMiddleware> {
+    : public ruvia::Middleware {
 public:
     explicit TestingFacadeThrowingMiddleware(int* attempts) {
         ++*attempts;
@@ -57,7 +57,7 @@ public:
     }
 };
 
-class TestingFacadeStamp final : public ruvia::Middleware<TestingFacadeStamp> {
+class TestingFacadeStamp final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
@@ -68,7 +68,7 @@ public:
 // Registered with constructor arguments rather than default constructed, so it
 // is deliberately not default constructible: the descriptor must carry the
 // registration arguments to every instance the router builds.
-class TestingFacadeConfiguredStamp final : public ruvia::Middleware<TestingFacadeConfiguredStamp> {
+class TestingFacadeConfiguredStamp final : public ruvia::Middleware {
 public:
     TestingFacadeConfiguredStamp(std::string_view name, int level) noexcept
         : name_(name),
@@ -93,7 +93,7 @@ struct TestingFacadeUser final {
 // The pattern request-scoped bindings exist for: a middleware computes a value,
 // owns it in its own coroutine frame, and publishes it to everything downstream
 // of its next() for exactly that scope.
-class TestingFacadeAuth final : public ruvia::Middleware<TestingFacadeAuth> {
+class TestingFacadeAuth final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         const TestingFacadeUser user{
@@ -104,7 +104,7 @@ public:
 };
 
 // Stamps a header so a response shows whether this middleware ran at all.
-class TestingFacadeScoped final : public ruvia::Middleware<TestingFacadeScoped> {
+class TestingFacadeScoped final : public ruvia::Middleware {
 public:
     explicit TestingFacadeScoped(std::string_view tag) noexcept
         : tag_(tag) {}
@@ -120,7 +120,7 @@ private:
 
 // Declares itself meaningful on a request that matched no route, the way
 // SecurityHeadersMiddleware does.
-class TestingFacadeAlways final : public ruvia::Middleware<TestingFacadeAlways> {
+class TestingFacadeAlways final : public ruvia::Middleware {
 public:
     static constexpr bool ruviaRunsOnUnmatchedRequests = true;
 

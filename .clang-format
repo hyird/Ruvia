@@ -1,6 +1,7 @@
 BasedOnStyle: Google
 Language: Cpp
 Standard: Latest
+AttributeMacros: [RUVIA_LIFETIMEBOUND]
 
 IndentWidth: 4
 ContinuationIndentWidth: 4

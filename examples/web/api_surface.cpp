@@ -77,7 +77,7 @@ ruvia::Task<> surfaceNotFound(ruvia::Context& c) {
     co_return c.text("surface not found\n");
 }
 
-class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
+class SurfaceContextMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
@@ -103,7 +103,7 @@ public:
     }
 };
 
-class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
+class SurfaceReturnMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<> handle(ruvia::Context& c, ruvia::Next&) {
         c.status(ruvia::http_status::kAccepted);
@@ -112,7 +112,7 @@ public:
 };
 
 class SurfacePreDirectResponseMiddleware final
-    : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
+    : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         c.header("X-Surface-Pre-Direct", "true");
@@ -120,7 +120,7 @@ public:
     }
 };
 
-class SurfaceResSlotOnlyMiddleware final : public ruvia::Middleware<SurfaceResSlotOnlyMiddleware> {
+class SurfaceResSlotOnlyMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next&) {
         c.header("X-Surface-Res-Slot-Only", "true");

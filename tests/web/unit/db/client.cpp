@@ -848,3 +848,39 @@ RUVIA_TEST(db_result_value_move_assignment_propagates_allocator_failure) {
     }
     RUVIA_CHECK(allocationFailure);
 }
+
+RUVIA_TEST(db_sql_literal_cold_operations_release_owned_parameters) {
+    DbRegistryTestRuntime runtime;
+    ruvia::test::CountingMemoryResource memory;
+    ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker, &memory, testDbConfig());
+    ruvia::detail::ScopedOperationScope scope;
+    auto handle = registry.get(scope);
+    const auto baseline = memory.liveAllocations();
+    for (int i = 0; i < 16; ++i) {
+        {
+#ifdef RUVIA_ENABLE_MARIADB
+            auto query = handle.query<"SELECT ?">(std::string(200, 'q'));
+            auto execute = handle.execute<"UPDATE t SET name = ?">(std::string(200, 'e'));
+            auto stream = handle.queryStream<"SELECT ?">(std::string(200, 's'));
+            auto noParams = handle.query<"SELECT 1">();
+#else
+            auto query = handle.query<"SELECT $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 'q'));
+            auto execute = handle.execute<"UPDATE t SET name = $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 'e'));
+            auto stream = handle.queryStream<"SELECT $1", ruvia::DbDriver::kPostgreSql>(std::string(200, 's'));
+            auto noParams = handle.query<"SELECT 1", ruvia::DbDriver::kPostgreSql>();
+#endif
+            RUVIA_CHECK(memory.liveAllocations() > baseline);
+        }
+        RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    }
+    const auto allocations = memory.allocationCount();
+    const bool rejected = throwsOn([&] {
+#ifdef RUVIA_ENABLE_MARIADB
+        (void)handle.query<"SELECT $1", ruvia::DbDriver::kPostgreSql>(1);
+#else
+        (void)handle.query<"SELECT ?">(1);
+#endif
+    });
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(memory.allocationCount(), allocations);
+}

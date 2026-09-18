@@ -3,6 +3,7 @@
 // text/JSON/redirect/error responses including HEAD and OPTIONS, and
 // prefix-scoped notFound/onError fallbacks layered under the app-wide one.
 
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -11,11 +12,12 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/core/Integer.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/Error.h"
 
-class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
+class RequestIdMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
@@ -23,7 +25,7 @@ public:
     }
 };
 
-class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> {
+class AdminAuthMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
@@ -63,21 +65,6 @@ ruvia::Task<> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
         .code = error.code(),
         .message = error.message(),
         .statusText = error.statusText()});
-}
-
-std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
-    if (!input || input->empty()) {
-        return std::nullopt;
-    }
-
-    std::uint32_t value{};
-    const auto* const begin = input->data();
-    const auto* const end = begin + input->size();
-    const auto [ptr, ec] = std::from_chars(begin, end, value);
-    if (ec != std::errc{} || ptr != end) {
-        return std::nullopt;
-    }
-    return value;
 }
 
 class BasicHttpController final : public ruvia::Controller<BasicHttpController> {
@@ -128,12 +115,21 @@ private:
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
-        if (const auto page = parseUInt32(c.req().query("page"))) {
-            char buffer[16]{};
-            const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), *page);
-            if (ec == std::errc{}) {
-                body.append(buffer, static_cast<std::size_t>(ptr - buffer));
+        std::uint32_t page = 1;
+        if (auto raw = c.req().query("page")) {
+            auto parsed = ruvia::parseInteger<std::uint32_t>(*raw)
+                              .transform([](auto value) { return std::max(std::uint32_t{1}, value); });
+            if (!parsed) {
+                co_return c.error({.status = ruvia::http_status::kBadRequest,
+                    .code = "invalid_page",
+                    .message = "page must be a uint32 decimal integer"});
             }
+            page = *parsed;
+        }
+        char buffer[16]{};
+        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page);
+        if (ec == std::errc{}) {
+            body.append(buffer, static_cast<std::size_t>(ptr - buffer));
         }
         body.append("\nsession=");
         body.append(c.req().cookie("session").value_or(""));

@@ -822,6 +822,29 @@ The selected driver must be enabled at build time. PostgreSQL parameters use
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
 
+Fixed SQL can check its parameter count at compile time. Parameter **values**
+remain ordinary runtime values:
+
+```cpp
+// On a MariaDB handle (the default literal dialect):
+auto rows = co_await db.query<"SELECT name FROM users WHERE id = ?">(userId);
+// On a PostgreSQL handle:
+auto rows = co_await db.query<"SELECT name FROM users WHERE id = $1",
+    ruvia::DbDriver::kPostgreSql>(userId);
+```
+
+The same template form is available for `execute()` and `queryStream()` on
+`DbClient` / `DbHandle`, and for `query()` / `execute()` on `DbTransaction`.
+PostgreSQL uses the highest parameter index, so repeated `$1` references take
+one argument. Quoted text and comments are skipped using the backend's lexical
+rules; PostgreSQL dollar quotes, escape strings and nested comments are handled.
+MariaDB scanning follows the existing backslash-escape convention, and
+PostgreSQL ordinary strings assume `standard_conforming_strings=on`.
+This checks parameter arity, not SQL syntax, column types or server SQL modes.
+A literal's selected dialect must match the connection; a mismatch throws
+`std::invalid_argument` before creating the operation. Runtime SQL strings and
+parameter spans continue to use `query(sql, params)` and runtime validation.
+
 `query()` returns `DbRows`, which is directly iterable and indexable. A `DbRow`
 supports both positional and exact column-name lookup. `DbField::value()` returns
 an optional text view so SQL NULL is distinct from an empty string, while
@@ -1719,6 +1742,13 @@ their storage independently and remain valid across later operations until
 they are destroyed. Keep operations and results on their owning worker and
 within their owner's scope; Context handles and results belong to the
 Context's scope. These rules also apply to handles obtained before an upgrade.
+Borrowing accessors on owning models, form data and result containers use
+`RUVIA_LIFETIMEBOUND` where supported and reject temporary owners where applicable.
+These annotations assist compiler diagnostics; they do not extend storage lifetime
+or guarantee detection of asynchronous escapes. `c.req()` is a temporary facade:
+its views borrow the request, not the facade object. Copy data that must outlive
+the request or the next buffer-invalidating operation.
+
 Borrowed body chunks and WebSocket payload views retain their documented
 validity until the next read on the same stream or connection.
 
@@ -1878,6 +1908,30 @@ Use `auto session = c.session()` followed by `data()`, `set()`, `clear()`, or
 `regenerate()`; `trySession()` returns `std::nullopt` when the middleware is not
 present. `SessionConfig` owns its Redis alias, cookie name, key prefix, and TTL,
 so a designated-initialized temporary is safe to register.
+
+### Strict integer conversion
+
+`<ruvia/core/Integer.h>` provides `parseInteger<T>(text)`, returning
+`std::expected<T, IntegerParseError>`. It accepts complete decimal integers,
+rejects whitespace, a leading `+`, trailing bytes and unsigned negative values,
+and distinguishes `kInvalidFormat` from `kOutOfRange`. Missing request parameters
+are separate from malformed values:
+
+```cpp
+std::uint32_t page = 1;
+if (auto raw = c.req().query("page")) {
+    auto parsed = ruvia::parseInteger<std::uint32_t>(*raw)
+        .transform([](auto value) { return std::max(std::uint32_t{1}, value); });
+    if (!parsed) {
+        co_return c.error({.status = ruvia::http_status::kBadRequest,
+            .code = "invalid_page", .message = "invalid page number"});
+    }
+    page = *parsed;
+}
+```
+
+Use `QueryModel<T>` for structured request validation; use `and_then()` and
+`transform()` for short conversions without discarding error information.
 
 ## HTTP Protocol Library
 

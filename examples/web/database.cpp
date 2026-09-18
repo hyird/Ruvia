@@ -119,13 +119,13 @@ private:
         ruvia::Context& c, std::string_view name, std::uint64_t& id) {
         if (driver_ == ruvia::DbDriver::kPostgreSql) {
             auto result =
-                co_await c.db().query("INSERT INTO users(name) VALUES ($1) RETURNING id", name);
+                co_await c.db().query<"INSERT INTO users(name) VALUES ($1) RETURNING id", ruvia::DbDriver::kPostgreSql>(name);
             if (result.empty() || result.front().empty()) {
                 throw std::runtime_error("PostgreSQL INSERT did not return an id");
             }
             id = result.front()["id"].as<std::uint64_t>().value();
         } else {
-            const auto result = co_await c.db().execute("INSERT INTO users(name) VALUES (?)", name);
+            const auto result = co_await c.db().execute<"INSERT INTO users(name) VALUES (?)">(name);
             id = result.lastInsertId().value_or(0);
         }
         co_return;

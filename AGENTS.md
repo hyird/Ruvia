@@ -264,7 +264,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - App 注册的自包含 callback 必须由 App RAII 拥有并析构；worker、router 和请求服务只保存内部两指针 `CallbackRef`。公开 callback API 不得提供可制造悬垂引用的 `bind()`/`borrow()`。
 - 重复 method + path 或等价动态 route shape 必须启动期报错。
 - 无显式 HEAD route 时 fallback 到普通 GET；streaming GET 不参与隐式 HEAD fallback。
-- middleware API 保持 CRTP + async `handle(Context&, Next&)`；`next()` 是 single-shot。
+- middleware API 使用普通非模板基类 + async `handle(Context&, Next&)`；`next()` 是 single-shot。
 
 ## Controller API
 

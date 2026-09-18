@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/Attributes.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/util/PmrResource.h"
@@ -74,22 +75,22 @@ public:
 
     ~HttpResponseHeaders();
 
-    [[nodiscard]] const_iterator begin() const& noexcept {
+    [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
         return data();
     }
     [[nodiscard]] const_iterator begin() const&& = delete;
 
-    [[nodiscard]] const_iterator end() const& noexcept {
+    [[nodiscard]] const_iterator end() const& noexcept RUVIA_LIFETIMEBOUND {
         return data() + size();
     }
     [[nodiscard]] const_iterator end() const&& = delete;
 
-    [[nodiscard]] const_iterator cbegin() const& noexcept {
+    [[nodiscard]] const_iterator cbegin() const& noexcept RUVIA_LIFETIMEBOUND {
         return begin();
     }
     [[nodiscard]] const_iterator cbegin() const&& = delete;
 
-    [[nodiscard]] const_iterator cend() const& noexcept {
+    [[nodiscard]] const_iterator cend() const& noexcept RUVIA_LIFETIMEBOUND {
         return end();
     }
     [[nodiscard]] const_iterator cend() const&& = delete;
@@ -186,9 +187,9 @@ public:
     HttpResponse& operator=(HttpResponse&& other) noexcept;
 
     [[nodiscard]] HttpStatusCode status() const noexcept;
-    [[nodiscard]] const HttpResponseHeaders& headers() const& noexcept;
+    [[nodiscard]] const HttpResponseHeaders& headers() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const HttpResponseHeaders& headers() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const&& = delete;
     // A generic HttpResponse is always final (200..599). Interim 1xx progress
     // messages use HttpInterimResponseHead; 101 uses a dedicated protocol driver.

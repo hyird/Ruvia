@@ -58,7 +58,7 @@ struct SessionConfig final {
     std::chrono::seconds ttl{std::chrono::hours(24)};
 };
 
-class SessionMiddleware final : public Middleware<SessionMiddleware> {
+class SessionMiddleware final : public Middleware {
 public:
     SessionMiddleware();
     explicit SessionMiddleware(const SessionConfig& config);

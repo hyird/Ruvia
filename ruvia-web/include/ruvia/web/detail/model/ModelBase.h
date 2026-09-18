@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/web/Attributes.h"
 #include "ruvia/web/ModelObject.h"
 #include "ruvia/web/detail/model/ModelSchema.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
@@ -39,7 +40,7 @@ public:
         : ModelStorage(::ruvia::ModelOptions{.resource = owner.resource()}) {}
 
     template <FixedString Field>
-    [[nodiscard]] decltype(auto) get() const& {
+    [[nodiscard]] decltype(auto) get() const& RUVIA_LIFETIMEBOUND {
         constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
         using DescriptorT = std::tuple_element_t<index, std::tuple<DescriptorTs...>>;
         const auto& slot = std::get<index>(fields_);
@@ -64,7 +65,7 @@ public:
     DerivedT& set(ValueT&&) && = delete;
 
     template <FixedString Field>
-    [[nodiscard]] decltype(auto) ensure() & {
+    [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {
         constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
         return std::get<index>(fields_).ensure(resource_);
     }

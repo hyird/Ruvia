@@ -25,6 +25,7 @@
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/Attributes.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ContextRequest.h"
 #include "ruvia/web/Error.h"
@@ -146,9 +147,10 @@ public:
     Context(Context&&) = delete;
     Context& operator=(Context&&) = delete;
 
-    [[nodiscard]] ContextRequest req() const noexcept {
+    [[nodiscard]] ContextRequest req() const& noexcept RUVIA_LIFETIMEBOUND {
         return ContextRequest(*this);
     }
+    ContextRequest req() const&& = delete;
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an

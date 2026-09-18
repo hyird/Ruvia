@@ -1,6 +1,5 @@
 #pragma once
 
-#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -8,10 +7,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/Integer.h"
 #include "ruvia/core/detail/number/DecimalNumber.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
@@ -64,11 +63,11 @@ template <typename NumberT>
             return std::nullopt;
         }
     } else {
-        const auto [ptr, ec] =
-            std::from_chars(decoded.data(), decoded.data() + decoded.size(), parsed);
-        if (ec != std::errc{} || ptr != decoded.data() + decoded.size()) {
+        const auto integer = parseInteger<NumberT>(decoded);
+        if (!integer) {
             return std::nullopt;
         }
+        parsed = *integer;
     }
     return parsed;
 }

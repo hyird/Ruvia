@@ -17,6 +17,8 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/Attributes.h"
+#include "ruvia/web/FixedString.h"
 
 namespace ruvia {
 
@@ -47,35 +49,6 @@ struct ModelSerializeOptions final {
     std::pmr::memory_resource* resource{nullptr};
 };
 
-template <std::size_t N>
-struct FixedString {
-    char value[N]{};
-
-    constexpr FixedString(const char (&text)[N]) noexcept {
-        for (std::size_t i = 0; i < N; ++i) {
-            value[i] = text[i];
-        }
-    }
-
-    [[nodiscard]] constexpr std::string_view view() const& noexcept {
-        return std::string_view(value, N - 1);
-    }
-    [[nodiscard]] constexpr std::string_view view() const&& = delete;
-};
-
-template <std::size_t N>
-FixedString(const char (&)[N]) -> FixedString<N>;
-
-template <std::size_t LeftN, std::size_t RightN>
-[[nodiscard]] constexpr bool operator==(
-    const FixedString<LeftN>& left, const FixedString<RightN>& right) noexcept {
-    if constexpr (LeftN != RightN) {
-        return false;
-    } else {
-        return std::ranges::equal(left.value, right.value);
-    }
-}
-
 class String final {
 public:
     explicit String(ModelOptions options = {})
@@ -104,7 +77,7 @@ public:
         return *this;
     }
 
-    [[nodiscard]] std::string_view view() const& noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
             return *borrowed;
         }
@@ -113,7 +86,7 @@ public:
     }
     [[nodiscard]] std::string_view view() const&& = delete;
 
-    [[nodiscard]] const char* data() const& noexcept {
+    [[nodiscard]] const char* data() const& noexcept RUVIA_LIFETIMEBOUND {
         return view().data();
     }
     [[nodiscard]] const char* data() const&& = delete;
@@ -126,7 +99,7 @@ public:
         return view().empty();
     }
 
-    operator std::string_view() const& noexcept {
+    operator std::string_view() const& noexcept RUVIA_LIFETIMEBOUND {
         return view();
     }
     operator std::string_view() const&& = delete;
@@ -279,22 +252,22 @@ public:
         return items_.size();
     }
 
-    [[nodiscard]] const T& operator[](std::size_t index) const& noexcept {
+    [[nodiscard]] const T& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return *items_[index];
     }
     [[nodiscard]] const T& operator[](std::size_t) const&& = delete;
 
-    [[nodiscard]] const T& front() const& noexcept {
+    [[nodiscard]] const T& front() const& noexcept RUVIA_LIFETIMEBOUND {
         return *items_.front();
     }
     [[nodiscard]] const T& front() const&& = delete;
 
-    [[nodiscard]] auto begin() const& noexcept {
+    [[nodiscard]] auto begin() const& noexcept RUVIA_LIFETIMEBOUND {
         return Iterator(items_.begin());
     }
     void begin() const&& = delete;
 
-    [[nodiscard]] auto end() const& noexcept {
+    [[nodiscard]] auto end() const& noexcept RUVIA_LIFETIMEBOUND {
         return Iterator(items_.end());
     }
     void end() const&& = delete;

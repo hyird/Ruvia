@@ -61,7 +61,7 @@ void applySecurityHeaders(Context& context, const SecurityHeadersConfig& config 
 
 // Registered app-wide with the defaults as `app().use<SecurityHeadersMiddleware>()`,
 // or with an owning policy as `app().use<SecurityHeadersMiddleware>(config)`.
-class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
+class SecurityHeadersMiddleware final : public Middleware {
 public:
     // A 404 is a response to an attacker-reachable URL like any other, so it
     // needs the same CSP, frame and referrer policy a matched route gets. CORS
