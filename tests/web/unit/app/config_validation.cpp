@@ -230,6 +230,20 @@ RUVIA_TEST(client_origin_accepts_network_names_and_rejects_uri_only_names) {
     }
 }
 
+RUVIA_TEST(client_tls_stream_inherits_verification_and_protocol_policy) {
+    asio::io_context loop;
+    for (const auto policy : {ruvia::TlsPeerVerificationPolicy::kVerify,
+             ruvia::TlsPeerVerificationPolicy::kSkipVerification}) {
+        asio::ssl::context tls(asio::ssl::context::tls_client);
+        ruvia::detail::configureClientTlsContext(tls, {.tlsPeerVerification = policy});
+        asio::ssl::stream<asio::ip::tcp::socket> stream(loop, tls);
+        RUVIA_CHECK_EQ(SSL_get_verify_mode(stream.native_handle()),
+            policy == ruvia::TlsPeerVerificationPolicy::kVerify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE);
+        const auto disabled = SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1;
+        RUVIA_CHECK_EQ(SSL_get_options(stream.native_handle()) & disabled, disabled);
+    }
+}
+
 RUVIA_TEST(client_tls_sni_uses_dns_identity_without_changing_network_host) {
     asio::io_context loop;
     asio::ssl::context tls(asio::ssl::context::tls_client);
