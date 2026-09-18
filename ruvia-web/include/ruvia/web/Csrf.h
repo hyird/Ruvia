@@ -24,7 +24,7 @@ struct CsrfProtectionConfig final {
 // rejected with 403. Register on a controller, group, or route that should
 // enforce browser XSRF checks. Cookie and header names default to "XSRF-TOKEN"
 // and "X-XSRF-TOKEN" and can be rebranded per app.
-class CsrfProtection final : public Middleware<CsrfProtection> {
+class CsrfProtection final : public Middleware {
 public:
     CsrfProtection();
     explicit CsrfProtection(const CsrfProtectionConfig& config);

@@ -27,9 +27,9 @@ inline void validateResponseHeaderStorageSize(std::size_t nameSize, std::size_t 
 }
 
 struct HttpResponseHeaderAccess final {
-    [[nodiscard]] static HttpResponseHeader make(const char* bytes, std::uint32_t nameSize,
+    [[nodiscard]] static constexpr HttpResponseHeader make(const char* bytes, std::uint32_t nameSize,
         std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
-        HttpResponseHeader header;
+        HttpResponseHeader header{};
         header.bytes = bytes;
         header.nameSize = nameSize;
         header.valueSize = valueSize;
@@ -64,7 +64,7 @@ struct HttpResponseHeaderAccess final {
     }
 };
 
-[[nodiscard]] inline HttpResponseHeader makeResponseHeader(const char* bytes,
+[[nodiscard]] inline constexpr HttpResponseHeader makeResponseHeader(const char* bytes,
     std::uint32_t nameSize, std::uint32_t valueSize, std::uint32_t knownBit, bool owned) noexcept {
     return HttpResponseHeaderAccess::make(bytes, nameSize, valueSize, knownBit, owned);
 }

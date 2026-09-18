@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <compare>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -68,10 +69,8 @@ void assignDotPath(ContextRequest::RequestFormField& field, std::pmr::memory_res
     std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
         const auto leftName = fields[left].name();
         const auto rightName = fields[right].name();
-        if (leftName == rightName) {
-            return left < right;
-        }
-        return leftName < rightName;
+        const auto comparison = leftName <=> rightName;
+        return comparison == 0 ? left < right : comparison < 0;
     });
     return order;
 }

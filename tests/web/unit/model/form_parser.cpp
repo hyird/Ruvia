@@ -1,3 +1,4 @@
+#include <cmath>
 #include <memory_resource>
 #include <string_view>
 
@@ -46,6 +47,16 @@ RUVIA_TEST(form_number_floating_accepts_fraction_and_exponent) {
     RUVIA_CHECK(!parseFormNumber<double>("").has_value());
     RUVIA_CHECK(
         !parseFormNumber<double>("1.2.3").has_value());  // trailing junk after a valid prefix
+}
+
+RUVIA_TEST(form_number_float_uses_target_precision_and_range) {
+    const auto parsed = parseFormNumber<float>("1.000000059604644775390626");
+    RUVIA_CHECK(parsed.has_value());
+    if (parsed) {
+        RUVIA_CHECK_EQ(*parsed, std::nextafter(1.0f, 2.0f));
+    }
+    RUVIA_CHECK(!parseFormNumber<float>("1e-46"));
+    RUVIA_CHECK(!parseFormNumber<float>("1e39"));
 }
 
 RUVIA_TEST(form_number_floating_rejects_non_finite) {

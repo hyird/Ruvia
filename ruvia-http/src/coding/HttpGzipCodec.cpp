@@ -144,11 +144,13 @@ ContentEncodeAttempt encodeGzipContent(
         const auto offset = output.size();
         const auto writable = std::min<std::size_t>(8192, maxEncodedBytes - offset);
         const auto beforeInput = stream.avail_in;
-        output.resize(offset + writable);
-        stream.next_out = reinterpret_cast<Bytef*>(output.data() + offset);
-        stream.avail_out = static_cast<uInt>(writable);
-        const auto status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
-        output.resize(offset + (writable - stream.avail_out));
+        int status = Z_OK;
+        output.resize_and_overwrite(offset + writable, [&](char* bytes, std::size_t) noexcept {
+            stream.next_out = reinterpret_cast<Bytef*>(bytes + offset);
+            stream.avail_out = static_cast<uInt>(writable);
+            status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
+            return offset + (writable - stream.avail_out);
+        });
         if (status == Z_STREAM_END) {
             return output;
         }

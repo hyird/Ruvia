@@ -2,11 +2,34 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpUriGrammar.h"
 
 #include "test_harness.h"
+
+RUVIA_TEST(uri_port_parser_returns_typed_values_and_errors) {
+    using ruvia::detail::parsePortValue;
+    RUVIA_CHECK_EQ(parsePortValue("0").value(), std::uint16_t{0});
+    RUVIA_CHECK_EQ(parsePortValue("65535").value(), std::uint16_t{65535});
+    RUVIA_CHECK_EQ(parsePortValue("00080").value(), std::uint16_t{80});
+    for (const std::string_view text : {"", "+80", "-1", " 80", "80 ", "80x"}) {
+        const auto port = parsePortValue(text);
+        RUVIA_CHECK(!port.has_value());
+        if (!port) {
+            RUVIA_CHECK_EQ(port.error(), std::errc::invalid_argument);
+        }
+    }
+    for (const std::string_view text : {"65536", "99999999999999999999999999"}) {
+        const auto port = parsePortValue(text);
+        RUVIA_CHECK(!port.has_value());
+        if (!port) {
+            RUVIA_CHECK_EQ(port.error(), std::errc::result_out_of_range);
+        }
+    }
+}
 
 namespace {
 

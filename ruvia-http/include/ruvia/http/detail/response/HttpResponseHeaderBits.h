@@ -30,7 +30,7 @@ inline constexpr std::uint32_t kResponseHeaderLocation = 1U << 20;
 inline constexpr std::uint32_t kResponseHeaderSetCookie = 1U << 21;
 inline constexpr std::size_t kResponseKnownHeaderCount = 22;
 
-[[nodiscard]] inline std::size_t responseKnownHeaderSlot(std::uint32_t bit) noexcept {
+[[nodiscard]] inline constexpr std::size_t responseKnownHeaderSlot(std::uint32_t bit) noexcept {
     constexpr std::uint32_t knownMask = (1U << kResponseKnownHeaderCount) - 1U;
     if (bit == 0 || (bit & ~knownMask) != 0 || (bit & (bit - 1U)) != 0) {
         return kResponseKnownHeaderCount;

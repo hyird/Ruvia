@@ -144,6 +144,61 @@ struct ContextFixture final {
 
 }  // namespace
 
+RUVIA_TEST(context_response_scratch_does_not_remain_in_request_arena) {
+    ruvia::WorkerMemory worker;
+    const auto measure = [&](auto&& makeResponse, std::string_view header) {
+        alignas(std::max_align_t) std::array<std::byte, 64 * 1024> buffer;
+        ruvia::RequestMemory memory(worker, buffer);
+        auto request = ruvia::detail::HttpRequestAccess::make();
+        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+        auto context = ruvia::detail::ContextAccess::make(
+            memory, request, ruvia::test::testContextServices());
+        const auto response = makeResponse(context);
+        const auto* end = static_cast<std::byte*>(memory.resource()->allocate(1, 1));
+        return std::pair{end - buffer.data(), std::string(response.header(header).value())};
+    };
+
+    const std::string location = "/" + std::string(1024, ' ');
+    std::string encodedLocation = "/";
+    for (int index = 0; index != 1024; ++index) {
+        encodedLocation += "%20";
+    }
+    const auto encoded = measure([&](ruvia::Context& context) {
+        return context.redirect({.location = location});
+    },
+        "Location");
+    const auto verbatim = measure([&](ruvia::Context& context) {
+        return context.redirect({.location = encodedLocation});
+    },
+        "Location");
+    RUVIA_CHECK_EQ(encoded.second, encodedLocation);
+    RUVIA_CHECK_EQ(encoded.second, verbatim.second);
+    RUVIA_CHECK_EQ(encoded.first, verbatim.first);
+
+    const std::string name(128, 'n');
+    const std::string value(1024, 'v');
+    const ruvia::CookieOptions attributes{
+        .path = "/",
+        .prefix = ruvia::CookiePrefix::kHost,
+        .secure = ruvia::CookieAttributePolicy::kEmit,
+    };
+    const auto signedCookie = measure([&](ruvia::Context& context) {
+        context.setSignedCookie({.name = name, .value = value, .secret = "response-scratch-test-secret", .attributes = attributes});
+        return context.text("ok");
+    },
+        "Set-Cookie");
+    const auto valueStart = signedCookie.second.find('=') + 1;
+    const auto valueEnd = signedCookie.second.find(';', valueStart);
+    const auto signedValue = std::string_view(signedCookie.second).substr(valueStart, valueEnd - valueStart);
+    const auto plainCookie = measure([&](ruvia::Context& context) {
+        context.setCookie({.name = name, .value = signedValue, .attributes = attributes});
+        return context.text("ok");
+    },
+        "Set-Cookie");
+    RUVIA_CHECK_EQ(signedCookie.second, plainCookie.second);
+    RUVIA_CHECK_EQ(signedCookie.first, plainCookie.first);
+}
+
 RUVIA_TEST(context_operation_clients_keep_parameters_out_of_request_arena) {
     ContextFixture fixture;
     auto context = ruvia::detail::ContextAccess::make(

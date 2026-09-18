@@ -136,8 +136,8 @@ template <typename MiddlewareT>
 // one descriptor shape and one construction path.
 template <typename MiddlewareT, typename... Args>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args) {
-    static_assert(std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
-        "middleware must derive from ruvia::Middleware<MiddlewareT>");
+    static_assert(std::is_base_of_v<Middleware, MiddlewareT>,
+        "middleware must derive from ruvia::Middleware");
     static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
     static_assert(std::is_constructible_v<MiddlewareT, const std::decay_t<Args>&...>,
         "middleware is not constructible from the arguments passed to use<T>(); a middleware "

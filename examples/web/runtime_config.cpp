@@ -30,7 +30,7 @@ std::filesystem::path pathOrEmpty(std::optional<std::string_view> value) {
 // Registered app-wide below (App::use): one shared instance runs before the
 // controller and route middlewares of EVERY matched route, in use() order.
 // Requests that match no route (404/405) never enter a middleware chain.
-class GlobalHeaderMiddleware final : public ruvia::Middleware<GlobalHeaderMiddleware> {
+class GlobalHeaderMiddleware final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();

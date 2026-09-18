@@ -76,11 +76,11 @@ template <typename SequenceT>
 struct JsonSequenceValueTraits;
 
 template <typename ValueT>
-struct JsonSequenceValueTraits<std::pmr::vector<ValueT>> {
+struct JsonSequenceValueTraits<Array<ValueT>> {
     using value_type = ValueT;
 
-    static void emplace(std::pmr::vector<ValueT>& value, ValueT&& element) {
-        value.emplace_back(std::move(element));
+    static void emplace(Array<ValueT>& value, ValueT&& element) {
+        ModelValueFactory::emplaceParsed(value, std::move(element));
     }
 };
 
@@ -89,7 +89,7 @@ struct JsonSequenceValueTraits<BoxedArray<ValueT>> {
     using value_type = ValueT;
 
     static void emplace(BoxedArray<ValueT>& value, ValueT&& element) {
-        value.emplaceMove(std::move(element));
+        ModelValueFactory::emplaceParsed(value, std::move(element));
     }
 };
 

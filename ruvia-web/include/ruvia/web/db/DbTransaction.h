@@ -18,6 +18,7 @@
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbMappedQuery.h"
 #include "ruvia/web/detail/db/DbParameterPack.h"
+#include "ruvia/web/detail/db/DbSqlLiteral.h"
 
 namespace ruvia {
 
@@ -75,6 +76,28 @@ public:
 
     // Bound parameters as ordinary arguments, with the same synchronous cloning
     // and the same temporary-safety as DbHandle::query()/execute().
+    // Fixed SQL uses MariaDB placeholders by default; specify kPostgreSql
+    // for numbered parameters. Values are owned by the existing operation path.
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbRows> query(Params&&... params) & {
+        detail::validateDbSqlLiteral<Sql, Driver, sizeof...(Params)>(queryDriver());
+        return query(Sql.view(), std::forward<Params>(params)...);
+    }
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    ScopedOperation<DbRows> query(Params&&...) && = delete;
+
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    [[nodiscard]] ScopedOperation<DbExecResult> execute(Params&&... params) & {
+        detail::validateDbSqlLiteral<Sql, Driver, sizeof...(Params)>(queryDriver());
+        return execute(Sql.view(), std::forward<Params>(params)...);
+    }
+    template <FixedString Sql, DbDriver Driver = DbDriver::kMariaDb, typename... Params>
+        requires(detail::DbParameter<Params> && ...)
+    ScopedOperation<DbExecResult> execute(Params&&...) && = delete;
+
     template <typename... Params>
         requires detail::DbParameterPack<Params...>
     [[nodiscard]] ScopedOperation<DbRows> query(std::string_view sql, Params&&... params) & {

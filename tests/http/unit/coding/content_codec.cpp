@@ -14,15 +14,21 @@ public:
     [[nodiscard]] std::size_t allocations() const noexcept {
         return allocations_;
     }
+    [[nodiscard]] std::size_t liveBytes() const noexcept {
+        return liveBytes_;
+    }
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        liveBytes_ += bytes;
+        return allocation;
     }
 
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+        liveBytes_ -= bytes;
     }
 
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -30,6 +36,7 @@ private:
     }
 
     std::size_t allocations_{0};
+    std::size_t liveBytes_{0};
 };
 
 class RejectOutputCapAllocationResource final : public std::pmr::memory_resource {
@@ -237,6 +244,46 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     }
 }
 
+RUVIA_TEST(http_content_encode_round_trips_across_output_block_boundaries) {
+    for (const std::size_t size : {std::size_t{0}, std::size_t{8191}, std::size_t{8192},
+             std::size_t{8193}, std::size_t{65537}, std::size_t{(4u << 20) + 1}}) {
+        std::string input;
+        input.reserve(size);
+        std::uint32_t state = 0x12345678;
+        for (std::size_t i = 0; i < size; ++i) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            input.push_back(static_cast<char>(state >> 24));
+        }
+        for (const auto coding : {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+            const auto full = encodeHttpContent(coding, input, {.maxEncodedBytes = size * 2 + 1024});
+            RUVIA_CHECK(full.encoded() != nullptr);
+            if (full.encoded() == nullptr) {
+                continue;
+            }
+            const auto bytes = full.encoded()->bytes();
+            RUVIA_CHECK(!bytes.empty());
+            RUVIA_CHECK_EQ(decoded(coding, bytes, input.size()), input);
+            if (size >= 8192) {
+                RUVIA_CHECK(bytes.size() > 8192);
+            }
+            const auto exact = encodeHttpContent(coding, input, {.maxEncodedBytes = bytes.size()});
+            RUVIA_CHECK(exact.encoded() != nullptr);
+            if (exact.encoded() != nullptr) {
+                RUVIA_CHECK_EQ(exact.encoded()->bytes(), bytes);
+            }
+            if (!bytes.empty()) {
+                const auto tooSmall = encodeHttpContent(coding, input, {.maxEncodedBytes = bytes.size() - 1});
+                RUVIA_CHECK(tooSmall.failure() != nullptr);
+                if (tooSmall.failure() != nullptr) {
+                    RUVIA_CHECK_EQ(tooSmall.failure()->error(), HttpContentEncodeError::kEncodedSizeExceeded);
+                }
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http_content_decoder_state_uses_the_callers_memory_resource) {
     const struct {
         HttpContentCoding coding;
@@ -336,6 +383,47 @@ RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {
         encoded.append(chunk);
         RUVIA_CHECK_EQ(decoded(coding, encoded, input.size()), input);
     }
+}
+
+RUVIA_TEST(http_content_encoder_results_survive_subsequent_writes_and_encoder_destruction) {
+    const std::string input(16385, 'x');
+    for (const auto coding : {HttpContentCoding::kGzip, HttpContentCoding::kBrotli, HttpContentCoding::kZstd}) {
+        CountingMemoryResource resource;
+        {
+            std::pmr::string first(&resource);
+            std::pmr::string rest(&resource);
+            std::string saved;
+            {
+                HttpContentEncoder encoder(coding, &resource);
+                RUVIA_CHECK(encoder.write(input, first, true) != HttpContentEncodeStep::kFailure);
+                saved.assign(first);
+                for (int iteration = 0; iteration < 16; ++iteration) {
+                    RUVIA_CHECK(encoder.write(input, rest, true) != HttpContentEncodeStep::kFailure);
+                    RUVIA_CHECK_EQ(std::string_view(first), std::string_view(saved));
+                }
+                RUVIA_CHECK(encoder.finish(rest) == HttpContentEncodeStep::kFinished);
+            }
+            RUVIA_CHECK_EQ(std::string_view(first), std::string_view(saved));
+            saved.append(rest);
+            RUVIA_CHECK_EQ(decoded(coding, saved, input.size() * 17), std::string(input.size() * 17, 'x'));
+            RUVIA_CHECK(resource.liveBytes() != 0);
+        }
+        RUVIA_CHECK_EQ(resource.liveBytes(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(http_brotli_decode_checks_limits_and_complete_stream_after_output_blocks) {
+    const std::string input(65537, 'b');
+    const auto encoded = brotliCompress(input);
+    for (const std::size_t cap : {std::size_t{0}, std::size_t{1}, std::size_t{16383},
+             std::size_t{16384}, std::size_t{65536}}) {
+        RUVIA_CHECK_EQ(decodeError(HttpContentCoding::kBrotli, encoded, cap), HttpContentDecodeError::kDecodedSizeExceeded);
+    }
+    RUVIA_CHECK_EQ(decoded(HttpContentCoding::kBrotli, encoded, input.size()), input);
+    RUVIA_CHECK_EQ(decodeError(HttpContentCoding::kBrotli, std::string_view(encoded).substr(0, encoded.size() - 1), input.size()),
+        HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK_EQ(decodeError(HttpContentCoding::kBrotli, encoded + "trailing", input.size()),
+        HttpContentDecodeError::kInvalidContent);
 }
 
 RUVIA_TEST(http_brotli_encode_does_not_reserve_the_output_cap) {

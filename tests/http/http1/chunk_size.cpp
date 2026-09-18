@@ -1,4 +1,6 @@
 #include <cstddef>
+#include <limits>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -112,4 +114,24 @@ RUVIA_TEST(chunk_size_rejects_trailing_whitespace) {
 RUVIA_TEST(chunk_size_overflow_is_rejected) {
     // More hex digits than fit in size_t must report overflow, not wrap.
     RUVIA_CHECK(chunkStatus("ffffffffffffffff0") == ChunkSizeLineStatus::kOverflow);
+}
+
+RUVIA_TEST(chunk_size_numeric_boundaries_and_failure_preserve_output) {
+    const std::string maximum(sizeof(std::size_t) * 2, 'f');
+    std::size_t size = 0;
+    RUVIA_CHECK(ruvia::detail::parseHttpChunkSizeLine(maximum, size) == ChunkSizeLineStatus::kOk);
+    RUVIA_CHECK_EQ(size, (std::numeric_limits<std::size_t>::max)());
+    RUVIA_CHECK_EQ(chunkSize(std::string(128, '0') + "2A;name=value"), std::size_t{42});
+
+    const auto checkFailure = [&](std::string_view line, ChunkSizeLineStatus expected) {
+        std::size_t unchanged = 123;
+        RUVIA_CHECK(ruvia::detail::parseHttpChunkSizeLine(line, unchanged) == expected);
+        RUVIA_CHECK_EQ(unchanged, std::size_t{123});
+    };
+    checkFailure(maximum + "0", ChunkSizeLineStatus::kOverflow);
+    checkFailure(maximum + "0;=bad", ChunkSizeLineStatus::kOverflow);
+    checkFailure("+1", ChunkSizeLineStatus::kInvalidSize);
+    checkFailure("-1", ChunkSizeLineStatus::kInvalidSize);
+    checkFailure("0x10", ChunkSizeLineStatus::kInvalidExtension);
+    checkFailure("1;=bad", ChunkSizeLineStatus::kInvalidExtension);
 }

@@ -10,7 +10,7 @@
 namespace ruvia {
 
 template <typename BodyT>
-class JsonBody final : public Middleware<JsonBody<BodyT>> {
+class JsonBody final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "JsonBody requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;
@@ -25,7 +25,7 @@ public:
 };
 
 template <typename BodyT>
-class FormBody final : public Middleware<FormBody<BodyT>> {
+class FormBody final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "FormBody requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;
@@ -40,7 +40,7 @@ public:
 };
 
 template <typename BodyT>
-class QueryModel final : public Middleware<QueryModel<BodyT>> {
+class QueryModel final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "QueryModel requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;
@@ -55,7 +55,7 @@ public:
 };
 
 template <typename BodyT>
-class PathModel final : public Middleware<PathModel<BodyT>> {
+class PathModel final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "PathModel requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;
@@ -70,7 +70,7 @@ public:
 };
 
 template <typename BodyT>
-class HeaderModel final : public Middleware<HeaderModel<BodyT>> {
+class HeaderModel final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "HeaderModel requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;
@@ -85,7 +85,7 @@ public:
 };
 
 template <typename BodyT>
-class CookieModel final : public Middleware<CookieModel<BodyT>> {
+class CookieModel final : public Middleware {
 public:
     static_assert(detail::isRequestModel<BodyT>, "CookieModel requires a RUVIA_REQUEST_MODEL");
     using RuviaValidationBody = BodyT;

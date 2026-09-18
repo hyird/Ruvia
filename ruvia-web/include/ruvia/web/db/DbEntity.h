@@ -20,7 +20,8 @@ namespace ruvia {
 namespace detail {
 template <typename E>
 struct DbEntityAccess;
-}
+struct DbResultAccess;
+}  // namespace detail
 template <typename Entity>
 class DbEntityRows;
 
@@ -644,6 +645,7 @@ public:
     }
 
 private:
+    friend struct detail::DbResultAccess;
     std::pmr::vector<Entity> rows_;
 };
 

@@ -52,11 +52,11 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
     };
 
     auto available = detail::HttpResponseCodingCandidates::identityOnly();
+    std::pmr::string variantPath(resource);
     for (auto& candidate : candidates) {
         if (!qualities.accepts(candidate.contentCoding)) {
             continue;
         }
-        std::pmr::string variantPath(resource);
         variantPath.reserve(relative.size() + candidate.suffix.size());
         variantPath.assign(relative.data(), relative.size());
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());

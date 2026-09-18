@@ -68,7 +68,7 @@ RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
-RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
+RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
     CountingMemoryResource sourceResource;
     CountingMemoryResource targetResource;
     {
@@ -81,14 +81,14 @@ RUVIA_TEST(model_list_move_assignment_transfers_element_resource) {
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{3});
 
         target = std::move(source);
-        RUVIA_CHECK_EQ(target.resource(), &sourceResource);
+        RUVIA_CHECK_EQ(target.resource(), &targetResource);
         RUVIA_CHECK_EQ(source.resource(), &sourceResource);
         RUVIA_CHECK_EQ(target.size(), std::size_t{2});
         RUVIA_CHECK_EQ(target[0].value(), 4);
         RUVIA_CHECK_EQ(target[1].value(), 5);
         RUVIA_CHECK(source.empty());
         RUVIA_CHECK_EQ(TrackedValue::alive(), std::size_t{2});
-        RUVIA_CHECK_EQ(targetResource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK(targetResource.liveAllocations() > 0);
 
         source.emplace(6);
         RUVIA_CHECK_EQ(source.front().value(), 6);

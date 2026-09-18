@@ -5,7 +5,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
@@ -14,6 +16,7 @@ namespace ruvia::detail {
 struct WebSocketServerNegotiationOptions final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::span<const std::string_view> supportedSubprotocols{};
+    std::span<const HttpHeaderView> responseHeaders{};
     std::pmr::memory_resource* resource{nullptr};
 };
 
@@ -43,15 +46,21 @@ public:
         return webSocketCompressionExtension(compression_);
     }
 
+    [[nodiscard]] std::span<const HttpHeader> responseHeaders() const& noexcept {
+        return responseHeaders_;
+    }
+    std::span<const HttpHeader> responseHeaders() const&& = delete;
+
 private:
     friend WebSocketServerNegotiation makeWebSocketServerNegotiation(
         const HttpRequest&, WebSocketServerNegotiationOptions);
 
     WebSocketServerNegotiation(std::string_view subprotocol, WebSocketCompression compression,
-        std::pmr::memory_resource* resource);
+        std::span<const HttpHeaderView> responseHeaders, std::pmr::memory_resource* resource);
 
     std::pmr::string subprotocol_;
     WebSocketCompression compression_;
+    std::pmr::vector<HttpHeader> responseHeaders_;
 };
 
 [[nodiscard]] WebSocketServerNegotiation makeWebSocketServerNegotiation(

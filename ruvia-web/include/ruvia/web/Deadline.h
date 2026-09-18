@@ -58,7 +58,7 @@ namespace ruvia {
 // extend App::deadline()'s handler deadline, and where a controller-wide and
 // a route-specific declaration both exist the stricter wins.
 template <std::int64_t Milliseconds>
-class Deadline final : public Middleware<Deadline<Milliseconds>> {
+class Deadline final : public Middleware {
 public:
     static_assert(Milliseconds > 0, "deadline must be greater than 0ms");
 

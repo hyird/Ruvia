@@ -50,6 +50,9 @@ public:
     std::optional<RequestQueryCache> query;
     std::optional<RequestNameValueList> cookies;
     std::optional<RequestFieldCache> routeParams;
+    // Monotonic: survives buffered error construction by middleware after the
+    // handshake has started, when returning to HTTP response mode is impossible.
+    bool webSocketHandshakeStarted{false};
     bool queryInvalid{false};
     bool routeParamsInvalid{false};
 };

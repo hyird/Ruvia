@@ -822,6 +822,29 @@ The selected driver must be enabled at build time. PostgreSQL parameters use
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
 keys, use `INSERT ... RETURNING id` and read the returned row.
 
+Fixed SQL can check its parameter count at compile time. Parameter **values**
+remain ordinary runtime values:
+
+```cpp
+// On a MariaDB handle (the default literal dialect):
+auto rows = co_await db.query<"SELECT name FROM users WHERE id = ?">(userId);
+// On a PostgreSQL handle:
+auto rows = co_await db.query<"SELECT name FROM users WHERE id = $1",
+    ruvia::DbDriver::kPostgreSql>(userId);
+```
+
+The same template form is available for `execute()` and `queryStream()` on
+`DbClient` / `DbHandle`, and for `query()` / `execute()` on `DbTransaction`.
+PostgreSQL uses the highest parameter index, so repeated `$1` references take
+one argument. Quoted text and comments are skipped using the backend's lexical
+rules; PostgreSQL dollar quotes, escape strings and nested comments are handled.
+MariaDB scanning follows the existing backslash-escape convention, and
+PostgreSQL ordinary strings assume `standard_conforming_strings=on`.
+This checks parameter arity, not SQL syntax, column types or server SQL modes.
+A literal's selected dialect must match the connection; a mismatch throws
+`std::invalid_argument` before creating the operation. Runtime SQL strings and
+parameter spans continue to use `query(sql, params)` and runtime validation.
+
 `query()` returns `DbRows`, which is directly iterable and indexable. A `DbRow`
 supports both positional and exact column-name lookup. `DbField::value()` returns
 an optional text view so SQL NULL is distinct from an empty string, while
@@ -1719,6 +1742,13 @@ their storage independently and remain valid across later operations until
 they are destroyed. Keep operations and results on their owning worker and
 within their owner's scope; Context handles and results belong to the
 Context's scope. These rules also apply to handles obtained before an upgrade.
+Borrowing accessors on owning models, form data and result containers use
+`RUVIA_LIFETIMEBOUND` where supported and reject temporary owners where applicable.
+These annotations assist compiler diagnostics; they do not extend storage lifetime
+or guarantee detection of asynchronous escapes. `c.req()` is a temporary facade:
+its views borrow the request, not the facade object. Copy data that must outlive
+the request or the next buffer-invalidating operation.
+
 Borrowed body chunks and WebSocket payload views retain their documented
 validity until the next read on the same stream or connection.
 
@@ -1732,9 +1762,17 @@ if (value) {
 }
 ```
 
-When constructing temporary PMR data yourself, use `c.pool()`.
-It uses the same worker pool, so each object's destruction returns its storage
-for reuse without invalidating other live objects. Moving an object originally
+When constructing temporary owning PMR data yourself, use `c.pool()`.
+Choose by storage lifetime: request metadata and response storage use the arena;
+scratch buffers that can be discarded after a call or loop iteration use the
+pool.
+
+Each pool-backed object's destruction returns its storage for reuse without
+invalidating other live objects. Cached pool storage may remain allocated until
+the pool is destroyed; reclamation does not promise a drop in process RSS.
+Clients can own separate worker-local pools, so `c.pool()` is not guaranteed to
+equal a client's result resource. A transfer avoids copying only when the source
+and destination resources are compatible. Moving an object originally
 allocated in the request arena does not reclaim its arena storage.
 Both `c.arena()` and `c.pool()` return `std::pmr::memory_resource*` for use
 with PMR containers. Objects allocated from either must stay on the owning
@@ -1814,6 +1852,13 @@ model may only nest request models, and a response model may only nest response
 models. Both roles support `ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>`
 fields. Form, query, param, header, and cookie binding remain flat scalar inputs.
 
+A model's allocation resource stays fixed. Public field assignment and collection
+insertion own strings and recursively normalize nested values to that resource.
+`Array<T>` and `BoxedArray<T>` also use their resource for newly constructed
+elements. Move construction transfers the complete value; move assignment keeps
+the destination resource and can allocate. JSON view parsing still borrows its
+input, which must outlive the parsed view.
+
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
 `model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
@@ -1823,6 +1868,9 @@ optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
 `null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
 (`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
 used in JSON and validation paths.
+
+`ValidationError` owns its message, code, and all issue details independently of
+the validator or request arena, including when the exception is copied or moved.
 
 Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
@@ -1877,7 +1925,36 @@ With Redis enabled, `SessionMiddleware` binds one typed request capability.
 Use `auto session = c.session()` followed by `data()`, `set()`, `clear()`, or
 `regenerate()`; `trySession()` returns `std::nullopt` when the middleware is not
 present. `SessionConfig` owns its Redis alias, cookie name, key prefix, and TTL,
-so a designated-initialized temporary is safe to register.
+so a designated-initialized temporary is safe to register. Session changes are
+saved before the response head is sent, including the first SSE/stream write and
+WebSocket handshake. Once submission begins, `set()`, `clear()`, and `regenerate()`
+throw `std::logic_error`; `data()` remains readable for the request or WebSocket
+session lifetime. Modify WebSocket sessions in middleware before `next()`.
+Storage failure prevents publication of a new session cookie.
+
+### Strict integer conversion
+
+`<ruvia/core/Integer.h>` provides `parseInteger<T>(text)`, returning
+`std::expected<T, IntegerParseError>`. It accepts complete decimal integers,
+rejects whitespace, a leading `+`, trailing bytes and unsigned negative values,
+and distinguishes `kInvalidFormat` from `kOutOfRange`. Missing request parameters
+are separate from malformed values:
+
+```cpp
+std::uint32_t page = 1;
+if (auto raw = c.req().query("page")) {
+    auto parsed = ruvia::parseInteger<std::uint32_t>(*raw)
+        .transform([](auto value) { return std::max(std::uint32_t{1}, value); });
+    if (!parsed) {
+        co_return c.error({.status = ruvia::http_status::kBadRequest,
+            .code = "invalid_page", .message = "invalid page number"});
+    }
+    page = *parsed;
+}
+```
+
+Use `QueryModel<T>` for structured request validation; use `and_then()` and
+`transform()` for short conversions without discarding error information.
 
 ## HTTP Protocol Library
 

@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -37,6 +38,47 @@ const unsigned char* bytes(const char* p) noexcept {
 }
 
 }  // namespace
+
+RUVIA_TEST(frame_public_codec_preserves_wire_bytes_and_buffer_boundaries) {
+    std::array<char, 11> storage{};
+    storage.fill('#');
+    auto output = std::span(storage).subspan(1, kHttp2FrameHeaderBytes);
+    RUVIA_CHECK(ruvia::encodeHttp2FrameHeader(output, 0xabcdef,
+        static_cast<Http2FrameType>(0xfe), 0x81, 0x7f123456));
+    const std::array<unsigned char, 9> expected{0xab, 0xcd, 0xef, 0xfe, 0x81, 0x7f, 0x12, 0x34, 0x56};
+    for (std::size_t i = 0; i < expected.size(); ++i) {
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(output[i]), expected[i]);
+    }
+    RUVIA_CHECK_EQ(storage.front(), '#');
+    RUVIA_CHECK_EQ(storage.back(), '#');
+    // A received reserved bit is ignored; unknown frame types remain available
+    // to the connection's extension handling rather than being rejected here.
+    output[5] = static_cast<char>(0xff);
+    const auto decoded = ruvia::parseHttp2FrameHeader(output);
+    RUVIA_CHECK(decoded.has_value());
+    if (decoded) {
+        RUVIA_CHECK_EQ(decoded->length, std::uint32_t{0xabcdef});
+        RUVIA_CHECK_EQ(decoded->type, std::uint8_t{0xfe});
+        RUVIA_CHECK_EQ(decoded->flags, std::uint8_t{0x81});
+        RUVIA_CHECK_EQ(decoded->streamId, std::uint32_t{0x7f123456});
+    }
+}
+
+RUVIA_TEST(frame_public_codec_rejects_invalid_input_without_writing) {
+    std::array<char, kHttp2FrameHeaderBytes> output{};
+    output.fill('#');
+    const auto unchanged = output;
+    for (std::size_t size = 0; size < output.size(); ++size) {
+        const auto shortBuffer = std::span(output).first(size);
+        RUVIA_CHECK(!ruvia::encodeHttp2FrameHeader(shortBuffer, 0, Http2FrameType::kData, 0, 1));
+        RUVIA_CHECK(!ruvia::parseHttp2FrameHeader(shortBuffer));
+        RUVIA_CHECK_EQ(output, unchanged);
+    }
+    RUVIA_CHECK(!ruvia::encodeHttp2FrameHeader(output, 0x1000000, Http2FrameType::kData, 0, 1));
+    RUVIA_CHECK_EQ(output, unchanged);
+    RUVIA_CHECK(!ruvia::encodeHttp2FrameHeader(output, 0, Http2FrameType::kData, 0, 0x80000000));
+    RUVIA_CHECK_EQ(output, unchanged);
+}
 
 RUVIA_TEST(frame_header_encode_parse_round_trip) {
     char buf[kHttp2FrameHeaderBytes];
@@ -143,3 +185,4 @@ RUVIA_TEST(http2_window_update_overflow_is_flow_control_error) {
     RUVIA_CHECK(http2ApplyWindowUpdate(exact, 10) == Http2WindowUpdateResult::kOk);
     RUVIA_CHECK_EQ(exact, kMax);
 }
+#include <array>

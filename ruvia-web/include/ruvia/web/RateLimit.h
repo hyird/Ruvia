@@ -49,7 +49,7 @@ struct RouteRateLimitOptions final {
 // caller meets, the same "narrower scope may only tighten" rule BodyLimit
 // follows. Worker-local, like the app-wide rule.
 template <std::size_t MaxRequests, std::int64_t WindowMs>
-class RateLimit final : public Middleware<RateLimit<MaxRequests, WindowMs>> {
+class RateLimit final : public Middleware {
 public:
     static_assert(MaxRequests > 0, "route rate limit max requests must be greater than 0");
     static_assert(WindowMs > 0, "route rate limit window must be greater than 0ms");

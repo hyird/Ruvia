@@ -46,7 +46,6 @@ using ruvia::detail::generateSecureToken;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
 using ruvia::detail::RequestKnownHeader;
-using ruvia::detail::TrustedProxyBlock;
 using ruvia::detail::TrustedProxySet;
 
 // Naming a private member inside a requires-expression is an unsatisfied
@@ -91,9 +90,8 @@ struct CsrfOutcome final {
 TrustedProxySet trustedProxySetOf(std::initializer_list<std::string_view> cidrs) {
     TrustedProxySet set;
     for (const auto cidr : cidrs) {
-        TrustedProxyBlock block;
-        if (ruvia::detail::parseTrustedProxyBlock(cidr, block)) {
-            set.add(block);
+        if (const auto block = ruvia::detail::parseTrustedProxyBlock(cidr)) {
+            set.add(*block);
         }
     }
     return set;

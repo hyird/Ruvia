@@ -168,11 +168,11 @@ std::optional<HttpAuthorityView> parseHttpAuthority(std::string_view value) noex
         return HttpAuthorityViewAccess::make(host, HttpAuthorityPortKind::kEmpty);
     }
 
-    std::uint16_t port = 0;
-    if (!parsePortValue(portText, port)) {
+    const auto port = parsePortValue(portText);
+    if (!port) {
         return std::nullopt;
     }
-    return HttpAuthorityViewAccess::make(host, HttpAuthorityPortKind::kValue, port);
+    return HttpAuthorityViewAccess::make(host, HttpAuthorityPortKind::kValue, *port);
 }
 
 bool httpUriHostEquals(std::string_view left, std::string_view right) noexcept {

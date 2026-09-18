@@ -14,6 +14,7 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
 #include "test_harness.h"
@@ -96,6 +97,54 @@ bool throwsInvalid(Fn&& fn) {
 }
 
 }  // namespace
+
+RUVIA_TEST(response_header_clone_shares_static_storage_and_isolates_owned_values) {
+    CountingMemoryResource resource;
+    HttpResponse empty({.resource = &resource});
+    const auto beforeEmptyClone = resource.allocations();
+    auto emptyClone = ruvia::detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(empty, 0);
+    const auto emptyCloneAllocations = resource.allocations() - beforeEmptyClone;
+    RUVIA_CHECK(emptyClone.headers().empty());
+
+    HttpResponse source({.resource = &resource});
+    ruvia::detail::setResponseHeaderStableView(source, "Content-Type", "application/json");
+    source.header("X-Owned", "original");
+    const auto* staticValue = source.header("Content-Type")->data();
+    const auto beforeClone = resource.allocations();
+    auto clone = ruvia::detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(source, 0);
+    // Only the dynamic field needs byte storage, independent of any Debug
+    // container bookkeeping already measured by the empty clone.
+    RUVIA_CHECK_EQ(resource.allocations() - beforeClone, emptyCloneAllocations + 1);
+    RUVIA_CHECK_EQ(clone.header("Content-Type")->data(), staticValue);
+    RUVIA_CHECK(clone.header("X-Owned")->data() != source.header("X-Owned")->data());
+    source.header("X-Owned", "changed!");
+    source.removeHeader("Content-Type");
+    RUVIA_CHECK_EQ(clone.header("X-Owned"), std::string_view("original"));
+    RUVIA_CHECK_EQ(clone.header("Content-Type"), std::string_view("application/json"));
+    clone.header("Content-Type", "text/plain");
+    RUVIA_CHECK_EQ(clone.header("Content-Type"), std::string_view("text/plain"));
+}
+
+RUVIA_TEST(response_header_append_preserves_multiplicity_across_table_spill) {
+    HttpResponse response;
+    response.header("X-Repeated", "first");
+    for (int i = 0; i < 7; ++i) {
+        response.header("X-Filler-" + std::to_string(i), "value");
+    }
+    response.header("x-repeated", "second", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{9});
+    std::size_t marked = 0;
+    for (const auto& header : response.headers()) {
+        if (ruvia::detail::httpAsciiEqualsIgnoreCase(header.name(), "X-Repeated")) {
+            RUVIA_CHECK(ruvia::detail::responseHeaderAppend(header));
+            ++marked;
+        }
+    }
+    RUVIA_CHECK_EQ(marked, std::size_t{2});
+    response.header("X-Repeated", "replacement");
+    RUVIA_CHECK_EQ(response.headers().size(), std::size_t{8});
+    RUVIA_CHECK_EQ(response.header("X-Repeated"), std::string_view("replacement"));
+}
 
 RUVIA_TEST(response_status_is_version_neutral_code_only) {
     auto response = makeResponse();

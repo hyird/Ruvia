@@ -311,3 +311,10 @@ RUVIA_TEST(rate_limit_key_groups_ipv6_by_64_prefix) {
     RUVIA_CHECK_EQ(rateLimitKey("fe80::1%1"), std::string("fe80::1%1"));
     RUVIA_CHECK(rateLimitKey("fe80::1%1") != rateLimitKey("fe80::1%2"));
 }
+
+RUVIA_TEST(rate_limit_key_preserves_malformed_ipv6_instead_of_parsing_a_prefix) {
+    std::string address = "2001:db8::1";
+    address.push_back('\0');
+    address.append("suffix");
+    RUVIA_CHECK_EQ(rateLimitKey(address), address);
+}

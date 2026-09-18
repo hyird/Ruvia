@@ -97,6 +97,25 @@ namespace ruvia::detail {
     return sql.size();
 }
 
+[[nodiscard]] constexpr std::size_t skipPostgreSqlBlockComment(std::string_view sql, std::size_t index) noexcept {
+    std::size_t depth = 1;
+    auto cursor = index + 2;
+    while (cursor + 1 < sql.size()) {
+        if (sql[cursor] == '/' && sql[cursor + 1] == '*') {
+            ++depth;
+            cursor += 2;
+        } else if (sql[cursor] == '*' && sql[cursor + 1] == '/') {
+            cursor += 2;
+            if (--depth == 0) {
+                return cursor;
+            }
+        } else {
+            ++cursor;
+        }
+    }
+    return sql.size();
+}
+
 // The index just past the construct starting at `index`. For an ordinary byte
 // that is `index + 1`; for a literal, identifier or comment it is the first
 // index after its terminator, or `sql.size()` when the construct is unclosed.
@@ -137,7 +156,7 @@ namespace ruvia::detail {
 
 [[nodiscard]] constexpr bool isPostgreSqlDollarTagStart(char character) noexcept {
     const auto byte = static_cast<unsigned char>(character);
-    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || byte == '_';
+    return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || byte == '_' || byte >= 0x80;
 }
 
 [[nodiscard]] constexpr bool isPostgreSqlDollarTagContinue(char character) noexcept {
@@ -230,7 +249,7 @@ namespace ruvia::detail {
             return index + 1;
         case '/':
             if (index + 1 < size && sql[index + 1] == '*') {
-                return skipSqlBlockComment(sql, index);
+                return skipPostgreSqlBlockComment(sql, index);
             }
             return index + 1;
         default:

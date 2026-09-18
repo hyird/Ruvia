@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -37,6 +38,24 @@ std::optional<Session> Context::trySession() noexcept {
         return std::nullopt;
     }
     return Session(sessionState());
+}
+
+Task<void> detail::SessionAccess::commit(Context& context) {
+    auto& state = context.sessionState();
+    if (!state.beginCommit()) {
+        co_return;
+    }
+    try {
+#ifdef RUVIA_ENABLE_REDIS
+        if (const auto* owner = state.owner()) {
+            co_await owner->commit(context);
+        }
+#endif
+        state.finishCommit();
+    } catch (...) {
+        state.failCommit(std::current_exception());
+        throw;
+    }
 }
 
 }  // namespace ruvia
@@ -89,11 +108,11 @@ SessionMiddleware::SessionMiddleware(const SessionConfig& config)
     : config_(config, detail::registrationResource()) {}
 
 Task<void> SessionMiddleware::handle(Context& c, Next& next) {
-    detail::SessionAccess::bind(c);
+    detail::SessionAccess::bind(c, this);
     const auto cookie = c.req().cookie(config_.cookieName);
     if (cookie && detail::isValidSessionId(*cookie)) {
         detail::SessionAccess::observePresentedId(c, *cookie);
-        std::pmr::string key(c.arena());
+        std::pmr::string key(c.pool());
         key.append(config_.keyPrefix);
         key.append(cookie->data(), cookie->size());
         if (auto stored = co_await c.redis(config_.redisAlias).get(key)) {
@@ -102,7 +121,10 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     }
 
     co_await next();
+    co_await detail::SessionAccess::commit(c);
+}
 
+Task<void> SessionMiddleware::commit(Context& c) const {
     const auto& state = detail::SessionAccess::state(c);
     if (state.untouched() != nullptr || state.unrecognized() != nullptr ||
         state.loaded() != nullptr) {
@@ -112,15 +134,16 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     const auto connection = getConnInfo(c);
     const bool secure = connection.scheme() == HttpScheme::kHttps;
     if (const auto* cleared = state.cleared()) {
+        auto& response = detail::ContextAccess::responseStorage(c);
+        auto staged = detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response, 1);
+        detail::appendExpiredSessionCookieHeader(staged, c.pool(), config_.cookieName, secure);
         if (cleared->oldId.has_value()) {
-            std::pmr::string key(c.arena());
+            std::pmr::string key(c.pool());
             key.append(config_.keyPrefix);
             key.append(cleared->oldId->data(), cleared->oldId->size());
             (void)(co_await c.redis(config_.redisAlias).del(key));
         }
-        auto& response = detail::ContextAccess::responseStorage(c);
-        detail::appendExpiredSessionCookieHeader(
-            response, c.arena(), config_.cookieName, secure);
+        detail::HttpResponseHeaderStateAccess::commitHeaders(response, std::move(staged));
         co_return;
     }
 
@@ -145,12 +168,20 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         const auto tokenResult = detail::generateSecureToken(idBuffer);
         const auto* token = tokenResult.ready();
         if (token == nullptr) {
-            c.respond(c.error({.status = ruvia::http_status::kInternalServerError,
+            throw HttpError({.status = ruvia::http_status::kInternalServerError,
                 .code = "secure_random_failed",
-                .message = "secure token generation failed"}));
-            co_return;
+                .message = "secure token generation failed"});
         }
         existingId = token->value();
+    }
+
+    // Allocate and validate the cookie before changing Redis. Publication after
+    // successful storage is an allocation-free move of the complete header state.
+    auto& response = detail::ContextAccess::responseStorage(c);
+    std::optional<HttpResponse> staged;
+    if (mintNewId) {
+        staged.emplace(detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response, 1));
+        detail::appendSessionCookieHeader(*staged, c.pool(), config_.cookieName, existingId, secure);
     }
 
     // Do not publish a newly minted id until its blob has been persisted, and do
@@ -161,7 +192,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     for (std::size_t i = 0; i < commitPlan.count; ++i) {
         switch (commitPlan.steps[i]) {
             case detail::SessionCommitStep::kPersistCurrent: {
-                std::pmr::string key(c.arena());
+                std::pmr::string key(c.pool());
                 key.append(config_.keyPrefix);
                 key.append(existingId.data(), existingId.size());
                 ruvia::RedisSetOptions options;
@@ -170,16 +201,14 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
                 break;
             }
             case detail::SessionCommitStep::kDeleteOld: {
-                std::pmr::string oldKey(c.arena());
+                std::pmr::string oldKey(c.pool());
                 oldKey.append(config_.keyPrefix);
                 oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
                 (void)(co_await c.redis(config_.redisAlias).del(oldKey));
                 break;
             }
             case detail::SessionCommitStep::kPublishCurrentCookie: {
-                auto& response = detail::ContextAccess::responseStorage(c);
-                detail::appendSessionCookieHeader(
-                    response, c.arena(), config_.cookieName, existingId, secure);
+                detail::HttpResponseHeaderStateAccess::commitHeaders(response, std::move(*staged));
                 break;
             }
         }

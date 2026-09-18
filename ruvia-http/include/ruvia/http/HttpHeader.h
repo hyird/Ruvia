@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/Attributes.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia::detail {
@@ -20,11 +21,11 @@ inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 // represents initial fields and trailers for requests and responses.
 class HttpHeader final {
 public:
-    [[nodiscard]] std::string_view name() const& noexcept {
+    [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_;
     }
     std::string_view name() const&& = delete;
-    [[nodiscard]] std::string_view value() const& noexcept {
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
     }
     std::string_view value() const&& = delete;

@@ -22,7 +22,7 @@ RUVIA_RESPONSE_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::Strin
 RUVIA_RESPONSE_MODEL(MiddlewareResponse, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
 
 template <int N>
-class Passthrough final : public ruvia::Middleware<Passthrough<N>> {
+class Passthrough final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();

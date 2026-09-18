@@ -5,6 +5,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/Task.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 
 namespace ruvia {
@@ -73,7 +74,7 @@ public:
     }
     const ResponseStreamCommitPlan* commitPlan() const&& = delete;
 
-    using StreamingHeadThunk = HttpResponse (*)(Context&);
+    using StreamingHeadThunk = Task<HttpResponse> (*)(Context&);
 
     void bindContext(Context* context, StreamingHeadThunk streamingHead) {
         if (!std::holds_alternative<Unbound>(state_)) {
@@ -91,7 +92,7 @@ public:
         }
     }
 
-    [[nodiscard]] HttpResponse streamingHead() const {
+    [[nodiscard]] Task<HttpResponse> streamingHead() const {
         const auto* bound = std::get_if<Bound>(&state_);
         if (bound == nullptr) {
             if (committed()) {

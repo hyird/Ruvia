@@ -77,7 +77,7 @@ ruvia::Task<ruvia::TimerSleepResult> sleepOutput(
     co_return ruvia::TimerSleepResult::kElapsed;
 }
 
-void bindOutput(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+void bindOutput(void*, ruvia::Context*, ruvia::Task<ruvia::HttpResponse> (*)(ruvia::Context&)) noexcept {}
 void releaseOutput(void*) noexcept {}
 bool outputFalse(void*) noexcept {
     return false;

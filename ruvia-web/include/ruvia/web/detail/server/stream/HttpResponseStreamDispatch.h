@@ -47,7 +47,7 @@ bool responseStreamAbortedThunk(void* target) noexcept {
 
 template <typename Sink>
 void responseStreamBindContextThunk(
-    void* target, Context* context, HttpResponse (*streamingHead)(Context&)) {
+    void* target, Context* context, Task<HttpResponse> (*streamingHead)(Context&)) {
     static_cast<Sink*>(target)->bindContext(context, streamingHead);
 }
 

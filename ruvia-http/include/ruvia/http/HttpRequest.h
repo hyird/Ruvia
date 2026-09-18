@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/http/Attributes.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
@@ -76,7 +77,7 @@ public:
     // exposed through method()/scheme()/authority()/target(), split Cookie
     // fields are coalesced, and Host is synthesized from a valid :authority
     // when absent. Repeated regular fields retain wire order.
-    [[nodiscard]] std::span<const HttpHeaderView> headers() const& noexcept {
+    [[nodiscard]] std::span<const HttpHeaderView> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::span<const HttpHeaderView>(headers_.data(), headerCount_);
     }
     [[nodiscard]] std::span<const HttpHeaderView> headers() const&& = delete;

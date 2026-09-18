@@ -45,7 +45,9 @@ public:
     [[nodiscard]] const WorkerHandle& worker() const& noexcept;
     const WorkerHandle& worker() const&& = delete;
     // Same worker-reclaimable pool as Context::pool(). Posted jobs have no
-    // request arena; allocate temporary and result storage here.
+    // request arena; allocate temporary and result storage here. Destroy that
+    // storage on this worker within the job's scope. Pool caching does not
+    // extend the lifetime of objects or borrowed views.
     [[nodiscard]] std::pmr::memory_resource* pool() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
 

@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 namespace ruvia::detail {
@@ -32,6 +33,24 @@ public:
     [[nodiscard]] std::string_view view() const& noexcept;
     [[nodiscard]] std::string_view view() const&& = delete;
     [[nodiscard]] bool canAppendOnStack(std::size_t size) const noexcept;
+
+    // The writer must initialize exactly size bytes and must not access this
+    // buffer while writing. Capacity and overflow are checked before invocation.
+    template <typename Writer>
+        requires std::is_nothrow_invocable_r_v<void, Writer&, char*>
+    void appendGenerated(std::size_t size, Writer&& writer) {
+        if (char* cursor = stackCursor(size); cursor != nullptr) {
+            writer(cursor);
+            commitStack(cursor + size);
+            return;
+        }
+        reserveAdditional(size);
+        const auto previousSize = heap_.size();
+        heap_.resize_and_overwrite(previousSize + size, [&](char* bytes, std::size_t) noexcept {
+            writer(bytes + previousSize);
+            return previousSize + size;
+        });
+    }
 
     // Bulk fast path: returns a raw cursor when `bound` bytes are guaranteed to
     // fit in the stack buffer, so callers can emit without per-append checks.

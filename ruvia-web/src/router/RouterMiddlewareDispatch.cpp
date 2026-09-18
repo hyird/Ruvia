@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "ruvia/web/Error.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 #include "ruvia/web/detail/router/RouteStreamState.h"
@@ -216,6 +217,9 @@ Task<void> detail::RouteTable::invokeUnmatchedMiddlewareContinuation(NextState s
 Task<void> detail::RouteTable::invokeStreamMiddlewareAt(const RouteEntry& route, std::size_t index,
     Context& context, StreamMiddlewareChainState& chain, const RouteStreamHandler& handler) const {
     if (index >= route.middlewareCount()) {
+        if (route.endpoint().webSocket() != nullptr && context.trySession()) {
+            co_await SessionAccess::commit(context);
+        }
         chain.markHandlerInvoked();
         co_await handler(context);
         co_return;

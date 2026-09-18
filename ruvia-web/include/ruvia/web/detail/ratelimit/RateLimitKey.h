@@ -2,11 +2,12 @@
 
 #include <cstddef>
 #include <string_view>
-#include <system_error>
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
+
+#include "ruvia/core/detail/io/IpAddress.h"
 
 namespace ruvia::detail {
 
@@ -31,9 +32,12 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
     if (!remoteAddress.contains(':')) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }
-    std::error_code ec;
-    const auto address = asio::ip::make_address_v6(remoteAddress, ec);
-    if (ec || address.scope_id() != 0) {
+    const auto parsed = parseIpAddress(remoteAddress);
+    if (!parsed || !parsed->is_v6()) {
+        return remoteAddress;
+    }
+    const auto address = parsed->to_v6();
+    if (address.scope_id() != 0) {
         return remoteAddress;  // unparseable or scoped -> a full host key
     }
     if (address.is_v4_mapped()) {
