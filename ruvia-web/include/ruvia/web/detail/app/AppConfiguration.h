@@ -24,8 +24,8 @@ public:
     // Registers one app-wide middleware that runs before every matched route's
     // controller and route middlewares, in registration order. It participates
     // only in routed dispatch; requests that end in 404/405 without matching a
-    // route never enter a middleware chain. Validator middlewares
-    // (RUVIA_VALIDATE_*) bind one model to one route and are rejected here.
+    // route never enter a middleware chain. Request-model bindings
+    // (`JsonBody<T>`, `PathModel<T>`, and friends) attach to one route and are rejected here.
     //
     // Arguments configure the middleware: they are copied once at registration
     // and every instance is constructed from them, so a configured middleware

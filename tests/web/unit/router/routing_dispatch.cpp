@@ -212,30 +212,35 @@ RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {
 }
 
 RUVIA_TEST(request_json_form_map_media_type_mismatch_to_415) {
+    const ControllerMiddlewareDescriptor jsonBody[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ruvia::JsonBody<ScopedValidationRequest>>()};
+    const ControllerMiddlewareDescriptor formBody[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ruvia::FormBody<ScopedValidationRequest>>()};
+
     // Sanity: the right media type with a parsable body reaches the handler.
-    const auto ok = dispatchBodyRequest(
-        RouteHandler(nullptr, &jsonModelEchoHandler), "application/json", R"({"value":"hi"})");
+    const auto ok = dispatchBodyRequest(RouteHandler(nullptr, &jsonModelEchoHandler),
+        "application/json", R"({"value":"hi"})", jsonBody);
     RUVIA_CHECK_EQ(ok.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(ok.body, std::string("hi"));
 
     // The wrong media type is the client's format mistake: 415, not 400.
-    const auto wrongType = dispatchBodyRequest(
-        RouteHandler(nullptr, &jsonModelEchoHandler), "text/plain", R"({"value":"hi"})");
+    const auto wrongType = dispatchBodyRequest(RouteHandler(nullptr, &jsonModelEchoHandler),
+        "text/plain", R"({"value":"hi"})", jsonBody);
     RUVIA_CHECK_EQ(wrongType.status, std::uint16_t{415});
-    const auto missingType =
-        dispatchBodyRequest(RouteHandler(nullptr, &jsonModelEchoHandler), "", R"({"value":"hi"})");
+    const auto missingType = dispatchBodyRequest(
+        RouteHandler(nullptr, &jsonModelEchoHandler), "", R"({"value":"hi"})", jsonBody);
     RUVIA_CHECK_EQ(missingType.status, std::uint16_t{415});
     const auto formWrongType = dispatchBodyRequest(
-        RouteHandler(nullptr, &formModelEchoHandler), "application/json", "value=hi");
+        RouteHandler(nullptr, &formModelEchoHandler), "application/json", "value=hi", formBody);
     RUVIA_CHECK_EQ(formWrongType.status, std::uint16_t{415});
 
     // A malformed body of the RIGHT type stays 400.
     const auto badBody = dispatchBodyRequest(
-        RouteHandler(nullptr, &jsonModelEchoHandler), "application/json", "{not-json");
+        RouteHandler(nullptr, &jsonModelEchoHandler), "application/json", "{not-json", jsonBody);
     RUVIA_CHECK_EQ(badBody.status, std::uint16_t{400});
 
     const auto formOk = dispatchBodyRequest(RouteHandler(nullptr, &formModelEchoHandler),
-        "application/x-www-form-urlencoded", "value=hi");
+        "application/x-www-form-urlencoded", "value=hi", formBody);
     RUVIA_CHECK_EQ(formOk.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(formOk.body, std::string("hi"));
 }
@@ -254,14 +259,6 @@ RUVIA_TEST(request_json_if_and_form_if_only_fall_back_on_media_type_mismatch) {
         dispatchBodyRequest(RouteHandler(nullptr, &formIfEchoHandler), "text/plain", "value=hi");
     RUVIA_CHECK_EQ(formWrongType.status, std::uint16_t{200});
     RUVIA_CHECK_EQ(formWrongType.body, std::string("no-form"));
-    const auto jsonValueWrongType =
-        dispatchBodyRequest(RouteHandler(nullptr, &jsonValueIfEchoHandler), "text/plain", "{}");
-    RUVIA_CHECK_EQ(jsonValueWrongType.status, std::uint16_t{200});
-    RUVIA_CHECK_EQ(jsonValueWrongType.body, std::string("no-json"));
-    const auto badJsonValue = dispatchBodyRequest(
-        RouteHandler(nullptr, &jsonValueIfEchoHandler), "application/json", "{not-json");
-    RUVIA_CHECK_EQ(badJsonValue.status, std::uint16_t{400});
-
     const auto badForm = dispatchBodyRequest(RouteHandler(nullptr, &formIfEchoHandler),
         "application/x-www-form-urlencoded", "value=%ZZ");
     RUVIA_CHECK_EQ(badForm.status, std::uint16_t{400});

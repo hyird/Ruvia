@@ -96,11 +96,9 @@ responses through `Context`. Set response metadata through `c.status()`,
 HTTP status APIs use `ruvia::HttpStatusCode`: prefer named values such as
 `ruvia::http_status::kCreated`, and use `HttpStatusCode::fromValue()` only for
 validated extension codes.
-Public configuration types are ordinary C++ aggregates. Configure them directly
-with designated initializers; there are no configuration factories, builders,
-or identity wrappers. Passing a config to an optional App feature enables or
-replaces it, and passing `nullptr` disables it. Ruvia validates each complete
-value before atomically copying retained data into process-owned PMR storage.
+Public configuration types are ordinary C++ aggregates. Configure them with
+designated initializers. Passing a config to an optional App feature enables or
+replaces it, and passing `nullptr` disables it.
 
 `listen()` configures a numeric IPv4 or IPv6 bind address and its optional HTTP
 and HTTPS ports as one value. The address is validated and normalized when the
@@ -183,11 +181,9 @@ Dependency direction is fixed:
 ruvia-web   ->  ruvia-core + ruvia-http
 ```
 
-`ruvia-http` is core-free, Asio-free, and socket-free. It owns the outbound
-HTTP/1 and HTTP/2 protocol state machines. `ruvia-web` drives those primitives
-with worker-local DNS, sockets, TLS/ALPN, connection reuse, timeouts, and
-cancellation. It deliberately does not add a second `fetch` name, proxy, or
-reverse-proxy product API.
+`ruvia-http` is a sans-I/O protocol library: callers feed bytes and consume
+typed events. `ruvia-web` drives those primitives with worker-local DNS,
+sockets, TLS/ALPN, connection reuse, timeouts, and cancellation.
 
 ## Outbound HTTP Client
 
@@ -406,10 +402,9 @@ loops.join();
 Keep the stop registration alive while its resource is active. The callback
 runs on the owning event-loop thread before that loop exits. Do not call
 `run()`, `stop()`, or `restart()` on a pool-owned `io_context`; lifecycle
-control belongs to `EventLoopPool`. Cross-thread application work must still
-use bounded `EventLoop::post()` rather than raw `asio::post()`, so shutdown and
-backpressure remain observable. Web workers deliberately expose only
-`WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
+control belongs to `EventLoopPool`. Cross-thread application work uses bounded
+`EventLoop::post()`. Web workers expose `WorkerHandle`/`WebWorkerHandle`, not
+their `io_context` or executor.
 
 A lazy `Task<T>` needs an explicit root owner. `EventLoop::start()` schedules it
 on that loop and returns a move-only `RootTask<T>` completion owner:
@@ -1687,20 +1682,11 @@ install components.
 ## Web API Shape
 
 Ruvia intentionally uses one application per process. `ruvia::app()` is the
-only configuration and lifecycle entry point; applications do not construct
-additional `App` instances. Controllers use CRTP and register themselves at
-startup when their route macro block is declared, so there is no separate
-controller list or `useController()` step. Every controller translation unit
-retained in the final executable contributes to this process-wide registry.
-Controller static or object libraries are linked with
-`ruvia_link_controllers(application controllers)`, which preserves every
-controller object across GNU and MSVC linkers without a manual controller list.
-Dynamically loaded modules must be present before `run()`.
-The first `App::run()` or `TestApp::request()` seals and deduplicates that
-registry. Loading a controller-bearing module after sealing is a startup error,
-so every worker observes the same controller set.
-Each worker then creates its own controller instances and finalized route graph
-from that startup registry.
+only configuration and lifecycle entry point. Controllers use CRTP and register
+themselves at startup when their route macro block is declared. Controller
+static or object libraries are linked with
+`ruvia_link_controllers(application controllers)`. Dynamically loaded modules
+must be present before `run()`.
 Routes and schemas use these macros:
 
 | Concern | Macros |
@@ -1711,11 +1697,10 @@ Routes and schemas use these macros:
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
 | Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD` |
-| Validation | `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE` |
+| Validation | Field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`; route bindings `JsonBody<T>` / `QueryModel<T>` / `PathModel<T>` |
 
 Route tables, middleware chains, and controller instances are finalized before
-workers start. The request path does not rebuild them or use a per-request
-virtual dispatcher.
+workers start.
 
 `Context::arena()` and `allocator()` use the request arena. For WebSocket
 and response-stream routes, that arena stays alive for the whole handler,
@@ -1749,12 +1734,13 @@ if (value) {
 
 When constructing temporary PMR data yourself, use `c.pool()`.
 It uses the same worker pool, so each object's destruction returns its storage
-for reuse without invalidating other live objects. The pool may cache freed
-blocks and does not promise an immediate drop in process RSS. Moving an object
-originally allocated in the request arena does not reclaim its arena storage.
+for reuse without invalidating other live objects. Moving an object originally
+allocated in the request arena does not reclaim its arena storage.
 Both `c.arena()` and `c.pool()` return `std::pmr::memory_resource*` for use
 with PMR containers. Objects allocated from either must stay on the owning
-worker and be destroyed within the Context's scope.
+worker and be destroyed within the Context's scope. Posted jobs use
+`WebWorkerContext::pool()` for that same worker pool; they have no request
+arena.
 
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
@@ -1766,9 +1752,7 @@ connection. `App::httpStats()` sums the same events across every worker as
 counters — active and shed connections, connection failures, transient accept
 failures, worker failures, document-root refresh failures — so a deployment can
 be monitored by polling instead of by installing callbacks.
-Self-contained callbacks passed to App are owned and destroyed with the App;
-request dispatch retains only internal, allocation-free callback references.
-Public callback types never expose non-owning `bind()` or `borrow()` factories.
+Self-contained callbacks passed to App are owned and destroyed with the App.
 
 Redis time APIs avoid exposing wire-level sentinel values in application code:
 `expireAt()` accepts `std::chrono::system_clock::time_point`, `ttl()` and
@@ -1821,16 +1805,14 @@ RUVIA_RESPONSE_MODEL(UserResponse,
     RUVIA_OPTIONAL_FIELD(avatar, ruvia::String, RUVIA_EMIT_NULL));
 ```
 
-`RUVIA_REQUEST_MODEL` supports `fromJson<T>()`, `fromForm<T>()`, route parsing,
-and validation. Every JSON response is first represented by a
-`RUVIA_RESPONSE_MODEL`; `toJson()` and `c.json()` accept response models only,
-and there is no dynamic object/array writer API. Runtime-sized collections are
-declared as `ruvia::Array<T>` fields. Request handlers parse typed JSON with
-`c.req().json<T>()`; handlers that explicitly need a dynamic borrowed JSON view
-use `c.req().jsonValue()`. A request model may only nest request models, and a
-response model may only nest response models. Both roles support
-`ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>` fields. Form, query,
-param, header, and cookie binding remain flat scalar inputs.
+`RUVIA_REQUEST_MODEL` supports `fromJson<T>()`, `fromForm<T>()` (parse only, no
+field rules), route parsing, and validation. Every JSON response is first
+represented by a `RUVIA_RESPONSE_MODEL`; `toJson()` and `c.json()` accept
+response models only, and there is no dynamic object/array writer API.
+Runtime-sized collections are declared as `ruvia::Array<T>` fields. A request
+model may only nest request models, and a response model may only nest response
+models. Both roles support `ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>`
+fields. Form, query, param, header, and cookie binding remain flat scalar inputs.
 
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
@@ -1842,15 +1824,18 @@ optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
 (`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
 used in JSON and validation paths.
 
-Model field descriptors are passed directly to a C++ variadic template. Model
-registration does not use a preprocessor argument counter or `FOR_EACH`, so
-Ruvia defines no fixed field-count limit; only the compiler's normal template
-resource limits apply. Route middleware keeps the typed
-`c.req().validated<T>()` API, while `c.req().validatedJson<T>()` also exposes the
-validated original bytes through `raw()` for JSONB passthrough. See the compiled
+Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
+Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
+`QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`. A
+handler may return a response model; the framework serializes it as JSON.
+`jsonIf` / `formIf` still parse without running those field rules. JSONB
+passthrough uses `c.req().validatedJson<T>().raw()`.
+
+Route middleware keeps the typed `c.req().validated<T>()` API, while
+`c.req().validatedJson<T>()` also exposes the validated original bytes through
+`raw()` for JSONB passthrough. See the compiled
 [`models_validation.cpp`](examples/web/models_validation.cpp) example for a
 complete request/response, nested, array, default, and validation example.
-`RUVIA_RULE` adds route-level business constraints after structural validation.
 
 `TestApp` uses the production route graph and one real Ruvia worker, preserving
 worker-local state, route body and rate limits, and `Deadline` cancellation.
@@ -1908,12 +1893,10 @@ acknowledge or destroy them when their bytes have been consumed.
 The supplied PMR resource must outlive the connection and all retained events,
 credits, response heads, and trailers allocated from it.
 
-The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
-transport I/O themselves. It contains no App, Context, Router, socket,
-TLS, connection pool, runtime timeout, static-root policy, DB, Redis, or JWT
-integration. Content-Encoding parsing distinguishes identity, one supported
-coding, and an unsupported coding stack; Web request decoding reports the
-latter as HTTP 415.
+The library is sans-I/O: callers feed bytes, consume typed results/events, and
+drive transport I/O themselves. Content-Encoding parsing distinguishes identity,
+one supported coding, and an unsupported coding stack; Web request decoding
+reports the latter as HTTP 415.
 
 `HttpRequest` preserves `scheme()`, `authority()`, and `targetForm()` alongside
 the original target. Its header view is protocol-semantic rather than a raw

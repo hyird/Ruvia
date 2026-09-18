@@ -139,7 +139,7 @@ public:
     RUVIA_GET("/greet", greet);
     RUVIA_GET("/link", link);
     RUVIA_GET("/count", count);
-    RUVIA_POST("/echo", echo);
+    RUVIA_POST("/echo", echo, ruvia::JsonBody<TestingFacadeEcho>);
     RUVIA_GET("/boom", boom);
     RUVIA_GET("/whoami", whoami, TestingFacadeAuth);
     RUVIA_GET("/whoami-unbound", whoamiUnbound);
@@ -190,7 +190,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto body = co_await c.req().json<TestingFacadeEcho>();
+        const auto& body = c.req().validated<TestingFacadeEcho>();
         co_return c.body(body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
     }
 

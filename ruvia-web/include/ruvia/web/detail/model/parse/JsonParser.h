@@ -194,7 +194,7 @@ template <typename T>
         }
         input = remaining;
         return FieldT(parsed);
-    } else if constexpr (JsonBody<FieldT>::value) {
+    } else if constexpr (isRequestModel<FieldT>) {
         auto nested =
             ModelParseAccess::parseValue<FieldT>(remaining, resource, depth, stringStorage);
         if (!nested.has_value()) {

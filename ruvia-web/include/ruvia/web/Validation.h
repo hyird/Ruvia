@@ -207,60 +207,20 @@ private:
 
 }  // namespace ruvia
 
-#define RUVIA_REQUIRED(message)        \
-    ::ruvia::detail::model::Required { \
-        message                        \
-    }
 // RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
 // is its value; for a string field it is the UTF-8 BYTE length, not the
 // codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
 // multibyte input in mind (for example a minimum-length rule on free text).
-#define RUVIA_MIN(value, message)                \
-    ::ruvia::detail::model::Min {                \
-        static_cast<long double>(value), message \
-    }
-#define RUVIA_MAX(value, message)                \
-    ::ruvia::detail::model::Max {                \
-        static_cast<long double>(value), message \
-    }
-#define RUVIA_ONE_OF(message, ...)               \
-    ::ruvia::detail::model::OneOf<__VA_ARGS__> { \
-        message                                  \
-    }
-#define RUVIA_EMAIL(message)        \
-    ::ruvia::detail::model::Email { \
-        message                     \
-    }
-#define RUVIA_PATTERN(message, pattern)            \
-    ::ruvia::detail::model::PatternRule<pattern> { \
-        message                                    \
-    }
-#define RUVIA_REGEX(message, pattern)            \
-    ::ruvia::detail::model::RegexRule<pattern> { \
-        message                                  \
-    }
+#define RUVIA_MIN(value, message) \
+    ::ruvia::detail::model::Min<static_cast<long double>(value), ::ruvia::FixedString{message}>
+#define RUVIA_MAX(value, message) \
+    ::ruvia::detail::model::Max<static_cast<long double>(value), ::ruvia::FixedString{message}>
+#define RUVIA_ONE_OF(message, ...) \
+    ::ruvia::detail::model::OneOf<::ruvia::FixedString{message}, __VA_ARGS__>
+#define RUVIA_EMAIL(message) ::ruvia::detail::model::Email<::ruvia::FixedString{message}>
+#define RUVIA_PATTERN(message, pattern) \
+    ::ruvia::detail::model::PatternRule<pattern, ::ruvia::FixedString{message}>
+#define RUVIA_REGEX(message, pattern) \
+    ::ruvia::detail::model::RegexRule<pattern, ::ruvia::FixedString{message}>
 #define RUVIA_CUSTOM(message, predicate) \
-    ::ruvia::detail::model::Custom {     \
-        message, predicate               \
-    }
-#define RUVIA_NESTED(validator_type) \
-    ::ruvia::detail::model::Nested<validator_type> {}
-#define RUVIA_EACH(validator_type) \
-    ::ruvia::detail::model::Each<validator_type> {}
-
-#define RUVIA_RULE(field, ...) (field, (#field), (::ruvia::detail::model::Rules{__VA_ARGS__}))
-#define RUVIA_RULE_NAME(wire_name, field, ...) \
-    (field, (wire_name), (::ruvia::detail::model::Rules{__VA_ARGS__}))
-
-#define RUVIA_VALIDATE_RULE_FIELD(T, x) RUVIA_VALIDATE_RULE_FIELD_I(RUVIA_VALIDATION_UNPAREN x)
-#define RUVIA_VALIDATE_RULE_FIELD_I(...) RUVIA_VALIDATE_RULE_FIELD_IMPL(__VA_ARGS__)
-#define RUVIA_VALIDATE_RULE_FIELD_IMPL(field, wire, rules)                                         \
-    {                                                                                              \
-        ::std::pmr::string ruviaPath(validator.resource());                                        \
-        ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire});           \
-        const auto ruviaState = ::ruvia::detail::ModelValidationAccess::fieldState<#field>(body);  \
-        const auto& ruviaValue = ::ruvia::detail::ModelValidationAccess::fieldValue<#field>(body); \
-        (rules).validate(ruviaState,                                                               \
-            ::ruvia::detail::ModelValidationAccess::fieldRequired<#field>(body),                   \
-            ruviaValue, ruviaPath, validator);                                                     \
-    }
+    ::ruvia::detail::model::Custom<predicate, ::ruvia::FixedString{message}>
