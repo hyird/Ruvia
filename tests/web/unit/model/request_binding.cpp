@@ -1,3 +1,4 @@
+#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/web/Controller.h"
@@ -14,6 +15,18 @@ RUVIA_REQUEST_MODEL(RequestBindingBody,
 RUVIA_RESPONSE_MODEL(RequestBindingOut, RUVIA_REQUIRED_FIELD(id, ruvia::String),
     RUVIA_REQUIRED_FIELD(name, ruvia::String));
 
+namespace {
+
+ruvia::Task<RequestBindingOut> makeResponse(std::string_view id, std::string_view name,
+    std::pmr::memory_resource* resource) {
+    RequestBindingOut response({.resource = resource});
+    response.set<"id">(id);
+    response.set<"name">(name);
+    co_return response;
+}
+
+}  // namespace
+
 class RequestBindingController final : public ruvia::Controller<RequestBindingController> {
 public:
     RUVIA_ROUTES_BEGIN
@@ -21,17 +34,15 @@ public:
         ruvia::JsonBody<RequestBindingBody>);
     RUVIA_ROUTES_END
 
-    ruvia::Task<RequestBindingOut> update(ruvia::Context& c) {
+    ruvia::Task<> update(ruvia::Context& c) {
         const auto& params = c.req().validated<RequestBindingParams>();
         const auto& body = c.req().validated<RequestBindingBody>();
-        RequestBindingOut response({.resource = c.arena()});
-        response.set<"id">(params.get<"id">().view());
-        response.set<"name">(body.get<"name">().view());
-        co_return response;
+        auto response = co_await makeResponse(params.get<"id">().view(), body.get<"name">().view(), c.arena());
+        co_return c.json(response);
     }
 };
 
-RUVIA_TEST(request_binding_validates_param_and_json_and_returns_model) {
+RUVIA_TEST(request_binding_validates_inputs_and_serializes_service_model) {
     ruvia::TestApp app;
     const auto ok = app.request(
         ruvia::TestRequest::put("/request-binding/u1").json(R"({"name":"Al"})"));

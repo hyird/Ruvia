@@ -46,7 +46,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
+    ruvia::Task<> stats(ruvia::Context& c) {
         auto& state = c.workerState<WorkerStats>();
         ++state.served;
         std::pmr::string body(c.arena());
@@ -64,7 +64,7 @@ private:
     // worker, which kept serving other connections meanwhile. A saturated pool
     // throws BlockingOperationRejected at the co_await, which the default error
     // path answers with 503.
-    ruvia::Task<ruvia::HttpResponse> offload(ruvia::Context& c) {
+    ruvia::Task<> offload(ruvia::Context& c) {
         const auto checksum = co_await c.runBlocking(
             [input = std::string(c.req().query("input").value_or("default"))] {
                 return slowChecksum(input);
@@ -79,7 +79,7 @@ private:
     // The same work, with the overload answered by this handler instead of by
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
-    ruvia::Task<ruvia::HttpResponse> offloadOrShed(ruvia::Context& c) {
+    ruvia::Task<> offloadOrShed(ruvia::Context& c) {
         auto result = co_await c.tryRunBlocking(std::chrono::seconds(2),
             [input = std::string("expensive input")] { return slowChecksum(input); });
         if (!result.completed()) {
@@ -97,7 +97,7 @@ private:
     // Cross-worker dispatch: pick a worker by key and post a job onto its
     // event loop. The job sees the SAME per-worker state instance that
     // worker's HTTP requests see.
-    ruvia::Task<ruvia::HttpResponse> fanout(ruvia::Context& c) {
+    ruvia::Task<> fanout(ruvia::Context& c) {
         std::size_t accepted = 0;
         for (const auto& worker : ruvia::app().workers()) {
             const auto posted = worker.post([](ruvia::WebWorkerContext& ctx) -> ruvia::Task<void> {

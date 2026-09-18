@@ -1,7 +1,7 @@
 // Typed request/response models and validation: rules live on the request
 // model fields; routes select the source with JsonBody/FormBody/Query/Param/
-// Header/Cookie. Handlers may return a response model, which is serialized as
-// JSON. jsonIf/formIf still parse without field rules.
+// Header/Cookie. Handlers return HTTP responses using c.json(model).
+// jsonIf/formIf still parse without field rules.
 
 #include <charconv>
 #include <cstdint>
@@ -82,7 +82,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<RegisterResponse> registerUser(ruvia::Context& c) {
+    ruvia::Task<> registerUser(ruvia::Context& c) {
         const auto& request = c.req().validated<RegisterRequest>();
 
         RegisterResponse response({.resource = c.arena()});
@@ -96,12 +96,12 @@ private:
         response.ensure<"tags">().emplace_back(
             ruvia::String("validated", {.resource = c.arena()}));
         c.status(ruvia::http_status::kCreated);
-        co_return response;
+        co_return c.json(response);
     }
 
     // jsonIf/formIf still parse without field rules. A malformed selected body
     // is 400; only a different Content-Type yields nullopt.
-    ruvia::Task<ruvia::HttpResponse> feedback(ruvia::Context& c) {
+    ruvia::Task<> feedback(ruvia::Context& c) {
         if (const auto json = co_await c.req().jsonIf<ContactForm>()) {
             std::pmr::string body(c.allocator<char>());
             body.append("json feedback from ");
@@ -121,7 +121,7 @@ private:
         co_return c.text("no feedback body\n");
     }
 
-    ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
+    ruvia::Task<> contact(ruvia::Context& c) {
         const auto& form = c.req().validated<ContactForm>();
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
@@ -130,7 +130,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
+    ruvia::Task<> search(ruvia::Context& c) {
         const auto& query = c.req().validated<SearchQuery>();
         const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
@@ -154,14 +154,14 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> category(ruvia::Context& c) {
+    ruvia::Task<> category(ruvia::Context& c) {
         Category root({.resource = c.arena()});
         root.set<"name">("root");
         root.ensure<"children">().emplace().set<"name">("leaf");
         co_return c.json(root);
     }
 
-    ruvia::Task<ruvia::HttpResponse> categoryById(ruvia::Context& c) {
+    ruvia::Task<> categoryById(ruvia::Context& c) {
         const auto& params = c.req().validated<CategoryParams>();
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
@@ -170,7 +170,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
+    ruvia::Task<> headers(ruvia::Context& c) {
         const auto& headers = c.req().validated<RequestHeaders>();
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
@@ -179,7 +179,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
+    ruvia::Task<> cookies(ruvia::Context& c) {
         const auto& cookies = c.req().validated<PreferencesCookie>();
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");

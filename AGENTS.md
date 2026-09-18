@@ -271,7 +271,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。ORM 可以组合 SQL 表达式、实体/子查询 JOIN、CTE 和显式类型投影；SQL 片段只作为表达式节点，不能替换 Repository 绑定的完整语句。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
 - SQL 与 Redis 的实体声明使用各自的宏、字段描述符和配置类型；不得把 Redis 宏实现成 SQL 宏的别名，也不得跨后端接受实体。内部可以复用值存储与生命周期实现。
 
-- 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`，或返回 `RUVIA_RESPONSE_MODEL` 的 `ruvia::Task<Model>(Context&)`（自动 `c.json()`）。
+- 普通 handler：`ruvia::Task<> handler(ruvia::Context& c)`，Web 层的默认结果类型为 `HttpResponse`；响应模型必须通过 `c.json(model)` 输出，不支持 handler 直接返回 `Task<Model>`。service 等内部异步函数仍可返回 `Task<T>`。core 层不提供默认结果类型，无结果操作显式使用 `Task<void>`。
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
 - 公开协程返回类型统一是 `ruvia::Task<T>`，不暴露 `asio::awaitable<T>`。
 - 请求统一走 `c.req()`；连接元数据通过 `getConnInfo(c)` 读取。
