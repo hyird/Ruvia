@@ -22,7 +22,7 @@ class TaskScope;
 // depends on T. Stating the contract once is the point -- a duplicated copy of
 // the terminate below and of the co_await deletions can drift out of step with
 // this one, and the compiler would not say a word.
-template <typename T = void>
+template <typename T>
 class [[nodiscard]] Task {
 public:
     using value_type = T;

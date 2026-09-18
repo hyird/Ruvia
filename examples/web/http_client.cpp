@@ -18,7 +18,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> forward(ruvia::Context& c) {
+    ruvia::Task<> forward(ruvia::Context& c) {
         const auto incomingBody = co_await c.req().text();
         auto client = c.httpClient();
 

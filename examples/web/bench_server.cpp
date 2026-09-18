@@ -46,17 +46,17 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
+    ruvia::Task<> hello(ruvia::Context& c) {
         co_return c.text("Hello, World!");
     }
 
-    ruvia::Task<ruvia::HttpResponse> status(ruvia::Context& c) {
+    ruvia::Task<> status(ruvia::Context& c) {
         StatusResponse response({.resource = c.arena()});
         response.set<"status">("running").set<"framework">("ruvia");
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
+    ruvia::Task<> echo(ruvia::Context& c) {
         const auto& user = c.req().validated<UserDTO>();
         UserEcho response({.resource = c.arena()});
         if (const auto& name = user.get<"name">()) {
@@ -71,7 +71,7 @@ private:
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
+    ruvia::Task<> user(ruvia::Context& c) {
         const auto id = c.req().param("id").value_or("");
         UserByIdResponse response({.resource = c.arena()});
         std::pmr::string name(c.allocator<char>());
@@ -81,15 +81,15 @@ private:
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware0(ruvia::Context& c) {
+    ruvia::Task<> middleware0(ruvia::Context& c) {
         co_return middlewareResponse(c, 0);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware3(ruvia::Context& c) {
+    ruvia::Task<> middleware3(ruvia::Context& c) {
         co_return middlewareResponse(c, 3);
     }
 
-    ruvia::Task<ruvia::HttpResponse> middleware10(ruvia::Context& c) {
+    ruvia::Task<> middleware10(ruvia::Context& c) {
         co_return middlewareResponse(c, 10);
     }
 

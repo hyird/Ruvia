@@ -60,7 +60,7 @@ public:
         RUVIA_GET("/hello", hello);
     RUVIA_ROUTES_END
 
-    ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
+    ruvia::Task<> hello(ruvia::Context& c) {
         co_return c.text("hello");
     }
 };
@@ -217,7 +217,7 @@ before returning the lazy operation, so its inputs only need to survive the
 synchronous `send()` call:
 
 ```cpp
-ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
+ruvia::Task<> loadData(ruvia::Context& c) {
     auto client = c.httpClient();
     auto operation = client
         .withOptions({.timeout = std::chrono::seconds(2)})
@@ -610,7 +610,7 @@ ruvia::app().blockingPool({
     .queueCapacity = 512, // 0 selects threadCount * 64
 });
 
-ruvia::Task<ruvia::HttpResponse> hash(ruvia::Context& c) {
+ruvia::Task<> hash(ruvia::Context& c) {
     const auto body = co_await c.req().text();   // borrows the request buffer
     auto digest = co_await c.runBlocking(
         [input = std::string(body)] {            // ...so copy before offloading
@@ -1827,7 +1827,28 @@ used in JSON and validation paths.
 Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
 `QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`. A
-handler may return a response model; the framework serializes it as JSON.
+handler returns `Task<>` and explicitly serializes a response model with `c.json(model)`.
+Including `ruvia/web/Task.h` (also included by `Context.h`) makes `Task<>`
+equivalent to `Task<HttpResponse>`. Core-only code specifies its result type
+explicitly; operations without a result use `Task<void>`. Ordinary route
+handlers return HTTP responses, while services can return typed model values:
+
+```cpp
+ruvia::Task<UserResponse> getUser(std::uint64_t id,
+    std::pmr::memory_resource* requestResource) {
+    UserResponse response({.resource = requestResource});
+    response.set<"id">(ruvia::UInt64{id});
+    response.set<"name">("Alice");
+    co_return response;
+}
+
+ruvia::Task<> handler(ruvia::Context& c) {
+    auto response = co_await getUser(1, c.arena());
+    co_return c.json(response);
+}
+```
+
+The model uses the supplied request arena and must not outlive the request.
 `jsonIf` / `formIf` still parse without running those field rules. JSONB
 passthrough uses `c.req().validatedJson<T>().raw()`.
 
