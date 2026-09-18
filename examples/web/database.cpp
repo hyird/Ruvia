@@ -63,7 +63,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> findUser(ruvia::Context& c) {
+    ruvia::Task<> findUser(ruvia::Context& c) {
         bool found = false;
         co_await loadUserFound(c, found);
         std::pmr::string body(c.allocator<char>());
@@ -72,13 +72,13 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> streamUsers(ruvia::Context& c) {
+    ruvia::Task<> streamUsers(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         co_await appendUsers(c, body);
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
+    ruvia::Task<> createUser(ruvia::Context& c) {
         const auto name = co_await c.req().text();
         std::uint64_t id = 0;
         co_await insertUser(c, name, id);
@@ -90,7 +90,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> transfer(ruvia::Context& c) {
+    ruvia::Task<> transfer(ruvia::Context& c) {
         co_await transferFunds(c);
         co_return c.text("transfer committed\n");
     }

@@ -39,7 +39,7 @@ public:
 RUVIA_RESPONSE_MODEL(UserResponse, RUVIA_OPTIONAL_FIELD(id, ruvia::String),
     RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
 
-ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(
+ruvia::Task<> exampleErrorHandler(
     ruvia::Context& c, ruvia::HttpErrorInfo error) {
     co_return c.error({.status = error.status(),
         .code = error.code(),
@@ -50,14 +50,14 @@ ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(
 // Prefix-scoped fallbacks: the longest matching registered prefix wins, on
 // whole path segments ("/api" scopes "/api/x" but never "/apix"); requests
 // outside every prefix keep using the app-wide handlers above.
-ruvia::Task<ruvia::HttpResponse> apiNotFound(ruvia::Context& c) {
+ruvia::Task<> apiNotFound(ruvia::Context& c) {
     c.status(ruvia::http_status::kNotFound);
     co_return c.error({.status = ruvia::http_status::kNotFound,
         .code = "api_not_found",
         .message = "no such API endpoint"});
 }
 
-ruvia::Task<ruvia::HttpResponse> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
+ruvia::Task<> apiError(ruvia::Context& c, ruvia::HttpErrorInfo error) {
     c.header("X-Api-Error", "true");
     co_return c.error({.status = error.status(),
         .code = error.code(),
@@ -101,11 +101,11 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
+    ruvia::Task<> hello(ruvia::Context& c) {
         co_return c.text("hello from ruvia\n");
     }
 
-    ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
+    ruvia::Task<> user(ruvia::Context& c) {
         UserResponse response({.resource = c.arena()});
         response.set<"id">(c.req().param("id").value_or("unknown"))
             .set<"name">("example-user")
@@ -113,7 +113,7 @@ private:
         co_return c.json(response);
     }
 
-    ruvia::Task<ruvia::HttpResponse> wildcard(ruvia::Context& c) {
+    ruvia::Task<> wildcard(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("wildcard=");
         body.append(c.req().param("*").value_or(""));
@@ -121,7 +121,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> inputs(ruvia::Context& c) {
+    ruvia::Task<> inputs(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("remote=");
         body.append(getConnInfo(c).remote().address());
@@ -141,7 +141,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
+    ruvia::Task<> echo(ruvia::Context& c) {
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
@@ -150,7 +150,7 @@ private:
         co_return c.text(std::move(owned));
     }
 
-    ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
+    ruvia::Task<> redirect(ruvia::Context& c) {
         co_return c.redirect({.location = "/api/hello"});
     }
 
@@ -158,7 +158,7 @@ private:
     // pattern is the route's identity, values are percent-encoded, and an
     // unregistered pattern throws at build time instead of emitting a dead
     // link. Works in handlers, middleware and fallback handlers alike.
-    ruvia::Task<ruvia::HttpResponse> links(ruvia::Context& c) {
+    ruvia::Task<> links(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("user=");
         body.append(c.urlFor("/api/users/:id", {c.req().param("id").value_or("0")}));
@@ -168,23 +168,23 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> fail(ruvia::Context&) {
+    ruvia::Task<> fail(ruvia::Context&) {
         throw ruvia::HttpError({.status = ruvia::http_status::kBadRequest,
             .code = "example_error",
             .message = "the example handler threw an HttpError"});
     }
 
-    ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
+    ruvia::Task<> health(ruvia::Context& c) {
         co_return c.text("ok\n");
     }
 
-    ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
+    ruvia::Task<> options(ruvia::Context& c) {
         c.status(ruvia::http_status::kNoContent);
         c.header("Allow", "GET, HEAD, OPTIONS");
         co_return c.text("");
     }
 
-    ruvia::Task<ruvia::HttpResponse> adminStatus(ruvia::Context& c) {
+    ruvia::Task<> adminStatus(ruvia::Context& c) {
         co_return c.text("admin ok\n");
     }
 };

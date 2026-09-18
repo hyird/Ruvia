@@ -47,7 +47,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> ok(ruvia::Context& c) {
+    ruvia::Task<> ok(ruvia::Context& c) {
         co_return c.text("ok\n");
     }
 };

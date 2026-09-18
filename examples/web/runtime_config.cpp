@@ -46,7 +46,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> runtime(ruvia::Context& c) {
+    ruvia::Task<> runtime(ruvia::Context& c) {
         co_return c.text("runtime configured\n");
     }
 };

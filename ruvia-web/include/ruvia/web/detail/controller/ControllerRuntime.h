@@ -114,14 +114,10 @@ class ControllerRegistrationAccess final {
     [[nodiscard]] static ControllerRouteHandler bind(ControllerT* instance) noexcept {
         using ResultT = typename ContextTaskResult<decltype(Handler)>::type;
         static_assert(ContextTaskResult<decltype(Handler)>::ok,
-            "handler must take Context& and return Task<HttpResponse> or Task<ResponseModel>");
-        if constexpr (std::is_same_v<ResultT, HttpResponse>) {
-            return ControllerRouteHandler(instance, &invoke<Handler>);
-        } else {
-            static_assert(isResponseModel<ResultT>,
-                "non-HttpResponse handler result must be a RUVIA_RESPONSE_MODEL");
-            return ControllerRouteHandler(instance, &invokeModel<Handler>);
-        }
+            "handler must take Context& and return Task<>");
+        static_assert(std::is_same_v<ResultT, HttpResponse>,
+            "ordinary handlers must return Task<>; serialize response models with c.json(model)");
+        return ControllerRouteHandler(instance, &invoke<Handler>);
     }
 
     template <Task<void> (ControllerT::*Handler)(Context&)>
@@ -151,12 +147,6 @@ class ControllerRegistrationAccess final {
     template <auto Handler>
     [[nodiscard]] static Task<HttpResponse> invoke(void* target, Context& context) {
         return (static_cast<ControllerT*>(target)->*Handler)(context);
-    }
-
-    template <auto Handler>
-    [[nodiscard]] static Task<HttpResponse> invokeModel(void* target, Context& context) {
-        auto model = co_await (static_cast<ControllerT*>(target)->*Handler)(context);
-        co_return context.json(model);
     }
 
     template <Task<void> (ControllerT::*Handler)(Context&)>

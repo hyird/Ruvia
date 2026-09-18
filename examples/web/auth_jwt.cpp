@@ -86,7 +86,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
+    ruvia::Task<> token(ruvia::Context& c) {
         auto options = signOptions(c);
         options.subject.assign(c.req().query("sub").value_or("example-user"));
         auto jwt = ruvia::jwtSign(options);
@@ -95,7 +95,7 @@ private:
 
     // The middleware published the verified identity as request state; the
     // handler reads it back by type, with no out-of-band channel.
-    ruvia::Task<ruvia::HttpResponse> me(ruvia::Context& c) {
+    ruvia::Task<> me(ruvia::Context& c) {
         const auto& user = c.requestState<AuthenticatedUser>();
         std::pmr::string reply(c.arena());
         reply.append("authenticated as ");
