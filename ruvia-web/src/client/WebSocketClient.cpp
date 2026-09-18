@@ -30,16 +30,19 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       worker_(loop_.handle()),
       memory_(),
       config_(config, memory_.resource()),
-      tlsContext_(asio::ssl::context::tls_client),
+      tlsContext_([&] {
+          asio::ssl::context context(asio::ssl::context::tls_client);
+          if (config_.scheme == WebSocketScheme::kWss) {
+              configureClientTlsContext(context, config_.transport.view());
+          }
+          return context;
+      }()),
       resolver_(loop_.ioContext()),
       stream_(loop_.ioContext(), tlsContext_),
       writeSignal_(worker_),
       closeState_(worker_),
       input_(memory_.allocator<char>()),
       selectedSubprotocol_(memory_.allocator<char>()) {
-    if (config_.scheme == WebSocketScheme::kWss) {
-        configureClientTlsContext(tlsContext_, config_.transport.view());
-    }
     input_.reserve(kWebSocketClientTransportBufferBytes);
 }
 

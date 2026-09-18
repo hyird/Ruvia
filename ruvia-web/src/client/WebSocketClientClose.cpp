@@ -174,7 +174,8 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
             if (count == 0) {
                 state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
-                co_return;
+                throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
+                    "WebSocket transport ended before peer Close");
             }
             state->input_.append(bytes.data(), count);
             continue;
