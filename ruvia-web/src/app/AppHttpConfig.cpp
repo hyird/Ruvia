@@ -108,7 +108,7 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
     if (descriptor.validatedModelTypeKey() != nullptr) {
         // A validator binds one model type to one route's body/fields; running
         // it for every route would fail requests that legitimately carry no
-        // such payload. Attach RUVIA_VALIDATE_* middlewares per route instead.
+        // such payload. Attach JsonBody<T> / QueryModel<T> / PathModel<T> on the route instead.
         throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
     }
     return detail::mutateStoppedApp(*this, *state_,

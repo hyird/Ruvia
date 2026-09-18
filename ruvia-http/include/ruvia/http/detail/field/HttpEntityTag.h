@@ -20,6 +20,10 @@ std::string_view httpTrimWeakEtagPrefix(Value&&) = delete;
     return value.size() >= 2 && value[0] == 'W' && value[1] == '/';
 }
 
+[[nodiscard]] inline bool httpIsStrongEtag(std::string_view value) noexcept {
+    return !value.empty() && value.front() == '"';
+}
+
 [[nodiscard]] inline bool httpStrongEtagEquals(
     std::string_view left, std::string_view right) noexcept {
     return !httpIsWeakEtag(left) && !httpIsWeakEtag(right) && left == right;

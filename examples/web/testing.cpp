@@ -33,7 +33,7 @@ public:
     RUVIA_CONTROLLER_GROUP("/notes")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/:id", note);
-    RUVIA_POST("/", create);
+    RUVIA_POST("/", create, ruvia::JsonBody<NoteRequest>);
     RUVIA_GET("/", stats);
     RUVIA_ROUTES_END
 
@@ -50,7 +50,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
-        const auto note = co_await c.req().json<NoteRequest>();
+        const auto& note = c.req().validated<NoteRequest>();
         ++c.workerState<NoteCounter>().stored;
         c.status(ruvia::http_status::kCreated);
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");

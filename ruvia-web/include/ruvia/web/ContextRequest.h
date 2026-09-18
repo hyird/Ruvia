@@ -633,23 +633,14 @@ public:
     [[nodiscard]] ScopedOperation<RequestBlob> blob() const;
     ScopedOperation<void> discardBody() const;
 
-    [[nodiscard]] ScopedOperation<JsonValue> jsonValue() const;
-
-    template <typename T>
-    [[nodiscard]] ScopedOperation<T> json() const;
-
-    template <typename T>
-    [[nodiscard]] ScopedOperation<T> form() const;
-
     // Optional format probes for endpoints that want to fall back when the
     // Content-Type is not the consumed media type. Once the media type selects
-    // JSON or form, a malformed body still throws the same 400 as json<T>(),
-    // jsonValue(), or form<T>(); nullopt never means "the selected format was
-    // invalid". Transport and
-    // protocol failures (unreadable body, unsupported Content-Encoding, decoded
-    // size over the limit) also throw because they describe the request stream.
-    [[nodiscard]] ScopedOperation<std::optional<JsonValue>> jsonValueIf() const;
-
+    // JSON or form, a malformed body still throws 400; nullopt never means
+    // "the selected format was invalid". Transport and protocol failures
+    // (unreadable body, unsupported Content-Encoding, decoded size over the
+    // limit) also throw because they describe the request stream. Typed JSON
+    // and form that must run field rules use JsonBody<T> / FormBody<T> and
+    // validated<T>().
     template <typename T>
     [[nodiscard]] ScopedOperation<std::optional<T>> jsonIf() const;
 
@@ -690,14 +681,8 @@ private:
 
     [[nodiscard]] static Task<std::span<const std::byte>> bytesTask(const Context* context);
     [[nodiscard]] static Task<RequestBlob> blobTask(const Context* context);
-    [[nodiscard]] static Task<JsonValue> jsonValueTask(const Context* context);
-    [[nodiscard]] static Task<std::optional<JsonValue>> jsonValueIfTask(const Context* context);
-    template <typename T>
-    [[nodiscard]] static Task<T> jsonModelTask(const Context* context);
     template <typename T>
     [[nodiscard]] static Task<std::optional<T>> jsonIfModelTask(const Context* context);
-    template <typename T>
-    [[nodiscard]] static Task<T> formModelTask(const Context* context);
     template <typename T>
     [[nodiscard]] static Task<std::optional<T>> formIfModelTask(const Context* context);
     [[nodiscard]] static Task<std::string_view> contextTextTask(const Context* context);

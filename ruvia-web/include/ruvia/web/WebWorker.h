@@ -44,7 +44,9 @@ public:
 
     [[nodiscard]] const WorkerHandle& worker() const& noexcept;
     const WorkerHandle& worker() const&& = delete;
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
+    // Same worker-reclaimable pool as Context::pool(). Posted jobs have no
+    // request arena; allocate temporary and result storage here.
+    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
 
 #ifdef RUVIA_ENABLE_DATABASE

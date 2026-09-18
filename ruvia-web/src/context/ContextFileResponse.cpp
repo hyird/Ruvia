@@ -22,7 +22,6 @@
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/static/FileConditionalRequest.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 #include "ruvia/web/detail/http/static/StaticPathNormalization.h"
@@ -258,13 +257,13 @@ template <typename ApplyResponseState>
 
     const auto method = request.knownMethod();
     const auto methodPlan = detail::httpConditionalMethodPlan(method);
-    const auto conditional = fileConditionalHeaders(request);
+    const auto conditional = detail::httpConditionalHeaders(request);
     // Response validator generation is optional, but request preconditions are
     // method semantics. In particular, If-Match / If-None-Match "*" test the
     // existence of this current representation without needing an ETag, and
     // date conditions can use the file metadata without emitting Last-Modified.
     if (methodPlan.evaluatesPreconditions) {
-        const auto etagConditions = fileEtagConditions(request, etag);
+        const auto etagConditions = detail::httpEtagPreconditions(request, etag);
         if (etagConditions.ifMatch.present && !etagConditions.ifMatch.matches()) {
             throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
                 .code = "precondition_failed",
@@ -276,7 +275,7 @@ template <typename ApplyResponseState>
         // when If-None-Match is present. Presence is tracked separately because an
         // empty list is still a present field and must take precedence over the date.
         if (!etagConditions.ifMatch.present && !conditional.ifUnmodifiedSince.empty() &&
-            !httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
+            !detail::httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
             throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
                 .code = "precondition_failed",
                 .message = "file precondition failed"});
@@ -293,7 +292,7 @@ template <typename ApplyResponseState>
 
         if (methodPlan.evaluatesIfModifiedSince && !etagConditions.ifNoneMatch.present &&
             !conditional.ifModifiedSince.empty() &&
-            httpDateNotModified(conditional.ifModifiedSince, validatorModifiedSeconds)) {
+            detail::httpDateNotModified(conditional.ifModifiedSince, validatorModifiedSeconds)) {
             return makeHeaderOnlyResponse(http_status::kNotModified);
         }
     }
@@ -311,7 +310,7 @@ template <typename ApplyResponseState>
         // before) skipped the check entirely and returned a 206. A range with
         // no If-Range is still honored without response validator headers.
         if (conditional.hasIfRange &&
-            (!emitResponseValidators || !ifRangeAllows(conditional.ifRange, etag,
+            (!emitResponseValidators || !detail::httpIfRangeAllows(conditional.ifRange, etag,
                                             validatorModifiedSeconds, lastModifiedIsActual))) {
             return makeFullFileResponse(std::nullopt);
         }

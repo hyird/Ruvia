@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "ruvia/web/detail/model/ModelSchema.h"
-#include "ruvia/web/detail/model/rule/RuleValidation.h"
+#include "ruvia/web/detail/model/rule/RulePack.h"
 
 namespace ruvia::detail {
 
@@ -20,11 +20,6 @@ struct ModelValidationAccess final {
     template <FixedString Field, typename ModelT>
     [[nodiscard]] static const auto& fieldValue(const ModelT& model) {
         return model.template ruviaFieldValue<Field>();
-    }
-
-    template <FixedString Field, typename ModelT>
-    [[nodiscard]] static constexpr bool fieldRequired(const ModelT&) noexcept {
-        return ModelT::template ruviaFieldRequired<Field>();
     }
 
     template <typename ModelT>
@@ -75,15 +70,39 @@ struct ModelValidationAccess final {
             });
     }
 
+    template <typename ModelT, typename ValidatorT>
+    static void validateModel(const ModelT& modelValue, ValidatorT& validator) {
+        validateStructure(modelValue, {}, validator);
+        validateFieldRules(modelValue, {}, validator);
+    }
+
+    template <typename ModelT, typename ValidatorT>
+    static void validateFieldRules(
+        const ModelT& modelValue, std::string_view prefix, ValidatorT& validator) {
+        model::visitModelFields(
+            modelValue, ModelT::ruviaSchema(), [&](const auto& descriptor, const auto& slot) {
+                using DescriptorT = std::remove_cvref_t<decltype(descriptor)>;
+                std::pmr::string path(validator.resource());
+                model::appendPath(path, prefix, slot.wireName());
+                typename DescriptorT::rules_type{}.validate(
+                    slot.state(), DescriptorT::required, slot.value(), path, validator);
+
+                if (slot.state() != ModelFieldState::kParsed || !slot.value()) {
+                    return;
+                }
+                validateNestedFieldRules(*slot.value(), path, validator);
+            });
+    }
+
 private:
     template <typename ValueT>
     [[nodiscard]] static bool valueStructureValid(const ValueT& value) {
         using T = std::remove_cvref_t<ValueT>;
-        if constexpr (JsonBody<T>::value) {
+        if constexpr (isRequestModel<T>) {
             return structureValid(value);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (JsonBody<std::remove_cvref_t<ElementT>>::value) {
+            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
                 for (const auto& element : value) {
                     if (!structureValid(element)) {
                         return false;
@@ -100,11 +119,11 @@ private:
     static void validateValueStructure(
         const ValueT& value, std::string_view path, ValidatorT& validator) {
         using T = std::remove_cvref_t<ValueT>;
-        if constexpr (JsonBody<T>::value) {
+        if constexpr (isRequestModel<T>) {
             validateStructure(value, path, validator);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (JsonBody<std::remove_cvref_t<ElementT>>::value) {
+            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     std::pmr::string itemPath(validator.resource());
@@ -114,73 +133,25 @@ private:
             }
         }
     }
+
+    template <typename ValueT, typename ValidatorT>
+    static void validateNestedFieldRules(
+        const ValueT& value, std::string_view path, ValidatorT& validator) {
+        using T = std::remove_cvref_t<ValueT>;
+        if constexpr (isRequestModel<T>) {
+            validateFieldRules(value, path, validator);
+        } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
+            using ElementT = typename T::value_type;
+            if constexpr (isRequestModel<std::remove_cvref_t<ElementT>>) {
+                std::size_t index = 0;
+                for (const auto& element : value) {
+                    std::pmr::string itemPath(validator.resource());
+                    model::appendIndexPath(itemPath, path, index++);
+                    validateFieldRules(element, itemPath, validator);
+                }
+            }
+        }
+    }
 };
 
 }  // namespace ruvia::detail
-
-namespace ruvia::detail::model {
-
-template <typename... RuleTs>
-class Rules final {
-public:
-    constexpr explicit Rules(RuleTs... rules) noexcept
-        : rules_(rules...) {
-        static_assert((isValidationRule<RuleTs>() && ...),
-            "RUVIA_RULE accepts only validation rules such as RUVIA_REQUIRED, RUVIA_MIN, "
-            "RUVIA_MAX, "
-            "RUVIA_ONE_OF, RUVIA_EMAIL, RUVIA_PATTERN, RUVIA_REGEX, RUVIA_CUSTOM, "
-            "RUVIA_NESTED, and RUVIA_EACH.");
-    }
-
-    [[nodiscard]] constexpr bool required() const noexcept {
-        return (isRequiredRule<RuleTs>() || ... || false);
-    }
-
-    [[nodiscard]] constexpr std::string_view requiredMessage() const noexcept {
-        std::string_view result{"is required"};
-        std::apply(
-            [&result](const auto&... rules) { (setRequiredMessage(result, rules), ...); }, rules_);
-        return result;
-    }
-
-    template <typename ValueT, typename ValidatorT>
-    void validate(ModelFieldState state, bool fieldRequired, const std::optional<ValueT>& value,
-        std::string_view path, ValidatorT& validator) const {
-        if (state != ModelFieldState::kParsed) {
-            if (state == ModelFieldState::kMissing && required() && !fieldRequired) {
-                validator.add(path, "required", requiredMessage());
-            }
-            return;
-        }
-
-        if (value) {
-            validatePresent(*value, path, validator);
-        }
-    }
-
-private:
-    template <typename RuleT>
-    static constexpr void setRequiredMessage(std::string_view& result, const RuleT& rule) noexcept {
-        if constexpr (isRequiredRule<RuleT>()) {
-            result = rule.message;
-        } else {
-            (void)result;
-            (void)rule;
-        }
-    }
-
-    template <typename ValueT, typename ValidatorT>
-    void validatePresent(const ValueT& value, std::string_view path, ValidatorT& validator) const {
-        std::apply(
-            [&value, path, &validator](
-                const auto&... rules) { (validateRule(value, path, validator, rules), ...); },
-            rules_);
-    }
-
-    std::tuple<RuleTs...> rules_;
-};
-
-template <typename... RuleTs>
-Rules(RuleTs...) -> Rules<RuleTs...>;
-
-}  // namespace ruvia::detail::model

@@ -68,11 +68,7 @@ public:
     }
 };
 
-class ScopedValidationValidator final : public ruvia::Middleware<ScopedValidationValidator> {
-public:
-    RUVIA_VALIDATE_JSON(
-        ScopedValidationRequest, RUVIA_RULE(value, RUVIA_REQUIRED("value is required")))
-};
+
 
 class ValidationScopeProbe final : public ruvia::Middleware<ValidationScopeProbe> {
 public:
@@ -784,13 +780,13 @@ inline ruvia::Task<ruvia::HttpResponse> urlForEchoHandler(void*, ruvia::Context&
 }
 
 inline ruvia::Task<ruvia::HttpResponse> jsonModelEchoHandler(void*, ruvia::Context& context) {
-    const auto body = co_await context.req().json<ScopedValidationRequest>();
+    const auto& body = context.req().validated<ScopedValidationRequest>();
     co_return context.body(
         body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
 }
 
 inline ruvia::Task<ruvia::HttpResponse> formModelEchoHandler(void*, ruvia::Context& context) {
-    const auto body = co_await context.req().form<ScopedValidationRequest>();
+    const auto& body = context.req().validated<ScopedValidationRequest>();
     co_return context.body(
         body.get<"value">().has_value() ? body.get<"value">()->view() : "missing");
 }
@@ -809,19 +805,14 @@ inline ruvia::Task<ruvia::HttpResponse> formIfEchoHandler(void*, ruvia::Context&
                                : "no-form");
 }
 
-inline ruvia::Task<ruvia::HttpResponse> jsonValueIfEchoHandler(void*, ruvia::Context& context) {
-    const auto body = co_await context.req().jsonValueIf();
-    co_return context.body(std::string_view(body.has_value() ? "json" : "no-json"));
-}
-
 // Dispatches one GET /x with an optional Content-Type header and body.
-inline DispatchResult dispatchBodyRequest(
-    RouteHandler handler, std::string_view contentType, std::string_view body) {
+inline DispatchResult dispatchBodyRequest(RouteHandler handler, std::string_view contentType,
+    std::string_view body,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
     ruvia::detail::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
-        std::span<const ControllerMiddlewareDescriptor>{},
-        std::span<const ControllerMiddlewareDescriptor>{});
+        std::span<const ControllerMiddlewareDescriptor>{}, routeMiddlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
 

@@ -45,6 +45,8 @@ namespace ruvia::detail {
 class RouteRateLimitResult;
 }  // namespace ruvia::detail
 
+RUVIA_REQUEST_MODEL(SurfaceJsonMessage, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+
 #ifdef RUVIA_GET_DYNAMIC
 #error \
     "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
@@ -65,23 +67,7 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     }
 }
 
-std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
-    switch (kind) {
-        case ruvia::JsonValue::Kind::kObject:
-            return "object";
-        case ruvia::JsonValue::Kind::kArray:
-            return "array";
-        case ruvia::JsonValue::Kind::kString:
-            return "string";
-        case ruvia::JsonValue::Kind::kNumber:
-            return "number";
-        case ruvia::JsonValue::Kind::kBoolean:
-            return "boolean";
-        case ruvia::JsonValue::Kind::kNull:
-            return "null";
-    }
-    return "unknown";
-}
+
 
 RUVIA_RESPONSE_MODEL(SurfaceJsonResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
@@ -175,8 +161,8 @@ public:
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
-    RUVIA_POST("/json-object", jsonValueBody);
-    RUVIA_POST("/json-value", jsonValueBody);
+    RUVIA_POST("/json-object", jsonMessage, ruvia::JsonBody<SurfaceJsonMessage>);
+    RUVIA_POST("/json-raw", jsonMessage, ruvia::JsonBody<SurfaceJsonMessage>);
     RUVIA_POST("/discard", discard);
     RUVIA_PUT("/items/:id", replaceItem);
     RUVIA_PATCH("/items/:id", patchItem);
@@ -523,14 +509,12 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<ruvia::HttpResponse> jsonValueBody(ruvia::Context& c) {
-        const auto json = co_await c.req().jsonValue();
+    ruvia::Task<ruvia::HttpResponse> jsonMessage(ruvia::Context& c) {
+        const auto json = c.req().validatedJson<SurfaceJsonMessage>();
         std::pmr::string body(c.allocator<char>());
-        body.append("json-value kind=");
-        body.append(jsonKindName(json.kind()));
-        body.append(" bytes=");
-        appendUnsigned(body, json.view().size());
-        if (auto message = json.get<ruvia::String>("message")) {
+        body.append("json-value bytes=");
+        appendUnsigned(body, json.raw().size());
+        if (const auto& message = json.value().get<"message">()) {
             body.append("\nmessage=");
             body.append(message->view());
         }

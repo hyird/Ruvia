@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/model/parse/FormParser.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
@@ -18,10 +18,7 @@ namespace ruvia::detail {
     if (contentType.empty()) {
         return false;
     }
-    const auto semicolon = contentType.find(';');
-    const auto mediaType = httpTrimOws(
-        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
-    return httpAsciiEqualsIgnoreCase(mediaType, expected);
+    return httpAsciiEqualsIgnoreCase(httpMediaTypeOnly(contentType), expected);
 }
 
 }  // namespace ruvia::detail

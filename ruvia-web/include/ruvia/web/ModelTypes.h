@@ -35,20 +35,6 @@ enum class ModelStringStorage : std::uint8_t {
 
 }  // namespace detail
 
-template <typename T, typename = void>
-struct JsonBody : std::false_type {};
-
-template <typename T>
-    requires requires { typename T::RuviaRequestModelSchema; }
-struct JsonBody<T, void> : std::true_type {};
-
-template <typename T, typename = void>
-struct FormBody : std::false_type {};
-
-template <typename T>
-    requires requires { typename T::RuviaRequestModelSchema; }
-struct FormBody<T, void> : std::true_type {};
-
 struct ModelOptions final {
     std::pmr::memory_resource* resource{nullptr};
 };

@@ -9,6 +9,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/Middleware.h"
+#include "ruvia/web/RequestValidation.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 namespace ruvia::detail {
@@ -245,38 +246,3 @@ private:                                                                        
         auto& ruviaRouteScope = ruviaRouteGroup;
 
 #define RUVIA_GROUP_END }
-
-#define RUVIA_VALIDATE_BODY(target, body_type, ...)                                              \
-public:                                                                                          \
-    static_assert(::ruvia::detail::isRequestModel<body_type>,                                    \
-        "RUVIA_VALIDATE_* requires a RUVIA_REQUEST_MODEL");                                      \
-    using RuviaValidationBody = body_type;                                                       \
-    void validate(const body_type& body, ::ruvia::Validator& validator) const {                  \
-        ::ruvia::detail::ModelValidationAccess::validateStructure(body, {}, validator);          \
-        validateNested(body, {}, validator);                                                     \
-    }                                                                                            \
-    void validateNested(                                                                         \
-        const body_type& body, ::std::string_view prefix, ::ruvia::Validator& validator) const { \
-        RUVIA_VALIDATION_FOR_EACH(RUVIA_VALIDATE_RULE_FIELD, body_type, __VA_ARGS__)             \
-    }                                                                                            \
-    [[nodiscard]] ::ruvia::Task<void> handle(::ruvia::Context& c, ::ruvia::Next& next) {         \
-        return ::ruvia::detail::invokeModelValidator<target, body_type>(*this, c, next);         \
-    }
-
-#define RUVIA_VALIDATE_JSON(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kJson, body_type, __VA_ARGS__)
-
-#define RUVIA_VALIDATE_FORM(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kForm, body_type, __VA_ARGS__)
-
-#define RUVIA_VALIDATE_QUERY(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kQuery, body_type, __VA_ARGS__)
-
-#define RUVIA_VALIDATE_PARAM(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kParam, body_type, __VA_ARGS__)
-
-#define RUVIA_VALIDATE_HEADER(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kHeader, body_type, __VA_ARGS__)
-
-#define RUVIA_VALIDATE_COOKIE(body_type, ...) \
-    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kCookie, body_type, __VA_ARGS__)

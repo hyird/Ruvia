@@ -81,7 +81,7 @@ template <typename T>
         return "must be a string";
     } else if constexpr (detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>) {
         return "must be an array";
-    } else if constexpr (JsonBody<ValueT>::value) {
+    } else if constexpr (isRequestModel<ValueT>) {
         return "must be an object";
     } else if constexpr (detail::isRuviaScalar<ValueT>) {
         if constexpr (std::is_same_v<detail::ModelScalarValueT<ValueT>, bool>) {
@@ -135,10 +135,7 @@ inline void appendIndexPath(std::pmr::string& output, std::string_view prefix, s
     output.push_back(']');
 }
 
-template <typename Rule>
-[[nodiscard]] constexpr bool isRequiredRule() noexcept {
-    return std::is_same_v<std::remove_cvref_t<Rule>, Required>;
-}
+
 
 template <typename Rule>
 [[nodiscard]] constexpr bool isDefaultRule() noexcept {

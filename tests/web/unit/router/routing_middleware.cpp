@@ -13,7 +13,7 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
         auto& impl = ruvia::detail::RouterImpl::from(router);
         const std::array middlewares{
             ruvia::detail::makeMiddlewareDescriptor<ValidationScopeProbe>(),
-            ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
+            ruvia::detail::makeMiddlewareDescriptor<ruvia::JsonBody<ScopedValidationRequest>>()};
         impl.registerRoute(HttpKnownMethod::kPost, path("/validated-scope"),
             RouteHandler(nullptr, &scopedValidationHandler), RequestBodyMode::kBuffered,
             std::span<const ControllerMiddlewareDescriptor>{}, std::span(middlewares));

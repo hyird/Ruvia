@@ -13,26 +13,11 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace ruvia::detail {
-
-inline std::string_view hostWithoutExplicitPort(std::string_view host) noexcept {
-    if (host.empty()) {
-        return host;
-    }
-    if (host.front() == '[') {
-        const auto close = host.find(']');
-        if (close == std::string_view::npos) {
-            return host;
-        }
-        return host.substr(0, close + 1);
-    }
-
-    const auto colon = host.find(':');
-    return colon == std::string_view::npos ? host : host.substr(0, colon);
-}
 
 inline void appendHttpsPort(std::pmr::string& location, std::uint16_t httpsPort) {
     if (httpsPort == 443) {
@@ -55,8 +40,9 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kPermanentRedirect);
 
-    const auto host =
-        hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
+    const auto hostField = requestKnownHeader(request, RequestKnownHeader::kHost);
+    const auto authority = parseHttpAuthority(hostField);
+    const auto host = authority.has_value() ? authority->host() : std::string_view{};
     auto path = request.path();
     if (path.empty() || path.front() != '/') {
         path = "/";

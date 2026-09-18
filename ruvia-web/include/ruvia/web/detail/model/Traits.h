@@ -96,8 +96,12 @@ template <typename T>
 struct ResponseModel<T, void> : std::true_type {};
 
 template <typename T>
+inline constexpr bool isRequestModel =
+    requires { typename std::remove_cvref_t<T>::RuviaRequestModelSchema; };
+
+template <typename T>
 struct RuviaRequestModelFieldTraits : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> ||
-                                                         JsonBody<std::remove_cvref_t<T>>::value> {
+                                                         isRequestModel<std::remove_cvref_t<T>>> {
 };
 
 template <typename ValueT>
@@ -112,8 +116,7 @@ template <typename T>
 inline constexpr bool isRequestModelField =
     RuviaRequestModelFieldTraits<std::remove_cvref_t<T>>::value;
 
-template <typename T>
-inline constexpr bool isRequestModel = JsonBody<std::remove_cvref_t<T>>::value;
+
 
 template <typename T>
 inline constexpr bool isResponseModel = ResponseModel<std::remove_cvref_t<T>>::value;

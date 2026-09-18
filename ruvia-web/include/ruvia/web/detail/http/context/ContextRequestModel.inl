@@ -13,28 +13,8 @@
 namespace ruvia {
 
 template <typename T>
-Task<T> ContextRequest::jsonModelTask(const Context* context) {
-    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
-    if (!contextContentTypeMatches(context, "application/json")) {
-        detail::throwInvalidJsonContentType();
-    }
-    const auto requestBody = co_await contextTextTask(context);
-    auto parsed =
-        detail::ModelParseAccess::parseJsonBorrowed<T>(requestBody, contextResource(context));
-    if (!parsed) {
-        detail::throwInvalidJsonBody();
-    }
-    co_return std::move(*parsed);
-}
-
-template <typename T>
-ScopedOperation<T> ContextRequest::json() const {
-    return detail::makeScopedOperation(contextOperationScope(context_), jsonModelTask<T>(context_));
-}
-
-template <typename T>
 Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
-    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
+    static_assert(detail::isRequestModel<T>, "JSON body type must use RUVIA_REQUEST_MODEL");
     if (!contextContentTypeMatches(context, "application/json")) {
         co_return std::nullopt;
     }
@@ -57,28 +37,8 @@ ScopedOperation<std::optional<T>> ContextRequest::jsonIf() const {
 }
 
 template <typename T>
-Task<T> ContextRequest::formModelTask(const Context* context) {
-    static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
-    if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
-        detail::throwInvalidFormContentType();
-    }
-    const auto requestBody = co_await contextTextTask(context);
-    auto parsed =
-        detail::ModelParseAccess::parseFormBorrowed<T>(requestBody, contextResource(context));
-    if (!parsed) {
-        detail::throwInvalidFormBody();
-    }
-    co_return std::move(*parsed);
-}
-
-template <typename T>
-ScopedOperation<T> ContextRequest::form() const {
-    return detail::makeScopedOperation(contextOperationScope(context_), formModelTask<T>(context_));
-}
-
-template <typename T>
 Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
-    static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
+    static_assert(detail::isRequestModel<T>, "form body type must use RUVIA_REQUEST_MODEL");
     if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
         co_return std::nullopt;
     }

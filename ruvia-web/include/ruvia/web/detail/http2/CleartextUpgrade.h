@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -13,8 +12,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/Http2CleartextPreface.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -22,61 +20,20 @@
 
 namespace ruvia::detail {
 
-enum class CleartextHttp2Probe : std::uint8_t {
-    kHttp1,
-    kNeedMorePreface,
-    kCompletePreface,
-    kDropConnection,
-};
-
 enum class CleartextHttp2DispatchResult : std::uint8_t {
     kContinueHttp1,
     kContinueReadLoop,
     kSessionFinished,
 };
 
-// Runtime policy for bytes that reached the HTTP/1 parser but do not look like
-// an HTTP request line. A real HTTP-version token receives the protocol error;
-// obvious non-HTTP traffic is dropped without reflecting an error response.
-[[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(
-    std::string_view buffer, Http1ServerRequestParseFailureSource failureSource) noexcept {
-    if (failureSource != Http1ServerRequestParseFailureSource::kRequestLine) {
-        return false;
-    }
-
-    const auto lineEnd = buffer.find("\r\n");
-    if (lineEnd == std::string_view::npos) {
-        return false;
-    }
-
-    auto line = buffer.substr(0, lineEnd);
-    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
-        line.remove_suffix(1);
-    }
-
-    const auto versionStart = line.find_last_of(" \t");
-    if (versionStart == std::string_view::npos || versionStart + 1 >= line.size()) {
-        return false;
-    }
-    const auto version = line.substr(versionStart + 1);
-    return !version.starts_with("HTTP/");
-}
-
-[[nodiscard]] inline CleartextHttp2Probe probeCleartextHttp2Preface(
+// AutoHTTPS reserves the cleartext listener for HTTP/1 redirects and therefore
+// refuses prior-knowledge HTTP/2. Preface classification itself is protocol.
+[[nodiscard]] inline Http2CleartextPrefaceProbe probeCleartextHttp2Preface(
     std::string_view current, bool autoHttpsEnabled) noexcept {
-    if (autoHttpsEnabled || current.empty()) {
-        return CleartextHttp2Probe::kHttp1;
+    if (autoHttpsEnabled) {
+        return Http2CleartextPrefaceProbe::kHttp1;
     }
-
-    if (current.starts_with(kHttp2ClientPreface) || kHttp2ClientPreface.starts_with(current)) {
-        return current.size() >= kHttp2ClientPreface.size() ? CleartextHttp2Probe::kCompletePreface
-                                                            : CleartextHttp2Probe::kNeedMorePreface;
-    }
-
-    if (current.starts_with("PRI ")) {
-        return CleartextHttp2Probe::kDropConnection;
-    }
-    return CleartextHttp2Probe::kHttp1;
+    return probeHttp2CleartextPreface(current);
 }
 
 // Entry point for a direct HTTP/2 connection (TLS ALPN h2, or a cleartext client
@@ -97,12 +54,12 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     bool autoHttpsEnabled) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, autoHttpsEnabled)) {
-        case CleartextHttp2Probe::kHttp1:
+        case Http2CleartextPrefaceProbe::kHttp1:
             co_return CleartextHttp2DispatchResult::kContinueHttp1;
-        case CleartextHttp2Probe::kCompletePreface:
+        case Http2CleartextPrefaceProbe::kCompletePreface:
             co_await runHttp2ServerSession(setup, current);
             co_return CleartextHttp2DispatchResult::kSessionFinished;
-        case CleartextHttp2Probe::kNeedMorePreface: {
+        case Http2CleartextPrefaceProbe::kNeedMorePreface: {
             setup.scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
             auto readCompletion = co_await asyncAsio<std::size_t>(
                 [&setup, &readBuffer, usedBytes](auto handler) mutable {
@@ -119,7 +76,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             setup.scannerEntry.touch();
             co_return CleartextHttp2DispatchResult::kContinueReadLoop;
         }
-        case CleartextHttp2Probe::kDropConnection:
+        case Http2CleartextPrefaceProbe::kDropConnection:
             co_return CleartextHttp2DispatchResult::kSessionFinished;
     }
 

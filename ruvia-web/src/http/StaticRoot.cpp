@@ -18,7 +18,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
@@ -119,9 +119,7 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 
 [[nodiscard]] bool staticContentTypeEligibleForPrecompression(
     std::string_view contentType) noexcept {
-    const auto semicolon = contentType.find(';');
-    const auto mediaType = detail::httpTrimOws(
-        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    const auto mediaType = detail::httpMediaTypeOnly(contentType);
     if (mediaType.empty()) {
         return false;
     }

@@ -1,7 +1,12 @@
+#include <cstddef>
+#include <ctime>
 #include <string_view>
 
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/field/HttpConditionalRequest.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
 #include "test_harness.h"
 
@@ -92,4 +97,67 @@ RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
         httpParseEtagListMatches(R"("current", malformed)", R"("current")", true);
     RUVIA_CHECK(!malformedAfterMatch.valid);
     RUVIA_CHECK(!malformedAfterMatch.matched);
+}
+
+RUVIA_TEST(http_date_precondition_comparisons) {
+    using ruvia::detail::httpDateNotModified;
+    using ruvia::detail::httpDateUnmodified;
+
+    constexpr std::time_t canonical{784111777};
+    const auto later = canonical + 1;
+    const auto earlier = canonical - 1;
+    constexpr auto header = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+    RUVIA_CHECK(httpDateNotModified(header, canonical));
+    RUVIA_CHECK(httpDateNotModified(header, earlier));
+    RUVIA_CHECK(!httpDateNotModified(header, later));
+    RUVIA_CHECK(!httpDateNotModified("not-a-date", canonical));
+
+    RUVIA_CHECK(httpDateUnmodified(header, canonical));
+    RUVIA_CHECK(httpDateUnmodified(header, earlier));
+    RUVIA_CHECK(!httpDateUnmodified(header, later));
+    RUVIA_CHECK(httpDateUnmodified("not-a-date", later));
+}
+
+RUVIA_TEST(http_if_range_requires_exact_validator) {
+    using ruvia::detail::httpIfRangeAllows;
+
+    constexpr std::time_t canonical{784111777};
+    constexpr auto etag = R"("abc")";
+    constexpr auto date = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+    RUVIA_CHECK(!httpIfRangeAllows("", etag, canonical, true));
+    RUVIA_CHECK(httpIfRangeAllows(etag, etag, canonical, true));
+    RUVIA_CHECK(!httpIfRangeAllows(R"(W/"abc")", etag, canonical, true));
+    RUVIA_CHECK(httpIfRangeAllows(date, etag, canonical, true));
+    RUVIA_CHECK(!httpIfRangeAllows(date, etag, canonical + 1, true));
+    RUVIA_CHECK(!httpIfRangeAllows(date, etag, canonical, false));
+}
+
+RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
+    using ruvia::HttpHeaderView;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+    using ruvia::detail::httpEtagPreconditions;
+
+    auto request = HttpRequestAccess::make();
+    const auto noneMatchSlot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfNoneMatch);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request, HttpHeaderView("If-None-Match", R"("current")"), noneMatchSlot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request, HttpHeaderView("If-None-Match", R"("stale")"), noneMatchSlot));
+
+    const auto matched = httpEtagPreconditions(request, R"("current")");
+    RUVIA_CHECK(matched.ifNoneMatch.present);
+    RUVIA_CHECK(matched.ifNoneMatch.matches());
+    RUVIA_CHECK_EQ(matched.ifNoneMatch.lineCount, std::size_t{2});
+
+    auto wildcard = HttpRequestAccess::make();
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        wildcard, HttpHeaderView("If-Match", "*"),
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfMatch)));
+    const auto existence = httpEtagPreconditions(wildcard, R"("unused")");
+    RUVIA_CHECK(existence.ifMatch.present);
+    RUVIA_CHECK(existence.ifMatch.matches());
+    RUVIA_CHECK(existence.ifMatch.wildcard);
 }
