@@ -40,6 +40,8 @@ ruvia_install_public_header_closure(http include/ruvia/http)
 
 # Compile-time contracts consumed by ruvia-web's installed template surface.
 ruvia_install_public_headers(http
+    include/ruvia/http/detail/field/HttpMediaType.h
+    include/ruvia/http/detail/field/HttpQualityValue.h
     include/ruvia/http/detail/parser/HttpRequestTarget.h
     include/ruvia/http/detail/util/HttpNumberFormat.h)
 
