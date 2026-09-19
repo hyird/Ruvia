@@ -19,7 +19,7 @@
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/websocket/WsConnection.h"
+#include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/ClientCloseState.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
@@ -152,7 +152,7 @@ private:
 
     void requireCurrent() const;
     void requireOpen() const;
-    [[nodiscard]] WsConnection& requireProtocol() noexcept;
+    [[nodiscard]] ruvia::WebSocketConnection& requireProtocol() noexcept;
     [[nodiscard]] std::uint16_t port() const noexcept;
     void closeOnWorker(AbortReason reason) noexcept;
     void startCloseOnWorker() noexcept;
@@ -181,7 +181,7 @@ private:
         AbortReason reason);
     void disarm(WorkerTimerRegistration& timer) noexcept;
     void throwAbort() const;
-    [[nodiscard]] static bool generateMask(void*, WsMaskKey& key) noexcept;
+    [[nodiscard]] static bool generateMask(void*, WebSocketMaskKey& key) noexcept;
 
     EventLoop loop_;
     WorkerHandle worker_;
@@ -198,7 +198,7 @@ private:
     WorkerSignal writeSignal_;
     ClientCloseState closeState_;
     std::pmr::string input_;
-    std::optional<WsConnection> protocol_;
+    std::optional<ruvia::WebSocketConnection> protocol_;
     std::pmr::string selectedSubprotocol_;
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;

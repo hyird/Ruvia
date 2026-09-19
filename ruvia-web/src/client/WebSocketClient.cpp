@@ -77,7 +77,7 @@ void WebSocketClientState::requireOpen() const {
     }
 }
 
-WsConnection& WebSocketClientState::requireProtocol() noexcept {
+ruvia::WebSocketConnection& WebSocketClientState::requireProtocol() noexcept {
     if (!protocol_.has_value()) {
         std::terminate();
     }
@@ -88,7 +88,7 @@ std::uint16_t WebSocketClientState::port() const noexcept {
     return config_.port.value_or(config_.scheme == WebSocketScheme::kWss ? 443 : 80);
 }
 
-bool WebSocketClientState::generateMask(void*, WsMaskKey& key) noexcept {
+bool WebSocketClientState::generateMask(void*, WebSocketMaskKey& key) noexcept {
     return RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), static_cast<int>(key.size())) ==
            1;
 }

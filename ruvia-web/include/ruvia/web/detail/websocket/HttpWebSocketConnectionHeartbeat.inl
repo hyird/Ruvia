@@ -47,7 +47,7 @@ Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.
         const auto pingSentAtMs = webSocketSteadyNowMs();
-        if (protocol_.livenessMode() == WsLivenessMode::kOpen &&
+        if (protocol_.livenessMode() == WebSocketLivenessMode::kOpen &&
             std::holds_alternative<WebSocketSendingPing>(livenessState_)) {
             livenessState_ = WebSocketAwaitingPong(pingSentAtMs);
         }

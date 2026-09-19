@@ -5,6 +5,10 @@
 
 namespace ruvia {
 
+enum class WebSocketLivenessMode : std::uint8_t { kOpen,
+    kAwaitingPeerClose,
+    kInactive };
+
 enum class WebSocketOpcode : std::uint8_t {
     kText = 0x1,
     kBinary = 0x2,

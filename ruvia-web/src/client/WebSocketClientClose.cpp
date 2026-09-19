@@ -146,7 +146,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
         state->requireOpen();
         WriteGuard writeGuard(*state, WritePhase::kApplication);
         const auto submitted = state->requireProtocol().submitClose(options.code, reason);
-        if (submitted != WsCloseSubmitStatus::kAccepted) {
+        if (submitted != WebSocketCloseSubmitStatus::kAccepted) {
             throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                 "invalid WebSocket client close payload");
         }
@@ -160,11 +160,11 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
         AbortReason::kTimeout);
     std::array<char, kWebSocketClientCloseHandshakeBufferBytes> bytes{};
     for (;;) {
-        std::optional<WsEvent> event;
+        std::optional<WebSocketEvent> event;
         {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
-            event = state->requireProtocol().poll();
+            event = state->requireProtocol().nextEvent();
             if (event.has_value() && event->ping() != nullptr) {
                 co_await state->flushOutput();
             }
@@ -177,7 +177,7 @@ Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState
                 throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                     "WebSocket transport ended before peer Close");
             }
-            state->input_.append(bytes.data(), count);
+            (void)state->requireProtocol().feed(std::string_view(bytes.data(), count));
             continue;
         }
         if (event->protocolError() != nullptr) {
