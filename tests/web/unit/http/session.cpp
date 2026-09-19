@@ -326,3 +326,43 @@ RUVIA_TEST(session_id_validation_accepts_only_lowercase_hex) {
     RUVIA_CHECK(!isValidSessionId("../../etc"));                        // path-traversal shape can never validate
     RUVIA_CHECK(!isValidSessionId(std::string_view("dead\0beef", 9)));  // embedded NUL
 }
+
+RUVIA_TEST(session_commit_freezes_before_io_and_failure_is_terminal) {
+    ruvia::detail::ContextSessionState state(std::pmr::new_delete_resource());
+    state.bind();
+    state.set("user=1");
+    RUVIA_CHECK(state.beginCommit());
+    int rejections = 0;
+    try {
+        state.set("user=2");
+    } catch (const std::logic_error&) {
+        ++rejections;
+    }
+    try {
+        state.clear();
+    } catch (const std::logic_error&) {
+        ++rejections;
+    }
+    try {
+        state.regenerate();
+    } catch (const std::logic_error&) {
+        ++rejections;
+    }
+    try {
+        (void)state.beginCommit();
+    } catch (const std::logic_error&) {
+        ++rejections;
+    }
+    RUVIA_CHECK_EQ(rejections, 4);
+    state.failCommit(std::make_exception_ptr(std::runtime_error("storage failed")));
+    for (int attempt = 0; attempt != 2; ++attempt) {
+        bool failed = false;
+        try {
+            (void)state.beginCommit();
+        } catch (const std::runtime_error& error) {
+            failed = std::string_view(error.what()) == "storage failed";
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(state.data(), std::string_view("user=1"));
+    }
+}

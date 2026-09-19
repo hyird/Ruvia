@@ -20,6 +20,8 @@
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/Session.h"
+#include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -57,7 +59,7 @@ using Http1BorrowTestSink =
 
 class CapturingStreamSink final {
 public:
-    using StreamingHeadThunk = HttpResponse (*)(Context&);
+    using StreamingHeadThunk = Task<HttpResponse> (*)(Context&);
 
     explicit CapturingStreamSink(bool failUncommittedEnd) noexcept
         : failUncommittedEnd_(failUncommittedEnd) {}
@@ -86,7 +88,7 @@ public:
 
     Task<void> write(std::string_view chunk) {
         if (!chunk.empty()) {
-            commit(ResponseTrailerIntent::kNone);
+            co_await commit(ResponseTrailerIntent::kNone);
         }
         co_return;
     }
@@ -95,7 +97,7 @@ public:
         if (failUncommittedEnd_ && !commitPlan_.has_value()) {
             throw std::runtime_error("peer aborted before the test sink committed a final head");
         }
-        commit(trailers.empty() ? ResponseTrailerIntent::kNone : ResponseTrailerIntent::kPresent);
+        co_await commit(trailers.empty() ? ResponseTrailerIntent::kNone : ResponseTrailerIntent::kPresent);
         co_return;
     }
 
@@ -104,14 +106,14 @@ public:
     }
 
 private:
-    void commit(ResponseTrailerIntent trailerIntent) {
+    Task<void> commit(ResponseTrailerIntent trailerIntent) {
         if (commitPlan_.has_value()) {
-            return;
+            co_return;
         }
         if (context_ == nullptr || streamingHead_ == nullptr) {
             throw std::logic_error("test response stream context is not bound");
         }
-        const auto response = streamingHead_(*context_);
+        const auto response = co_await streamingHead_(*context_);
         commitPlan_.emplace(
             ruvia::detail::httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp1Chunked,
                 HttpKnownMethod::kGet, response.status(), trailerIntent));
@@ -261,4 +263,29 @@ RUVIA_TEST(response_stream_dispatch_types_precommit_failure_response) {
         const auto recovered = std::move(*recoveredFailure).takeResponse();
         RUVIA_CHECK_EQ(recovered.status(), ruvia::http_status::kBadGateway);
     }
+}
+
+RUVIA_TEST(response_stream_first_write_commits_session_and_freezes_mutations) {
+    struct State {
+        bool frozen{false};
+        bool retained{false};
+    } state;
+    auto handler = [](void* target, Context& context) -> Task<void> {
+        auto& observed = *static_cast<State*>(target);
+        ruvia::detail::SessionAccess::bind(context);
+        auto session = context.session();
+        session.set("user=1");
+        co_await context.stream().write("first");
+        try {
+            session.set("user=2");
+        } catch (const std::logic_error&) {
+            observed.frozen = true;
+        }
+        co_await context.stream().write("second");
+        observed.retained = session.data() == "user=1";
+    };
+    auto result = dispatchStream(RouteStreamHandler(&state, handler), false);
+    RUVIA_CHECK(result.completed() != nullptr);
+    RUVIA_CHECK(state.frozen);
+    RUVIA_CHECK(state.retained);
 }

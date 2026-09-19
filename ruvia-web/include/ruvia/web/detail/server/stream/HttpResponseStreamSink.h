@@ -99,7 +99,7 @@ private:
         }
 
         try {
-            auto response = state_.streamingHead();
+            auto response = co_await state_.streamingHead();
             compression_.prepare(plan_.requestMethod(), response, kind_);
             auto prepareResult =
                 prepareHttp1ResponseStreamHead(std::move(response), kind_, plan_, trailerIntent);

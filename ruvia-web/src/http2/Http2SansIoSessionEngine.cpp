@@ -41,6 +41,7 @@
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
+#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
 
 namespace ruvia::detail {
 
@@ -309,8 +310,10 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 using WsConnection = WebSocketConnection<WsTransport>;
                 std::optional<WsConnection> webSocketConnection;
                 auto upgradeAndRun = [&](Context& context) -> Task<void> {
+                    const auto responseHeaders = webSocketResponseHeaders(context);
                     auto negotiation = makeWebSocketServerNegotiation(
                         request, {.supportedSubprotocols = webSocketEndpoint->subprotocols(),
+                                     .responseHeaders = responseHeaders,
                                      .resource = requestMemory.resource()});
                     const auto handshakeResult =
                         connection_.submitWebSocketHandshake(streamId, std::move(negotiation));
@@ -318,6 +321,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     if (submittedHandshake == nullptr) {
                         co_return;
                     }
+                    ContextAccess::markWebSocketHandshakeStarted(context);
                     wakeWriter();
                     webSocketConnection.emplace(
                         WsTransport(connection_, streamId, streamingBody->queue(), *streamSignal,

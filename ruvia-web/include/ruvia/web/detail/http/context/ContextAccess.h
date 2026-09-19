@@ -123,6 +123,14 @@ struct ContextAccess final {
         return context.responseState().activeResponse().header(name).has_value();
     }
 
+    static void markWebSocketHandshakeStarted(Context& context) noexcept {
+        context.requestStorage().webSocketHandshakeStarted = true;
+    }
+
+    [[nodiscard]] static bool webSocketHandshakeStarted(const Context& context) noexcept {
+        return context.requestStorage().webSocketHandshakeStarted;
+    }
+
     static void setError(Context& context, std::exception_ptr exception) noexcept {
         context.storeError(std::move(exception));
     }

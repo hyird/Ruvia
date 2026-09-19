@@ -20,6 +20,9 @@ class Next;
 
 // A request-local capability bound by SessionMiddleware. The handle borrows
 // Context state and therefore cannot escape the request.
+// Changes are persisted automatically before the response head (including a
+// stream or WebSocket handshake) is sent. Once that commit begins, set(),
+// clear(), and regenerate() throw std::logic_error; data() remains readable.
 class Session final {
 public:
     [[nodiscard]] std::string_view data() const& noexcept;
@@ -47,9 +50,9 @@ private:
 namespace ruvia {
 
 // Server-side session backed by Redis (RUVIA_ENABLE_REDIS). Reads the `sid`
-// cookie, loads the blob at sess:<id> into the Context, runs the handler, then
-// persists it with the configured TTL or deletes it if the handler changed the
-// typed Session capability. A new session mints a random id in an HttpOnly
+// cookie and loads the blob at sess:<id> into the Context. Before the response
+// head is sent, it persists changes with the configured TTL or deletes the
+// session. A new session mints a random id in an HttpOnly
 // cookie. The blob format is the application's; pair it with JSON if desired.
 struct SessionConfig final {
     std::string redisAlias{"default"};
@@ -71,6 +74,9 @@ public:
     Task<void> handle(Context& c, Next& next);
 
 private:
+    friend struct detail::SessionAccess;
+    Task<void> commit(Context& c) const;
+
     struct ConfigStorage final {
         ConfigStorage(const SessionConfig& source, std::pmr::memory_resource* resource);
 

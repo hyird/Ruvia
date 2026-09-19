@@ -1,4 +1,6 @@
+#include <array>
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -11,11 +13,13 @@
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/context/RequestBindings.h"
 
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
 
 using ruvia::Validator;
+using ruvia::test::CountingMemoryResource;
 
 RUVIA_REQUEST_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
     RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
@@ -29,6 +33,44 @@ RUVIA_REQUEST_MODEL(RequiredRulesModel,
 
 RUVIA_REQUEST_MODEL(OptionalRulesModel,
     RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_MIN(1, "value is empty")));
+
+[[nodiscard]] std::exception_ptr captureValidationException(
+    std::pmr::memory_resource* resource, bool moveValidator) {
+    Validator validator({.resource = resource});
+    validator.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+    try {
+        if (moveValidator) {
+            std::move(validator).throwIfInvalid({
+                .status = ruvia::http_status::kUnprocessableContent,
+                .code = "invalid_payload",
+                .message = "payload failed validation",
+            });
+        } else {
+            validator.throwIfInvalid({
+                .status = ruvia::http_status::kUnprocessableContent,
+                .code = "invalid_payload",
+                .message = "payload failed validation",
+            });
+        }
+    } catch (...) {
+        return std::current_exception();
+    }
+    return {};
+}
+
+[[nodiscard]] std::exception_ptr captureValidationExceptionFromShortLivedArena(
+    std::pmr::memory_resource* upstream) {
+    alignas(std::max_align_t) std::array<std::byte, 64> initial{};
+    std::pmr::monotonic_buffer_resource arena(initial.data(), initial.size(), upstream);
+    Validator validator({.resource = &arena});
+    validator.add(std::string(128, 'f'), "required", std::string(256, 'm'));
+    try {
+        validator.throwIfInvalid();
+    } catch (...) {
+        return std::current_exception();
+    }
+    return {};
+}
 
 }  // namespace
 
@@ -260,6 +302,81 @@ RUVIA_TEST(validation_error_options_control_reported_error_info) {
         RUVIA_CHECK_EQ(info.message(), std::string_view("payload failed validation"));
         RUVIA_CHECK_EQ(info.validationIssues().size(), std::size_t{1});
     }
+}
+
+RUVIA_TEST(validation_error_lvalue_and_rvalue_throws_release_validator_resource) {
+    for (const bool moveValidator : {false, true}) {
+        CountingMemoryResource resource;
+        const auto exception = captureValidationException(&resource, moveValidator);
+
+        RUVIA_CHECK(exception != nullptr);
+        RUVIA_CHECK(resource.allocationCount() > 0);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+
+        try {
+            std::rethrow_exception(exception);
+        } catch (const ruvia::ValidationError& error) {
+            RUVIA_CHECK_EQ(std::string_view(error.what()),
+                std::string_view("payload failed validation"));
+            RUVIA_CHECK_EQ(error.issues().get_allocator().resource(),
+                ruvia::detail::processResource());
+            RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(error.issues()[0].field().size(), std::size_t{128});
+            RUVIA_CHECK_EQ(error.issues()[0].message().size(), std::size_t{256});
+        }
+    }
+}
+
+RUVIA_TEST(validation_error_survives_short_lived_arena_and_exception_ptr) {
+    CountingMemoryResource upstream;
+    const auto exception = captureValidationExceptionFromShortLivedArena(&upstream);
+
+    // The arena, its initial buffer, and the Validator have all gone away before
+    // the exception is inspected. The exception owns process-lifetime copies.
+    RUVIA_CHECK(exception != nullptr);
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+
+    try {
+        std::rethrow_exception(exception);
+    } catch (const ruvia::ValidationError& error) {
+        RUVIA_CHECK_EQ(std::string_view(error.what()),
+            std::string_view("request validation failed"));
+        RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(error.issues()[0].field().size(), std::size_t{128});
+        RUVIA_CHECK_EQ(error.issues()[0].message().size(), std::size_t{256});
+    }
+}
+
+RUVIA_TEST(validation_error_copy_move_and_assignment_preserve_owned_data) {
+    CountingMemoryResource resource;
+    const auto exception = captureValidationException(&resource, false);
+
+    try {
+        std::rethrow_exception(exception);
+    } catch (const ruvia::ValidationError& original) {
+        ruvia::ValidationError copied(original);
+        ruvia::ValidationError::IssueList emptyIssues;
+        ruvia::ValidationError copyAssigned(emptyIssues);
+        copyAssigned = original;
+
+        ruvia::ValidationError moved(std::move(copied));
+        ruvia::ValidationError moveAssigned(emptyIssues);
+        moveAssigned = std::move(moved);
+
+        for (const auto* error : {&copyAssigned, &moveAssigned}) {
+            RUVIA_CHECK_EQ(error->issues().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(error->issues()[0].field().size(), std::size_t{128});
+            RUVIA_CHECK_EQ(error->issues()[0].message().size(), std::size_t{256});
+            RUVIA_CHECK_EQ(std::string_view(error->what()),
+                std::string_view("payload failed validation"));
+        }
+        RUVIA_CHECK_EQ(copied.issues().size(), std::size_t{0});
+        RUVIA_CHECK_EQ(moved.issues().size(), std::size_t{0});
+    }
+
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {

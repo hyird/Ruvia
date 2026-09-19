@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -38,6 +39,24 @@ public:
         }
     explicit ModelStorage(ResourceOwnerT& owner) noexcept
         : ModelStorage(::ruvia::ModelOptions{.resource = owner.resource()}) {}
+
+    ModelStorage(const ModelStorage&) = delete;
+    ModelStorage& operator=(const ModelStorage&) = delete;
+
+    ModelStorage(ModelStorage&& other) noexcept
+        : resource_(other.resource_),
+          fields_(std::move(other.fields_)) {}
+
+    ModelStorage& operator=(ModelStorage&& other) {
+        if (this == &other) {
+            return *this;
+        }
+
+        auto rebound = rebindFields(other.fields_, resource_);
+        resetMovedFields(other.fields_);
+        replaceFields(fields_, std::move(rebound));
+        return *this;
+    }
 
     template <FixedString Field>
     [[nodiscard]] decltype(auto) get() const& RUVIA_LIFETIMEBOUND {
@@ -117,6 +136,54 @@ protected:
 
 private:
     friend struct ::ruvia::detail::ModelValidationAccess;
+    friend struct ::ruvia::detail::ModelValueRebindAccess;
+
+    template <std::size_t... Indices>
+    [[nodiscard]] static auto rebindFields(const auto& source,
+        std::pmr::memory_resource* resource, std::index_sequence<Indices...>) {
+        return std::tuple<typename DescriptorTs::field_type...>{
+            std::get<Indices>(source).rebindForModel(
+                std::get<Indices>(source), resource)...};
+    }
+
+    [[nodiscard]] static auto rebindFields(
+        const auto& source, std::pmr::memory_resource* resource) {
+        return rebindFields(source, resource, std::index_sequence_for<DescriptorTs...>{});
+    }
+
+    using FieldTuple = std::tuple<typename DescriptorTs::field_type...>;
+
+    static void replaceFields(FieldTuple& destination, FieldTuple&& source) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<FieldTuple>);
+        std::destroy_at(std::addressof(destination));
+        std::construct_at(std::addressof(destination), std::move(source));
+    }
+
+    template <std::size_t... Indices>
+    static void resetMovedFields(auto& fields, std::index_sequence<Indices...>) noexcept {
+        (std::get<Indices>(fields).resetAfterMove(), ...);
+    }
+
+    static void resetMovedFields(auto& fields) noexcept {
+        resetMovedFields(fields, std::index_sequence_for<DescriptorTs...>{});
+    }
+
+    [[nodiscard]] DerivedT rebindForModel(std::pmr::memory_resource* resource) const& {
+        DerivedT rebound(::ruvia::ModelOptions{.resource = resource});
+        auto reboundFields = rebindFields(fields_, resource,
+            std::index_sequence_for<DescriptorTs...>{});
+        replaceFields(static_cast<ModelStorage&>(rebound).fields_, std::move(reboundFields));
+        return rebound;
+    }
+
+    [[nodiscard]] DerivedT rebindForModel(std::pmr::memory_resource* resource) && {
+        DerivedT rebound(::ruvia::ModelOptions{.resource = resource});
+        auto reboundFields = rebindFields(fields_, resource,
+            std::index_sequence_for<DescriptorTs...>{});
+        replaceFields(static_cast<ModelStorage&>(rebound).fields_, std::move(reboundFields));
+        resetMovedFields(fields_);
+        return rebound;
+    }
 
     template <FixedString Field>
     [[nodiscard]] ModelFieldState ruviaFieldState() const {
@@ -287,7 +354,7 @@ private:
                         if (auto value = detail::parseJsonValue<ValueT>(
                                 valueInput, resource, depth + 1, stringStorage);
                             value) {
-                            slot.emplaceParsed(std::move(*value));
+                            detail::ModelValueFactory::emplaceParsed(slot, std::move(*value));
                             return true;
                         }
                         valueInput = originalInput;
@@ -335,7 +402,7 @@ private:
                                 detail::parseFormValue<ValueT>(detail::ResolvedPmrResourceTag{},
                                     value, encoding, resource, input.stringStorage());
                             if (parsed) {
-                                slot.emplaceParsed(std::move(*parsed));
+                                detail::ModelValueFactory::emplaceParsed(slot, std::move(*parsed));
                             } else {
                                 slot.markInvalidType();
                             }

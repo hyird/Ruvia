@@ -29,11 +29,45 @@ namespace detail {
 
 class ModelInput;
 struct ModelValueFactory;
+struct ModelValueRebindAccess;
 
 enum class ModelStringStorage : std::uint8_t {
     kBorrowed,
     kOwned,
 };
+
+struct ModelValueRebindAccess final {
+    template <typename T>
+    [[nodiscard]] static consteval bool hasRebindForModel() {
+        using ValueT = std::remove_cvref_t<T>;
+        return requires(const ValueT& source, std::pmr::memory_resource* target) {
+            source.rebindForModel(target);
+        };
+    }
+
+    template <typename T>
+    [[nodiscard]] static std::remove_cvref_t<T> own(
+        T&& value, std::pmr::memory_resource* resource) {
+        using ValueT = std::remove_cvref_t<T>;
+        if constexpr (requires(ValueT& source, std::pmr::memory_resource* target) {
+                          source.rebindForModel(target);
+                      }) {
+            if constexpr (std::is_lvalue_reference_v<T&&>) {
+                return value.rebindForModel(resource);
+            } else {
+                return std::move(value).rebindForModel(resource);
+            }
+        } else {
+            return std::forward<T>(value);
+        }
+    }
+};
+
+template <typename T>
+[[nodiscard]] std::remove_cvref_t<T> rebindModelValue(
+    T&& value, std::pmr::memory_resource* resource) {
+    return ModelValueRebindAccess::own(std::forward<T>(value), resource);
+}
 
 }  // namespace detail
 
@@ -66,14 +100,14 @@ public:
         : resource_(other.resource_),
           storage_(std::move(other.storage_)) {}
 
-    String& operator=(String&& other) noexcept {
+    String& operator=(String&& other) {
         if (this == &other) {
             return *this;
         }
 
+        auto rebound = std::move(other).rebindForModel(resource_);
         std::destroy_at(&storage_);
-        resource_ = other.resource_;
-        std::construct_at(&storage_, std::move(other.storage_));
+        std::construct_at(&storage_, std::move(rebound.storage_));
         return *this;
     }
 
@@ -120,6 +154,7 @@ public:
 
 private:
     friend struct detail::ModelValueFactory;
+    friend struct detail::ModelValueRebindAccess;
 
     using Storage = std::variant<std::string_view, std::pmr::string>;
 
@@ -131,6 +166,30 @@ private:
         detail::ResolvedPmrResourceTag, std::string_view value, std::pmr::memory_resource* resource)
         : resource_(resource),
           storage_(std::in_place_type<std::string_view>, value) {}
+
+    [[nodiscard]] String rebindForModel(std::pmr::memory_resource* resource) const& {
+        String rebound(detail::ResolvedPmrResourceTag{}, resource);
+        if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
+            rebound.storage_.template emplace<std::pmr::string>(*owned, resource);
+        } else {
+            rebound.assignOwned(std::get<std::string_view>(storage_));
+        }
+        return rebound;
+    }
+
+    [[nodiscard]] String rebindForModel(std::pmr::memory_resource* resource) && {
+        String rebound(detail::ResolvedPmrResourceTag{}, resource);
+        if (auto* owned = std::get_if<std::pmr::string>(&storage_)) {
+            if (owned->get_allocator().resource() == resource) {
+                rebound.storage_.template emplace<std::pmr::string>(std::move(*owned));
+            } else {
+                rebound.storage_.template emplace<std::pmr::string>(*owned, resource);
+            }
+        } else {
+            rebound.assignOwned(std::get<std::string_view>(storage_));
+        }
+        return rebound;
+    }
 
     std::pmr::memory_resource* resource_;
     Storage storage_;
@@ -207,10 +266,211 @@ struct UInt64 final {
 };
 
 template <typename T>
-using Array = std::pmr::vector<T>;
+class Array final {
+public:
+    using value_type = T;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using reference = T&;
+    using const_reference = const T&;
+    using iterator = typename std::pmr::vector<T>::iterator;
+    using const_iterator = typename std::pmr::vector<T>::const_iterator;
+
+    explicit Array(ModelOptions options = {})
+        : Array(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(options.resource)) {}
+
+    Array(const Array&) = delete;
+    Array& operator=(const Array&) = delete;
+
+    Array(Array&& other) noexcept
+        : resource_(other.resource_),
+          items_(std::move(other.items_)) {}
+
+    Array& operator=(Array&& other) {
+        if (this == &other) {
+            return *this;
+        }
+
+        auto rebound = [&]() {
+            if constexpr (detail::ModelValueRebindAccess::hasRebindForModel<T>()) {
+                return other.rebindForModel(resource_);
+            } else {
+                return std::move(other).rebindForModel(resource_);
+            }
+        }();
+        other.clear();
+        items_ = std::move(rebound.items_);
+        return *this;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return items_.empty();
+    }
+
+    [[nodiscard]] size_type size() const noexcept {
+        return items_.size();
+    }
+
+    [[nodiscard]] size_type capacity() const noexcept {
+        return items_.capacity();
+    }
+
+    [[nodiscard]] reference operator[](size_type index) & noexcept RUVIA_LIFETIMEBOUND {
+        return items_[index];
+    }
+    [[nodiscard]] const_reference operator[](size_type index) const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_[index];
+    }
+    [[nodiscard]] const_reference operator[](size_type) const&& = delete;
+
+    [[nodiscard]] reference front() & noexcept RUVIA_LIFETIMEBOUND {
+        return items_.front();
+    }
+    [[nodiscard]] const_reference front() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.front();
+    }
+    [[nodiscard]] const_reference front() const&& = delete;
+
+    [[nodiscard]] reference back() & noexcept RUVIA_LIFETIMEBOUND {
+        return items_.back();
+    }
+    [[nodiscard]] const_reference back() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.back();
+    }
+    [[nodiscard]] const_reference back() const&& = delete;
+
+    [[nodiscard]] iterator begin() & noexcept RUVIA_LIFETIMEBOUND {
+        return items_.begin();
+    }
+    [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.begin();
+    }
+    iterator begin() const&& = delete;
+
+    [[nodiscard]] iterator end() & noexcept RUVIA_LIFETIMEBOUND {
+        return items_.end();
+    }
+    [[nodiscard]] const_iterator end() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.end();
+    }
+    iterator end() const&& = delete;
+
+    [[nodiscard]] std::pmr::polymorphic_allocator<T> get_allocator() const noexcept {
+        return items_.get_allocator();
+    }
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
+    void reserve(size_type count) {
+        items_.reserve(count);
+    }
+
+    void clear() noexcept {
+        items_.clear();
+    }
+
+    void resize(size_type count) {
+        if (count < size()) {
+            items_.resize(count);
+            return;
+        }
+        while (size() < count) {
+            emplace_back();
+        }
+    }
+
+    void resize(size_type count, const T& value) {
+        if (count <= size()) {
+            if (count < size()) {
+                items_.resize(count);
+            }
+            return;
+        }
+        T stable = detail::rebindModelValue(value, resource_);
+        while (size() < count) {
+            push_back(stable);
+        }
+    }
+
+    template <typename... Args>
+    T& emplace_back(Args&&... args) & {
+        if constexpr (sizeof...(Args) == 1 &&
+                      (std::same_as<std::remove_cvref_t<Args>, T> && ...)) {
+            return emplaceOwned(std::forward<Args>(args)...);
+        } else if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, ModelOptions>) {
+            return emplaceOwned(T(ModelOptions{.resource = resource_}));
+        } else if constexpr (requires {
+                                 T(std::forward<Args>(args)...,
+                                     ModelOptions{.resource = resource_});
+                             }) {
+            return emplaceOwned(T(std::forward<Args>(args)...,
+                ModelOptions{.resource = resource_}));
+        } else {
+            return emplaceOwned(T(std::forward<Args>(args)...));
+        }
+    }
+
+    void push_back(const T& value) & {
+        (void)emplaceOwned(value);
+    }
+
+    void push_back(T&& value) & {
+        (void)emplaceOwned(std::move(value));
+    }
+
+private:
+    friend struct detail::ModelValueFactory;
+    friend struct detail::ModelValueRebindAccess;
+
+    Array(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+        : resource_(resource),
+          items_(resource_) {}
+
+    void emplaceParsed(T&& value) {
+        items_.emplace_back(std::move(value));
+    }
+
+    T& emplaceOwned(const T& value) {
+        T rebound = detail::rebindModelValue(value, resource_);
+        items_.push_back(std::move(rebound));
+        return items_.back();
+    }
+
+    T& emplaceOwned(T&& value) {
+        T rebound = detail::rebindModelValue(std::move(value), resource_);
+        items_.push_back(std::move(rebound));
+        return items_.back();
+    }
+
+    [[nodiscard]] Array rebindForModel(std::pmr::memory_resource* resource) const& {
+        Array rebound(detail::ResolvedPmrResourceTag{}, resource);
+        rebound.reserve(size());
+        for (const auto& value : items_) {
+            rebound.items_.push_back(detail::rebindModelValue(value, resource));
+        }
+        return rebound;
+    }
+
+    [[nodiscard]] Array rebindForModel(std::pmr::memory_resource* resource) && {
+        Array rebound(detail::ResolvedPmrResourceTag{}, resource);
+        rebound.reserve(size());
+        for (auto& value : items_) {
+            rebound.items_.push_back(detail::rebindModelValue(std::move(value), resource));
+        }
+        return rebound;
+    }
+
+    std::pmr::memory_resource* resource_;
+    std::pmr::vector<T> items_;
+};
 
 template <typename T>
 class BoxedArray final {
+    template <bool Const>
+    class Iterator;
+
 public:
     using value_type = T;
 
@@ -225,18 +485,21 @@ public:
         : resource_(other.resource_),
           items_(std::move(other.items_)) {}
 
-    BoxedArray& operator=(BoxedArray&& other) noexcept {
+    BoxedArray& operator=(BoxedArray&& other) {
         if (this == &other) {
             return *this;
         }
 
+        auto rebound = [&]() {
+            if constexpr (detail::ModelValueRebindAccess::hasRebindForModel<T>()) {
+                return other.rebindForModel(resource_);
+            } else {
+                return std::move(other).rebindForModel(resource_);
+            }
+        }();
+        other.clear();
         clear();
-        // polymorphic_allocator does not propagate on move assignment. Rebuild
-        // the pointer table so its allocator follows the resource that owns the
-        // transferred elements.
-        std::destroy_at(&items_);
-        resource_ = other.resource_;
-        std::construct_at(&items_, std::move(other.items_));
+        items_ = std::move(rebound.items_);
         return *this;
     }
 
@@ -255,20 +518,40 @@ public:
     [[nodiscard]] const T& operator[](std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
         return *items_[index];
     }
+    [[nodiscard]] T& operator[](std::size_t index) & noexcept RUVIA_LIFETIMEBOUND {
+        return *items_[index];
+    }
     [[nodiscard]] const T& operator[](std::size_t) const&& = delete;
 
     [[nodiscard]] const T& front() const& noexcept RUVIA_LIFETIMEBOUND {
         return *items_.front();
     }
+    [[nodiscard]] T& front() & noexcept RUVIA_LIFETIMEBOUND {
+        return *items_.front();
+    }
     [[nodiscard]] const T& front() const&& = delete;
 
+    [[nodiscard]] const T& back() const& noexcept RUVIA_LIFETIMEBOUND {
+        return *items_.back();
+    }
+    [[nodiscard]] T& back() & noexcept RUVIA_LIFETIMEBOUND {
+        return *items_.back();
+    }
+    [[nodiscard]] const T& back() const&& = delete;
+
+    [[nodiscard]] auto begin() & noexcept RUVIA_LIFETIMEBOUND {
+        return Iterator<false>(items_.begin());
+    }
     [[nodiscard]] auto begin() const& noexcept RUVIA_LIFETIMEBOUND {
-        return Iterator(items_.begin());
+        return Iterator<true>(items_.begin());
     }
     void begin() const&& = delete;
 
+    [[nodiscard]] auto end() & noexcept RUVIA_LIFETIMEBOUND {
+        return Iterator<false>(items_.end());
+    }
     [[nodiscard]] auto end() const& noexcept RUVIA_LIFETIMEBOUND {
-        return Iterator(items_.end());
+        return Iterator<true>(items_.end());
     }
     void end() const&& = delete;
 
@@ -279,27 +562,48 @@ public:
         items_.clear();
     }
 
-    template <typename... Args>
-    T& emplace(Args&&... args) & {
-        T* value = nullptr;
-        if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, ModelOptions>) {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{}, resource_, ModelOptions{.resource = resource_});
-        } else {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{}, resource_, std::forward<Args>(args)...);
-        }
-        try {
-            items_.push_back(value);
-        } catch (...) {
-            detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, value, resource_);
-            throw;
-        }
-        return *value;
+    void reserve(std::size_t count) {
+        items_.reserve(count);
     }
 
-    T& emplaceMove(T&& value) & {
-        return emplace(std::move(value));
+    void resize(std::size_t count) {
+        if (count < size()) {
+            while (size() > count) {
+                auto* value = items_.back();
+                items_.pop_back();
+                detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, value, resource_);
+            }
+            return;
+        }
+        while (size() < count) {
+            emplace();
+        }
+    }
+
+    template <typename... Args>
+    T& emplace(Args&&... args) & {
+        if constexpr (sizeof...(Args) == 1 &&
+                      (std::same_as<std::remove_cvref_t<Args>, T> && ...)) {
+            return emplaceOwned(std::forward<Args>(args)...);
+        } else if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, ModelOptions>) {
+            return emplaceOwned(T(ModelOptions{.resource = resource_}));
+        } else if constexpr (requires {
+                                 T(std::forward<Args>(args)...,
+                                     ModelOptions{.resource = resource_});
+                             }) {
+            return emplaceOwned(T(std::forward<Args>(args)...,
+                ModelOptions{.resource = resource_}));
+        } else {
+            return emplaceOwned(T(std::forward<Args>(args)...));
+        }
+    }
+
+    void push_back(const T& value) & {
+        (void)emplaceOwned(value);
+    }
+
+    void push_back(T&& value) & {
+        (void)emplaceOwned(std::move(value));
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
@@ -308,18 +612,22 @@ public:
 
 private:
     friend struct detail::ModelValueFactory;
+    friend struct detail::ModelValueRebindAccess;
 
     BoxedArray(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : resource_(resource),
           items_(resource_) {}
 
+    template <bool Const>
     class Iterator final {
     public:
-        using InnerIterator = typename std::pmr::vector<T*>::const_iterator;
+        using InnerIterator = std::conditional_t<Const,
+            typename std::pmr::vector<T*>::const_iterator,
+            typename std::pmr::vector<T*>::iterator>;
         using difference_type = typename InnerIterator::difference_type;
         using value_type = T;
-        using reference = const T&;
-        using pointer = const T*;
+        using reference = std::conditional_t<Const, const T&, T&>;
+        using pointer = std::conditional_t<Const, const T*, T*>;
         using iterator_category = std::forward_iterator_tag;
 
         explicit Iterator(InnerIterator current) noexcept
@@ -352,6 +660,46 @@ private:
         InnerIterator current_;
     };
 
+    T& emplaceOwned(const T& value) {
+        T rebound = detail::rebindModelValue(value, resource_);
+        return emplaceParsed(std::move(rebound));
+    }
+
+    T& emplaceOwned(T&& value) {
+        T rebound = detail::rebindModelValue(std::move(value), resource_);
+        return emplaceParsed(std::move(rebound));
+    }
+
+    T& emplaceParsed(T&& value) {
+        auto* const stored = detail::constructPmrObject<T>(
+            detail::ResolvedPmrResourceTag{}, resource_, std::move(value));
+        try {
+            items_.push_back(stored);
+        } catch (...) {
+            detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, stored, resource_);
+            throw;
+        }
+        return *stored;
+    }
+
+    [[nodiscard]] BoxedArray rebindForModel(std::pmr::memory_resource* resource) const& {
+        BoxedArray rebound(detail::ResolvedPmrResourceTag{}, resource);
+        rebound.reserve(size());
+        for (const auto& value : *this) {
+            rebound.emplaceParsed(detail::rebindModelValue(value, resource));
+        }
+        return rebound;
+    }
+
+    [[nodiscard]] BoxedArray rebindForModel(std::pmr::memory_resource* resource) && {
+        BoxedArray rebound(detail::ResolvedPmrResourceTag{}, resource);
+        rebound.reserve(size());
+        for (auto& value : *this) {
+            rebound.emplaceParsed(detail::rebindModelValue(std::move(value), resource));
+        }
+        return rebound;
+    }
+
     std::pmr::memory_resource* resource_;
     std::pmr::vector<T*> items_;
 };
@@ -371,6 +719,11 @@ struct ModelValueFactory final {
     template <typename ListT>
     [[nodiscard]] static ListT makeBoxedArray(std::pmr::memory_resource* resource) {
         return ListT(ResolvedPmrResourceTag{}, resource);
+    }
+
+    template <typename TargetT>
+    static void emplaceParsed(TargetT& target, typename TargetT::value_type&& value) {
+        target.emplaceParsed(std::move(value));
     }
 };
 

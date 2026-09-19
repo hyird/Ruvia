@@ -227,7 +227,8 @@ private:
             co_return;
         }
         try {
-            auto response = state_.streamingHead();
+            auto response = co_await state_.streamingHead();
+            throwIfTerminated();
             compression_.prepare(requestMethod_, response, kind_);
             const auto commitBodyPlan = httpResponseBodyPlan(requestMethod_, response.status());
             compression_.activate(commitBodyPlan);

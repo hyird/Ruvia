@@ -1,6 +1,7 @@
 #include <optional>
 #include <utility>
 
+#include "ruvia/web/detail/http/SessionAccess.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
@@ -37,8 +38,11 @@ private:
 // Web-side thunk producing the streaming response head from the bound Context. It is
 // handed to the http streaming layer (ResponseStreamWriter::bindContext) so the h1/h2
 // sinks can build the head at commit without naming ContextAccess (web).
-[[nodiscard]] HttpResponse streamingHeadThunk(Context& context) {
-    return detail::ContextAccess::streamingHead(context);
+[[nodiscard]] Task<HttpResponse> streamingHeadThunk(Context& context) {
+    if (context.trySession()) {
+        co_await detail::SessionAccess::commit(context);
+    }
+    co_return detail::ContextAccess::streamingHead(context);
 }
 
 }  // namespace
@@ -106,7 +110,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
             co_await responseStreamOutput->writer().end();
             co_return std::nullopt;
         }
-        if ((webSocketRoute && middlewareChain.handlerInvoked()) ||
+        if ((webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) ||
             (responseStreamOutput != nullptr &&
                 detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);
@@ -119,12 +123,12 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     // response and records it via context.exception() (storeMiddlewareExceptionResponse
     // -> handleException -> setError), so a mid-request failure does not surface as
     // a local exception above. When the stream is already committed (or this is a
-    // WebSocket route), that buffered response can no longer be sent, and finalizing
+    // committed WebSocket handshake), that buffered response can no longer be sent, and finalizing
     // the stream with a clean terminator would frame a truncated body as complete.
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
-    if (webSocketRoute || (responseStreamOutput != nullptr &&
-                              detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
+    if ((webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) || (responseStreamOutput != nullptr &&
+                                                                                             detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
         if (auto contextException = context.exception()) {
             std::rethrow_exception(contextException);
         }
@@ -133,10 +137,10 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     const bool streamCommitted = responseStreamOutput != nullptr &&
                                  detail::StreamingAccess::committed(responseStreamOutput->writer());
     const bool handlerInvoked = middlewareChain.handlerInvoked();
-    const bool webSocketHandled = webSocketRoute && handlerInvoked;
+    const bool webSocketHandled = webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context);
     // Middleware may replace an uncommitted response stream with a buffered
-    // response after `next()`. A WebSocket handler, however, owns its upgraded
-    // session as soon as it is invoked and cannot return to HTTP response mode.
+    // response after `next()`. A WebSocket terminal can still fail during
+    // handshake preparation; only a started handshake prevents HTTP recovery.
     if (detail::ContextAccess::hasResponse(context) && !streamCommitted && !webSocketHandled) {
         co_return detail::ContextAccess::takeResponse(context);
     }

@@ -17,9 +17,13 @@ namespace ruvia::detail {
 // Privileged access to a Context's session slot, used by the session middleware
 // to load the stored blob and read what the handler left behind.
 struct SessionAccess final {
-    static void bind(Context& context) noexcept {
-        context.sessionState().bind();
+    static void bind(Context& context, const SessionMiddleware* owner = nullptr) {
+        context.sessionState().bind(owner);
     }
+
+    // No callback chain: the bound SessionMiddleware owns this capability's
+    // single response-commit stage for both buffered and long-lived routes.
+    [[nodiscard]] static Task<void> commit(Context& context);
 
     static void observePresentedId(Context& context, std::string_view id) {
         context.sessionState().observePresentedId(id);

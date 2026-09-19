@@ -29,7 +29,7 @@ template <typename T>
 struct RuviaArrayTraits : std::false_type {};
 
 template <typename ValueT>
-struct RuviaArrayTraits<std::pmr::vector<ValueT>> : std::true_type {
+struct RuviaArrayTraits<Array<ValueT>> : std::true_type {
     using value_type = ValueT;
 };
 
@@ -105,7 +105,7 @@ struct RuviaRequestModelFieldTraits : std::bool_constant<isRuviaString<T> || isR
 };
 
 template <typename ValueT>
-struct RuviaRequestModelFieldTraits<std::pmr::vector<ValueT>>
+struct RuviaRequestModelFieldTraits<Array<ValueT>>
     : RuviaRequestModelFieldTraits<std::remove_cvref_t<ValueT>> {};
 
 template <typename ValueT>
@@ -124,7 +124,7 @@ struct RuviaResponseModelFieldTraits
     : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || isResponseModel<T>> {};
 
 template <typename ValueT>
-struct RuviaResponseModelFieldTraits<std::pmr::vector<ValueT>>
+struct RuviaResponseModelFieldTraits<Array<ValueT>>
     : RuviaResponseModelFieldTraits<std::remove_cvref_t<ValueT>> {};
 
 template <typename ValueT>
@@ -140,8 +140,7 @@ template <typename T>
     if constexpr (isRuviaString<T>) {
         return ModelValueFactory::makeString(resource);
     } else if constexpr (isRuviaArray<T>) {
-        using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
-        return T(std::pmr::polymorphic_allocator<ValueT>(resource));
+        return T(ModelOptions{.resource = resource});
     } else if constexpr (isRuviaBoxedArray<T>) {
         return ModelValueFactory::makeBoxedArray<T>(resource);
     } else if constexpr (isRequestModel<T> || isResponseModel<T>) {

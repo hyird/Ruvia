@@ -121,7 +121,7 @@ private:
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*, std::span<const HttpHeaderView>);
     using Sleep = Task<TimerSleepResult> (*)(void*, std::chrono::milliseconds, const StopToken&);
-    using StreamingHeadThunk = HttpResponse (*)(Context&);
+    using StreamingHeadThunk = Task<HttpResponse> (*)(Context&);
     using BindContext = void (*)(void*, Context*, StreamingHeadThunk);
     using ReleaseContext = void (*)(void*) noexcept;
     using Committed = bool (*)(void*) noexcept;

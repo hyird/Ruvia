@@ -332,7 +332,7 @@ inline ruvia::Task<ruvia::TimerSleepResult> scSleep(
     void*, std::chrono::milliseconds, const ruvia::StopToken&) {
     co_return ruvia::TimerSleepResult::kElapsed;
 }
-inline void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
+inline void scBind(void*, ruvia::Context*, ruvia::Task<ruvia::HttpResponse> (*)(ruvia::Context&)) noexcept {}
 inline void scReleaseContext(void* target) noexcept {
     static_cast<StreamCaptureSink*>(target)->contextReleased = true;
 }
@@ -427,6 +427,7 @@ struct WebSocketTerminalTarget final {
 inline ruvia::Task<void> webSocketTerminal(void* target, ruvia::Context& context) {
     auto& terminal = *static_cast<WebSocketTerminalTarget*>(target);
     terminal.observation->terminalInvoked = true;
+    ruvia::detail::ContextAccess::markWebSocketHandshakeStarted(context);
     ruvia::detail::ContextWebSocketBinding binding(context, *terminal.webSocket);
     terminal.observation->capabilityAvailableInTerminal =
         &context.webSocket() == terminal.webSocket;

@@ -1852,6 +1852,13 @@ model may only nest request models, and a response model may only nest response
 models. Both roles support `ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>`
 fields. Form, query, param, header, and cookie binding remain flat scalar inputs.
 
+A model's allocation resource stays fixed. Public field assignment and collection
+insertion own strings and recursively normalize nested values to that resource.
+`Array<T>` and `BoxedArray<T>` also use their resource for newly constructed
+elements. Move construction transfers the complete value; move assignment keeps
+the destination resource and can allocate. JSON view parsing still borrows its
+input, which must outlive the parsed view.
+
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
 `model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
@@ -1861,6 +1868,9 @@ optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
 `null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
 (`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
 used in JSON and validation paths.
+
+`ValidationError` owns its message, code, and all issue details independently of
+the validator or request arena, including when the exception is copied or moved.
 
 Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
@@ -1915,7 +1925,12 @@ With Redis enabled, `SessionMiddleware` binds one typed request capability.
 Use `auto session = c.session()` followed by `data()`, `set()`, `clear()`, or
 `regenerate()`; `trySession()` returns `std::nullopt` when the middleware is not
 present. `SessionConfig` owns its Redis alias, cookie name, key prefix, and TTL,
-so a designated-initialized temporary is safe to register.
+so a designated-initialized temporary is safe to register. Session changes are
+saved before the response head is sent, including the first SSE/stream write and
+WebSocket handshake. Once submission begins, `set()`, `clear()`, and `regenerate()`
+throw `std::logic_error`; `data()` remains readable for the request or WebSocket
+session lifetime. Modify WebSocket sessions in middleware before `next()`.
+Storage failure prevents publication of a new session cookie.
 
 ### Strict integer conversion
 

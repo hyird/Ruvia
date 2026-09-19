@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpProtocolError.h"
@@ -26,6 +27,10 @@ struct WebSocketHandshakeValidationResultAccess;
 struct WebSocketServerHandshakeOptions final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::span<const std::string_view> supportedSubprotocols{};
+    // Additional response fields, copied before construction returns. Framing,
+    // connection, and Sec-WebSocket fields belong to the handshake itself.
+    // Names/values must be valid fields; values cannot start or end with SP/HTAB.
+    std::span<const HttpHeaderView> responseHeaders{};
     std::pmr::memory_resource* resource{nullptr};
 };
 
@@ -143,6 +148,12 @@ public:
             visitor(extension);
             visitor(kCrlf);
         }
+        for (const auto& header : responseHeaders_) {
+            visitor(header.name());
+            visitor(std::string_view(": "));
+            visitor(header.value());
+            visitor(kCrlf);
+        }
         visitor(kCrlf);
     }
 
@@ -182,14 +193,16 @@ private:
     inline static constexpr std::string_view kCrlf = "\r\n";
 
     WebSocketServerHandshake(std::array<char, 28> accept, std::pmr::string subprotocol,
-        WebSocketCompression compression) noexcept
+        WebSocketCompression compression, std::pmr::vector<HttpHeader> responseHeaders) noexcept
         : accept_(accept),
           subprotocol_(std::move(subprotocol)),
-          compression_(compression) {}
+          compression_(compression),
+          responseHeaders_(std::move(responseHeaders)) {}
 
     std::array<char, 28> accept_;
     std::pmr::string subprotocol_;
     WebSocketCompression compression_;
+    std::pmr::vector<HttpHeader> responseHeaders_;
 };
 
 // Call after validateWebSocketHandshake() succeeds. The selected subprotocol

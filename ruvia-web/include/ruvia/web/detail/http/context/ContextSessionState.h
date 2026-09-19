@@ -1,11 +1,16 @@
 #pragma once
 
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+
+namespace ruvia {
+class SessionMiddleware;
+}
 
 namespace ruvia::detail {
 
@@ -43,12 +48,18 @@ public:
     explicit ContextSessionState(std::pmr::memory_resource* resource) noexcept
         : resource_(resource) {}
 
-    void bind() noexcept {
-        available_ = true;
-    }
+    void bind(const SessionMiddleware* owner = nullptr);
     [[nodiscard]] bool available() const noexcept {
         return available_;
     }
+    [[nodiscard]] const SessionMiddleware* owner() const noexcept {
+        return owner_;
+    }
+    // The first commit freezes all mutation before any asynchronous storage I/O.
+    // A failed commit is terminal: its external writes cannot safely be replayed.
+    [[nodiscard]] bool beginCommit();
+    void finishCommit() noexcept;
+    void failCommit(std::exception_ptr exception) noexcept;
     void observePresentedId(std::string_view id);
     void loadRecognized(std::string_view data);
     void set(std::string_view data);
@@ -94,10 +105,18 @@ public:
     [[nodiscard]] const SessionClear* cleared() const&& = delete;
 
 private:
+    enum class Phase : unsigned char { kActive,
+        kCommitting,
+        kCommitted,
+        kFailed };
+    void requireMutable() const;
     [[nodiscard]] std::pmr::string copy(std::string_view value) const;
 
     std::pmr::memory_resource* resource_;
     bool available_{false};
+    const SessionMiddleware* owner_{nullptr};
+    Phase phase_{Phase::kActive};
+    std::exception_ptr failure_;
     std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew,
         SessionPersistExisting, SessionRotate, SessionClear>
         value_;

@@ -21,6 +21,7 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
+#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
 
 namespace ruvia::detail {
 
@@ -45,9 +46,12 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
     using Connection = SocketWebSocketConnection<Stream>;
     std::optional<Connection> webSocketConnection;
     auto upgradeAndRun = [&](Context& context) -> Task<void> {
+        const auto responseHeaders = webSocketResponseHeaders(context);
         const auto handshake = makeWebSocketServerHandshake(
             d.parsed.request, {.supportedSubprotocols = webSocketEndpoint.subprotocols(),
+                                  .responseHeaders = responseHeaders,
                                   .resource = d.memory.resource()});
+        ContextAccess::markWebSocketHandshakeStarted(context);
         if (const auto ec = co_await writeWebSocketHandshake(d.stream, handshake); ec) {
             co_return;
         }
