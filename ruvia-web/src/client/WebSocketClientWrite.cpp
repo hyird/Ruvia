@@ -62,12 +62,12 @@ Task<void> WebSocketClientState::flushOutput() {
         const auto plan = protocol.outputPlan();
         if (!plan.bytes().empty()) {
             co_await writeTransport(plan.bytes(), config_.writeTimeout);
-            if (protocol.consumeOutput(plan.bytes().size()) == WsOutputConsumeStatus::kOutOfRange) {
+            if (protocol.consumeOutput(plan.bytes().size()) == WebSocketOutputConsumeStatus::kOutOfRange) {
                 std::terminate();
             }
             continue;
         }
-        if (plan.disposition() == WsTransportDisposition::kEndTransport) {
+        if (plan.disposition() == WebSocketTransportDisposition::kEndTransport) {
             protocol.commitTransportEnd();
             closeOnWorker(AbortReason::kNone);
         }
@@ -114,12 +114,12 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
     WriteGuard writeGuard(*state, WritePhase::kApplication);
     const auto submitted = state->requireProtocol().submitFrame(opcode, payload);
     switch (submitted) {
-        case WsFrameSubmitStatus::kAccepted:
+        case WebSocketFrameSubmitStatus::kAccepted:
             break;
-        case WsFrameSubmitStatus::kMessageTooLarge:
+        case WebSocketFrameSubmitStatus::kMessageTooLarge:
             throw WebSocketClientError(WebSocketClientError::Code::kMessageTooLarge,
                 "WebSocket client message exceeds configured limit");
-        case WsFrameSubmitStatus::kNotOpen:
+        case WebSocketFrameSubmitStatus::kNotOpen:
             throw WebSocketClientError(
                 WebSocketClientError::Code::kClosing, "WebSocket client is closing");
         default:

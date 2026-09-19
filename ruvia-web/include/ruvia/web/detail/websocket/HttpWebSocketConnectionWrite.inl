@@ -55,7 +55,7 @@ Task<void> WebSocketConnection<Transport>::closeOwned(::ruvia::WebSocketCloseOpt
             if (flushOutput) {
                 co_await flushProtocolOutputNow();
             }
-            if (awaitPeerClose && protocol_.livenessMode() == WsLivenessMode::kAwaitingPeerClose) {
+            if (awaitPeerClose && protocol_.livenessMode() == WebSocketLivenessMode::kAwaitingPeerClose) {
                 // The timeout bounds the peer's response window, so commit it only
                 // after the local Close bytes have reached the transport. The
                 // successful flush touched the scanner with the current coarse

@@ -1971,9 +1971,16 @@ are `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,
 `<ruvia/http/Http1WebSocketClientHandshake.h>` for client handshake request
 preparation and response validation, and
-`<ruvia/http/WebSocketServerConnection.h>` for the server-side WebSocket driver
-and its typed events. The WebSocket driver accepts masked client frames and
-emits unmasked server frames; it does not claim a client role. SSE messages are
+`<ruvia/http/WebSocketConnection.h>` for the WebSocket driver and its typed
+events. `WebSocketConnectionOptions::role` selects server (default) or client
+masking and inbound validation. Client connections require `maskKeyGenerator`
+and an optional borrowed `maskKeyContext`; the transport supplies a fresh
+cryptographically random four-byte key for every frame, including automatic
+Pong and Close responses. The context must outlive the connection. Generator
+failure throws; abort the connection rather than retrying with a weak key.
+This replaces the former `WebSocketServerConnection` header, type, and options:
+server consumers rename these to `WebSocketConnection` and retain defaults.
+SSE messages are
 formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
 
 `Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a

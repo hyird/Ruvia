@@ -35,11 +35,11 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
     OperationGuard operation(*state, options);
     std::array<char, kWebSocketClientTransportBufferBytes> bytes{};
     for (;;) {
-        std::optional<WsEvent> event;
+        std::optional<WebSocketEvent> event;
         {
             co_await state->waitForWriteIdle();
             WriteGuard writeGuard(*state, WritePhase::kApplication);
-            event = state->requireProtocol().poll();
+            event = state->requireProtocol().nextEvent();
             if (event.has_value() && event->ping() != nullptr) {
                 co_await state->flushOutput();
             }
@@ -52,7 +52,7 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
                 state->closeOnWorker(AbortReason::kNone);
                 co_return std::nullopt;
             }
-            state->input_.append(bytes.data(), count);
+            (void)state->requireProtocol().feed(std::string_view(bytes.data(), count));
             continue;
         }
         if (const auto* message = event->message()) {

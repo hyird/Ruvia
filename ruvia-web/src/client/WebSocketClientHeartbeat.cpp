@@ -106,7 +106,7 @@ Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientS
         try {
             state->requireOpen();
             const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing, {});
-            if (submitted != WsFrameSubmitStatus::kAccepted) {
+            if (submitted != WebSocketFrameSubmitStatus::kAccepted) {
                 throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                     "failed to submit WebSocket client heartbeat");
             }

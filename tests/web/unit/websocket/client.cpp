@@ -22,7 +22,7 @@
 
 namespace {
 
-void checkClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
+void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
     asio::io_context io;
     auto attachment = ruvia::attachEventLoop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
@@ -40,8 +40,9 @@ void checkClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
         const auto start = keyBegin + keyHeader.size();
         ruvia::detail::WebSocketAcceptKey accept{};
         ruvia::detail::encodeWebSocketAccept(accept, std::string_view(request).substr(start, request.find("\r\n", start) - start));
+        // The first frame can arrive in the same transport read as the upgrade.
         const auto response = std::string("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ") +
-                              std::string(accept.data(), accept.size()) + "\r\n\r\n";
+                              std::string(accept.data(), accept.size()) + "\r\n\r\n" + "\x82\x05hello";
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         std::array<unsigned char, 2> header{};
         co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
@@ -64,6 +65,11 @@ void checkClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
         std::exception_ptr failure;
         try {
             co_await client.connect();
+            const auto greeting = co_await client.read();
+            RUVIA_CHECK(greeting.has_value());
+            if (greeting) {
+                RUVIA_CHECK_EQ(greeting->payload(), std::string_view("hello"));
+            }
             co_await client.close({});
             succeeded = true;
         } catch (const ruvia::WebSocketClientError& error) {
@@ -95,8 +101,8 @@ void checkClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
 }  // namespace
 
 RUVIA_TEST(websocket_client_close_requires_peer_close) {
-    checkClose(ruvia_ctx, false);
-    checkClose(ruvia_ctx, true);
+    checkExchangeAndClose(ruvia_ctx, false);
+    checkExchangeAndClose(ruvia_ctx, true);
 }
 
 RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {

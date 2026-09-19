@@ -35,14 +35,6 @@ enum class WsTransportDisposition : std::uint8_t {
     kEndTransport,
 };
 
-// Runtime timeout policy needs only this protocol-owned classification, not the
-// internal close-handshake state machine.
-enum class WsLivenessMode : std::uint8_t {
-    kOpen,
-    kAwaitingPeerClose,
-    kInactive,
-};
-
 enum class WsFrameSubmitStatus : std::uint8_t {
     kAccepted,
     kNotOpen,
@@ -122,7 +114,7 @@ public:
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
     [[nodiscard]] WsAbortDisposition abort() noexcept;
-    [[nodiscard]] WsLivenessMode livenessMode() const noexcept;
+    [[nodiscard]] WebSocketLivenessMode livenessMode() const noexcept;
 
     // Submit one complete logical message/control payload. Role-correct masking,
     // outbound text UTF-8 validation, optional data-message compression and
