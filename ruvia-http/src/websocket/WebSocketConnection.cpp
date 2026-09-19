@@ -1,4 +1,4 @@
-#include "ruvia/http/WebSocketServerConnection.h"
+#include "ruvia/http/WebSocketConnection.h"
 
 #include <exception>
 #include <stdexcept>
@@ -8,6 +8,16 @@
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] detail::WsConnectionRole toInternal(WebSocketConnectionRole role) {
+    switch (role) {
+        case WebSocketConnectionRole::kServer:
+            return detail::WsConnectionRole::kServer;
+        case WebSocketConnectionRole::kClient:
+            return detail::WsConnectionRole::kClient;
+    }
+    throw std::invalid_argument("invalid WebSocket connection role");
+}
 
 [[nodiscard]] WebSocketCompression validateCompression(WebSocketCompression compression) {
     switch (compression) {
@@ -52,18 +62,6 @@ namespace {
     std::terminate();
 }
 
-[[nodiscard]] WebSocketLivenessMode toPublic(detail::WsLivenessMode mode) noexcept {
-    switch (mode) {
-        case detail::WsLivenessMode::kOpen:
-            return WebSocketLivenessMode::kOpen;
-        case detail::WsLivenessMode::kAwaitingPeerClose:
-            return WebSocketLivenessMode::kAwaitingPeerClose;
-        case detail::WsLivenessMode::kInactive:
-            return WebSocketLivenessMode::kInactive;
-    }
-    std::terminate();
-}
-
 [[nodiscard]] WebSocketFrameSubmitStatus toPublic(detail::WsFrameSubmitStatus status) noexcept {
     switch (status) {
         case detail::WsFrameSubmitStatus::kAccepted:
@@ -102,33 +100,34 @@ namespace {
 
 }  // namespace
 
-class WebSocketServerConnection::Impl final {
+class WebSocketConnection::Impl final {
 public:
-    explicit Impl(WebSocketServerConnectionOptions options)
+    explicit Impl(WebSocketConnectionOptions options)
         : input(detail::httpPmrResourceOrDefault(options.resource)),
-          connection(input, options.messageLimit, validateCompression(options.compression)) {}
+          connection(input, options.messageLimit, validateCompression(options.compression),
+              toInternal(options.role), options.maskKeyGenerator, options.maskKeyContext) {}
     std::pmr::string input;
     detail::WsConnection connection;
 };
 
-WebSocketServerConnection::WebSocketServerConnection(WebSocketServerConnectionOptions options)
+WebSocketConnection::WebSocketConnection(WebSocketConnectionOptions options)
     : impl_(std::make_unique<Impl>(options)) {}
 
-WebSocketServerConnection::~WebSocketServerConnection() = default;
-WebSocketServerConnection::WebSocketServerConnection(
-    WebSocketServerConnection&&) noexcept = default;
-WebSocketServerConnection& WebSocketServerConnection::operator=(
-    WebSocketServerConnection&&) noexcept = default;
+WebSocketConnection::~WebSocketConnection() = default;
+WebSocketConnection::WebSocketConnection(
+    WebSocketConnection&&) noexcept = default;
+WebSocketConnection& WebSocketConnection::operator=(
+    WebSocketConnection&&) noexcept = default;
 
-WebSocketFeedStatus WebSocketServerConnection::feed(std::string_view input) {
-    if (impl_->connection.livenessMode() == detail::WsLivenessMode::kInactive) {
+WebSocketFeedStatus WebSocketConnection::feed(std::string_view input) {
+    if (impl_->connection.livenessMode() == WebSocketLivenessMode::kInactive) {
         return WebSocketFeedStatus::kInactive;
     }
     impl_->input.append(input);
     return WebSocketFeedStatus::kAccepted;
 }
 
-std::optional<WebSocketEvent> WebSocketServerConnection::nextEvent() & {
+std::optional<WebSocketEvent> WebSocketConnection::nextEvent() & {
     auto event = impl_->connection.poll();
     if (!event) {
         return std::nullopt;
@@ -151,32 +150,32 @@ std::optional<WebSocketEvent> WebSocketServerConnection::nextEvent() & {
     return WebSocketEvent::transportEndEvent();
 }
 
-WebSocketOutputPlan WebSocketServerConnection::outputPlan() const& noexcept {
+WebSocketOutputPlan WebSocketConnection::outputPlan() const& noexcept {
     const auto plan = impl_->connection.outputPlan();
     return WebSocketOutputPlan(plan.bytes(), toPublic(plan.disposition()));
 }
 
-WebSocketOutputConsumeStatus WebSocketServerConnection::consumeOutput(std::size_t bytes) noexcept {
+WebSocketOutputConsumeStatus WebSocketConnection::consumeOutput(std::size_t bytes) noexcept {
     return toPublic(impl_->connection.consumeOutput(bytes));
 }
 
-void WebSocketServerConnection::commitTransportEnd() noexcept {
+void WebSocketConnection::commitTransportEnd() noexcept {
     impl_->connection.commitTransportEnd();
 }
-void WebSocketServerConnection::notifyTransportEof() noexcept {
+void WebSocketConnection::notifyTransportEof() noexcept {
     impl_->connection.notifyTransportEof();
 }
-WebSocketAbortDisposition WebSocketServerConnection::abort() noexcept {
+WebSocketAbortDisposition WebSocketConnection::abort() noexcept {
     return toPublic(impl_->connection.abort());
 }
-WebSocketLivenessMode WebSocketServerConnection::livenessMode() const noexcept {
-    return toPublic(impl_->connection.livenessMode());
+WebSocketLivenessMode WebSocketConnection::livenessMode() const noexcept {
+    return impl_->connection.livenessMode();
 }
-WebSocketFrameSubmitStatus WebSocketServerConnection::submitFrame(
+WebSocketFrameSubmitStatus WebSocketConnection::submitFrame(
     WebSocketOpcode opcode, std::string_view payload) {
     return toPublic(impl_->connection.submitFrame(opcode, payload));
 }
-WebSocketCloseSubmitStatus WebSocketServerConnection::submitClose(
+WebSocketCloseSubmitStatus WebSocketConnection::submitClose(
     std::uint16_t code, std::string_view reason) {
     return toPublic(impl_->connection.submitClose(code, reason));
 }

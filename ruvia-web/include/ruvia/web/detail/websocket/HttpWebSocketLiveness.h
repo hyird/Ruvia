@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <variant>
 
-#include "ruvia/http/detail/websocket/WsConnection.h"
+#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/web/WebSocket.h"
 
 namespace ruvia::detail {
@@ -59,12 +59,12 @@ using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSend
     WebSocketAwaitingPong, WebSocketAwaitingPeerClose>;
 
 [[nodiscard]] inline WebSocketLivenessDecision webSocketLivenessDecision(
-    const WebSocketLifecycleOptions& options, WsLivenessMode livenessMode,
+    const WebSocketLifecycleOptions& options, WebSocketLivenessMode livenessMode,
     const WebSocketLivenessState& state, bool writeActive, std::int64_t lastActiveMs,
     std::int64_t now) noexcept {
-    if (livenessMode != WsLivenessMode::kOpen) {
+    if (livenessMode != WebSocketLivenessMode::kOpen) {
         const auto* close = std::get_if<WebSocketAwaitingPeerClose>(&state);
-        return livenessMode == WsLivenessMode::kAwaitingPeerClose && close != nullptr &&
+        return livenessMode == WebSocketLivenessMode::kAwaitingPeerClose && close != nullptr &&
                        options.closeHandshakeTimeout.has_value() &&
                        now - close->startedAtMs() >= options.closeHandshakeTimeout->count()
                    ? WebSocketLivenessDecision::kAbortTransport

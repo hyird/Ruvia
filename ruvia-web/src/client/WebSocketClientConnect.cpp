@@ -96,10 +96,13 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
     try {
         co_await state->establishTransport();
         co_await state->performHandshake();
-        state->protocol_.emplace(state->input_,
-            ProtocolByteLimit::limited(state->config_.maxMessageBytes),
-            WebSocketCompression::kDisabled, WsConnectionRole::kClient,
-            &WebSocketClientState::generateMask, nullptr);
+        state->protocol_.emplace(WebSocketConnectionOptions{
+            .resource = state->memory_.resource(),
+            .messageLimit = ProtocolByteLimit::limited(state->config_.maxMessageBytes),
+            .role = WebSocketConnectionRole::kClient,
+            .maskKeyGenerator = &WebSocketClientState::generateMask});
+        (void)state->protocol_->feed(state->input_);
+        std::pmr::string(state->input_.get_allocator()).swap(state->input_);
         state->disarm(state->connectTimer_);
         auto open = Phase::kConnecting;
         if (!state->phase_.compare_exchange_strong(

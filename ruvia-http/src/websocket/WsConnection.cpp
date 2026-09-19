@@ -86,19 +86,19 @@ WsAbortDisposition WsConnection::abort() noexcept {
     return WsAbortDisposition::kAbortTransport;
 }
 
-WsLivenessMode WsConnection::livenessMode() const noexcept {
+WebSocketLivenessMode WsConnection::livenessMode() const noexcept {
     switch (closePhase_) {
         case ClosePhase::kOpen:
-            return WsLivenessMode::kOpen;
+            return WebSocketLivenessMode::kOpen;
         case ClosePhase::kLocalCloseQueued:
         case ClosePhase::kAwaitingPeerClose:
-            return WsLivenessMode::kAwaitingPeerClose;
+            return WebSocketLivenessMode::kAwaitingPeerClose;
         case ClosePhase::kFinalCloseQueued:
         case ClosePhase::kTransportEndReady:
         case ClosePhase::kClosed:
-            return WsLivenessMode::kInactive;
+            return WebSocketLivenessMode::kInactive;
     }
-    return WsLivenessMode::kInactive;
+    return WebSocketLivenessMode::kInactive;
 }
 
 void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -18,9 +19,6 @@ namespace ruvia {
 
 enum class WebSocketTransportDisposition : std::uint8_t { kKeepOpen,
     kEndTransport };
-enum class WebSocketLivenessMode : std::uint8_t { kOpen,
-    kAwaitingPeerClose,
-    kInactive };
 enum class WebSocketFrameSubmitStatus : std::uint8_t {
     kAccepted,
     kNotOpen,
@@ -45,10 +43,21 @@ enum class WebSocketOutputConsumeStatus : std::uint8_t { kPending,
 enum class WebSocketFeedStatus : std::uint8_t { kAccepted,
     kInactive };
 
-struct WebSocketServerConnectionOptions final {
+enum class WebSocketConnectionRole : std::uint8_t { kServer,
+    kClient };
+using WebSocketMaskKey = std::array<char, 4>;
+// Client transports must supply a fresh cryptographically random key per call.
+// The context is borrowed and must outlive the connection. Failure is fatal to
+// the transport: operations may throw and the caller must abort the connection.
+using WebSocketMaskKeyGenerator = bool (*)(void*, WebSocketMaskKey&) noexcept;
+
+struct WebSocketConnectionOptions final {
     std::pmr::memory_resource* resource{nullptr};
     ProtocolByteLimit messageLimit{ProtocolByteLimit::unlimited()};
     WebSocketCompression compression{WebSocketCompression::kDisabled};
+    WebSocketConnectionRole role{WebSocketConnectionRole::kServer};
+    WebSocketMaskKeyGenerator maskKeyGenerator{nullptr};
+    void* maskKeyContext{nullptr};
 };
 
 class WebSocketOutputPlan final {
@@ -61,7 +70,7 @@ public:
     }
 
 private:
-    friend class WebSocketServerConnection;
+    friend class WebSocketConnection;
     constexpr WebSocketOutputPlan(
         std::string_view bytes, WebSocketTransportDisposition disposition) noexcept
         : bytes_(bytes),
@@ -188,7 +197,7 @@ public:
     const WebSocketTransportEndEvent* transportEnd() const&& = delete;
 
 private:
-    friend class WebSocketServerConnection;
+    friend class WebSocketConnection;
     using Value = std::variant<WebSocketMessageEvent, WebSocketPingEvent, WebSocketPongEvent,
         WebSocketCloseEvent, WebSocketProtocolErrorEvent, WebSocketTransportEndEvent>;
     static_assert(std::to_underlying(WebSocketEventKind::kTransportEnd) + 1 ==
@@ -219,17 +228,19 @@ private:
     Value value_;
 };
 
-// Stable server-side sans-I/O WebSocket driver. It accepts RFC 6455 client
-// frames (which must be masked) and emits server frames (which are never
-// masked). Event views remain valid until the next feed() or nextEvent().
-class WebSocketServerConnection final {
+// Sans-I/O RFC 6455 driver for an already upgraded connection. The role fixes
+// inbound mask validation and outbound masking, including automatic Pong/Close.
+// Event views remain valid until the next feed() or nextEvent(). Output bytes
+// remain valid until nextEvent(), submitFrame(), submitClose(), consumeOutput(),
+// or destruction. feed(), EOF and abort do not invalidate an in-flight write.
+class WebSocketConnection final {
 public:
-    explicit WebSocketServerConnection(WebSocketServerConnectionOptions options = {});
-    ~WebSocketServerConnection();
-    WebSocketServerConnection(const WebSocketServerConnection&) = delete;
-    WebSocketServerConnection& operator=(const WebSocketServerConnection&) = delete;
-    WebSocketServerConnection(WebSocketServerConnection&&) noexcept;
-    WebSocketServerConnection& operator=(WebSocketServerConnection&&) noexcept;
+    explicit WebSocketConnection(WebSocketConnectionOptions options = {});
+    ~WebSocketConnection();
+    WebSocketConnection(const WebSocketConnection&) = delete;
+    WebSocketConnection& operator=(const WebSocketConnection&) = delete;
+    WebSocketConnection(WebSocketConnection&&) noexcept;
+    WebSocketConnection& operator=(WebSocketConnection&&) noexcept;
 
     [[nodiscard]] WebSocketFeedStatus feed(std::string_view input);
     template <detail::HttpTemporaryOwningCharString Input>
