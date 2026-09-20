@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -58,16 +59,17 @@ struct HttpRequestAccess final {
         if (slot >= kCachedHeaderSlots) {
             return {};
         }
-        return (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0
-                   ? request.cachedHeaders_[slot]
+        const auto index = request.cachedHeaders_[slot];
+        return index != 0 && index <= request.headers_.size()
+                   ? request.headers_[index - 1].value()
                    : std::string_view{};
     }
 
     [[nodiscard]] static bool hasKnownHeader(
         const HttpRequest& request, RequestKnownHeader name) noexcept {
         const auto slot = knownHeaderSlot(name);
-        return slot < kCachedHeaderSlots &&
-               (request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0;
+        return slot < kCachedHeaderSlots && request.cachedHeaders_[slot] != 0 &&
+               request.cachedHeaders_[slot] <= request.headers_.size();
     }
 
     [[nodiscard]] static std::string_view bodyBytes(const HttpRequest& request) noexcept {
@@ -75,19 +77,7 @@ struct HttpRequestAccess final {
     }
 
     static void reset(HttpRequest& request) noexcept {
-        request.method_ = {};
-        request.knownMethod_ = HttpKnownMethod::kUnknown;
-        request.target_ = {};
-        request.scheme_ = {};
-        request.authority_ = {};
-        request.path_ = {};
-        request.queryString_ = {};
-        request.protocolVersion_ = HttpProtocolVersion::kHttp11;
-        request.targetForm_ = ::ruvia::HttpRequestTargetForm::kOrigin;
-        request.headerCount_ = 0;
-        request.cachedHeaderBits_ = 0;
-        request.body_ = {};
-        request.resource_ = nullptr;
+        request = make();
     }
 
     static void setResource(HttpRequest& request, std::pmr::memory_resource* resource) noexcept {
@@ -128,39 +118,37 @@ struct HttpRequestAccess final {
         request.protocolVersion_ = protocolVersion;
     }
 
-    static bool addHeader(HttpRequest& request, HttpHeaderView header) noexcept {
-        if (request.headerCount_ == kMaxHttpHeaderFields) {
+    // Call once after syntax validation, with the exact semantic field count.
+    // Binding happens before allocation; changing the auxiliary request resource
+    // later does not change ownership of an existing descriptor block.
+    static void reserveHeaders(HttpRequest& request, std::size_t count) {
+        if (count > kMaxHttpHeaderFields || !request.headers_.empty()) {
+            throw std::logic_error("invalid request header block reservation");
+        }
+        request.headers_.reserve(count, request.resource());
+    }
+
+    static bool addHeader(HttpRequest& request, HttpHeaderView header) {
+        if (request.headers_.size() == kMaxHttpHeaderFields) {
             return false;
         }
-        request.headers_[request.headerCount_++] = header;
+        request.headers_.append(header);
         return true;
     }
 
     static bool addHeader(
-        HttpRequest& request, HttpHeaderView header, std::size_t knownSlot) noexcept {
+        HttpRequest& request, HttpHeaderView header, std::size_t knownSlot) {
         if (!addHeader(request, header)) {
             return false;
         }
-        setKnownHeaderSlot(request, knownSlot, header.value());
-        return true;
-    }
-
-    static void setKnownHeaderSlot(
-        HttpRequest& request, std::size_t slot, std::string_view value) noexcept {
-        if (slot >= kCachedHeaderSlots) {
-            return;
+        if (knownSlot < kCachedHeaderSlots) {
+            request.cachedHeaders_[knownSlot] = static_cast<std::uint8_t>(request.headers_.size());
         }
-        request.cachedHeaders_[slot] = value;
-        request.cachedHeaderBits_ |= cachedHeaderBit(slot);
+        return true;
     }
 
     static void setBody(HttpRequest& request, std::string_view body) noexcept {
         request.body_ = body;
-    }
-
-private:
-    [[nodiscard]] static constexpr std::uint32_t cachedHeaderBit(std::size_t slot) noexcept {
-        return 1U << slot;
     }
 };
 

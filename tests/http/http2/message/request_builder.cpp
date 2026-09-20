@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 
+#include "request_header_memory_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -43,6 +44,42 @@ void checkBuildFailure(ruvia::testing::TestContext& ruvia_ctx,
 }
 
 }  // namespace
+
+RUVIA_TEST(h2_request_header_blocks_release_independently_of_retained_stream_data) {
+    ruvia::test::HeaderMemory resource;
+    auto stream = makeStream();
+    stream.assignRequestMethod("GET");
+    stream.assignRequestPath("/saved");
+    RUVIA_CHECK(stream.appendRemoteHeader("x-value", "handshake", RequestHeaderKind::kOther));
+    auto retained = HttpRequestAccess::make();
+    const auto retainedBuild = Http2RequestBuilder::build(stream, retained, &resource, {});
+    RUVIA_CHECK(retainedBuild.built() != nullptr);
+    const auto baseline = resource.liveBytes;
+    RUVIA_CHECK_EQ(baseline, sizeof(ruvia::HttpHeaderView));
+    for (int i = 0; i < 64; ++i) {
+        {
+            auto request = HttpRequestAccess::make();
+            const auto build = Http2RequestBuilder::build(stream, request, &resource, {});
+            RUVIA_CHECK(build.built() != nullptr);
+            RUVIA_CHECK_EQ(resource.liveBytes, baseline * 2);
+        }
+        RUVIA_CHECK_EQ(resource.liveBytes, baseline);
+        RUVIA_CHECK_EQ(retained.header("x-value").value(), std::string_view("handshake"));
+    }
+    resource.reject = true;
+    bool failed = false;
+    try {
+        auto request = HttpRequestAccess::make();
+        (void)Http2RequestBuilder::build(stream, request, &resource, {});
+    } catch (const std::bad_alloc&) {
+        failed = true;
+    }
+    RUVIA_CHECK(failed);
+    RUVIA_CHECK_EQ(resource.liveBytes, baseline);
+    HttpRequestAccess::reset(retained);
+    RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(stream.remoteHeaderAt(0).value, std::string_view("handshake"));
+}
 
 RUVIA_TEST(h2_request_builder_route_method_is_known_wire_method_when_not_ws_connect) {
     auto stream = makeStream();

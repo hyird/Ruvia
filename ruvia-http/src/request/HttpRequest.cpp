@@ -28,14 +28,14 @@ std::optional<std::string_view> HttpRequest::header(std::string_view name) const
     const auto kind = detail::classifyRequestHeader(name);
     if (kind != detail::RequestHeaderKind::kOther) {
         const auto knownSlot = std::to_underlying(kind) - 1;
-        const auto bit = std::uint32_t{1} << knownSlot;
-        if ((cachedHeaderBits_ & bit) == 0) {
+        const auto index = cachedHeaders_[knownSlot];
+        if (index == 0 || index > headers_.size()) {
             return std::nullopt;
         }
-        return cachedHeaders_[knownSlot];
+        return headers_[index - 1].value();
     }
 
-    for (std::size_t i = headerCount_; i > 0; --i) {
+    for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
         if (detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), name)) {
             return headers_[index].value();
@@ -59,7 +59,7 @@ std::optional<std::string_view> HttpRequest::lastRawQueryValue(
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
-    for (std::size_t i = headerCount_; i > 0; --i) {
+    for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
         if (!detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), "Cookie")) {
             continue;

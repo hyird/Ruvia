@@ -130,6 +130,14 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         std::optional<RequestMemory> requestMemoryStorage;
         auto& requestMemory = emplaceRequestMemory(requestMemoryStorage, memory_,
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
+        // Work-set storage outlives this arena. Release its descriptor block
+        // on every exit (including exceptions/cancellation) before the arena dies.
+        struct RequestHeaderLifetime final {
+            HttpRequest& request;
+            ~RequestHeaderLifetime() {
+                HttpRequestAccess::reset(request);
+            }
+        } headerLifetime{parsed.request};
         HttpResponse response({.resource = requestMemory.resource()});
         HttpResponseCodingPolicy responseCodingPolicy = HttpResponseCodingPolicy::disabled();
         // Holds the next pipelined request from the moment a body route hands it
@@ -176,8 +184,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             }
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
             responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-            parser.parseHead(bufferView, parsed, headerSearchOffset);
-            HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
+            parser.parseHead(bufferView, parsed, headerSearchOffset, requestMemory.resource());
             if (const auto* requestHead = parsed.headReady()) {
                 // Reset phase so requestHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingPayload on their own; the

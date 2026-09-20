@@ -32,11 +32,11 @@ struct Http1RequestParseResultAccess final {
 
     // HttpRequest is a fixed-size collection of borrowed views. The result
     // copies it once into its own value object; no owning data is transferred.
-    [[nodiscard]] static Http1RequestParseResult parsed(const HttpRequest& request,
+    [[nodiscard]] static Http1RequestParseResult parsed(HttpRequest request,
         Http1RequestBodyPlan bodyPlan, std::string_view wireBody,
         std::size_t consumedBytes) noexcept {
         return Http1RequestParseResult(
-            Http1ParsedRequest(request, bodyPlan, wireBody, consumedBytes));
+            Http1ParsedRequest(std::move(request), bodyPlan, wireBody, consumedBytes));
     }
 
     [[nodiscard]] static Http1RequestParseResult failure(HttpParseError error) noexcept {
@@ -195,7 +195,7 @@ public:
 private:
     friend class Http1ServerRequestParser;
 
-    // The heavy request/header storage stays in place across parse attempts.
+    // The compact request owns its descriptor block across parse attempts.
     // Only this small progress value changes, so head/message/required/error
     // metadata exists solely in the alternative where it is meaningful.
     using Progress = std::variant<Http1ServerNeedRequestHead, Http1ServerRequestHeadReady,
@@ -207,24 +207,26 @@ private:
 
 class Http1ServerRequestParser final {
 public:
-    // Hot-path entry point: `state` is reset and reused across read attempts, so
-    // parsing an incomplete head never copies or re-zeroes the ~2.5KB state.
+    // Allocate the exact header descriptor block only after accepting the head.
+    // The resource must outlive state; field text still borrows buffer.
     void parseHead(std::string_view buffer, Http1ServerRequestParseState& state,
-        std::size_t headerSearchOffset = 0) const noexcept;
+        std::size_t headerSearchOffset = 0, std::pmr::memory_resource* resource = nullptr) const;
 
     template <HttpTemporaryOwningCharString Buffer>
-    void parseHead(Buffer&&, Http1ServerRequestParseState&, std::size_t = 0) const = delete;
+    void parseHead(Buffer&&, Http1ServerRequestParseState&, std::size_t = 0,
+        std::pmr::memory_resource* = nullptr) const = delete;
 
     // Whole-message scanner used by the public sans-I/O API. It always advances
     // beyond kRequestHeadReady to an unambiguous message/failure/need-more phase.
-    [[nodiscard]] Http1ServerRequestParseState parseMessage(std::string_view buffer) const noexcept;
+    [[nodiscard]] Http1ServerRequestParseState parseMessage(std::string_view buffer,
+        std::pmr::memory_resource* resource = nullptr) const;
 
     template <HttpTemporaryOwningCharString Buffer>
-    Http1ServerRequestParseState parseMessage(Buffer&&) const = delete;
+    Http1ServerRequestParseState parseMessage(Buffer&&, std::pmr::memory_resource* = nullptr) const = delete;
 
 private:
     static void parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset,
-        Http1ServerRequestParseState& state) noexcept;
+        Http1ServerRequestParseState& state, std::pmr::memory_resource* resource);
     static void parseMessageBody(
         std::string_view buffer, Http1ServerRequestParseState& state) noexcept;
 };

@@ -11,6 +11,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/detail/request/HttpRequestHeaderBlock.h"
 
 namespace ruvia {
 
@@ -34,6 +35,13 @@ struct HttpRequestAccess;
 
 class HttpRequest final {
 public:
+    // Owns the compact descriptor block; field text still borrows protocol input.
+    // The block's PMR resource must outlive the request. Moving transfers it.
+    HttpRequest(const HttpRequest&) = delete;
+    HttpRequest& operator=(const HttpRequest&) = delete;
+    HttpRequest(HttpRequest&&) noexcept = default;
+    HttpRequest& operator=(HttpRequest&&) noexcept = default;
+
     [[nodiscard]] std::string_view method() const noexcept {
         return method_;
     }
@@ -78,7 +86,7 @@ public:
     // fields are coalesced, and Host is synthesized from a valid :authority
     // when absent. Repeated regular fields retain wire order.
     [[nodiscard]] std::span<const HttpHeaderView> headers() const& noexcept RUVIA_LIFETIMEBOUND {
-        return std::span<const HttpHeaderView>(headers_.data(), headerCount_);
+        return headers_.fields();
     }
     [[nodiscard]] std::span<const HttpHeaderView> headers() const&& = delete;
 
@@ -109,21 +117,15 @@ private:
     std::string_view queryString_;
     HttpProtocolVersion protocolVersion_{HttpProtocolVersion::kHttp11};
     HttpRequestTargetForm targetForm_{HttpRequestTargetForm::kOrigin};
-    std::array<HttpHeaderView, kMaxHttpHeaderFields> headers_{};
-    std::size_t headerCount_{0};
-    std::uint32_t cachedHeaderBits_{0};
-    std::array<std::string_view, kCachedHeaderSlots> cachedHeaders_{};
+    detail::HttpRequestHeaderBlock headers_{};
+    // One-based indices; zero means absent. No duplicated string views.
+    std::array<std::uint8_t, kCachedHeaderSlots> cachedHeaders_{};
     std::string_view body_;
     std::pmr::memory_resource* resource_{nullptr};
 };
 
-// Every member is trivially copyable, so a move of HttpRequest is a full
-// memcpy, and construction value-initializes both fixed arrays. That cost is
-// paid once per HTTP/1 request and once per in-flight HTTP/2 stream, whose
-// coroutine frame carries the request for the stream's whole lifetime -- a
-// frame above kTaskFrameCacheMaxBlockBytes skips the frame cache entirely.
-// The bulk is headers_ (kMaxHttpHeaderFields * sizeof(HttpHeaderView)) plus
-// cachedHeaders_. Weigh that before adding a field or raising either bound.
-static_assert(sizeof(HttpRequest) <= 2624);
+// Header descriptors live in the caller-selected PMR resource rather than the
+// request's coroutine frame. The protocol field-count limit is independent of
+// this object's layout.
 
 }  // namespace ruvia

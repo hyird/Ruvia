@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/Http1RequestBodyPlan.h"
@@ -45,9 +47,9 @@ private:
     std::optional<std::size_t> requiredTotalBytes_{};
 };
 
-// One completely framed HTTP/1 request. All views borrow the input passed to
-// Http1RequestParser::parse() and remain valid only while those bytes remain
-// alive and unmoved.
+// One completely framed HTTP/1 request. Owns its compact header descriptor
+// block in the parse resource. Field strings and body borrow the input passed
+// to parse() and remain valid only while those bytes remain alive and unmoved.
 class Http1ParsedRequest final {
 public:
     [[nodiscard]] const HttpRequest& request() const& noexcept {
@@ -75,11 +77,10 @@ public:
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    // HttpRequest contains only borrowed views and fixed-size metadata. Copy it
-    // once into the result so the ownership and lifetime contract stays explicit.
-    Http1ParsedRequest(const HttpRequest& request, Http1RequestBodyPlan bodyPlan,
+    // Transfer the descriptor block; header text continues to borrow input.
+    Http1ParsedRequest(HttpRequest request, Http1RequestBodyPlan bodyPlan,
         std::string_view wireBody, std::size_t consumedBytes) noexcept
-        : request_(request),
+        : request_(std::move(request)),
           bodyPlan_(bodyPlan),
           wireBody_(wireBody),
           consumedBytes_(consumedBytes) {}
@@ -134,7 +135,7 @@ private:
         : state_(state) {}
 
     explicit Http1RequestParseResult(Http1ParsedRequest state) noexcept
-        : state_(state) {}
+        : state_(std::move(state)) {}
 
     explicit Http1RequestParseResult(Http1RequestParseFailure state) noexcept
         : state_(state) {}
@@ -142,15 +143,21 @@ private:
     std::variant<Http1RequestNeedMore, Http1ParsedRequest, Http1RequestParseFailure> state_;
 };
 
-// Stateless, zero-copy whole-message scanner for HTTP/1 requests. It validates
-// the request head and framing, then reports the exact first-message boundary;
-// it does not perform transfer decoding or mutate the caller's bytes.
+struct Http1RequestParseOptions final {
+    // Must outlive the result. nullptr uses the default PMR resource.
+    std::pmr::memory_resource* resource{nullptr};
+};
+
+// Stateless whole-message scanner: field text is zero-copy, descriptors are
+// allocated in the parse resource. Allocation failures propagate; syntax and
+// framing failures use the typed result. No transfer decoding or input mutation.
 class Http1RequestParser final {
 public:
-    [[nodiscard]] Http1RequestParseResult parse(std::string_view buffer) const noexcept;
+    [[nodiscard]] Http1RequestParseResult parse(std::string_view buffer,
+        Http1RequestParseOptions options = {}) const;
 
     template <detail::HttpTemporaryOwningCharString Buffer>
-    Http1RequestParseResult parse(Buffer&&) const = delete;
+    Http1RequestParseResult parse(Buffer&&, Http1RequestParseOptions = {}) const = delete;
 };
 
 }  // namespace ruvia

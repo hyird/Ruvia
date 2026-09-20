@@ -240,7 +240,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## HTTP 解析和响应
 
-- 请求解析走 Ruvia 自研 zero-copy parser；method/path/version/header 默认借用连接读缓冲。
+- 请求解析走 Ruvia 自研 zero-copy parser；method/path/version/header 文本默认借用连接读缓冲。header 描述符由 move-only 请求拥有，在请求/stream PMR 中按实际字段数一次分配；所有者必须在资源退役前释放描述符块。
 - header 上限 64KB，普通 body 上限 16MB。
 - chunked 请求体在连接读缓冲中原地解码。
 - 普通 route dispatch 前完整读取 body；大 body 必须显式使用 stream route。
