@@ -111,7 +111,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> inputs(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("remote=");
-        body.append(getConnInfo(c).remote().address());
+        body.append(c.conn().remote().address());
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");

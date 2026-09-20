@@ -83,14 +83,14 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
 
     const auto plainContext = ContextAccess::make(
         memory, request, ruvia::test::testContextServices().withPlainTransport("192.0.2.44"));
-    const auto plainInfo = ruvia::getConnInfo(plainContext);
+    const auto plainInfo = plainContext.conn();
     RUVIA_CHECK(plainInfo.plain() != nullptr);
     RUVIA_CHECK(plainInfo.tls() == nullptr);
     RUVIA_CHECK_EQ(plainInfo.remote().address(), std::string_view("192.0.2.44"));
 
     const auto tlsContext = ContextAccess::make(memory, request,
         ruvia::test::testContextServices().withTlsTransport("198.51.100.55", "CN=request-client"));
-    const auto tlsInfo = ruvia::getConnInfo(tlsContext);
+    const auto tlsInfo = tlsContext.conn();
     RUVIA_CHECK(tlsInfo.plain() == nullptr);
     RUVIA_CHECK(tlsInfo.tls() != nullptr);
     RUVIA_CHECK_EQ(tlsInfo.remote().address(), std::string_view("198.51.100.55"));

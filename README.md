@@ -160,7 +160,7 @@ app-wide nor a route-specific rule allocate no table. Pass `nullptr` to
 Connection metadata is deliberately separate from the HTTP request model:
 
 ```cpp
-const auto info = ruvia::getConnInfo(c);
+const auto info = c.conn();
 const auto peerAddress = info.remote().address();
 if (const auto* tls = info.tls()) {
     const auto clientSubject = tls->clientCertificateSubject();

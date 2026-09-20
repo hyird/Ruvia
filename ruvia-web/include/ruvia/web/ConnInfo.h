@@ -110,7 +110,6 @@ public:
 
 private:
     friend class detail::ContextServices;
-    friend ConnInfo getConnInfo(const Context& context) noexcept;
 
     constexpr ConnInfo(std::string_view remoteAddress, PlainConnectionTransport transport) noexcept
         : remote_(remoteAddress),
@@ -169,9 +168,5 @@ static_assert(std::is_nothrow_copy_constructible_v<ConnInfo>);
 static_assert(std::is_nothrow_move_constructible_v<ConnInfo>);
 static_assert(std::is_nothrow_copy_assignable_v<ConnInfo>);
 static_assert(std::is_nothrow_move_assignable_v<ConnInfo>);
-
-// Hono-like adapter boundary: connection details are queried from Context,
-// never from the HTTP request model.
-[[nodiscard]] ConnInfo getConnInfo(const Context& context) noexcept;
 
 }  // namespace ruvia

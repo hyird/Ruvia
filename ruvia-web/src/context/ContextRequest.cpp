@@ -31,10 +31,6 @@
 
 namespace ruvia {
 
-ConnInfo getConnInfo(const Context& context) noexcept {
-    return context.connInfo_;
-}
-
 namespace detail {
 
 // A media-type mismatch is the client speaking the wrong format at a valid

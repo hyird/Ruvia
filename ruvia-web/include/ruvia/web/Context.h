@@ -118,7 +118,6 @@ class Context final : public detail::BlockingCapability<Context>,
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
-    friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
     friend detail::RequestBindingHandle<T> detail::bindValidatedModel(
@@ -151,6 +150,12 @@ public:
         return ContextRequest(*this);
     }
     ContextRequest req() const&& = delete;
+
+    // Connection metadata borrows this request's transport state.
+    [[nodiscard]] ConnInfo conn() const& noexcept RUVIA_LIFETIMEBOUND {
+        return connInfo_;
+    }
+    ConnInfo conn() const&& = delete;
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an

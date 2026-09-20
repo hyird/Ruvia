@@ -275,7 +275,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`，core 与 Web 共用无默认结果类型的 `Task<T>`；响应模型必须通过 `c.json(model)` 输出，不支持 handler 直接返回 `Task<Model>`。service 等内部异步函数仍可返回 `Task<T>`。core 层不提供默认结果类型，无结果操作显式使用 `Task<void>`。
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
 - 公开协程返回类型统一是 `ruvia::Task<T>`，不暴露 `asio::awaitable<T>`。
-- 请求统一走 `c.req()`；连接元数据通过 `getConnInfo(c)` 读取。
+- 请求统一走 `c.req()`；连接元数据通过 `c.conn()` 读取。
 - `HttpRequest`、`ContextRequest`、`RawRequestClone` 不保存 remote address、TLS 状态或证书身份。
 - 响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)`。
 - 响应构造走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。

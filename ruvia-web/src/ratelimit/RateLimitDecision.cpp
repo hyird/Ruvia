@@ -25,7 +25,7 @@ namespace {
     // The client, not the hop -- same as the app-wide limiter. Behind a trusted
     // proxy, remote() is the proxy and every caller would share one key.
     return limiter->allowRoute(ContextAccess::routeRateLimitScope(context),
-        rateLimitKeyFor(getConnInfo(context).client().address(), keyBuffer), options.rule);
+        rateLimitKeyFor(context.conn().client().address(), keyBuffer), options.rule);
 }
 
 void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
