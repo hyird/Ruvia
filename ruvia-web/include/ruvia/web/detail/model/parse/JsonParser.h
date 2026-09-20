@@ -155,12 +155,12 @@ template <typename T>
             return ModelValueFactory::makeString(parsed->raw(), resource);
         }
         auto decoded = decodeJsonString(parsed->raw(), resource);
+        input = remaining;
         if (!decoded.has_value()) {
             return std::nullopt;
         }
         FieldT value = makeRequestValue<FieldT>(resource);
         value.assignOwned(std::move(*decoded));
-        input = remaining;
         return value;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         const auto parsed = parseJsonString(remaining);

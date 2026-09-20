@@ -358,8 +358,10 @@ private:
                             detail::ModelValueFactory::emplaceParsed(slot, std::move(*value));
                             return true;
                         }
-                        valueInput = originalInput;
-                        if (!detail::skipJsonValue(valueInput, depth + 1)) {
+                        // parseJsonValue only advances when it consumed a complete
+                        // JSON token. Wrong-type values still need one structural skip.
+                        if (valueInput.data() == originalInput.data() &&
+                            !detail::skipJsonValue(valueInput, depth + 1)) {
                             return false;
                         }
                         slot.markInvalidType();

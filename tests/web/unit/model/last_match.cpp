@@ -40,6 +40,23 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     RUVIA_CHECK(response.ensure<"message">().resource() == &modelResource);
 }
 
+RUVIA_REQUEST_MODEL(TwoFieldRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(tag, ruvia::String));
+
+RUVIA_TEST(json_invalid_type_does_not_rescan_before_the_next_field) {
+    std::pmr::monotonic_buffer_resource resource;
+    const auto parsed = ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<TwoFieldRequest>(
+        R"({"message":42,"tag":"ok"})", &resource);
+    RUVIA_CHECK(parsed.has_value());
+    if (!parsed) {
+        return;
+    }
+    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"message">(*parsed) ==
+                ruvia::detail::ModelFieldState::kInvalidType);
+    RUVIA_CHECK(parsed->get<"tag">().has_value());
+    RUVIA_CHECK_EQ(parsed->get<"tag">()->view(), std::string_view("ok"));
+}
+
 RUVIA_TEST(request_and_response_models_support_nested_arrays_and_optional_fields) {
     std::pmr::monotonic_buffer_resource resource;
     std::string input = R"({"primary":{"id":1},"items":[{"id":2,"label":"two"}],"tags":["a","b"]})";
