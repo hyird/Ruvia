@@ -10,11 +10,6 @@ using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpResponseContentSemantics;
 using ruvia::detail::httpResponseContentSemantics;
 
-constexpr auto kHeadResponse =
-    httpResponseContentSemantics(HttpKnownMethod::kHead, ruvia::http_status::kOk);
-constexpr auto kConnectResponse =
-    httpResponseContentSemantics(HttpKnownMethod::kConnect, ruvia::http_status::kOk);
-
 }  // namespace
 
 RUVIA_TEST(response_content_semantics_owns_method_status_precedence) {

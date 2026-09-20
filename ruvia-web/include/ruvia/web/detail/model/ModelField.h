@@ -108,6 +108,11 @@ public:
         state_ = detail::ModelFieldState::kInvalidType;
     }
 
+    void markNull() noexcept {
+        value_.reset();
+        state_ = detail::ModelFieldState::kNull;
+    }
+
 private:
     template <typename DerivedT, typename... DescriptorTs>
     friend class ModelStorage;

@@ -55,11 +55,17 @@ RUVIA_TEST(model_wrapper_scalar_fields_parse_json_and_forms) {
 }
 
 RUVIA_TEST(model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_optional_fields) {
-    for (const auto body :
-        {std::string_view(R"({"count":"nan"})"), std::string_view(R"({"count":null})")}) {
-        std::pmr::monotonic_buffer_resource wrappedResource;
-        const auto wrapped = ruvia::fromJson<WrappedScalars>(body, {.resource = &wrappedResource});
-        RUVIA_CHECK(!wrapped.has_value());
+    std::pmr::monotonic_buffer_resource wrappedResource;
+    RUVIA_CHECK(!ruvia::fromJson<WrappedScalars>(R"({"count":"nan"})", {.resource = &wrappedResource})
+            .has_value());
+
+    const auto nullCount =
+        ruvia::fromJson<WrappedScalars>(R"({"count":null})", {.resource = &wrappedResource});
+    RUVIA_CHECK(nullCount.has_value());
+    if (nullCount) {
+        RUVIA_CHECK(!nullCount->get<"count">().has_value());
+        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"count">(*nullCount) ==
+                    ruvia::detail::ModelFieldState::kNull);
     }
 
     std::pmr::monotonic_buffer_resource resource;

@@ -81,8 +81,10 @@ template <typename T>
         return "must be a string";
     } else if constexpr (detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>) {
         return "must be an array";
-    } else if constexpr (isRequestModel<ValueT>) {
+    } else if constexpr (detail::isRuviaJsonObject<ValueT> || isRequestModel<ValueT>) {
         return "must be an object";
+    } else if constexpr (detail::isRuviaJsonValue<ValueT>) {
+        return "must be a JSON value";
     } else if constexpr (detail::isRuviaScalar<ValueT>) {
         if constexpr (std::is_same_v<detail::ModelScalarValueT<ValueT>, bool>) {
             return "must be a boolean";

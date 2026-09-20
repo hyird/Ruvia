@@ -2,6 +2,7 @@
 
 #include "ruvia/web/ModelForm.h"
 #include "ruvia/web/ModelJson.h"
+#include "ruvia/web/ModelObject.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/model/macro/Macros.h"
 #include "ruvia/web/detail/model/parse/ModelInputVisitors.h"
