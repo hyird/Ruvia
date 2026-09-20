@@ -1,12 +1,15 @@
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
@@ -136,14 +139,17 @@ WebSocketHandshakeValidationResult validateWebSocketHandshake(
     std::size_t versionCount = 0;
     bool webSocketUpgrade = false;
 
-    for (const auto& header : request.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto kind = detail::HttpRequestAccess::headerKind(request, i);
+        const auto& header = headers[i];
+        if (kind == std::to_underlying(detail::RequestHeaderKind::kConnection)) {
             if (connectionOptions.parseField(
                     header.value(), detail::HttpFieldListRole::kRecipient) !=
                 detail::HttpFieldListParseStatus::kOk) {
                 return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
+        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kUpgrade)) {
             if (upgradeProtocols.parseField(header.value(), detail::HttpFieldListRole::kRecipient,
                     [&webSocketUpgrade](const detail::HttpUpgradeProtocol& protocol) noexcept {
                         if (protocol.version.empty() &&
@@ -154,10 +160,10 @@ WebSocketHandshakeValidationResult validateWebSocketHandshake(
                     }) != detail::HttpFieldListParseStatus::kOk) {
                 return WebSocketHandshakeValidationResult::makeInvalidRequest();
             }
-        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Key")) {
+        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kSecWebSocketKey)) {
             key = header.value();
             ++keyCount;
-        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Version")) {
+        } else if (kind == std::to_underlying(detail::RequestHeaderKind::kSecWebSocketVersion)) {
             version = header.value();
             ++versionCount;
         }
