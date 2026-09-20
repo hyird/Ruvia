@@ -249,6 +249,9 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     // every Accept line into one best-match accumulator (equivalent to the joined
     // value, and correct for a q=0 exclusion spread across lines) without
     // allocating to concatenate.
+    if (!detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kAccept)) {
+        return true;
+    }
     int bestSpecificity = -1;
     int bestQuality = 0;
     bool sawAccept = false;
