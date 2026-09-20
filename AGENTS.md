@@ -153,7 +153,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 - Context、Controller、Router、middleware、Next、route macro。
 - HTTP server runtime、TLS、HTTP/2 server、WebSocket route、response streaming。
 - Model、JSON/form parsing/serialization、validation middleware。
-- `HttpErrorInfo`、`HttpError`、JSON 错误响应和自定义 error/not-found handler。
+- `HttpErrorInfo`、`HttpError`、RFC 9457 Problem Details 默认错误响应和自定义 error/not-found handler。
 - Session、CSRF、RateLimit、CORS、安全头、静态文件、AutoHTTPS redirect。
 - 可选 MariaDB、Redis、JWT 集成。
 

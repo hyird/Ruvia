@@ -18,18 +18,25 @@ namespace {
 RUVIA_RESPONSE_MODEL(HttpValidationIssueResponseModel, RUVIA_REQUIRED_FIELD(field, ruvia::String),
     RUVIA_REQUIRED_FIELD(code, ruvia::String), RUVIA_REQUIRED_FIELD(message, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(HttpErrorResponseModel, RUVIA_REQUIRED_FIELD(error, ruvia::String),
-    RUVIA_REQUIRED_FIELD(code, ruvia::String), RUVIA_REQUIRED_FIELD(message, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(details, ruvia::Array<HttpValidationIssueResponseModel>));
+RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
+    RUVIA_REQUIRED_FIELD(type, ruvia::String),
+    RUVIA_REQUIRED_FIELD(title, ruvia::String),
+    RUVIA_REQUIRED_FIELD(status, ruvia::Int32),
+    RUVIA_REQUIRED_FIELD(detail, ruvia::String),
+    RUVIA_REQUIRED_FIELD(code, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(errors, ruvia::Array<HttpValidationIssueResponseModel>));
 
 [[nodiscard]] std::pmr::string serializeErrorResponse(
     HttpErrorInfo error, std::pmr::memory_resource* resource) {
     HttpErrorResponseModel model({.resource = resource});
-    model.set<"error">(error.statusText())
-        .set<"code">(error.code())
-        .set<"message">(error.message());
+    const auto phrase = httpReasonPhrase(error.status());
+    model.set<"type">("about:blank")
+        .set<"title">(phrase.empty() ? std::string_view("HTTP Error") : phrase)
+        .set<"status">(error.status().value())
+        .set<"detail">(error.message())
+        .set<"code">(error.code());
     if (!error.validationIssues().empty()) {
-        auto& details = model.ensure<"details">();
+        auto& details = model.ensure<"errors">();
         details.reserve(error.validationIssues().size());
         for (const auto& issue : error.validationIssues()) {
             details.emplace_back(ModelOptions{.resource = resource})
@@ -126,7 +133,7 @@ HttpResponse detail::makeDefaultErrorResponse(
     HttpResponse response({.resource = resource});
     reserveResponseHeaders(response, 1);
     response.status(error.status());
-    setResponseHeaderStableView(response, "Content-Type", "application/json");
+    setResponseHeaderStableView(response, "Content-Type", "application/problem+json");
 
     auto body = serializeErrorResponse(error, resource);
     setResponseBodyOwned(response, std::move(body));

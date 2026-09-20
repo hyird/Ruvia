@@ -1780,6 +1780,13 @@ worker and be destroyed within the Context's scope. Posted jobs use
 `WebWorkerContext::pool()` for that same worker pool; they have no request
 arena.
 
+Default error responses use RFC 9457 `application/problem+json`: `type` is
+`about:blank`, `title` describes the HTTP status, `status` matches the response,
+and `detail` describes the failure. The `code` extension is a stable application
+error code. Validation failures also include an `errors` array of
+`{ "field": "...", "code": "...", "message": "..." }` entries. No `instance`
+is generated or request URL echoed. A custom `onError` can replace this document.
+
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
 deterministic 500. A failure past the response's point of no return cannot become
