@@ -59,12 +59,22 @@ std::optional<std::string_view> HttpRequest::lastRawQueryValue(
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
+    if (!detail::requestHasKnownHeader(*this, detail::RequestKnownHeader::kCookie)) {
+        return std::nullopt;
+    }
+    const auto lastCookie =
+        detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
+    if (auto value = detail::httpFindSemicolonParameter(lastCookie, name)) {
+        return value;
+    }
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
-        if (!detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), "Cookie")) {
+        const auto header = headers_[index];
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie") ||
+            header.value().data() == lastCookie.data()) {
             continue;
         }
-        if (auto value = detail::httpFindSemicolonParameter(headers_[index].value(), name)) {
+        if (auto value = detail::httpFindSemicolonParameter(header.value(), name)) {
             return value;
         }
     }

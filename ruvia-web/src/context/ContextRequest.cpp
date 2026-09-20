@@ -76,7 +76,6 @@ const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
     if (!cache) {
         const auto rawHeaders = request_.headers();
-        std::pmr::vector<std::pmr::string> names(arena());
         auto headers = detail::RequestNameValueListAccess::makeHeaders(arena());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
@@ -84,9 +83,9 @@ const RequestNameValueList& Context::requestHeaders() const {
                 headers, detail::RequestNameValueViewAccess::make(
                              rawHeader.name(), rawHeader.value()));
         }
-        cache.emplace(std::move(names), std::move(headers));
+        cache.emplace(std::move(headers));
     }
-    return cache->fields;
+    return *cache;
 }
 
 std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
@@ -101,14 +100,10 @@ void Context::ensureRequestQuery() const {
     if (requestStorage_->queryInvalid) {
         detail::throwInvalidQuery();
     }
-    if (!detail::validateUrlEncoding(request_.queryString())) {
-        requestStorage_->queryInvalid = true;
-        detail::throwInvalidQuery();
-    }
-
-    const auto pairCount = detail::delimitedFieldCount(request_.queryString(), '&');
+    // Percent-encoding is validated while decoding each component. A separate
+    // pre-scan of the raw query would walk the same bytes again.
     std::pmr::vector<std::pmr::string> storage(arena());
-    storage.reserve(detail::boundedFieldReserve(pairCount * 2));
+    storage.reserve(detail::boundedFieldReserve(16));
     bool valid = true;
     const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
         [this, &storage, &valid](std::string_view key, std::string_view value) {
@@ -196,42 +191,27 @@ const detail::RequestQueryValues& Context::requestQueries() const {
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
-    const auto headers = request_.headers();
-    for (std::size_t i = headers.size(); i > 0; --i) {
-        const auto& header = headers[i - 1];
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-            continue;
-        }
-        if (auto value = detail::httpFindSemicolonParameter(header.value(), name)) {
-            return value;
-        }
-    }
-    return std::nullopt;
+    return request_.cookie(name);
 }
 
 const RequestNameValueList& Context::requestCookies() const {
     auto& cache = requestStorage().cookies;
     if (!cache) {
-        std::size_t cookieCount = 0;
-        for (const auto& header : request_.headers()) {
-            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-                cookieCount += detail::delimitedFieldCount(header.value(), ';');
-            }
-        }
-
         auto cookies = detail::RequestNameValueListAccess::make(arena());
-        detail::RequestNameValueListAccess::reserve(
-            cookies, detail::boundedFieldReserve(cookieCount));
-        for (const auto& header : request_.headers()) {
-            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-                continue;
+        if (detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kCookie)) {
+            detail::RequestNameValueListAccess::reserve(
+                cookies, detail::boundedFieldReserve(8));
+            for (const auto& header : request_.headers()) {
+                if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+                    continue;
+                }
+                detail::httpVisitSemicolonParameters(
+                    header.value(), [&cookies](std::string_view key, std::string_view value) {
+                        detail::RequestNameValueListAccess::pushBack(
+                            cookies, detail::RequestNameValueViewAccess::make(key, value));
+                        return true;
+                    });
             }
-            detail::httpVisitSemicolonParameters(
-                header.value(), [&cookies](std::string_view key, std::string_view value) {
-                    detail::RequestNameValueListAccess::pushBack(
-                        cookies, detail::RequestNameValueViewAccess::make(key, value));
-                    return true;
-                });
         }
         cache.emplace(std::move(cookies));
     }
@@ -246,23 +226,12 @@ void Context::ensureRouteParams() const {
     if (requestStorage_->routeParamsInvalid) {
         detail::throwInvalidParam();
     }
-    std::size_t encodedValueCount = 0;
-    for (std::size_t i = 0; i < paramCount_; ++i) {
-        if (!detail::validateUrlEncoding(paramValues_[i])) {
-            requestStorage_->routeParamsInvalid = true;
-            detail::throwInvalidParam();
-        }
-        if (detail::hasUrlEncoding(paramValues_[i], detail::UrlDecodeMode::kPercent)) {
-            ++encodedValueCount;
-        }
-    }
-
     // Route names and unencoded captures already borrow stable route/request
-    // storage. Own only decoded values, keeping the cache compact while making
-    // every returned view stable for the whole Context lifetime.
+    // storage. Own only decoded values. Invalid percent-escapes fail in decode
+    // rather than in a separate pre-scan of the same captures.
     std::pmr::vector<std::pmr::string> storage(arena());
     auto params = detail::RequestNameValueListAccess::make(arena());
-    storage.reserve(encodedValueCount);
+    storage.reserve(paramCount_);
     detail::RequestNameValueListAccess::reserve(params, paramCount_);
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
