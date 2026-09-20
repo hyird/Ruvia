@@ -381,40 +381,59 @@ private:
 
     bool ruviaMaterializeForm(const detail::ModelInput& input) {
         auto* const resource = this->resource_;
+        const auto encoding = input.kind() == detail::ModelInputKind::kFormFields
+                                  ? detail::FormValueEncoding::kDecoded
+                                  : detail::FormValueEncoding::kUrlEncoded;
+        const auto* fields = input.fields();
+        const bool caseInsensitive =
+            fields != nullptr && detail::RequestNameValueListAccess::caseInsensitive(*fields);
+        const auto stringStorage = input.stringStorage();
         const bool valid = detail::visitModelInputFormFields(
-            input, [this, &input, resource](std::string_view key, std::string_view value) {
-                bool matched = false;
-                detail::model::visitModelFields(
-                    this->derived(), Base::ruviaSchema(), [&](const auto&, auto& slot) {
-                        using SlotT = std::remove_cvref_t<decltype(slot)>;
-                        if constexpr (detail::isFormField<typename SlotT::value_type>) {
-                            const auto* fields = input.fields();
-                            const bool nameMatches = fields != nullptr
-                                                         ? detail::RequestNameValueListAccess::namesEqual(*fields, key, slot.wireName())
-                                                         : key == slot.wireName();
-                            if (matched || !nameMatches) {
-                                return;
-                            }
-                            matched = true;
-                            if (slot.state() != detail::ModelFieldState::kMissing) {
-                                slot.markDuplicate();
-                                return;
-                            }
-                            const auto encoding =
-                                input.kind() == detail::ModelInputKind::kFormFields
-                                    ? detail::FormValueEncoding::kDecoded
-                                    : detail::FormValueEncoding::kUrlEncoded;
-                            using ValueT = typename SlotT::value_type;
-                            auto parsed =
-                                detail::parseFormValue<ValueT>(detail::ResolvedPmrResourceTag{},
-                                    value, encoding, resource, input.stringStorage());
-                            if (parsed) {
-                                detail::ModelValueFactory::emplaceParsed(slot, std::move(*parsed));
-                            } else {
-                                slot.markInvalidType();
-                            }
+            input, [this, resource, encoding, fields, caseInsensitive, stringStorage](
+                       std::string_view key, std::string_view value) {
+                auto bind = [&](auto& slot) {
+                    using SlotT = std::remove_cvref_t<decltype(slot)>;
+                    if constexpr (!detail::isFormField<typename SlotT::value_type>) {
+                        return;
+                    } else {
+                        if (slot.state() != detail::ModelFieldState::kMissing) {
+                            slot.markDuplicate();
+                            return;
                         }
+                        using ValueT = typename SlotT::value_type;
+                        auto parsed = detail::parseFormValue<ValueT>(detail::ResolvedPmrResourceTag{},
+                            value, encoding, resource, stringStorage);
+                        if (parsed) {
+                            detail::ModelValueFactory::emplaceParsed(slot, std::move(*parsed));
+                        } else {
+                            slot.markInvalidType();
+                        }
+                    }
+                };
+                if (caseInsensitive) {
+                    bool matched = false;
+                    detail::model::visitModelFields(
+                        this->derived(), Base::ruviaSchema(), [&](const auto&, auto& slot) {
+                            using SlotT = std::remove_cvref_t<decltype(slot)>;
+                            if constexpr (detail::isFormField<typename SlotT::value_type>) {
+                                if (matched || !detail::RequestNameValueListAccess::namesEqual(
+                                                   *fields, key, slot.wireName())) {
+                                    return;
+                                }
+                                matched = true;
+                                bind(slot);
+                            }
+                        });
+                    return true;
+                }
+                bool fieldResult = true;
+                (void)detail::model::visitModelFieldByWireName(this->derived(), Base::ruviaSchema(),
+                    detail::model::modelFieldNameHash(key), key, fieldResult,
+                    [&](auto& slot) -> bool {
+                        bind(slot);
+                        return true;
                     });
+                return fieldResult;
             });
         if (valid) {
             detail::model::visitModelFields(this->derived(), Base::ruviaSchema(),

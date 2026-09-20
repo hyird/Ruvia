@@ -114,6 +114,10 @@ private:
         : items_(headers),
           caseInsensitive_(true) {}
 
+    [[nodiscard]] bool caseInsensitive() const noexcept {
+        return caseInsensitive_;
+    }
+
     [[nodiscard]] bool namesEqual(std::string_view left, std::string_view right) const noexcept {
         return caseInsensitive_ ? detail::httpAsciiEqualsIgnoreCase(left, right) : left == right;
     }

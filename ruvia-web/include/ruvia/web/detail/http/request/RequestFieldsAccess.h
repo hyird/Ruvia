@@ -34,6 +34,10 @@ struct RequestNameValueListAccess final {
         return RequestNameValueList(headers);
     }
 
+    [[nodiscard]] static bool caseInsensitive(const RequestNameValueList& list) noexcept {
+        return list.caseInsensitive();
+    }
+
     [[nodiscard]] static bool namesEqual(const RequestNameValueList& list,
         std::string_view left, std::string_view right) noexcept {
         return list.namesEqual(left, right);
