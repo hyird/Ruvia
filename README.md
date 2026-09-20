@@ -1892,10 +1892,13 @@ used in JSON and validation paths.
 `ValidationError` owns its message, code, and all issue details independently of
 the validator or request arena, including when the exception is copied or moved.
 
-JSON and URL-encoded form parsing is schema-based. Raw `bytes()` / `text()`
-remain available for custom formats. Buffered `multipart()` and streaming
-`multipartReader()` expose flat protocol parts, preserving repeated names and
-file metadata without interpreting dotted names or array suffixes.
+Request and response models bind JSON through schema. `JsonValue` and
+`JsonObject` borrow a complete JSON document for `isObject()` / `isArray()` /
+`isNull()`, `view()`, and `get<T>("field")`; they are not a `c.json()` /
+`toJson()` writer. URL-encoded form binding stays schema-based. Raw `bytes()` /
+`text()` remain available for custom formats. Buffered `multipart()` and
+streaming `multipartReader()` expose flat protocol parts, preserving repeated
+names and file metadata without interpreting dotted names or array suffixes.
 
 Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
