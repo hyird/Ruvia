@@ -392,6 +392,9 @@ bool ConnectionScanner::isTimedOut(const Entry& entry, std::int64_t now) const n
         case Phase::kWriting:
             return timeoutExpired(options_.writeTimeout, inactiveMs);
         case Phase::kLongLived:
+            // The session owns its liveness policy through periodic checks.
+            // A generic idle deadline must not preempt its heartbeat or close handshake.
+            return false;
         case Phase::kIdle:
         default:
             return timeoutExpired(options_.idleTimeout, inactiveMs);

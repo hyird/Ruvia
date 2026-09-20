@@ -160,6 +160,9 @@ Task<std::optional<View>> detail::HttpClientResponseState::read() {
     }
 }
 
+template Task<std::optional<std::span<const std::byte>>> detail::HttpClientResponseState::read<std::span<const std::byte>>();
+template Task<std::optional<std::string_view>> detail::HttpClientResponseState::read<std::string_view>();
+
 ScopedOperation<std::pmr::vector<std::byte>> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");

@@ -1,3 +1,4 @@
+#include <iterator>
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -48,6 +49,10 @@ RUVIA_TEST(request_header_classification_table) {
         {"Transfer-Encoding", RequestHeaderKind::kTransferEncoding},
         {"Upgrade", RequestHeaderKind::kUpgrade},
         {"User-Agent", RequestHeaderKind::kUserAgent},
+        {"Forwarded", RequestHeaderKind::kForwarded},
+        {"X-Forwarded-For", RequestHeaderKind::kXForwardedFor},
+        {"X-Forwarded-Proto", RequestHeaderKind::kXForwardedProto},
+        {"Sec-WebSocket-Extensions", RequestHeaderKind::kSecWebSocketExtensions},
     };
     for (const auto& entry : cases) {
         RUVIA_CHECK(classifyRequestHeader(entry.name) == entry.kind);
@@ -110,8 +115,14 @@ RUVIA_TEST(request_header_singleton_policy_table) {
         RequestHeaderKind::kSecWebSocketProtocol,
         RequestHeaderKind::kTransferEncoding,
         RequestHeaderKind::kUpgrade,
+        RequestHeaderKind::kForwarded,
+        RequestHeaderKind::kXForwardedFor,
+        RequestHeaderKind::kXForwardedProto,
+        RequestHeaderKind::kSecWebSocketExtensions,
     };
     for (const auto kind : repeatableOrSpecial) {
         RUVIA_CHECK(singletonRequestHeaderBit(kind) == 0U);
     }
+    RUVIA_CHECK(std::size(singleton) + std::size(repeatableOrSpecial) ==
+                ruvia::detail::kRequestHeaderKindCount);
 }

@@ -1731,6 +1731,13 @@ Routes and schemas use these macros:
 Route tables, middleware chains, and controller instances are finalized before
 workers start.
 
+After a WebSocket upgrade, `ServerConfig::idleTimeout` no longer applies to
+that connection. Use `WebSocketRouteConfig::lifecycle.heartbeat` to configure
+idle Ping and matching-Pong deadlines; the route's `closeHandshakeTimeout`
+controls close completion independently. Without heartbeat, an idle WebSocket
+has no framework idle deadline: the application owns any required liveness
+policy. Ordinary HTTP connection timeouts remain unchanged.
+
 `Context::arena()` and `allocator()` use the request arena. For WebSocket
 and response-stream routes, that arena stays alive for the whole handler,
 including its handshake and middleware state. Destroying an arena-backed object

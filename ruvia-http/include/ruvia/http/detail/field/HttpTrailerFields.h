@@ -41,6 +41,10 @@ namespace ruvia::detail {
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kForwarded:
+        case RequestHeaderKind::kXForwardedFor:
+        case RequestHeaderKind::kXForwardedProto:
+        case RequestHeaderKind::kSecWebSocketExtensions:
             break;
     }
 
