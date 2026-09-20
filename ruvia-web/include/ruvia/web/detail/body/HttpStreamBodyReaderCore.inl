@@ -48,7 +48,7 @@ void StreamBodyReader<Stream>::takePipeline(std::pmr::string& stash) {
 }
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
+Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::read() {
     if (bodyPlan_.chunked() != nullptr) {
         co_await ensureContinue();
         co_return co_await readTransferDecodedChunked();
@@ -77,12 +77,12 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
     co_await ensureContinue();
     while (auto chunk = co_await readChunked()) {
         if (transferDecoder_ != nullptr) {
-            decodeTransferAppend(*chunk, body);
+            decodeTransferAppend(::ruvia::asChars(*chunk), body);
         } else {
             if (bodyLimit_.additionExceeds(body.size(), chunk->size())) {
                 throwRequestBodyTooLarge();
             }
-            body.append(chunk->data(), chunk->size());
+            body.append(::ruvia::asChars(*chunk));
         }
     }
     if (transferDecoder_ != nullptr) {

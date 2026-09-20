@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -120,7 +121,7 @@ private:
     detail::HttpRequestHeaderBlock headers_{};
     // One-based indices; zero means absent. No duplicated string views.
     std::array<std::uint8_t, kCachedHeaderSlots> cachedHeaders_{};
-    std::string_view body_;
+    std::span<const std::byte> body_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

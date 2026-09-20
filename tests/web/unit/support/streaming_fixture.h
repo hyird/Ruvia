@@ -18,6 +18,7 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -182,8 +183,8 @@ inline ruvia::Task<void> writeStoredTemporaryWebSocketPayload(ruvia::WebSocket& 
 }
 
 struct ImmediateBodySource final {
-    ruvia::Task<std::optional<std::string_view>> read() {
-        co_return std::string_view("must-not-read");
+    ruvia::Task<std::optional<std::span<const std::byte>>> read() {
+        co_return ruvia::asBytes("must-not-read");
     }
 };
 
@@ -232,7 +233,7 @@ struct SuspendedBodySource final {
         void await_resume() const noexcept {}
     };
 
-    ruvia::Task<std::optional<std::string_view>> read() {
+    ruvia::Task<std::optional<std::span<const std::byte>>> read() {
         co_await Awaiter{*this};
         co_return std::nullopt;
     }

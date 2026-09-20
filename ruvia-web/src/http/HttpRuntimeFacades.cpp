@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
@@ -190,15 +191,15 @@ namespace {
 
 template <typename View>
 Task<std::optional<View>> readBody(
-    detail::CallableRef<std::optional<std::string_view>> read) {
+    detail::CallableRef<std::optional<std::span<const std::byte>>> read) {
     const auto chunk = co_await read();
     if (!chunk) {
         co_return std::nullopt;
     }
     if constexpr (std::same_as<View, std::string_view>) {
-        co_return *chunk;
+        co_return asChars(*chunk);
     } else {
-        co_return std::as_bytes(std::span(chunk->data(), chunk->size()));
+        co_return *chunk;
     }
 }
 
@@ -219,7 +220,7 @@ ScopedOperation<std::optional<std::string_view>> BodyReader::text() & {
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::span<const std::byte> chunk) & {
-    return write(chunk.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(chunk.data()), chunk.size()));
+    return write(asChars(chunk));
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {

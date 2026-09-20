@@ -12,6 +12,7 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
@@ -35,9 +36,9 @@ struct ChunkSource final {
     std::vector<std::string> chunks;
     std::size_t index = 0;
 
-    Task<std::optional<std::string_view>> read() {
+    Task<std::optional<std::span<const std::byte>>> read() {
         if (index < chunks.size()) {
-            co_return std::string_view(chunks[index++]);
+            co_return ruvia::asBytes(chunks[index++]);
         }
         co_return std::nullopt;
     }
@@ -49,7 +50,7 @@ struct SuspendedChunkSource final {
           worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
           signal(worker) {}
 
-    Task<std::optional<std::string_view>> read() {
+    Task<std::optional<std::span<const std::byte>>> read() {
         co_await signal.wait();
         co_return std::nullopt;
     }

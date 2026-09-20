@@ -121,7 +121,9 @@ RUVIA_TEST(h2_request_builder_accepts_body_from_external_runtime_owner) {
     stream.assignRequestPath("/upload");
 
     RUVIA_CHECK(buildRequest(stream, request, "runtime-owned"));
-    RUVIA_CHECK_EQ(requestBodyBytes(request), std::string_view("runtime-owned"));
+    const auto body = requestBodyBytes(request);
+    RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()),
+        std::string_view("runtime-owned"));
 }
 
 RUVIA_TEST(h2_request_builder_target_is_path_and_splits_query) {

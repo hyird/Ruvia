@@ -7,6 +7,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -405,7 +406,7 @@ Task<std::string_view> Context::requestBody() const {
     } else if (requestBodySource().streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
-        raw = detail::requestBodyBytes(request_);
+        raw = asChars(detail::requestBodyBytes(request_));
     }
 
     // Transparently decode a request body whose Content-Encoding we understand,

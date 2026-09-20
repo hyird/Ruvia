@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 
 namespace ruvia {
@@ -59,7 +60,7 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
             if (!chunk) {
                 parser_.finishInput();
             } else {
-                parser_.feed(chunk->empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
+                parser_.feed(asChars(*chunk));
             }
             continue;
         }

@@ -2,7 +2,7 @@
 
 #include <memory_resource>
 #include <optional>
-#include <string_view>
+#include <span>
 #include <utility>
 
 #include "ruvia/core/StopToken.h"
@@ -11,7 +11,7 @@
 namespace ruvia::detail {
 
 struct StreamingAccess final {
-    using BodyRead = CallableRef<std::optional<std::string_view>>::Invoke;
+    using BodyRead = CallableRef<std::optional<std::span<const std::byte>>>::Invoke;
     using StreamWrite = ResponseStreamWriter::Write;
     using StreamEnd = ResponseStreamWriter::End;
     using StreamSleep = ResponseStreamWriter::Sleep;

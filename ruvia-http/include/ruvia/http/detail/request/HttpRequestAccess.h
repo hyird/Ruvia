@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -72,7 +73,7 @@ struct HttpRequestAccess final {
                request.cachedHeaders_[slot] <= request.headers_.size();
     }
 
-    [[nodiscard]] static std::string_view bodyBytes(const HttpRequest& request) noexcept {
+    [[nodiscard]] static std::span<const std::byte> bodyBytes(const HttpRequest& request) noexcept {
         return request.body_;
     }
 
@@ -147,8 +148,11 @@ struct HttpRequestAccess final {
         return true;
     }
 
-    static void setBody(HttpRequest& request, std::string_view body) noexcept {
+    static void setBody(HttpRequest& request, std::span<const std::byte> body) noexcept {
         request.body_ = body;
+    }
+    static void setBody(HttpRequest& request, std::string_view body) noexcept {
+        setBody(request, std::as_bytes(std::span<const char>(body.data(), body.size())));
     }
 };
 
@@ -165,7 +169,7 @@ static_assert(std::to_underlying(RequestKnownHeader::kUserAgent) + 1 ==
     return HttpRequestAccess::hasKnownHeader(request, name);
 }
 
-[[nodiscard]] inline std::string_view requestBodyBytes(const HttpRequest& request) noexcept {
+[[nodiscard]] inline std::span<const std::byte> requestBodyBytes(const HttpRequest& request) noexcept {
     return HttpRequestAccess::bodyBytes(request);
 }
 

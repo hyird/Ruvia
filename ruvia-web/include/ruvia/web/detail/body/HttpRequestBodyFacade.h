@@ -1,7 +1,7 @@
 #pragma once
 
 #include <optional>
-#include <string_view>
+#include <span>
 #include <utility>
 
 #include "ruvia/core/Task.h"
@@ -12,7 +12,7 @@
 namespace ruvia::detail {
 
 template <typename Reader>
-[[nodiscard]] Task<std::optional<std::string_view>> bodyReaderReadThunk(void* target) {
+[[nodiscard]] Task<std::optional<std::span<const std::byte>>> bodyReaderReadThunk(void* target) {
     return static_cast<Reader*>(target)->read();
 }
 
