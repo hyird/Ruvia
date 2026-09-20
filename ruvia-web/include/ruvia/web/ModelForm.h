@@ -4,8 +4,8 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/web/ModelObject.h"
 #include "ruvia/web/detail/model/Traits.h"
+#include "ruvia/web/detail/model/parse/JsonParser.h"
 
 namespace ruvia {
 

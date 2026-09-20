@@ -156,7 +156,6 @@ public:
     RUVIA_GET("/res-remove-buffered", removeBufferedResponse);
     RUVIA_GET("/res-assigned-prepared", assignedPreparedResponse);
     RUVIA_POST("/multipart", bufferedMultipart);
-    RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/json-object", jsonMessage, ruvia::JsonBody<SurfaceJsonMessage>);
@@ -356,126 +355,6 @@ private:
             body.append(part.contentType());
             body.append(";bytes=");
             appendUnsigned(body, part.body().size());
-        }
-        body.push_back('\n');
-        co_return c.text(std::move(body));
-    }
-
-    ruvia::Task<ruvia::HttpResponse> parsedBody(ruvia::Context& c) {
-        auto form = co_await c.req().parseBody({
-            .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
-            .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
-        });
-        std::pmr::string body(c.allocator<char>());
-        body.append("fields=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nentries=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\ngroups=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nkeys=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nvalues=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nfirst-value-file=");
-        body.append(!form.fields().empty() && form.fields().front().isFile() ? "true" : "false");
-        body.append("\nhas-title=");
-        body.append(static_cast<bool>(form.get("title")) ? "true" : "false");
-        const auto title = form.get("title");
-        if (auto titleText = title.value()) {
-            body.append("\ntitle=");
-            body.append(*titleText);
-        }
-        body.append("\nhas-obj=");
-        body.append(static_cast<bool>(form.get("obj")) ? "true" : "false");
-        body.append("\nhas-obj-key1=");
-        body.append(static_cast<bool>(form.get("obj.key1")) ? "true" : "false");
-        if (auto directNested = form.get("obj.key1").value()) {
-            body.append("\nobj.key1-direct=");
-            body.append(*directNested);
-        }
-        body.append("\ntag-count=");
-        appendUnsigned(body, form.count("tag"));
-        if (auto tag = form.get("tag").value()) {
-            body.append("\ntag-single=");
-            body.append(*tag);
-        }
-        body.append("\ntag-array-count=");
-        appendUnsigned(body, form.count("tag[]"));
-        body.append("\ntag-array-values=");
-        appendUnsigned(body, form.get("tag[]").size());
-        body.append("\ntag-array-name=");
-        body.append(form.get("tag[]").hasArrayName() ? "true" : "false");
-        body.append("\ntag-has-array-name=");
-        body.append(form.get("tag").hasArrayName() ? "true" : "false");
-        const auto nestedObject = form.object("obj");
-        const auto nested = nestedObject.get("key1");
-        if (auto nestedText = nested.value()) {
-            body.append("\nobj.key1=");
-            body.append(*nestedText);
-        }
-        if (auto nestedValue = nestedObject.get("key1").value()) {
-            body.append("\nobj.key1-value=");
-            body.append(*nestedValue);
-        }
-        const auto exactNested = form.get("obj.key1");
-        if (auto exactNestedText = exactNested.value()) {
-            body.append("\nobj.key1-exact=");
-            body.append(*exactNestedText);
-        }
-        body.append("\nobj.key1-exact-all=");
-        appendUnsigned(body, exactNested.size());
-        body.append("\nobj.key1-exact-array-name=");
-        body.append(exactNested.hasArrayName() ? "true" : "false");
-        body.append("\nobj.key1-all=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.key1-values=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.key1-array-name=");
-        body.append(nestedObject.get("key1").hasArrayName() ? "true" : "false");
-        body.append("\nobj.key-count=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.entries=");
-        appendUnsigned(body, nestedObject.groups().size());
-        body.append("\nobj.groups=");
-        appendUnsigned(body, nestedObject.groups().size());
-        body.append("\nobj.keys=");
-        appendUnsigned(body, nestedObject.groups().size());
-        const auto childObject = nestedObject.object("child");
-        body.append("\nobj.child.keys=");
-        appendUnsigned(body, childObject.groups().size());
-        for (const auto& field : form.fields()) {
-            body.append("\n");
-            body.append(field.name());
-            body.push_back('=');
-            body.append(field.value());
-            if (field.isFile()) {
-                const auto blob = field.blob();
-                body.append(";filename=");
-                body.append(field.filename());
-                body.append(";content-type=");
-                body.append(blob.contentType());
-                body.append(";bytes=");
-                appendUnsigned(body, blob.size());
-            }
-            const auto path = field.path();
-            if (!path.empty()) {
-                body.append(";path=");
-                for (std::size_t i = 0; i < path.size(); ++i) {
-                    if (i != 0) {
-                        body.push_back('/');
-                    }
-                    body.append(path[i]);
-                }
-            }
-        }
-        for (const auto& group : form.groups()) {
-            body.append("\ngroup=");
-            body.append(group.name());
-            body.append(";values=");
-            appendUnsigned(body, group.size());
-            body.append(";array-name=");
-            body.append(group.hasArrayName() ? "true" : "false");
         }
         body.push_back('\n');
         co_return c.text(std::move(body));

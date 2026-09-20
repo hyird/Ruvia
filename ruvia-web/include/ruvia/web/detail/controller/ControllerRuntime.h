@@ -13,6 +13,7 @@
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
+#include "ruvia/web/detail/model/parse/Parser.h"
 
 namespace ruvia {
 

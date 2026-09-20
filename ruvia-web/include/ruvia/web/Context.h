@@ -370,8 +370,6 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
-    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(
-        ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;

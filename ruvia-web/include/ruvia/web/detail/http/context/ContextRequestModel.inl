@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "ruvia/web/ModelJson.h"
-#include "ruvia/web/ModelObject.h"
+#include "ruvia/web/detail/model/parse/JsonParser.h"
 
 namespace ruvia {
 

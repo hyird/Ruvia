@@ -291,6 +291,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
 - 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套请求模型和 `Array<请求模型>` 自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`jsonIf`/`formIf` 只做内容协商探测，不跑字段规则。
+- JSON/form 的结构解析只提供 schema 路线；原始 body 和扁平 multipart 协议访问保留，不提供动态 JSON 对象或 form 点路径/分组语言。
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
 - 可选请求字段缺失时保持 `std::nullopt`，显式 JSON `null` 默认是 `invalid_type`，optional 不等于 nullable。可选响应字段未设置时默认省略；只有 `RUVIA_EMIT_NULL` 输出 `null`，`RUVIA_OMIT_EMPTY` 处理已设置的空值。
 - JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。

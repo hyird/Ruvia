@@ -11,8 +11,8 @@
 #include <utility>
 
 #include "ruvia/web/Attributes.h"
-#include "ruvia/web/ModelObject.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
+#include "ruvia/web/detail/model/ModelInput.h"
 #include "ruvia/web/detail/model/ModelSchema.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
