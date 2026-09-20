@@ -76,5 +76,7 @@ RUVIA_TEST(request_header_kind_known_slot) {
     RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAccept), std::size_t{0});
     RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAcceptEncoding), std::size_t{1});
     RUVIA_CHECK_EQ(
-        requestHeaderKindKnownSlot(RequestHeaderKind::kUserAgent), kRequestHeaderKindCount - 2);
+        requestHeaderKindKnownSlot(RequestHeaderKind::kUserAgent), std::size_t{24});
+    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kXForwardedProto),
+        kRequestHeaderKindCount - 2);
 }

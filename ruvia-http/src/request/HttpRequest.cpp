@@ -19,8 +19,10 @@ static_assert(std::to_underlying(detail::RequestHeaderKind::kContentEncoding) ==
               std::to_underlying(detail::RequestKnownHeader::kContentEncoding) + 1);
 static_assert(std::to_underlying(detail::RequestHeaderKind::kUserAgent) ==
               std::to_underlying(detail::RequestKnownHeader::kUserAgent) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kXForwardedProto) ==
+              std::to_underlying(detail::RequestKnownHeader::kXForwardedProto) + 1);
 static_assert(detail::kRequestHeaderKindCount ==
-              std::to_underlying(detail::RequestKnownHeader::kUserAgent) + 2);
+              std::to_underlying(detail::RequestKnownHeader::kXForwardedProto) + 2);
 
 }  // namespace
 

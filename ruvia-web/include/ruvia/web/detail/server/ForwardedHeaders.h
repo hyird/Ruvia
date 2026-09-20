@@ -1,9 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
@@ -146,13 +150,16 @@ inline void accumulateForwardedChain(std::string_view value, const TrustedProxyS
     std::string_view xForClient{};
     std::string_view xProto{};
 
-    for (const auto& header : request.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Forwarded")) {
-            accumulateForwardedChain(header.value(), trusted, forwardedLeftmost, forwardedClient);
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
-            accumulateForwardedForAddresses(header.value(), trusted, xForLeftmost, xForClient);
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
-            accumulateForwardedScheme(header.value(), xProto);
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto kind = HttpRequestAccess::headerKind(request, i);
+        if (kind == std::to_underlying(RequestHeaderKind::kForwarded)) {
+            accumulateForwardedChain(
+                headers[i].value(), trusted, forwardedLeftmost, forwardedClient);
+        } else if (kind == std::to_underlying(RequestHeaderKind::kXForwardedFor)) {
+            accumulateForwardedForAddresses(headers[i].value(), trusted, xForLeftmost, xForClient);
+        } else if (kind == std::to_underlying(RequestHeaderKind::kXForwardedProto)) {
+            accumulateForwardedScheme(headers[i].value(), xProto);
         }
     }
 

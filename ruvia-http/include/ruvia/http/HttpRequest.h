@@ -103,7 +103,7 @@ public:
 private:
     friend struct detail::HttpRequestAccess;
 
-    static constexpr std::size_t kCachedHeaderSlots = 25;
+    static constexpr std::size_t kCachedHeaderSlots = 28;
 
     HttpRequest() noexcept = default;
 
