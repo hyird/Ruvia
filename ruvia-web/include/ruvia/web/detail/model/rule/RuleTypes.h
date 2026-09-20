@@ -72,10 +72,6 @@ struct EmitNull final {
     using RuviaModelOptionMarker = void;
 };
 
-struct Nullable final {
-    using RuviaModelOptionMarker = void;
-};
-
 template <FixedString Pattern, FixedString Message>
 struct PatternRule final {
     using RuviaValidationRuleMarker = void;

@@ -1725,7 +1725,7 @@ Routes and schemas use these macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_NULLABLE` |
+| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD` |
 | Validation | Field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`; route bindings `JsonBody<T>` / `QueryModel<T>` / `PathModel<T>` |
 
 Route tables, middleware chains, and controller instances are finalized before
@@ -1883,9 +1883,8 @@ Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
 `model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
 returns `const std::optional<T>&`. A missing optional request property stays
-empty, while an explicit JSON `null` is an `invalid_type` error unless the field
-also has `RUVIA_NULLABLE`. A nullable `null` stays empty (`kNull`) and does not
-apply `RUVIA_DEFAULT`. An unset
+empty. An explicit JSON `null` on an optional field is also empty (`kNull`) and
+does not apply `RUVIA_DEFAULT`; on a required field it is `invalid_type`. An unset
 optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
 `null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
 (`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is

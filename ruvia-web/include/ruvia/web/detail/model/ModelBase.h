@@ -352,8 +352,9 @@ private:
                             return detail::skipJsonValue(valueInput, depth + 1);
                         }
                         const auto originalInput = valueInput;
-                        using ValueT = typename std::remove_cvref_t<decltype(slot)>::value_type;
-                        if (slot.nullable()) {
+                        using SlotT = std::remove_cvref_t<decltype(slot)>;
+                        using ValueT = typename SlotT::value_type;
+                        if constexpr (!SlotT::required) {
                             if constexpr (!detail::isRuviaJsonValue<ValueT>) {
                                 auto nullInput = valueInput;
                                 if (detail::consumeJsonLiteral(nullInput, "null")) {

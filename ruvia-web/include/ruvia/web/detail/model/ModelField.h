@@ -96,10 +96,6 @@ public:
         return options_.emitNull();
     }
 
-    [[nodiscard]] constexpr bool nullable() const noexcept {
-        return options_.nullable();
-    }
-
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
         return options_.omitEmpty();
     }

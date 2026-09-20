@@ -17,16 +17,11 @@ public:
     constexpr ModelOptions() noexcept
         : options_(OptionTs{}...) {
         static_assert((isModelOption<OptionTs>() && ... && true),
-            "model field options must be RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL, or "
-            "RUVIA_NULLABLE");
+            "model field options must be RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
         return containsOption<EmitNull>();
-    }
-
-    [[nodiscard]] constexpr bool nullable() const noexcept {
-        return containsOption<Nullable>();
     }
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {

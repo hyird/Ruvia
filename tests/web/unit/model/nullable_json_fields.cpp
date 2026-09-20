@@ -10,12 +10,12 @@
 
 namespace {
 
-RUVIA_REQUEST_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+RUVIA_REQUEST_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String));
 
 RUVIA_REQUEST_MODEL(RemarkWithDefaultRequest,
-    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_DEFAULT("fallback")));
 
-RUVIA_REQUEST_MODEL(StrictRemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String));
+RUVIA_REQUEST_MODEL(RequiredRemarkRequest, RUVIA_REQUIRED_FIELD(remark, ruvia::String));
 
 RUVIA_REQUEST_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
     RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject),
@@ -75,13 +75,13 @@ RUVIA_TEST(nullable_null_does_not_apply_default) {
     RUVIA_CHECK_EQ(missing->get<"remark">()->view(), std::string_view("fallback"));
 }
 
-RUVIA_TEST(optional_string_without_nullable_rejects_json_null) {
+RUVIA_TEST(required_string_rejects_json_null) {
     std::pmr::monotonic_buffer_resource resource;
-    RUVIA_CHECK(!ruvia::fromJson<StrictRemarkRequest>(R"({"remark":null})", {.resource = &resource})
+    RUVIA_CHECK(!ruvia::fromJson<RequiredRemarkRequest>(R"({"remark":null})", {.resource = &resource})
             .has_value());
 
     const auto partial =
-        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<StrictRemarkRequest>(
+        ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<RequiredRemarkRequest>(
             R"({"remark":null})", &resource);
     RUVIA_CHECK(partial.has_value());
     if (!partial) {
@@ -114,8 +114,15 @@ RUVIA_TEST(json_object_model_field_rejects_non_objects) {
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(!ruvia::fromJson<JsonBagRequest>(R"({"object":[1]})", {.resource = &resource})
             .has_value());
-    RUVIA_CHECK(!ruvia::fromJson<JsonBagRequest>(R"({"object":null})", {.resource = &resource})
-            .has_value());
+
+    const auto nullObject =
+        ruvia::fromJson<JsonBagRequest>(R"({"object":null})", {.resource = &resource});
+    RUVIA_CHECK(nullObject.has_value());
+    if (nullObject) {
+        RUVIA_CHECK(!nullObject->get<"object">().has_value());
+        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"object">(*nullObject) ==
+                    ruvia::detail::ModelFieldState::kNull);
+    }
 }
 
 RUVIA_TEST(json_value_model_fields_own_tokens_for_from_json) {
