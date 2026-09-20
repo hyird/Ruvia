@@ -269,8 +269,14 @@ inspection, and a single `stats()` snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
 
 Every response has one linear body reader. `read()` consumes one borrowed
-chunk, `readAll()` collects that same stream with a byte bound, and `pipeTo()`
-forwards it to a controller response stream with backpressure. There is no
+`std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
+an owning `std::pmr::vector<std::byte>` with a byte bound, and `pipeTo()`
+forwards it to a controller response stream with backpressure. Both the client
+body reader and request `BodyReader` offer `text()` for an explicit character
+view of the next chunk, without charset conversion or UTF-8 validation (encoded
+characters may straddle chunks). Reads share one operation lane; borrowed chunks
+expire on the next body operation. `ResponseStreamWriter::write()` accepts byte
+spans and copies their storage before returning the asynchronous operation. There is no
 separate buffered request or streaming request entry point:
 
 ```cpp
