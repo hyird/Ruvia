@@ -85,16 +85,12 @@ const RequestNameValueList& Context::requestHeaders() const {
     if (!cache) {
         const auto rawHeaders = request_.headers();
         std::pmr::vector<std::pmr::string> names(arena());
-        auto headers = detail::RequestNameValueListAccess::make(arena());
-        names.reserve(rawHeaders.size());
+        auto headers = detail::RequestNameValueListAccess::makeHeaders(arena());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
-            auto& name = names.emplace_back();
-            name.reserve(rawHeader.name().size());
-            detail::appendLowerAscii(name, rawHeader.name());
             detail::RequestNameValueListAccess::pushBack(
                 headers, detail::RequestNameValueViewAccess::make(
-                             std::string_view(name), rawHeader.value()));
+                             rawHeader.name(), rawHeader.value()));
         }
         cache.emplace(std::move(names), std::move(headers));
     }

@@ -618,10 +618,9 @@ public:
     // borrowed storage belongs to the Context and outlives the facade, exactly
     // as it does for header()/queries().
     //
-    // headerFields() normalizes every field name to lower case, matching the
-    // HTTP/2 wire form, while header(name) is an ASCII case-insensitive lookup
-    // over the request as received. Compare names from this list against lower
-    // case literals; "X-Trace" never matches, "x-trace" does.
+    // headerFields() preserves semantic header spelling (HTTP/2 is lowercase).
+    // Its get()/count(), header(name), and HeaderModel binding all compare
+    // names ASCII case-insensitively. Repeated fields remain in wire order.
     [[nodiscard]] const RequestNameValueList& headerFields() const;
     [[nodiscard]] const RequestNameValueList& queryFields() const;
     [[nodiscard]] const RequestNameValueList& cookieFields() const;

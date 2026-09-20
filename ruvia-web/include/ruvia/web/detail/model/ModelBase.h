@@ -12,6 +12,7 @@
 
 #include "ruvia/web/Attributes.h"
 #include "ruvia/web/ModelObject.h"
+#include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
 #include "ruvia/web/detail/model/ModelSchema.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
@@ -385,7 +386,11 @@ private:
                     this->derived(), Base::ruviaSchema(), [&](const auto&, auto& slot) {
                         using SlotT = std::remove_cvref_t<decltype(slot)>;
                         if constexpr (detail::isFormField<typename SlotT::value_type>) {
-                            if (matched || key != slot.wireName()) {
+                            const auto* fields = input.fields();
+                            const bool nameMatches = fields != nullptr
+                                                         ? detail::RequestNameValueListAccess::namesEqual(*fields, key, slot.wireName())
+                                                         : key == slot.wireName();
+                            if (matched || !nameMatches) {
                                 return;
                             }
                             matched = true;
