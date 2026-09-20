@@ -23,14 +23,14 @@ inline constexpr std::array kRuviaAllRouteMethods = {HttpKnownMethod::kGet, Http
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the
 // parenthesized list as a constructor call.
+template <std::size_t N>
 class RuviaMethodList final {
 public:
     template <std::same_as<HttpKnownMethod>... Methods>
     constexpr explicit RuviaMethodList(Methods... methods) noexcept
-        : methods_{methods...},
-          count_(sizeof...(Methods)) {
+        : methods_{methods...} {
         static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
-        static_assert(sizeof...(Methods) <= 9, "RUVIA_ON supports at most 9 methods");
+        static_assert(sizeof...(Methods) == N);
     }
 
     [[nodiscard]] constexpr const HttpKnownMethod* begin() const& noexcept {
@@ -39,27 +39,29 @@ public:
     [[nodiscard]] constexpr const HttpKnownMethod* begin() const&& = delete;
 
     [[nodiscard]] constexpr const HttpKnownMethod* end() const& noexcept {
-        return methods_.data() + count_;
+        return methods_.data() + N;
     }
     [[nodiscard]] constexpr const HttpKnownMethod* end() const&& = delete;
 
 private:
-    std::array<HttpKnownMethod, 9> methods_{};
-    std::size_t count_{0};
+    std::array<HttpKnownMethod, N> methods_{};
 };
+
+template <typename... Methods>
+RuviaMethodList(Methods...) -> RuviaMethodList<sizeof...(Methods)>;
 
 // Startup-only holder for the RUVIA_ON path list; the macro pastes the
 // parenthesized list as a constructor call.
+template <std::size_t N>
 class RuviaPathList final {
 public:
     template <typename... Paths>
         requires((std::convertible_to<Paths &&, std::string_view> && ...) &&
-                    (!HttpTemporaryOwningCharString<Paths> && ...))
+                 (!HttpTemporaryOwningCharString<Paths> && ...))
     constexpr explicit RuviaPathList(Paths&&... paths) noexcept
-        : paths_{httpBorrowedView(paths)...},
-          count_(sizeof...(Paths)) {
+        : paths_{httpBorrowedView(paths)...} {
         static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
-        static_assert(sizeof...(Paths) <= 8, "RUVIA_ON supports at most 8 paths");
+        static_assert(sizeof...(Paths) == N);
     }
 
     template <typename... Paths>
@@ -73,14 +75,16 @@ public:
     [[nodiscard]] constexpr const std::string_view* begin() const&& = delete;
 
     [[nodiscard]] constexpr const std::string_view* end() const& noexcept {
-        return paths_.data() + count_;
+        return paths_.data() + N;
     }
     [[nodiscard]] constexpr const std::string_view* end() const&& = delete;
 
 private:
-    std::array<std::string_view, 8> paths_{};
-    std::size_t count_{0};
+    std::array<std::string_view, N> paths_{};
 };
+
+template <typename... Paths>
+RuviaPathList(Paths&&...) -> RuviaPathList<sizeof...(Paths)>;
 
 }  // namespace ruvia::detail
 
