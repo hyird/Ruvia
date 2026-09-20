@@ -49,6 +49,8 @@ struct ServerConfig final {
     std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     std::size_t workerMailboxCapacity{1024};
+    // HTTP connection inactivity; upgraded WebSockets use their route lifecycle
+    // heartbeat and close-handshake deadlines instead, even when heartbeat is disabled.
     std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds connectionScanInterval{std::chrono::seconds(1)};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};

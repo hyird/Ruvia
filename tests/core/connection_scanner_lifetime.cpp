@@ -252,6 +252,59 @@ int main() {
         }
     }
 
+    // Long-lived sessions own their deadlines while ordinary phases retain
+    // scanner timeouts. Periodic liveness checks must still run on idle sessions.
+    ioContext.restart();
+    {
+        using Scanner = ruvia::detail::ConnectionScanner;
+        Scanner scanner(worker, {.scanInterval = std::chrono::milliseconds(1),
+                                    .idleTimeout = std::chrono::milliseconds(1),
+                                    .initialReadTimeout = std::chrono::milliseconds(1),
+                                    .payloadReadTimeout = std::chrono::milliseconds(1),
+                                    .writeTimeout = std::chrono::milliseconds(1)});
+        const std::array phases{Scanner::Phase::kIdle, Scanner::Phase::kReadingInitial,
+            Scanner::Phase::kReadingPayload, Scanner::Phase::kWriting,
+            Scanner::Phase::kLongLived, Scanner::Phase::kLongLived};
+        std::array<asio::ip::tcp::socket, 6> sockets{
+            asio::ip::tcp::socket(ioContext), asio::ip::tcp::socket(ioContext),
+            asio::ip::tcp::socket(ioContext), asio::ip::tcp::socket(ioContext),
+            asio::ip::tcp::socket(ioContext), asio::ip::tcp::socket(ioContext)};
+        std::array<Scanner::Entry, 6> entries;
+        std::array<std::optional<Scanner::Guard>, 6> guards;
+        PeriodicProbe liveness;
+        Scanner::PeriodicCheckRegistration livenessRegistration;
+        for (std::size_t i = 0; i < sockets.size(); ++i) {
+            sockets[i].open(asio::ip::tcp::v4());
+            guards[i].emplace(&scanner, entries[i], sockets[i]);
+            entries[i].setPhase(phases[i]);
+        }
+        entries[4].registerPeriodicCheck(livenessRegistration, &liveness, &PeriodicProbe::tick);
+        if (dispatcher->post([&scanner] { scanner.start(); }) != ruvia::PostStatus::kAccepted) {
+            return 13;
+        }
+        ioContext.run_for(std::chrono::milliseconds(50));
+        for (std::size_t i = 0; i < sockets.size(); ++i) {
+            if (sockets[i].is_open() != (phases[i] == Scanner::Phase::kLongLived)) {
+                return 14;
+            }
+        }
+        if (liveness.ticks == 0) {
+            return 15;
+        }
+        // Returning to ordinary idle restores its deadline; no exemption leaks
+        // from an earlier long-lived phase, with or without periodic checks.
+        entries[4].setPhase(Scanner::Phase::kIdle);
+        entries[5].setPhase(Scanner::Phase::kIdle);
+        ioContext.run_for(std::chrono::milliseconds(50));
+        if (sockets[4].is_open() || sockets[5].is_open()) {
+            return 16;
+        }
+        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::PostStatus::kAccepted) {
+            return 17;
+        }
+        ioContext.run_for(std::chrono::milliseconds(5));
+    }
+
     // Entry teardown invalidates registrations that happen to outlive it;
     // their own RAII reset must then be harmless.
     ruvia::detail::ConnectionScanner::PeriodicCheckRegistration registration;
