@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
@@ -34,9 +35,11 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
 
     detail::HttpResponseCodingQualities qualities;
     if (detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding)) {
-        for (const auto& header : request.headers()) {
-            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
-                qualities.update(header.value());
+        const auto headers = request.headers();
+        for (std::size_t i = 0; i < headers.size(); ++i) {
+            if (detail::HttpRequestAccess::headerKind(request, i) ==
+                std::to_underlying(detail::RequestHeaderKind::kAcceptEncoding)) {
+                qualities.update(headers[i].value());
             }
         }
     }

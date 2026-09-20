@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/ResponseHeaderUtils.h"
@@ -33,10 +34,13 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
     }
 
     bool first = true;
-    for (const auto& header : request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "Access-Control-Request-Headers")) {
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) !=
+            std::to_underlying(RequestHeaderKind::kAccessControlRequestHeaders)) {
             continue;
         }
+        const auto& header = headers[i];
         const bool valid = visitHttpCorsRequestHeaderNames(
             header.value(), [&response, &first](std::string_view name) {
                 if (first) {

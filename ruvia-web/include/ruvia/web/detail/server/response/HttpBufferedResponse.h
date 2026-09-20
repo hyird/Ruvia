@@ -1,12 +1,15 @@
 #pragma once
 
+#include <cstddef>
 #include <exception>
 #include <optional>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
@@ -107,9 +110,14 @@ private:
 [[nodiscard]] inline HttpResponseCodingQualities httpResponseCodingQualitiesFor(
     const HttpRequest& request) noexcept {
     HttpResponseCodingQualities qualities;
-    for (const auto& header : request.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
-            qualities.update(header.value());
+    if (!requestHasKnownHeader(request, RequestKnownHeader::kAcceptEncoding)) {
+        return qualities;
+    }
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) ==
+            std::to_underlying(RequestHeaderKind::kAcceptEncoding)) {
+            qualities.update(headers[i].value());
         }
     }
     return qualities;

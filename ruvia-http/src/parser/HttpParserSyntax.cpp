@@ -55,6 +55,11 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
                 return RequestHeaderKind::kUpgrade;
             }
             break;
+        case 9:
+            if (first == 'f' && httpAsciiEqualsIgnoreCase(name, "Forwarded")) {
+                return RequestHeaderKind::kForwarded;
+            }
+            break;
         case 8:
             if (first == 'i') {
                 if (httpAsciiEqualsIgnoreCase(name, "If-Match")) {
@@ -111,6 +116,9 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
             if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Accept-Encoding")) {
                 return RequestHeaderKind::kAcceptEncoding;
             }
+            if (first == 'x' && httpAsciiEqualsIgnoreCase(name, "X-Forwarded-For")) {
+                return RequestHeaderKind::kXForwardedFor;
+            }
             break;
         case 16:
             if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
@@ -134,6 +142,11 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
                         return RequestHeaderKind::kTransferEncoding;
                     }
                     break;
+                case 'x':
+                    if (httpAsciiEqualsIgnoreCase(name, "X-Forwarded-Proto")) {
+                        return RequestHeaderKind::kXForwardedProto;
+                    }
+                    break;
                 default:
                     break;
             }
@@ -151,6 +164,11 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
         case 22:
             if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Protocol")) {
                 return RequestHeaderKind::kSecWebSocketProtocol;
+            }
+            break;
+        case 24:
+            if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Extensions")) {
+                return RequestHeaderKind::kSecWebSocketExtensions;
             }
             break;
         case 29:

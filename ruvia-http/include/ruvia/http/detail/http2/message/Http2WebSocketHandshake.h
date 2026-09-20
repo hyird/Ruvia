@@ -1,9 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
@@ -11,6 +13,7 @@
 #include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
@@ -35,9 +38,11 @@ namespace ruvia::detail {
 
     std::size_t versionCount = 0;
     std::string_view version;
-    for (const auto& header : request.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Version")) {
-            version = header.value();
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) ==
+            std::to_underlying(RequestHeaderKind::kSecWebSocketVersion)) {
+            version = headers[i].value();
             ++versionCount;
         }
     }

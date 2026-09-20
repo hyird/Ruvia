@@ -44,6 +44,10 @@ enum class HttpConnectionOption : std::uint8_t {
         case RequestHeaderKind::kConnection:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kForwarded:
+        case RequestHeaderKind::kXForwardedFor:
+        case RequestHeaderKind::kXForwardedProto:
+        case RequestHeaderKind::kSecWebSocketExtensions:
             break;
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:

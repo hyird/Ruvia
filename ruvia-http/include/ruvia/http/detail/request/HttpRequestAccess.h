@@ -11,6 +11,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 
@@ -40,6 +41,10 @@ enum class RequestKnownHeader : std::uint8_t {
     kTransferEncoding,
     kUpgrade,
     kUserAgent,
+    kForwarded,
+    kXForwardedFor,
+    kXForwardedProto,
+    kSecWebSocketExtensions,
 };
 
 struct HttpRequestAccess final {
@@ -130,22 +135,28 @@ struct HttpRequestAccess final {
     }
 
     static bool addHeader(HttpRequest& request, HttpHeaderView header) {
-        if (request.headers_.size() == kMaxHttpHeaderFields) {
-            return false;
-        }
-        request.headers_.append(header);
-        return true;
+        return addHeader(
+            request, header, requestHeaderKindKnownSlot(classifyRequestHeader(header.name())));
     }
 
     static bool addHeader(
         HttpRequest& request, HttpHeaderView header, std::size_t knownSlot) {
-        if (!addHeader(request, header)) {
+        if (request.headers_.size() == kMaxHttpHeaderFields) {
             return false;
         }
+        const auto kind = knownSlot < kCachedHeaderSlots
+                              ? static_cast<std::uint8_t>(knownSlot + 1)
+                              : std::uint8_t{0};
+        request.headers_.append(header, kind);
         if (knownSlot < kCachedHeaderSlots) {
             request.cachedHeaders_[knownSlot] = static_cast<std::uint8_t>(request.headers_.size());
         }
         return true;
+    }
+
+    [[nodiscard]] static std::uint8_t headerKind(
+        const HttpRequest& request, std::size_t index) noexcept {
+        return request.headers_.kindAt(index);
     }
 
     static void setBody(HttpRequest& request, std::span<const std::byte> body) noexcept {
@@ -156,7 +167,7 @@ struct HttpRequestAccess final {
     }
 };
 
-static_assert(std::to_underlying(RequestKnownHeader::kUserAgent) + 1 ==
+static_assert(std::to_underlying(RequestKnownHeader::kSecWebSocketExtensions) + 1 ==
               HttpRequestAccess::kCachedHeaderSlots);
 
 [[nodiscard]] inline std::string_view requestKnownHeader(

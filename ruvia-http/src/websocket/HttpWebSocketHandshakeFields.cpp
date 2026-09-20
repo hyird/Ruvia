@@ -1,8 +1,10 @@
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <span>
 #include <stdexcept>
+#include <utility>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
@@ -74,6 +76,22 @@ namespace {
         }
         present = true;
         if (!protocols.appendList(header.value())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool appendWebSocketSubprotocolOffers(const HttpRequest& request,
+    WebSocketSubprotocolSet& protocols, bool& present) noexcept {
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) !=
+            std::to_underlying(RequestHeaderKind::kSecWebSocketProtocol)) {
+            continue;
+        }
+        present = true;
+        if (!protocols.appendList(headers[i].value())) {
             return false;
         }
     }
@@ -211,14 +229,34 @@ void skipWebSocketExtensionOws(std::string_view value, std::size_t& cursor) noex
     return !present || hasExtension;
 }
 
+[[nodiscard]] bool webSocketExtensionHeaderOffersValid(const HttpRequest& request) noexcept {
+    bool present = false;
+    bool hasExtension = false;
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) !=
+            std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions)) {
+            continue;
+        }
+        present = true;
+        if (!appendWebSocketExtensionList(headers[i].value(), hasExtension)) {
+            return false;
+        }
+    }
+    return !present || hasExtension;
+}
+
 }  // namespace
 
 bool webSocketSubprotocolOffersValid(const HttpRequest& request) noexcept {
-    return webSocketSubprotocolHeaderOffersValid(request.headers());
+    WebSocketSubprotocolSet protocols;
+    bool present = false;
+    return appendWebSocketSubprotocolOffers(request, protocols, present) &&
+           (!present || !protocols.empty());
 }
 
 bool webSocketExtensionOffersValid(const HttpRequest& request) noexcept {
-    return webSocketExtensionHeaderOffersValid(request.headers());
+    return webSocketExtensionHeaderOffersValid(request);
 }
 
 bool webSocketClientOfferHeadersValid(std::span<const HttpHeaderView> headers) noexcept {
@@ -232,7 +270,7 @@ bool webSocketProtocolOffered(const HttpRequest& request, std::string_view proto
     }
     WebSocketSubprotocolSet protocols;
     bool present = false;
-    return appendWebSocketSubprotocolOffers(request.headers(), protocols, present) && present &&
+    return appendWebSocketSubprotocolOffers(request, protocols, present) && present &&
            !protocols.empty() && protocols.contains(protocol);
 }
 
@@ -247,7 +285,7 @@ std::string_view chooseWebSocketSubprotocol(
 
     WebSocketSubprotocolSet offered;
     bool present = false;
-    if (!appendWebSocketSubprotocolOffers(request.headers(), offered, present) || !present ||
+    if (!appendWebSocketSubprotocolOffers(request, offered, present) || !present ||
         offered.empty()) {
         return {};
     }

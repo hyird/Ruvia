@@ -12,13 +12,26 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline HttpContentCodingFieldResult requestContentCoding(
     const HttpRequest& request) noexcept {
-    return httpContentCodingFromHeaders(request.headers());
+    HttpContentCodingFieldParser parser;
+    if (!requestHasKnownHeader(request, RequestKnownHeader::kContentEncoding)) {
+        return parser.finish();
+    }
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) ==
+            std::to_underlying(RequestHeaderKind::kContentEncoding)) {
+            parser.update(headers[i].value());
+        }
+    }
+    return parser.finish();
 }
 
 class HttpRequestContentDecodeProtocolFailure final {

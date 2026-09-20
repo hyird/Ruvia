@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
 #include "ruvia/http/detail/field/HttpAcceptToken.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/request/RequestBodyDecoding.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
@@ -182,10 +183,13 @@ const RequestNameValueList& Context::requestCookies() const {
         if (detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kCookie)) {
             detail::RequestNameValueListAccess::reserve(
                 cookies, detail::boundedFieldReserve(8));
-            for (const auto& header : request_.headers()) {
-                if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+            const auto headers = request_.headers();
+            for (std::size_t i = 0; i < headers.size(); ++i) {
+                if (detail::HttpRequestAccess::headerKind(request_, i) !=
+                    std::to_underlying(detail::RequestHeaderKind::kCookie)) {
                     continue;
                 }
+                const auto& header = headers[i];
                 detail::httpVisitSemicolonParameters(
                     header.value(), [&cookies](std::string_view key, std::string_view value) {
                         detail::RequestNameValueListAccess::pushBack(
@@ -255,14 +259,16 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     int bestSpecificity = -1;
     int bestQuality = 0;
     bool sawAccept = false;
-    for (const auto& header : request_.headers()) {
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept")) {
+    const auto headers = request_.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (detail::HttpRequestAccess::headerKind(request_, i) !=
+            std::to_underlying(detail::RequestHeaderKind::kAccept)) {
             continue;
         }
         sawAccept = true;
-        if (!header.value().empty()) {
+        if (!headers[i].value().empty()) {
             detail::httpAccumulateMediaTypeAcceptance(
-                header.value(), mediaType, bestSpecificity, bestQuality);
+                headers[i].value(), mediaType, bestSpecificity, bestQuality);
         }
     }
     // Only absence means no preference. A present but empty Accept field is an
@@ -303,18 +309,27 @@ std::optional<std::string_view> Context::requestNegotiate(
     // either is the offered token or is "*".
     const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
 
+    const auto expectedKind = mediaType ? std::to_underlying(detail::RequestHeaderKind::kAccept)
+                              : field == ContextRequest::Negotiable::kEncoding
+                                  ? std::to_underlying(detail::RequestHeaderKind::kAcceptEncoding)
+                                  : std::uint8_t{0};
     std::array<std::string_view, kMaxHttpHeaderFields> fieldValues{};
     std::size_t fieldValueCount = 0;
     bool sawField = false;
-    for (const auto& header : request_.headers()) {
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
+    const auto headers = request_.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (expectedKind != 0) {
+            if (detail::HttpRequestAccess::headerKind(request_, i) != expectedKind) {
+                continue;
+            }
+        } else if (!detail::httpAsciiEqualsIgnoreCase(headers[i].name(), headerName)) {
             continue;
         }
         sawField = true;
-        if (header.value().empty() || fieldValueCount == fieldValues.size()) {
+        if (headers[i].value().empty() || fieldValueCount == fieldValues.size()) {
             continue;
         }
-        fieldValues[fieldValueCount++] = header.value();
+        fieldValues[fieldValueCount++] = headers[i].value();
     }
 
     std::optional<std::string_view> best;
