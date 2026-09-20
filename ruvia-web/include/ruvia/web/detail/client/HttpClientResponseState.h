@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
@@ -13,6 +17,10 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpStatus.h"
+
+namespace ruvia {
+class ResponseStreamWriter;
+}
 
 namespace ruvia::detail {
 
@@ -32,6 +40,13 @@ public:
           buffered(resource),
           pending(resource) {}
     HttpClientResponseState(WorkerHandle&&, std::pmr::memory_resource*) = delete;
+
+    // Body algorithms run on the address-stable storage owner. The public
+    // facade wraps them in bodyOperationScope to enforce the linear lane.
+    template <typename View>
+    [[nodiscard]] Task<std::optional<View>> read();
+    [[nodiscard]] Task<std::pmr::vector<std::byte>> readAll(std::size_t maxBytes);
+    [[nodiscard]] Task<void> pipeTo(ResponseStreamWriter& output);
 
     WorkerSignal headSignal;
     WorkerSignal dataSignal;
@@ -65,6 +80,9 @@ public:
     // Declared last so the operation scope closes while every field borrowed
     // by a body coroutine is alive.
     ScopedOperationScope bodyOperationScope;
+
+private:
+    void promotePendingData();
 };
 
 }  // namespace ruvia::detail
