@@ -51,6 +51,7 @@ RUVIA_TEST(request_header_classification_table) {
         {"Forwarded", RequestHeaderKind::kForwarded},
         {"X-Forwarded-For", RequestHeaderKind::kXForwardedFor},
         {"X-Forwarded-Proto", RequestHeaderKind::kXForwardedProto},
+        {"Sec-WebSocket-Extensions", RequestHeaderKind::kSecWebSocketExtensions},
     };
     for (const auto& entry : cases) {
         RUVIA_CHECK(classifyRequestHeader(entry.name) == entry.kind);

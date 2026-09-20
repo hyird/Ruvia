@@ -10,11 +10,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 namespace ruvia::detail {
@@ -303,11 +306,13 @@ private:
     // every line in order and honor the first acceptable offer. Offers are resolved
     // independently (first honorable wins), so first-honorable-across-lines is the
     // same result as scanning the joined list.
-    for (const auto& header : request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) !=
+            std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions)) {
             continue;
         }
-        const auto negotiation = webSocketScanDeflateOffers(header.value());
+        const auto negotiation = webSocketScanDeflateOffers(headers[i].value());
         if (webSocketDeflateNegotiated(negotiation)) {
             return negotiation;
         }

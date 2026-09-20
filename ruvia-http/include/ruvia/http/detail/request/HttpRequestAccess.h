@@ -44,6 +44,7 @@ enum class RequestKnownHeader : std::uint8_t {
     kForwarded,
     kXForwardedFor,
     kXForwardedProto,
+    kSecWebSocketExtensions,
 };
 
 struct HttpRequestAccess final {
@@ -166,7 +167,7 @@ struct HttpRequestAccess final {
     }
 };
 
-static_assert(std::to_underlying(RequestKnownHeader::kXForwardedProto) + 1 ==
+static_assert(std::to_underlying(RequestKnownHeader::kSecWebSocketExtensions) + 1 ==
               HttpRequestAccess::kCachedHeaderSlots);
 
 [[nodiscard]] inline std::string_view requestKnownHeader(

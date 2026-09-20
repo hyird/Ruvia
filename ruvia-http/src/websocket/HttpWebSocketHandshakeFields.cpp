@@ -229,6 +229,23 @@ void skipWebSocketExtensionOws(std::string_view value, std::size_t& cursor) noex
     return !present || hasExtension;
 }
 
+[[nodiscard]] bool webSocketExtensionHeaderOffersValid(const HttpRequest& request) noexcept {
+    bool present = false;
+    bool hasExtension = false;
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (HttpRequestAccess::headerKind(request, i) !=
+            std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions)) {
+            continue;
+        }
+        present = true;
+        if (!appendWebSocketExtensionList(headers[i].value(), hasExtension)) {
+            return false;
+        }
+    }
+    return !present || hasExtension;
+}
+
 }  // namespace
 
 bool webSocketSubprotocolOffersValid(const HttpRequest& request) noexcept {
@@ -239,7 +256,7 @@ bool webSocketSubprotocolOffersValid(const HttpRequest& request) noexcept {
 }
 
 bool webSocketExtensionOffersValid(const HttpRequest& request) noexcept {
-    return webSocketExtensionHeaderOffersValid(request.headers());
+    return webSocketExtensionHeaderOffersValid(request);
 }
 
 bool webSocketClientOfferHeadersValid(std::span<const HttpHeaderView> headers) noexcept {

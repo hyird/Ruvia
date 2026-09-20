@@ -21,8 +21,10 @@ static_assert(std::to_underlying(detail::RequestHeaderKind::kUserAgent) ==
               std::to_underlying(detail::RequestKnownHeader::kUserAgent) + 1);
 static_assert(std::to_underlying(detail::RequestHeaderKind::kXForwardedProto) ==
               std::to_underlying(detail::RequestKnownHeader::kXForwardedProto) + 1);
+static_assert(std::to_underlying(detail::RequestHeaderKind::kSecWebSocketExtensions) ==
+              std::to_underlying(detail::RequestKnownHeader::kSecWebSocketExtensions) + 1);
 static_assert(detail::kRequestHeaderKindCount ==
-              std::to_underlying(detail::RequestKnownHeader::kXForwardedProto) + 2);
+              std::to_underlying(detail::RequestKnownHeader::kSecWebSocketExtensions) + 2);
 
 }  // namespace
 

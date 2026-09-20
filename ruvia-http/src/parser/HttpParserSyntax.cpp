@@ -166,6 +166,11 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
                 return RequestHeaderKind::kSecWebSocketProtocol;
             }
             break;
+        case 24:
+            if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Extensions")) {
+                return RequestHeaderKind::kSecWebSocketExtensions;
+            }
+            break;
         case 29:
             if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Request-Method")) {
                 return RequestHeaderKind::kAccessControlRequestMethod;

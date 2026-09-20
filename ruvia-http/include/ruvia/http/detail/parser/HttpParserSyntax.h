@@ -38,11 +38,12 @@ enum class RequestHeaderKind : std::uint8_t {
     kUserAgent,
     kForwarded,
     kXForwardedFor,
-    kXForwardedProto
+    kXForwardedProto,
+    kSecWebSocketExtensions
 };
 
 inline constexpr std::size_t kRequestHeaderKindCount =
-    std::to_underlying(RequestHeaderKind::kXForwardedProto) + 1;
+    std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions) + 1;
 
 [[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(
     RequestHeaderKind kind) noexcept {
