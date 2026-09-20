@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "ruvia/web/Attributes.h"
+#include "ruvia/web/ModelObject.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
 #include "ruvia/web/detail/model/ModelInput.h"
 #include "ruvia/web/detail/model/ModelSchema.h"
@@ -352,6 +353,16 @@ private:
                         }
                         const auto originalInput = valueInput;
                         using ValueT = typename std::remove_cvref_t<decltype(slot)>::value_type;
+                        if (slot.nullable()) {
+                            if constexpr (!detail::isRuviaJsonValue<ValueT>) {
+                                auto nullInput = valueInput;
+                                if (detail::consumeJsonLiteral(nullInput, "null")) {
+                                    valueInput = nullInput;
+                                    slot.markNull();
+                                    return true;
+                                }
+                            }
+                        }
                         if (auto value = detail::parseJsonValue<ValueT>(
                                 valueInput, resource, depth + 1, stringStorage);
                             value) {

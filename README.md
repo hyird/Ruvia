@@ -1725,7 +1725,7 @@ Routes and schemas use these macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD` |
+| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_NULLABLE` |
 | Validation | Field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`; route bindings `JsonBody<T>` / `QueryModel<T>` / `PathModel<T>` |
 
 Route tables, middleware chains, and controller instances are finalized before
@@ -1883,7 +1883,9 @@ Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
 `model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
 returns `const std::optional<T>&`. A missing optional request property stays
-empty, while an explicit JSON `null` is an `invalid_type` error. An unset
+empty, while an explicit JSON `null` is an `invalid_type` error unless the field
+also has `RUVIA_NULLABLE`. A nullable `null` stays empty (`kNull`) and does not
+apply `RUVIA_DEFAULT`. An unset
 optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
 `null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
 (`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
@@ -1893,9 +1895,9 @@ used in JSON and validation paths.
 the validator or request arena, including when the exception is copied or moved.
 
 Request and response models bind JSON through schema. `JsonValue` and
-`JsonObject` borrow a complete JSON document for `isObject()` / `isArray()` /
-`isNull()`, `view()`, and `get<T>("field")`; they are not a `c.json()` /
-`toJson()` writer. URL-encoded form binding stays schema-based. Raw `bytes()` /
+`JsonObject` may be model fields; they also parse a complete JSON document for
+`isObject()` / `isArray()` / `isNull()`, `view()`, and `get<T>("field")`. They
+are not a `c.json()` / `toJson()` writer. URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.

@@ -42,7 +42,8 @@ template <FixedString SourceName, FixedString WireName, typename ValueT, bool Re
 struct ModelFieldDescriptor final {
     static_assert(((isModelOption<ArgTs>() || isValidationRule<ArgTs>()) && ... && true),
         "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept model options (RUVIA_DEFAULT, "
-        "RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL) and validation rules (RUVIA_MIN, RUVIA_EMAIL, ...)");
+        "RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL, RUVIA_NULLABLE) and validation rules "
+        "(RUVIA_MIN, RUVIA_EMAIL, ...)");
 
     using value_type = ValueT;
     using options_type = typename TupleModelOptions<decltype(std::tuple_cat(std::tuple<>{},
@@ -50,6 +51,8 @@ struct ModelFieldDescriptor final {
     using rules_type = typename TupleRules<decltype(std::tuple_cat(std::tuple<>{},
         std::declval<FieldRuleTuple<ArgTs>>()...))>::type;
     using field_type = ModelField<ValueT, Required, options_type, WireName>;
+    static_assert(!Required || !options_type{}.nullable(),
+        "RUVIA_NULLABLE requires RUVIA_OPTIONAL_FIELD");
 
     static constexpr auto sourceName = SourceName;
     static constexpr auto wireName = WireName;

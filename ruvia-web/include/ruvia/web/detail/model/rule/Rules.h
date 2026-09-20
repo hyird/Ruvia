@@ -62,6 +62,8 @@ struct ModelValidationAccess final {
                             validator.add(path, "required", "is required");
                         }
                         return;
+                    case ModelFieldState::kNull:
+                        return;
                     case ModelFieldState::kParsed:
                         break;
                 }

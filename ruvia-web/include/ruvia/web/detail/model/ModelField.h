@@ -96,6 +96,10 @@ public:
         return options_.emitNull();
     }
 
+    [[nodiscard]] constexpr bool nullable() const noexcept {
+        return options_.nullable();
+    }
+
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
         return options_.omitEmpty();
     }
@@ -106,6 +110,11 @@ public:
 
     void markInvalidType() noexcept {
         state_ = detail::ModelFieldState::kInvalidType;
+    }
+
+    void markNull() noexcept {
+        value_.reset();
+        state_ = detail::ModelFieldState::kNull;
     }
 
 private:
