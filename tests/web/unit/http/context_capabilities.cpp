@@ -51,7 +51,7 @@ ruvia::Task<void> discardBody(void*) {
     co_return;
 }
 
-ruvia::Task<std::optional<std::string_view>> readBody(void*) {
+ruvia::Task<std::optional<std::span<const std::byte>>> readBody(void*) {
     co_return std::nullopt;
 }
 
@@ -108,7 +108,7 @@ struct BoundBodyReader final {
     explicit BoundBodyReader(int value) noexcept
         : value(value) {}
 
-    ruvia::Task<std::optional<std::string_view>> read() {
+    ruvia::Task<std::optional<std::span<const std::byte>>> read() {
         co_return std::nullopt;
     }
 

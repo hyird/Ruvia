@@ -14,9 +14,11 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -164,7 +166,7 @@ public:
           signal_(signal),
           writeSignal_(writeSignal) {}
 
-    [[nodiscard]] Task<std::optional<std::string_view>> read() {
+    [[nodiscard]] Task<std::optional<std::span<const std::byte>>> read() {
         for (;;) {
             if (signal_.terminated()) {
                 throw std::system_error(signal_.terminalError());
@@ -178,7 +180,7 @@ public:
                     connection_.releaseAllReceivedData(streamId_);
                     writeSignal_.notify();
                 }
-                co_return chunk;
+                co_return ::ruvia::asBytes(chunk);
             }
             if (!bodyQueue_.empty()) {
                 continue;

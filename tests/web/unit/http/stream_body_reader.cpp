@@ -131,7 +131,7 @@ KnownLengthObservation readKnownLengthBody(
         [&]() -> asio::awaitable<void> {
             try {
                 while (const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
-                    observation.body.append(*part);
+                    observation.body.append(ruvia::asChars(*part));
                 }
             } catch (const ruvia::HttpProtocolError& error) {
                 observation.errorStatus = error.status();
@@ -241,7 +241,7 @@ TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
                 if (streaming) {
                     while (
                         const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
-                        observation.body.append(*part);
+                        observation.body.append(ruvia::asChars(*part));
                     }
                 } else {
                     std::pmr::string body(&resource);

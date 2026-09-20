@@ -56,6 +56,7 @@ endfunction()
 if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
         core/base64.cpp
+        core/bytes.cpp
         core/decimal_number.cpp
         core/dns_host.cpp
         core/integer.cpp

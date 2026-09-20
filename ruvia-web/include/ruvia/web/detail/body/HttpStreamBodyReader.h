@@ -4,10 +4,12 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
@@ -42,7 +44,7 @@ public:
     // itself once those views are dead.
     void takePipeline(std::pmr::string& stash);
 
-    [[nodiscard]] Task<std::optional<std::string_view>> read();
+    [[nodiscard]] Task<std::optional<std::span<const std::byte>>> read();
     Task<std::string_view> readAll(std::pmr::string& body);
 
 private:
@@ -54,9 +56,9 @@ private:
     void materializeInitialRemainder();
     Task<void> readMore();
     Task<std::string_view> readKnownLengthAll(std::pmr::string& body, std::size_t contentLength);
-    Task<std::optional<std::string_view>> readKnownLength(std::size_t contentLength);
-    Task<std::optional<std::string_view>> readChunked();
-    Task<std::optional<std::string_view>> readTransferDecodedChunked();
+    Task<std::optional<std::span<const std::byte>>> readKnownLength(std::size_t contentLength);
+    Task<std::optional<std::span<const std::byte>>> readChunked();
+    Task<std::optional<std::span<const std::byte>>> readTransferDecodedChunked();
     void decodeTransferAppend(std::string_view input, std::pmr::string& target);
     [[nodiscard]] bool exceedsLimit(std::size_t bytes) const noexcept;
     void markFinished() noexcept;

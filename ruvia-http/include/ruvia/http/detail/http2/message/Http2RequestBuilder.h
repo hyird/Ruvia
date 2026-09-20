@@ -124,7 +124,7 @@ public:
     }
 
     [[nodiscard]] static Http2RequestBuildResult build(Http2StreamState& stream,
-        HttpRequest& request, std::pmr::memory_resource* resource, std::string_view body) noexcept {
+        HttpRequest& request, std::pmr::memory_resource* resource, std::string_view body) {
         HttpRequestAccess::reset(request);
         HttpRequestAccess::setResource(request, resource);
         const auto method = stream.requestMethod();
@@ -181,6 +181,14 @@ public:
         HttpRequestAccess::setQueryString(request, targetParts.queryString);
         HttpRequestAccess::setBody(request, body);
 
+        const auto authority = stream.requestAuthority();
+        const bool synthesizeHost = !stream.hasHost() && stream.hasAuthority() && isValidHostHeader(authority);
+        const auto headerCount = stream.remoteHeaderCount() + static_cast<std::size_t>(synthesizeHost) +
+                                 static_cast<std::size_t>(stream.hasCookie());
+        if (headerCount > kMaxHttpHeaderFields) {
+            return Http2RequestBuildResult::makeFailure(Http2RequestBuildFailure::Kind::kTooManyHeaders);
+        }
+        HttpRequestAccess::reserveHeaders(request, headerCount);
         for (std::size_t i = 0; i < stream.remoteHeaderCount(); ++i) {
             const auto header = stream.remoteHeaderAt(i);
             if (!addHeader(request, header.name, header.value, header.kind)) {
@@ -188,11 +196,10 @@ public:
                     Http2RequestBuildFailure::Kind::kTooManyHeaders);
             }
         }
-        const auto authority = stream.requestAuthority();
         // A non-HTTP target can carry RFC 3986 userinfo or another authority
         // value that is not legal Host syntax. Never manufacture an invalid
         // regular field from that distinct pseudo-header grammar.
-        if (!stream.hasHost() && stream.hasAuthority() && isValidHostHeader(authority)) {
+        if (synthesizeHost) {
             if (!addHeader(request, "host", authority, RequestHeaderKind::kHost)) {
                 return Http2RequestBuildResult::makeFailure(
                     Http2RequestBuildFailure::Kind::kTooManyHeaders);
@@ -226,7 +233,7 @@ private:
     }
 
     static bool addHeader(HttpRequest& request, std::string_view name, std::string_view value,
-        RequestHeaderKind kind) noexcept {
+        RequestHeaderKind kind) {
         return HttpRequestAccess::addHeader(
             request, HttpHeaderView{name, value}, requestHeaderKindKnownSlot(kind));
     }

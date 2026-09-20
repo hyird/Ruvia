@@ -97,7 +97,8 @@ std::span<const HttpHeader> HttpClientResponse::trailers() const& noexcept {
     return state_->trailers;
 }
 
-void HttpClientResponseBody::promotePendingData(detail::HttpClientResponseState& state) {
+void detail::HttpClientResponseState::promotePendingData() {
+    auto& state = *this;
     if (state.offset != state.buffered.size() || state.pending.empty()) {
         return;
     }
@@ -119,26 +120,26 @@ ScopedOperation<std::optional<std::span<const std::byte>>> HttpClientResponseBod
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, readTask<std::span<const std::byte>>(*state_));
+    return detail::makeScopedOperation(state_->bodyOperationScope, state_->read<std::span<const std::byte>>());
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::text() & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, readTask<std::string_view>(*state_));
+    return detail::makeScopedOperation(state_->bodyOperationScope, state_->read<std::string_view>());
 }
 
 template <typename View>
-Task<std::optional<View>> HttpClientResponseBody::readTask(
-    detail::HttpClientResponseState& state) {
+Task<std::optional<View>> detail::HttpClientResponseState::read() {
+    auto& state = *this;
     state.incrementalRead = true;
     while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
         state.buffered.clear();
         state.offset = 0;
         co_await state.dataSignal.wait();
     }
-    promotePendingData(state);
+    promotePendingData();
     if (state.offset == state.buffered.size()) {
         if (state.failure) {
             std::rethrow_exception(state.failure);
@@ -163,11 +164,11 @@ ScopedOperation<std::pmr::vector<std::byte>> HttpClientResponseBody::readAll(std
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, readAllTask(*state_, maxBytes));
+    return detail::makeScopedOperation(state_->bodyOperationScope, state_->readAll(maxBytes));
 }
 
-Task<std::pmr::vector<std::byte>> HttpClientResponseBody::readAllTask(
-    detail::HttpClientResponseState& state, std::size_t maxBytes) {
+Task<std::pmr::vector<std::byte>> detail::HttpClientResponseState::readAll(std::size_t maxBytes) {
+    auto& state = *this;
     state.collectAll = true;
     if (state.http2DataCredit && state.pool != nullptr) {
         state.pool->releaseResponseData(state);
@@ -192,10 +193,10 @@ Task<std::pmr::vector<std::byte>> HttpClientResponseBody::readAllTask(
     }
     std::pmr::vector<std::byte> result(state.resource);
     result.reserve(totalRemaining);
-    const auto buffered = std::as_bytes(std::span(state.buffered.data() + state.offset, remaining));
-    const auto pending = std::as_bytes(std::span(state.pending.data(), state.pending.size()));
-    result.insert(result.end(), buffered.begin(), buffered.end());
-    result.insert(result.end(), pending.begin(), pending.end());
+    const auto bufferedBytes = std::as_bytes(std::span(state.buffered.data() + state.offset, remaining));
+    const auto pendingBytes = std::as_bytes(std::span(state.pending.data(), state.pending.size()));
+    result.insert(result.end(), bufferedBytes.begin(), bufferedBytes.end());
+    result.insert(result.end(), pendingBytes.begin(), pendingBytes.end());
     state.offset = state.buffered.size();
     state.pending.clear();
     co_return result;
@@ -205,11 +206,11 @@ ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& outpu
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, pipeToTask(*state_, output));
+    return detail::makeScopedOperation(state_->bodyOperationScope, state_->pipeTo(output));
 }
 
-Task<void> HttpClientResponseBody::pipeToTask(
-    detail::HttpClientResponseState& state, ResponseStreamWriter& output) {
+Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output) {
+    auto& state = *this;
     state.incrementalRead = true;
     for (;;) {
         while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
@@ -217,7 +218,7 @@ Task<void> HttpClientResponseBody::pipeToTask(
             state.offset = 0;
             co_await state.dataSignal.wait();
         }
-        promotePendingData(state);
+        promotePendingData();
         if (state.offset == state.buffered.size()) {
             if (state.failure) {
                 std::rethrow_exception(state.failure);

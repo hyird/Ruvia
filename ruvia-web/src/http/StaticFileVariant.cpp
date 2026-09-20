@@ -33,9 +33,11 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
     }
 
     detail::HttpResponseCodingQualities qualities;
-    for (const auto& header : request.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
-            qualities.update(header.value());
+    if (detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding)) {
+        for (const auto& header : request.headers()) {
+            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
+                qualities.update(header.value());
+            }
         }
     }
 
