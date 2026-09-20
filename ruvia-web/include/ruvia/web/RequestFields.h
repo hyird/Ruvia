@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Attributes.h"
 
@@ -18,29 +19,8 @@ struct RequestNameValueViewAccess;
 struct RequestNameValueListAccess;
 }  // namespace detail
 
-// Read-only request fields materialized by the Web Context. These views may
-// represent headers, query parameters, cookies, or route parameters and borrow
-// request-owned storage.
-class RequestNameValueView final {
-public:
-    [[nodiscard]] std::string_view name() const noexcept {
-        return name_;
-    }
-
-    [[nodiscard]] std::string_view value() const noexcept {
-        return value_;
-    }
-
-private:
-    friend struct detail::RequestNameValueViewAccess;
-
-    constexpr RequestNameValueView(std::string_view name, std::string_view value) noexcept
-        : name_(name),
-          value_(value) {}
-
-    std::string_view name_;
-    std::string_view value_;
-};
+// Query, cookie, and route fields use the same name/value view as HTTP headers.
+using RequestNameValueView = HttpHeaderView;
 
 class RequestNameValueList final {
 public:
@@ -49,7 +29,12 @@ public:
 
     RequestNameValueList(const RequestNameValueList&) = delete;
     RequestNameValueList& operator=(const RequestNameValueList&) = delete;
-    RequestNameValueList(RequestNameValueList&&) noexcept = default;
+    RequestNameValueList(RequestNameValueList&& other) noexcept
+        : owned_(std::move(other.owned_)),
+          caseInsensitive_(other.caseInsensitive_) {
+        items_ = owned_.empty() ? other.items_ : std::span<const RequestNameValueView>(owned_);
+        other.items_ = {};
+    }
     RequestNameValueList& operator=(RequestNameValueList&&) = delete;
 
     [[nodiscard]] const_iterator begin() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -94,9 +79,9 @@ public:
     // the last occurrence. Header lists compare names case-insensitively;
     // other field sources compare exactly. Enumeration preserves name spelling.
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
-        for (auto it = items_.rbegin(); it != items_.rend(); ++it) {
-            if (namesEqual(it->name(), name)) {
-                return it->value();
+        for (std::size_t i = items_.size(); i > 0; --i) {
+            if (namesEqual(items_[i - 1].name(), name)) {
+                return items_[i - 1].value();
             }
         }
         return std::nullopt;
@@ -121,22 +106,30 @@ private:
     friend struct detail::RequestNameValueListAccess;
 
     explicit RequestNameValueList(std::pmr::memory_resource* resource, bool caseInsensitive = false)
-        : items_(detail::pmrResourceOrDefault(resource)),
+        : owned_(detail::pmrResourceOrDefault(resource)),
+          items_(owned_),
           caseInsensitive_(caseInsensitive) {}
+
+    explicit RequestNameValueList(std::span<const HttpHeaderView> headers) noexcept
+        : items_(headers),
+          caseInsensitive_(true) {}
 
     [[nodiscard]] bool namesEqual(std::string_view left, std::string_view right) const noexcept {
         return caseInsensitive_ ? detail::httpAsciiEqualsIgnoreCase(left, right) : left == right;
     }
 
     void reserve(std::size_t count) {
-        items_.reserve(count);
+        owned_.reserve(count);
+        items_ = owned_;
     }
 
     void pushBack(RequestNameValueView value) {
-        items_.push_back(value);
+        owned_.push_back(value);
+        items_ = owned_;
     }
 
-    std::pmr::vector<RequestNameValueView> items_;
+    std::pmr::vector<HttpHeaderView> owned_{};
+    std::span<const HttpHeaderView> items_{};
     bool caseInsensitive_{false};
 };
 

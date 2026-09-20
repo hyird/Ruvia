@@ -75,15 +75,7 @@ namespace detail {
 const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
     if (!cache) {
-        const auto rawHeaders = request_.headers();
-        auto headers = detail::RequestNameValueListAccess::makeHeaders(arena());
-        detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
-        for (const auto& rawHeader : rawHeaders) {
-            detail::RequestNameValueListAccess::pushBack(
-                headers, detail::RequestNameValueViewAccess::make(
-                             rawHeader.name(), rawHeader.value()));
-        }
-        cache.emplace(std::move(headers));
+        cache.emplace(detail::RequestNameValueListAccess::borrowHeaders(request_.headers()));
     }
     return *cache;
 }

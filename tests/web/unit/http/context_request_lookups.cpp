@@ -404,6 +404,8 @@ RUVIA_TEST(context_request_header_fields_enumerate_every_field_in_order) {
     RUVIA_CHECK_EQ(headers[2].name(), std::string_view("X-Other"));
     // Scalar lookup keeps last-occurrence semantics across the same list.
     RUVIA_CHECK_EQ(*headers.get("x-trace"), std::string_view("b"));
+    RUVIA_CHECK(headers.data() == request.headers().data());
+    RUVIA_CHECK_EQ(headers.size(), request.headers().size());
     // ...while the named lookup still accepts the sent spelling, and both paths
     // agree on last-occurrence-wins for a repeated name.
     RUVIA_CHECK_EQ(*context.req().header("X-Trace"), std::string_view("b"));

@@ -2,8 +2,10 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <span>
 #include <string_view>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/RequestFields.h"
 
@@ -12,7 +14,7 @@ namespace ruvia::detail {
 struct RequestNameValueViewAccess final {
     [[nodiscard]] static constexpr RequestNameValueView make(
         std::string_view name, std::string_view value) noexcept {
-        return RequestNameValueView(name, value);
+        return RequestNameValueView{name, value};
     }
 
     template <HttpTemporaryOwningCharString Name>
@@ -27,8 +29,9 @@ struct RequestNameValueListAccess final {
         return RequestNameValueList(resource);
     }
 
-    [[nodiscard]] static RequestNameValueList makeHeaders(std::pmr::memory_resource* resource) {
-        return RequestNameValueList(resource, true);
+    [[nodiscard]] static RequestNameValueList borrowHeaders(
+        std::span<const HttpHeaderView> headers) noexcept {
+        return RequestNameValueList(headers);
     }
 
     [[nodiscard]] static bool namesEqual(const RequestNameValueList& list,
