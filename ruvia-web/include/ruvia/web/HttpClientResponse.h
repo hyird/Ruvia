@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
@@ -35,14 +36,19 @@ public:
     // The returned view remains valid until the next body operation. A null
     // optional is the only end-of-body signal; an empty data chunk is never
     // returned. Reads are linear and concurrent operations are rejected.
-    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read() &;
-    ScopedOperation<std::optional<std::string_view>> read() && = delete;
+    [[nodiscard]] ScopedOperation<std::optional<std::span<const std::byte>>> read() &;
+    ScopedOperation<std::optional<std::span<const std::byte>>> read() && = delete;
+
+    // Reads one chunk as characters, without decoding or charset validation.
+    // Encoded characters may straddle chunks. Uses the same linear read lane.
+    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> text() &;
+    ScopedOperation<std::optional<std::string_view>> text() && = delete;
 
     // Collects the unread remainder of this same stream. maxBytes is a caller
     // bound in addition to the origin's transport bound.
-    [[nodiscard]] ScopedOperation<std::pmr::string> readAll(
+    [[nodiscard]] ScopedOperation<std::pmr::vector<std::byte>> readAll(
         std::size_t maxBytes = kDefaultMaxBufferedBodyBytes) &;
-    ScopedOperation<std::pmr::string> readAll(
+    ScopedOperation<std::pmr::vector<std::byte>> readAll(
         std::size_t = kDefaultMaxBufferedBodyBytes) && = delete;
 
     // Copies this same stream into a controller response stream with natural
@@ -59,9 +65,10 @@ private:
 
     ~HttpClientResponseBody() = default;
 
-    [[nodiscard]] static Task<std::optional<std::string_view>> readTask(
+    template <typename View>
+    [[nodiscard]] static Task<std::optional<View>> readTask(
         detail::HttpClientResponseState& state);
-    [[nodiscard]] static Task<std::pmr::string> readAllTask(
+    [[nodiscard]] static Task<std::pmr::vector<std::byte>> readAllTask(
         detail::HttpClientResponseState& state, std::size_t maxBytes);
     [[nodiscard]] static Task<void> pipeToTask(
         detail::HttpClientResponseState& state, ResponseStreamWriter& output);

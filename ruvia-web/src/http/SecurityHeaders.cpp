@@ -189,7 +189,7 @@ SecurityHeadersMiddleware::ConfigStorage::ConfigStorage(
 
 void applySecurityHeaders(Context& context, const SecurityHeadersConfig& options) {
     const auto flags = validateSecurityHeadersConfig(options);
-    const auto connection = getConnInfo(context);
+    const auto connection = context.conn();
     applySecurityHeadersTo(context,
         SecurityHeadersPolicy{
             .flags = flags,
@@ -207,7 +207,7 @@ SecurityHeadersMiddleware::SecurityHeadersMiddleware(const SecurityHeadersConfig
     : config_(config, detail::registrationResource()) {}
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
-    const auto connection = getConnInfo(context);
+    const auto connection = context.conn();
     const bool secureTransport = connection.scheme() == HttpScheme::kHttps;
     const SecurityHeadersPolicy policy{
         .flags =

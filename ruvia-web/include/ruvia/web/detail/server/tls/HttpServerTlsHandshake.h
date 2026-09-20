@@ -20,7 +20,7 @@ namespace ruvia::detail {
 
 // Extracts the verified peer (client) certificate subject DN into `out`, or
 // leaves it empty when no client certificate was presented. Used to surface
-// mutual-TLS identity to handlers via getConnInfo(context).
+// mutual-TLS identity to handlers via context.conn().
 inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     out.clear();
     const auto certificate =

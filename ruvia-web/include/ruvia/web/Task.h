@@ -5,9 +5,7 @@
 
 namespace ruvia {
 
-// Web handlers return HTTP responses by default. Core-only code spells out
-// its result type, including Task<void> for operations without a result.
-template <typename T = HttpResponse>
-class Task;
+// Web and core share Task<T>; handlers spell out Task<HttpResponse> and
+// operations without a result use Task<void>.
 
 }  // namespace ruvia

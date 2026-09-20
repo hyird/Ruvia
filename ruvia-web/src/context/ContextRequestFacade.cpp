@@ -5,27 +5,6 @@
 
 namespace ruvia {
 
-namespace {
-
-void validateParseBodyOptions(ContextRequest::ParseBodyOptions options) {
-    switch (options.repeatedScalars) {
-        case ContextRequest::RepeatedScalarPolicy::kLastValue:
-        case ContextRequest::RepeatedScalarPolicy::kRetainAll:
-            break;
-        default:
-            throw std::invalid_argument("parseBody repeated scalar policy is invalid");
-    }
-    switch (options.dottedNames) {
-        case ContextRequest::DottedNamePolicy::kLiteral:
-        case ContextRequest::DottedNamePolicy::kExpandPath:
-            break;
-        default:
-            throw std::invalid_argument("parseBody dotted name policy is invalid");
-    }
-}
-
-}  // namespace
-
 Task<std::string_view> ContextRequest::contextTextTask(const Context* context) {
     return context->requestBody();
 }
@@ -130,13 +109,6 @@ ScopedOperation<void> ContextRequest::discardBody() const {
 
 ScopedOperation<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
     return detail::makeScopedOperation(context_->operationScope_, context_->requestMultipart());
-}
-
-ScopedOperation<ContextRequest::RequestFormData> ContextRequest::parseBody(
-    ParseBodyOptions options) const {
-    validateParseBodyOptions(options);
-    return detail::makeScopedOperation(
-        context_->operationScope_, context_->parseRequestBody(options));
 }
 
 BodyReader& ContextRequest::bodyReader() const {

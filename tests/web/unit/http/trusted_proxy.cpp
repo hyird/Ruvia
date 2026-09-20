@@ -145,7 +145,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
     // No trusted set at all: the default, and it must read nothing.
     const auto context = ContextAccess::make(
         memory, request, ruvia::test::testContextServices().withPlainTransport("198.51.100.7"));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("198.51.100.7"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
     RUVIA_CHECK(!info.viaTrustedProxy());
@@ -156,7 +156,7 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
         ruvia::test::testContextServices()
             .withPlainTransport("198.51.100.7")
             .withTrustedProxies(trusted));
-    const auto guardedInfo = ruvia::getConnInfo(guarded);
+    const auto guardedInfo = guarded.conn();
     RUVIA_CHECK_EQ(guardedInfo.client().address(), std::string_view("198.51.100.7"));
     RUVIA_CHECK(guardedInfo.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -178,7 +178,7 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     // remote() still reports the hop, unchanged.
@@ -204,7 +204,7 @@ RUVIA_TEST(conn_info_reads_rfc7239_forwarded_when_x_headers_are_absent) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
 
     // Bracketed IPv6 with a port, unwrapped. No X- header to consult.
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("2001:db8::1"));
@@ -230,7 +230,7 @@ RUVIA_TEST(conn_info_prefers_proxy_written_x_headers_over_client_forwarded) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -252,7 +252,7 @@ RUVIA_TEST(conn_info_forwarded_quoted_comma_does_not_invent_a_hop) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("_x,203.0.113.9"));
 }
 
@@ -273,7 +273,7 @@ RUVIA_TEST(conn_info_forwarded_quoted_semicolon_stays_one_parameter) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("_x;203.0.113.9"));
 }
 
@@ -296,7 +296,7 @@ RUVIA_TEST(conn_info_walks_same_name_forwarding_fields_as_one_chain) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -318,7 +318,7 @@ RUVIA_TEST(conn_info_walks_same_name_rfc7239_fields_as_one_chain) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -339,7 +339,7 @@ RUVIA_TEST(conn_info_forwarded_skips_client_prepended_hops) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -361,7 +361,7 @@ RUVIA_TEST(conn_info_forwarded_ignores_proto_on_prepended_hops) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
     RUVIA_CHECK(info.viaTrustedProxy());
@@ -383,7 +383,7 @@ RUVIA_TEST(conn_info_forwarded_proto_is_case_insensitive) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
     RUVIA_CHECK(info.viaTrustedProxy());
 }
@@ -406,7 +406,7 @@ RUVIA_TEST(conn_info_x_forwarded_proto_is_case_insensitive_and_uses_the_last_hop
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
 }
@@ -428,7 +428,7 @@ RUVIA_TEST(conn_info_ignores_client_prepended_forwarding_hops) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
 }
@@ -448,7 +448,7 @@ RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {
         ruvia::test::testContextServices()
             .withTlsTransport("10.0.0.5", "CN=proxy")
             .withTrustedProxies(trusted));
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);

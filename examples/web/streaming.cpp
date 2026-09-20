@@ -21,7 +21,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<> uploadRaw(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> uploadRaw(ruvia::Context& c) {
         std::size_t bytes = 0;
         auto& reader = c.req().bodyReader();
         while (auto chunk = co_await reader.read()) {
@@ -35,7 +35,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> uploadMultipart(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> uploadMultipart(ruvia::Context& c) {
         std::size_t parts = 0;
         std::size_t bytes = 0;
         auto reader = c.req().multipartReader();

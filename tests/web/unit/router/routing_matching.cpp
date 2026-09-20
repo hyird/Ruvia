@@ -1,4 +1,5 @@
 #include "ruvia/web/BodyLimit.h"
+#include "ruvia/web/Controller.h"
 #include "ruvia/web/Deadline.h"
 
 #include "routing_fixture.h"
@@ -6,6 +7,15 @@
 // Routing: registering routes and matching a request to one.
 
 using TestRouteRateLimit = ruvia::RateLimit<1, 1000>;
+
+RUVIA_TEST(route_lists_preserve_all_entries) {
+    const ruvia::detail::RuviaPathList paths("/0", "/1", "/2", "/3", "/4", "/5", "/6", "/7", "/8", "/9");
+    RUVIA_CHECK_EQ(paths.end() - paths.begin(), 10);
+    RUVIA_CHECK_EQ(paths.begin()[9], std::string_view("/9"));
+    const ruvia::detail::RuviaMethodList methods(HttpKnownMethod::kGet, HttpKnownMethod::kPost);
+    RUVIA_CHECK_EQ(methods.end() - methods.begin(), 2);
+    RUVIA_CHECK(methods.begin()[1] == HttpKnownMethod::kPost);
+}
 
 RUVIA_TEST(compiled_route_plan_is_shared_across_worker_bindings) {
     ruvia::detail::Router firstRouter;

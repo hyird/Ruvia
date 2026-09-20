@@ -90,7 +90,7 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
     const auto services =
         ruvia::test::testContextServices().withTlsTransport("203.0.113.7", "/CN=client");
     auto context = ContextAccess::make(memory, request, services);
-    const auto info = ruvia::getConnInfo(context);
+    const auto info = context.conn();
 
     RUVIA_CHECK_EQ(info.remote().address(), std::string_view("203.0.113.7"));
     RUVIA_CHECK(info.plain() == nullptr);

@@ -4,7 +4,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/ModelObject.h"
+#include "ruvia/web/detail/model/ModelInput.h"
 #include "ruvia/web/detail/model/parse/RequestFieldVisitors.h"
 
 namespace ruvia::detail {

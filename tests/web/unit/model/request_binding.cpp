@@ -34,7 +34,7 @@ public:
         ruvia::JsonBody<RequestBindingBody>);
     RUVIA_ROUTES_END
 
-    ruvia::Task<> update(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> update(ruvia::Context& c) {
         const auto& params = c.req().validated<RequestBindingParams>();
         const auto& body = c.req().validated<RequestBindingBody>();
         auto response = co_await makeResponse(params.get<"id">().view(), body.get<"name">().view(), c.arena());

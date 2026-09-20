@@ -23,7 +23,6 @@
 namespace ruvia {
 
 class RequestNameValueList;
-class JsonValue;
 
 namespace detail {
 
@@ -728,8 +727,5 @@ struct ModelValueFactory final {
 };
 
 }  // namespace detail
-
-class JsonObject;
-class FormObject;
 
 }  // namespace ruvia

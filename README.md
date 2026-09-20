@@ -60,7 +60,7 @@ public:
         RUVIA_GET("/hello", hello);
     RUVIA_ROUTES_END
 
-    ruvia::Task<> hello(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c) {
         co_return c.text("hello");
     }
 };
@@ -160,7 +160,7 @@ app-wide nor a route-specific rule allocate no table. Pass `nullptr` to
 Connection metadata is deliberately separate from the HTTP request model:
 
 ```cpp
-const auto info = ruvia::getConnInfo(c);
+const auto info = c.conn();
 const auto peerAddress = info.remote().address();
 if (const auto* tls = info.tls()) {
     const auto clientSubject = tls->clientCertificateSubject();
@@ -217,7 +217,7 @@ before returning the lazy operation, so its inputs only need to survive the
 synchronous `send()` call:
 
 ```cpp
-ruvia::Task<> loadData(ruvia::Context& c) {
+ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
     auto client = c.httpClient();
     auto operation = client
         .withOptions({.timeout = std::chrono::seconds(2)})
@@ -269,8 +269,14 @@ inspection, and a single `stats()` snapshot. Requests are awaited as scoped
 coroutine operations; there are no blocking overloads or callback ownership model.
 
 Every response has one linear body reader. `read()` consumes one borrowed
-chunk, `readAll()` collects that same stream with a byte bound, and `pipeTo()`
-forwards it to a controller response stream with backpressure. There is no
+`std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
+an owning `std::pmr::vector<std::byte>` with a byte bound, and `pipeTo()`
+forwards it to a controller response stream with backpressure. Both the client
+body reader and request `BodyReader` offer `text()` for an explicit character
+view of the next chunk, without charset conversion or UTF-8 validation (encoded
+characters may straddle chunks). Reads share one operation lane; borrowed chunks
+expire on the next body operation. `ResponseStreamWriter::write()` accepts byte
+spans and copies their storage before returning the asynchronous operation. There is no
 separate buffered request or streaming request entry point:
 
 ```cpp
@@ -610,7 +616,7 @@ ruvia::app().blockingPool({
     .queueCapacity = 512, // 0 selects threadCount * 64
 });
 
-ruvia::Task<> hash(ruvia::Context& c) {
+ruvia::Task<ruvia::HttpResponse> hash(ruvia::Context& c) {
     const auto body = co_await c.req().text();   // borrows the request buffer
     auto digest = co_await c.runBlocking(
         [input = std::string(body)] {            // ...so copy before offloading
@@ -1780,6 +1786,13 @@ worker and be destroyed within the Context's scope. Posted jobs use
 `WebWorkerContext::pool()` for that same worker pool; they have no request
 arena.
 
+Default error responses use RFC 9457 `application/problem+json`: `type` is
+`about:blank`, `title` describes the HTTP status, `status` matches the response,
+and `detail` describes the failure. The `code` extension is a stable application
+error code. Validation failures also include an `errors` array of
+`{ "field": "...", "code": "...", "message": "..." }` entries. No `instance`
+is generated or request URL echoed. A custom `onError` can replace this document.
+
 Failures inside a request become responses: `onError` receives the exception and
 decides the status, and an error handler that itself throws still yields a
 deterministic 500. A failure past the response's point of no return cannot become
@@ -1872,13 +1885,17 @@ used in JSON and validation paths.
 `ValidationError` owns its message, code, and all issue details independently of
 the validator or request arena, including when the exception is copied or moved.
 
+JSON and URL-encoded form parsing is schema-based. Raw `bytes()` / `text()`
+remain available for custom formats. Buffered `multipart()` and streaming
+`multipartReader()` expose flat protocol parts, preserving repeated names and
+file metadata without interpreting dotted names or array suffixes.
+
 Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
 `QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`. A
-handler returns `Task<>` and explicitly serializes a response model with `c.json(model)`.
-Including `ruvia/web/Task.h` (also included by `Context.h`) makes `Task<>`
-equivalent to `Task<HttpResponse>`. Core-only code specifies its result type
-explicitly; operations without a result use `Task<void>`. Ordinary route
+handler returns `Task<HttpResponse>` and explicitly serializes a response model with `c.json(model)`.
+Core and Web use the same `Task<T>` with an explicit result type;
+operations without a result use `Task<void>`. Ordinary route
 handlers return HTTP responses, while services can return typed model values:
 
 ```cpp
@@ -1890,7 +1907,7 @@ ruvia::Task<UserResponse> getUser(std::uint64_t id,
     co_return response;
 }
 
-ruvia::Task<> handler(ruvia::Context& c) {
+ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c) {
     auto response = co_await getUser(1, c.arena());
     co_return c.json(response);
 }

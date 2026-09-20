@@ -119,6 +119,44 @@ RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
     RUVIA_CHECK(rejected);
 }
 
+RUVIA_TEST(body_reader_preserves_octets_and_shares_text_read_lane) {
+    struct Source {
+        std::string_view bytes{"\0\xff\xc3\xa9", 4};
+        bool consumed{false};
+        ruvia::Task<std::optional<std::string_view>> read() {
+            if (std::exchange(consumed, true)) {
+                co_return std::nullopt;
+            }
+            co_return bytes;
+        }
+    };
+    ruvia::detail::BodyReaderBinding<Source> binding;
+    auto& reader = binding.facade();
+    {
+        auto discarded = reader.read();
+    }
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto pending = reader.read();
+        bool rejected = false;
+        try {
+            auto concurrent = reader.text();
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        const auto bytes = co_await std::move(pending);
+        RUVIA_CHECK(bytes.has_value());
+        RUVIA_CHECK_EQ(bytes->size(), std::size_t{4});
+        RUVIA_CHECK((*bytes)[0] == std::byte{0});
+        RUVIA_CHECK((*bytes)[1] == std::byte{0xff});
+        RUVIA_CHECK(!(co_await reader.read()));
+    };
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
+    ctx.run();
+    future.get();
+}
+
 RUVIA_TEST(context_not_found_cold_operation_rejects_after_context_teardown) {
     auto operation = makeExpiredNotFoundResponse();
     bool rejected = false;

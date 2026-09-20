@@ -130,9 +130,10 @@ RUVIA_TEST(model_resource_public_insertion_owns_borrowed_parser_values) {
     const std::string text(160, 'c');
     {
         std::string body = "{\"name\":\"" + text + "\",\"tags\":[\"" + text + "\"]}";
-        auto object = ruvia::JsonObject::parse(body, {.resource = &resource});
-        auto name = object->get<ruvia::String>("name");
-        auto tags = object->get<ruvia::Array<ruvia::String>>("tags");
+        std::string_view nameInput(body.data() + body.find(text) - 1, text.size() + 2);
+        std::string_view tagsInput(body.data() + body.rfind('['), body.size() - body.rfind('[') - 1);
+        auto name = ruvia::detail::parseJsonValue<ruvia::String>(nameInput, &resource);
+        auto tags = ruvia::detail::parseJsonValue<ruvia::Array<ruvia::String>>(tagsInput, &resource);
         RUVIA_CHECK(name.has_value());
         RUVIA_CHECK(tags.has_value());
         RUVIA_CHECK_EQ(name->data(), body.data() + body.find(text));

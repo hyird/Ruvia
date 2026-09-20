@@ -38,7 +38,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<> note(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> note(ruvia::Context& c) {
         // urlFor builds links from registered patterns; the pattern is the
         // route's identity.
         std::pmr::string body(c.arena());
@@ -49,14 +49,14 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> create(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
         const auto& note = c.req().validated<NoteRequest>();
         ++c.workerState<NoteCounter>().stored;
         c.status(ruvia::http_status::kCreated);
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
     }
 
-    ruvia::Task<> stats(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> stats(ruvia::Context& c) {
         std::pmr::string body(c.arena());
         body.append("stored=");
         body.append(std::to_string(c.workerState<NoteCounter>().stored));
@@ -64,7 +64,7 @@ private:
     }
 };
 
-ruvia::Task<> notesMissing(ruvia::Context& c) {
+ruvia::Task<ruvia::HttpResponse> notesMissing(ruvia::Context& c) {
     c.status(ruvia::http_status::kNotFound);
     co_return c.text("no such note");
 }

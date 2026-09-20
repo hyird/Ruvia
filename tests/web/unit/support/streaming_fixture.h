@@ -187,13 +187,13 @@ struct ImmediateBodySource final {
     }
 };
 
-inline ruvia::ScopedOperation<std::optional<std::string_view>> makeExpiredBodyRead() {
+inline ruvia::ScopedOperation<std::optional<std::span<const std::byte>>> makeExpiredBodyRead() {
     ruvia::detail::BodyReaderBinding<ImmediateBodySource> binding;
     return binding.facade().read();
 }
 
 inline ruvia::Task<void> awaitExpiredBodyRead(
-    ruvia::ScopedOperation<std::optional<std::string_view>>& operation, bool& rejected) {
+    ruvia::ScopedOperation<std::optional<std::span<const std::byte>>>& operation, bool& rejected) {
     try {
         (void)co_await std::move(operation);
     } catch (const std::logic_error&) {

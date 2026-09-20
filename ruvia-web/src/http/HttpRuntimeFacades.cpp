@@ -188,18 +188,38 @@ SseWriter Context::streamSse() {
 
 namespace {
 
-Task<std::optional<std::string_view>> readBody(
+template <typename View>
+Task<std::optional<View>> readBody(
     detail::CallableRef<std::optional<std::string_view>> read) {
-    co_return co_await read();
+    const auto chunk = co_await read();
+    if (!chunk) {
+        co_return std::nullopt;
+    }
+    if constexpr (std::same_as<View, std::string_view>) {
+        co_return *chunk;
+    } else {
+        co_return std::as_bytes(std::span(chunk->data(), chunk->size()));
+    }
 }
 
 }  // namespace
 
-ScopedOperation<std::optional<std::string_view>> BodyReader::read() & {
+ScopedOperation<std::optional<std::span<const std::byte>>> BodyReader::read() & {
     if (operationScope_.hasPendingOperations()) {
         throw std::logic_error("request body read is already in progress");
     }
-    return detail::makeScopedOperation(operationScope_, readBody(read_));
+    return detail::makeScopedOperation(operationScope_, readBody<std::span<const std::byte>>(read_));
+}
+
+ScopedOperation<std::optional<std::string_view>> BodyReader::text() & {
+    if (operationScope_.hasPendingOperations()) {
+        throw std::logic_error("request body read is already in progress");
+    }
+    return detail::makeScopedOperation(operationScope_, readBody<std::string_view>(read_));
+}
+
+ScopedOperation<void> ResponseStreamWriter::write(std::span<const std::byte> chunk) & {
+    return write(chunk.empty() ? std::string_view{} : std::string_view(reinterpret_cast<const char*>(chunk.data()), chunk.size()));
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {

@@ -90,7 +90,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
                 .message = "secure token generation failed"}));
             co_return;
         }
-        const auto connection = getConnInfo(c);
+        const auto connection = c.conn();
         // Secure follows the client's scheme, including TLS a trusted proxy
         // terminated. tls() is this hop only; using it would omit Secure behind
         // a plaintext reverse proxy and leave the token readable on HTTP.

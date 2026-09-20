@@ -17,23 +17,16 @@
 #include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ModelJson.h"
-#include "ruvia/web/ModelObject.h"
 #include "ruvia/web/detail/auth/CookieSignature.h"
 #include "ruvia/web/detail/http/context/ContextRequestStorage.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
 #include "ruvia/web/detail/http/request/RequestFieldParsing.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
-#include "ruvia/web/detail/http/request/RequestFormAccess.h"
-#include "ruvia/web/detail/http/request/RequestFormBodyParse.h"
 #include "ruvia/web/detail/http/request/RequestQueryValues.h"
 #include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/model/parse/Parser.h"
 
 namespace ruvia {
-
-ConnInfo getConnInfo(const Context& context) noexcept {
-    return context.connInfo_;
-}
 
 namespace detail {
 
@@ -60,12 +53,6 @@ namespace detail {
     throw HttpError({.status = http_status::kBadRequest, .message = "invalid form body"});
 }
 
-[[noreturn]] void throwTooManyFormFields() {
-    throw HttpError({.status = http_status::kContentTooLarge,
-        .code = "too_many_form_fields",
-        .message = "request form has too many fields"});
-}
-
 [[noreturn]] void throwInvalidQuery() {
     throw HttpError({.status = http_status::kBadRequest, .message = "invalid query"});
 }
@@ -89,16 +76,12 @@ const RequestNameValueList& Context::requestHeaders() const {
     if (!cache) {
         const auto rawHeaders = request_.headers();
         std::pmr::vector<std::pmr::string> names(arena());
-        auto headers = detail::RequestNameValueListAccess::make(arena());
-        names.reserve(rawHeaders.size());
+        auto headers = detail::RequestNameValueListAccess::makeHeaders(arena());
         detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
-            auto& name = names.emplace_back();
-            name.reserve(rawHeader.name().size());
-            detail::appendLowerAscii(name, rawHeader.name());
             detail::RequestNameValueListAccess::pushBack(
                 headers, detail::RequestNameValueViewAccess::make(
-                             std::string_view(name), rawHeader.value()));
+                             rawHeader.name(), rawHeader.value()));
         }
         cache.emplace(std::move(names), std::move(headers));
     }
@@ -486,15 +469,15 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundary = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return detail::parseCompleteMultipartBody(requestBody, boundary, arena());
-}
-
-Task<ContextRequest::RequestFormData> Context::parseRequestBody(
-    ContextRequest::ParseBodyOptions options) const {
-    const auto requestBody = co_await this->requestBody();
-    co_return detail::parseFormBodyFromView(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), requestBody,
-        arena(), options);
+    auto parsed = parseMultipartBody(requestBody, {.boundary = boundary, .resource = arena()});
+    if (const auto* failure = parsed.failure()) {
+        throw failure->protocolError();
+    }
+    auto* body = parsed.body();
+    if (body == nullptr) {
+        throw std::logic_error("unexpected multipart body parse result");
+    }
+    co_return std::move(*body).takeParts();
 }
 
 Task<void> Context::requestDiscardBody() const {

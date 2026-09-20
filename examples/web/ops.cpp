@@ -21,11 +21,11 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<> health(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> health(ruvia::Context& c) {
         co_return ruvia::makeHealthResponse(c);
     }
 
-    ruvia::Task<> ready(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> ready(ruvia::Context& c) {
         const bool databaseReady = c.req().query("db").value_or("up") != "down";
         co_return ruvia::makeReadinessResponse(
             c, {
