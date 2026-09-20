@@ -54,7 +54,7 @@ private:
         response.set<"name">(user.get<"name">().view());
         response.set<"age">(ruvia::UInt32{user.get<"age">()});
     }
-    ruvia::Task<> create(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
         const auto& request = c.req().validated<CreateCachedUser>();
         CachedUser user(c.pool());
         user.set<"id">(request.get<"id">().view());
@@ -70,7 +70,7 @@ private:
         c.status(ruvia::http_status::kCreated);
         co_return c.json(response);
     }
-    ruvia::Task<> find(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> find(ruvia::Context& c) {
         auto user = co_await c.redis().getRepository<CachedUser>(userRedisConfig).findOne({.where = CachedUser::column<"id">() == c.req().param("id").value_or("")});
         if (!user) {
             co_return c.error({.status = ruvia::http_status::kNotFound, .message = "user not found"});
@@ -79,7 +79,7 @@ private:
         fill(response, *user);
         co_return c.json(response);
     }
-    ruvia::Task<> adults(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> adults(ruvia::Context& c) {
         const ruvia::DbFindOptions findOptions{
             .where = CachedUser::column<"age">() >= 18,
             .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},

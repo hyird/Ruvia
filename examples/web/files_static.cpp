@@ -31,12 +31,12 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<> download(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> download(ruvia::Context& c) {
         co_return c.file({.path = examplesRoot() / "public" / "hello.txt",
             .contentType = "text/plain; charset=utf-8"});
     }
 
-    ruvia::Task<> asset(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> asset(ruvia::Context& c) {
         co_return c.staticFile(
             *gAssets, {.relativePath = c.req().param("*").value_or("index.html")});
     }
