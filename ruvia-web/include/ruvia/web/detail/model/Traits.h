@@ -10,12 +10,18 @@
 
 // Internal layer. Users should include ruvia/web/Model.h instead of this file.
 
+namespace ruvia {
+class JsonObject;
+class JsonValue;
+}
+
 namespace ruvia::detail {
 
 // Shared model traits used by parser, validation rules, and generated macros.
 
 enum class ModelFieldState : std::uint8_t { kMissing,
     kParsed,
+    kNull,
     kInvalidType,
     kDuplicate };
 
@@ -24,6 +30,12 @@ inline constexpr bool alwaysFalse = false;
 
 template <typename T>
 inline constexpr bool isRuviaString = std::is_same_v<std::remove_cvref_t<T>, String>;
+
+template <typename T>
+inline constexpr bool isRuviaJsonValue = std::is_same_v<std::remove_cvref_t<T>, JsonValue>;
+
+template <typename T>
+inline constexpr bool isRuviaJsonObject = std::is_same_v<std::remove_cvref_t<T>, JsonObject>;
 
 template <typename T>
 struct RuviaArrayTraits : std::false_type {};
@@ -101,6 +113,7 @@ inline constexpr bool isRequestModel =
 
 template <typename T>
 struct RuviaRequestModelFieldTraits : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> ||
+                                                         isRuviaJsonValue<T> || isRuviaJsonObject<T> ||
                                                          isRequestModel<std::remove_cvref_t<T>>> {
 };
 
@@ -121,7 +134,8 @@ inline constexpr bool isResponseModel = ResponseModel<std::remove_cvref_t<T>>::v
 
 template <typename T>
 struct RuviaResponseModelFieldTraits
-    : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || isResponseModel<T>> {};
+    : std::bool_constant<isRuviaString<T> || isRuviaScalar<T> || isRuviaJsonValue<T> ||
+                         isRuviaJsonObject<T> || isResponseModel<T>> {};
 
 template <typename ValueT>
 struct RuviaResponseModelFieldTraits<Array<ValueT>>
@@ -143,7 +157,8 @@ template <typename T>
         return T(ModelOptions{.resource = resource});
     } else if constexpr (isRuviaBoxedArray<T>) {
         return ModelValueFactory::makeBoxedArray<T>(resource);
-    } else if constexpr (isRequestModel<T> || isResponseModel<T>) {
+    } else if constexpr (isRequestModel<T> || isResponseModel<T> || isRuviaJsonValue<T> ||
+                         isRuviaJsonObject<T>) {
         return T(ModelOptions{.resource = resource});
     } else {
         (void)resource;
@@ -154,7 +169,8 @@ template <typename T>
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
     if constexpr (isRuviaString<T> || isRuviaArray<T> || isRuviaBoxedArray<T> ||
-                  isRequestModel<T> || isResponseModel<T>) {
+                  isRequestModel<T> || isResponseModel<T> || isRuviaJsonValue<T> ||
+                  isRuviaJsonObject<T>) {
         return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;
