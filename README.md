@@ -2020,6 +2020,15 @@ drive transport I/O themselves. Content-Encoding parsing distinguishes identity,
 one supported coding, and an unsupported coding stack; Web request decoding
 reports the latter as HTTP 415.
 
+`HttpRequest` is move-only and owns a compact PMR header descriptor block;
+its strings still borrow the protocol input. HTTP/1 callers may select storage
+with `parser.parse(input, {.resource = &resource})`; that resource must outlive
+the result. The default is the default PMR resource. HTTP/2 events use the
+connection's configured resource. Web requests use their request/stream arena.
+The field-count limit remains 64; moving requests does not allocate or copy
+the header block. `headerFields()` preserves semantic name spelling, and both
+header-list lookup and `HeaderModel<T>` matching are ASCII case-insensitive.
+
 `HttpRequest` preserves `scheme()`, `authority()`, and `targetForm()` alongside
 the original target. Its header view is protocol-semantic rather than a raw
 wire block: HTTP/1 target authority can replace Host, while HTTP/2 pseudo-fields

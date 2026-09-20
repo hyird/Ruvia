@@ -51,7 +51,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
 }
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readKnownLength(
+Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readKnownLength(
     std::size_t contentLength) {
     compactPending();
     if (finished_) {
@@ -75,7 +75,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readKnownLength(
         if (deliveredBytes_ == contentLength) {
             markFinished();
         }
-        co_return chunk;
+        co_return ::ruvia::asBytes(chunk);
     }
 
     // The initial segment is now fully consumed as body: a partial-body prefix
@@ -102,7 +102,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readKnownLength(
         markFinished();
     }
 
-    co_return chunk;
+    co_return ::ruvia::asBytes(chunk);
 }
 
 }  // namespace ruvia::detail

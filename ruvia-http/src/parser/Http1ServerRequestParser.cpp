@@ -22,10 +22,9 @@ using ruvia::detail::RequestTargetView;
 }  // namespace
 
 void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
-    std::size_t headerSearchOffset, Http1ServerRequestParseState& state) noexcept {
-    // Reset only the small progress value and reachable request state; the
-    // result object is reused across read iterations and requests, so a full
-    // value-initialization here would re-zero the 2KB header table.
+    std::size_t headerSearchOffset, Http1ServerRequestParseState& state,
+    std::pmr::memory_resource* resource) {
+    // Incomplete input allocates no descriptor storage.
     state.progress_ = Http1ServerNeedRequestHead{};
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
     state.connectionPlan = Http1ServerConnectionPlan::http11Close();
@@ -172,6 +171,8 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
         return fail(HttpParseError::kInvalidHeader);
     }
 
+    HttpRequestAccess::setResource(state.request, resource);
+    HttpRequestAccess::reserveHeaders(state.request, block.headerCount);
     for (std::size_t i = 0; i < block.headerCount; ++i) {
         const auto& header = block.headers[i];
         auto value = header.value.bind(buffer);
@@ -205,8 +206,9 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
 }
 
 void Http1ServerRequestParser::parseHead(std::string_view buffer,
-    Http1ServerRequestParseState& state, std::size_t headerSearchOffset) const noexcept {
-    parseRequestHead(buffer, headerSearchOffset, state);
+    Http1ServerRequestParseState& state, std::size_t headerSearchOffset,
+    std::pmr::memory_resource* resource) const {
+    parseRequestHead(buffer, headerSearchOffset, state, resource);
 }
 
 void Http1ServerRequestParser::parseMessageBody(
@@ -295,9 +297,9 @@ void Http1ServerRequestParser::parseMessageBody(
 }
 
 Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
-    std::string_view buffer) const noexcept {
+    std::string_view buffer, std::pmr::memory_resource* resource) const {
     Http1ServerRequestParseState state;
-    parseRequestHead(buffer, 0, state);
+    parseRequestHead(buffer, 0, state, resource);
     parseMessageBody(buffer, state);
     return state;
 }
@@ -306,9 +308,10 @@ Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
 
 namespace ruvia {
 
-Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const noexcept {
+Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer,
+    Http1RequestParseOptions options) const {
     detail::Http1ServerRequestParser parser;
-    auto parsed = parser.parseMessage(buffer);
+    auto parsed = parser.parseMessage(buffer, options.resource);
     if (parsed.needRequestHead() != nullptr) {
         return detail::Http1RequestParseResultAccess::needMore();
     }
@@ -329,7 +332,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
     const auto wireBody =
         buffer.substr(message->headerBytes(), message->messageBytes() - message->headerBytes());
     return detail::Http1RequestParseResultAccess::parsed(
-        parsed.request, parsed.bodyPlan, wireBody, message->messageBytes());
+        std::move(parsed.request), parsed.bodyPlan, wireBody, message->messageBytes());
 }
 
 }  // namespace ruvia

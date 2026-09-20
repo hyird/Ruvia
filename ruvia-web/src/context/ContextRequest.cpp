@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -7,6 +8,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -74,18 +76,9 @@ namespace detail {
 const RequestNameValueList& Context::requestHeaders() const {
     auto& cache = requestStorage().headers;
     if (!cache) {
-        const auto rawHeaders = request_.headers();
-        std::pmr::vector<std::pmr::string> names(arena());
-        auto headers = detail::RequestNameValueListAccess::makeHeaders(arena());
-        detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
-        for (const auto& rawHeader : rawHeaders) {
-            detail::RequestNameValueListAccess::pushBack(
-                headers, detail::RequestNameValueViewAccess::make(
-                             rawHeader.name(), rawHeader.value()));
-        }
-        cache.emplace(std::move(names), std::move(headers));
+        cache.emplace(detail::RequestNameValueListAccess::borrowHeaders(request_.headers()));
     }
-    return cache->fields;
+    return *cache;
 }
 
 std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
@@ -100,28 +93,23 @@ void Context::ensureRequestQuery() const {
     if (requestStorage_->queryInvalid) {
         detail::throwInvalidQuery();
     }
-    if (!detail::validateUrlEncoding(request_.queryString())) {
-        requestStorage_->queryInvalid = true;
-        detail::throwInvalidQuery();
-    }
-
-    const auto pairCount = detail::delimitedFieldCount(request_.queryString(), '&');
+    // Percent-encoding is validated while decoding each component. Unencoded
+    // names and values borrow the request query string instead of copying.
     std::pmr::vector<std::pmr::string> storage(arena());
-    storage.reserve(detail::boundedFieldReserve(pairCount * 2));
+    auto query = detail::RequestNameValueListAccess::make(arena());
     bool valid = true;
     const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
-        [this, &storage, &valid](std::string_view key, std::string_view value) {
-            std::pmr::string decodedName(arena());
-            std::pmr::string decodedValue(arena());
-            if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
-                !detail::assignUrlDecodedOrCopy(
-                    decodedValue, value, detail::UrlDecodeMode::kForm)) {
+        [&storage, &query, &valid](std::string_view key, std::string_view value) {
+            const auto name =
+                detail::borrowOrDecode(storage, key, detail::UrlDecodeMode::kForm);
+            const auto decodedValue =
+                detail::borrowOrDecode(storage, value, detail::UrlDecodeMode::kForm);
+            if (!name || !decodedValue) {
                 valid = false;
                 return false;
             }
-
-            storage.push_back(std::move(decodedName));
-            storage.push_back(std::move(decodedValue));
+            detail::RequestNameValueListAccess::pushBack(
+                query, detail::RequestNameValueViewAccess::make(*name, *decodedValue));
             return true;
         });
     if (!completed || !valid) {
@@ -135,44 +123,33 @@ void Context::ensureRequestQuery() const {
         std::size_t end;
     };
 
-    const auto order = detail::sortedPairOrder(storage, arena());
+    const auto order = detail::sortedFieldOrder(query, arena());
     std::pmr::vector<QueryBuild> builds(arena());
     builds.reserve(order.size());
     for (std::size_t offset = 0; offset < order.size();) {
         const auto begin = offset;
         const auto firstIndex = order[offset];
-        const auto name = detail::pairNameAt(storage, firstIndex);
+        const auto name = query[firstIndex].name();
         do {
             ++offset;
-        } while (offset < order.size() && detail::pairNameAt(storage, order[offset]) == name);
+        } while (offset < order.size() && query[order[offset]].name() == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
     std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto query = detail::RequestNameValueListAccess::make(arena());
     detail::RequestQueryValues groups{arena()};
-    const auto decodedPairCount = storage.size() / 2;
-    detail::RequestNameValueListAccess::reserve(query, decodedPairCount);
     groups.reserve(builds.size());
-    for (std::size_t pairIndex = 0; pairIndex < decodedPairCount; ++pairIndex) {
-        detail::RequestNameValueListAccess::pushBack(
-            query, detail::RequestNameValueViewAccess::make(
-                       detail::storedStringView(storage[pairIndex * 2]),
-                       detail::storedStringView(storage[pairIndex * 2 + 1])));
-    }
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
-        // the parsed-form scalar compaction, RequestNameValueList::get(), and the
-        // raw cookie lookup all take the last occurrence. Keep the public field
-        // list duplicate-preserving so model binding can still reject ambiguity;
-        // this grouped index only backs requestQueries(name).
-        auto& group = groups.append(detail::pairNameAt(storage, build.firstIndex));
+        // and RequestNameValueList::get() all take the last occurrence. Keep the
+        // public field list duplicate-preserving so model binding can still reject
+        // ambiguity; this grouped index only backs requestQueries(name).
+        auto& group = groups.append(query[build.firstIndex].name());
         for (std::size_t i = build.begin; i < build.end; ++i) {
-            const auto pairIndex = order[i];
-            group.add(detail::storedStringView(storage[pairIndex * 2 + 1]));
+            group.add(query[order[i]].value());
         }
     }
 
@@ -195,42 +172,27 @@ const detail::RequestQueryValues& Context::requestQueries() const {
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
-    const auto headers = request_.headers();
-    for (std::size_t i = headers.size(); i > 0; --i) {
-        const auto& header = headers[i - 1];
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-            continue;
-        }
-        if (auto value = detail::httpFindSemicolonParameter(header.value(), name)) {
-            return value;
-        }
-    }
-    return std::nullopt;
+    return request_.cookie(name);
 }
 
 const RequestNameValueList& Context::requestCookies() const {
     auto& cache = requestStorage().cookies;
     if (!cache) {
-        std::size_t cookieCount = 0;
-        for (const auto& header : request_.headers()) {
-            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-                cookieCount += detail::delimitedFieldCount(header.value(), ';');
-            }
-        }
-
         auto cookies = detail::RequestNameValueListAccess::make(arena());
-        detail::RequestNameValueListAccess::reserve(
-            cookies, detail::boundedFieldReserve(cookieCount));
-        for (const auto& header : request_.headers()) {
-            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
-                continue;
+        if (detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kCookie)) {
+            detail::RequestNameValueListAccess::reserve(
+                cookies, detail::boundedFieldReserve(8));
+            for (const auto& header : request_.headers()) {
+                if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+                    continue;
+                }
+                detail::httpVisitSemicolonParameters(
+                    header.value(), [&cookies](std::string_view key, std::string_view value) {
+                        detail::RequestNameValueListAccess::pushBack(
+                            cookies, detail::RequestNameValueViewAccess::make(key, value));
+                        return true;
+                    });
             }
-            detail::httpVisitSemicolonParameters(
-                header.value(), [&cookies](std::string_view key, std::string_view value) {
-                    detail::RequestNameValueListAccess::pushBack(
-                        cookies, detail::RequestNameValueViewAccess::make(key, value));
-                    return true;
-                });
         }
         cache.emplace(std::move(cookies));
     }
@@ -245,23 +207,12 @@ void Context::ensureRouteParams() const {
     if (requestStorage_->routeParamsInvalid) {
         detail::throwInvalidParam();
     }
-    std::size_t encodedValueCount = 0;
-    for (std::size_t i = 0; i < paramCount_; ++i) {
-        if (!detail::validateUrlEncoding(paramValues_[i])) {
-            requestStorage_->routeParamsInvalid = true;
-            detail::throwInvalidParam();
-        }
-        if (detail::hasUrlEncoding(paramValues_[i], detail::UrlDecodeMode::kPercent)) {
-            ++encodedValueCount;
-        }
-    }
-
     // Route names and unencoded captures already borrow stable route/request
-    // storage. Own only decoded values, keeping the cache compact while making
-    // every returned view stable for the whole Context lifetime.
+    // storage. Own only decoded values. Invalid percent-escapes fail in decode
+    // rather than in a separate pre-scan of the same captures.
     std::pmr::vector<std::pmr::string> storage(arena());
     auto params = detail::RequestNameValueListAccess::make(arena());
-    storage.reserve(encodedValueCount);
+    storage.reserve(paramCount_);
     detail::RequestNameValueListAccess::reserve(params, paramCount_);
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
@@ -298,6 +249,9 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     // every Accept line into one best-match accumulator (equivalent to the joined
     // value, and correct for a q=0 exclusion spread across lines) without
     // allocating to concatenate.
+    if (!detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kAccept)) {
+        return true;
+    }
     int bestSpecificity = -1;
     int bestQuality = 0;
     bool sawAccept = false;
@@ -349,29 +303,32 @@ std::optional<std::string_view> Context::requestNegotiate(
     // either is the offered token or is "*".
     const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
 
+    std::array<std::string_view, kMaxHttpHeaderFields> fieldValues{};
+    std::size_t fieldValueCount = 0;
+    bool sawField = false;
+    for (const auto& header : request_.headers()) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
+            continue;
+        }
+        sawField = true;
+        if (header.value().empty() || fieldValueCount == fieldValues.size()) {
+            continue;
+        }
+        fieldValues[fieldValueCount++] = header.value();
+    }
+
     std::optional<std::string_view> best;
     int bestQuality = 0;
-    bool sawField = false;
-
     for (const auto offered : supported) {
-        // Each candidate gets its own accumulator folded over every field line,
-        // for the same multi-line reason requestAccepts documents.
         int specificity = -1;
         int quality = 0;
-        for (const auto& header : request_.headers()) {
-            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
-                continue;
-            }
-            sawField = true;
-            if (header.value().empty()) {
-                continue;
-            }
+        for (std::size_t i = 0; i < fieldValueCount; ++i) {
             if (mediaType) {
                 detail::httpAccumulateMediaTypeAcceptance(
-                    header.value(), offered, specificity, quality);
+                    fieldValues[i], offered, specificity, quality);
             } else {
                 detail::httpAccumulateTokenAcceptance(
-                    header.value(), offered, prefixMatching, specificity, quality);
+                    fieldValues[i], offered, prefixMatching, specificity, quality);
             }
         }
         if (specificity < 0 || quality <= 0) {
@@ -405,7 +362,7 @@ Task<std::string_view> Context::requestBody() const {
     } else if (requestBodySource().streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
-        raw = detail::requestBodyBytes(request_);
+        raw = asChars(detail::requestBodyBytes(request_));
     }
 
     // Transparently decode a request body whose Content-Encoding we understand,

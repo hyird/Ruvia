@@ -400,12 +400,10 @@ RUVIA_TEST(http2_web_body_queue_preserves_fifo_and_tracks_backlog) {
     queue.enqueue("third");
     RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{16});
     const auto active = queue.pop();
-    RUVIA_CHECK_EQ(active, std::string_view("first"));
-    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{11});
+    RUVIA_CHECK_EQ(active, std::string_view("firstsecondthird"));
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
     queue.enqueue("fourth");
-    RUVIA_CHECK_EQ(active, std::string_view("first"));
-    RUVIA_CHECK_EQ(queue.pop(), std::string_view("second"));
-    RUVIA_CHECK_EQ(queue.pop(), std::string_view("third"));
+    RUVIA_CHECK_EQ(active, std::string_view("firstsecondthird"));
     RUVIA_CHECK_EQ(queue.pop(), std::string_view("fourth"));
     RUVIA_CHECK(queue.empty());
     RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
@@ -415,13 +413,13 @@ RUVIA_TEST(http2_web_body_queue_reuses_storage_and_ignores_empty_chunks) {
     Http2SansIoBodyQueue queue(std::pmr::get_default_resource());
     queue.enqueue({});
     RUVIA_CHECK(queue.empty());
+    std::string expected;
     for (int i = 0; i < 50; ++i) {
-        queue.enqueue(std::to_string(i));
+        const auto piece = std::to_string(i);
+        expected += piece;
+        queue.enqueue(piece);
     }
-    for (int i = 0; i < 50; ++i) {
-        const auto expected = std::to_string(i);
-        RUVIA_CHECK_EQ(queue.pop(), std::string_view(expected));
-    }
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view(expected));
     RUVIA_CHECK(queue.empty());
     queue.enqueue("reused");
     RUVIA_CHECK_EQ(queue.pop(), std::string_view("reused"));

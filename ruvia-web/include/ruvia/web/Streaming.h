@@ -37,7 +37,7 @@ private:
 
 public:
     BodyReader(Token, void* target,
-        detail::CallableRef<std::optional<std::string_view>>::Invoke read) noexcept
+        detail::CallableRef<std::optional<std::span<const std::byte>>>::Invoke read) noexcept
         : read_(target, read) {}
 
     BodyReader(const BodyReader&) = delete;
@@ -59,7 +59,7 @@ public:
     ScopedOperation<std::optional<std::string_view>> text() && = delete;
 
 private:
-    detail::CallableRef<std::optional<std::string_view>> read_;
+    detail::CallableRef<std::optional<std::span<const std::byte>>> read_;
     detail::ScopedOperationScope operationScope_;
 };
 

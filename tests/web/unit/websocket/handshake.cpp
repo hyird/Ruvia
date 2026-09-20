@@ -45,8 +45,8 @@ private:
 
 HttpRequest parseRequest(std::string_view rawRequest) {
     Http1ServerRequestParser parser;
-    const auto parsed = parser.parseMessage(rawRequest);
-    return parsed.request;
+    auto parsed = parser.parseMessage(rawRequest);
+    return std::move(parsed.request);
 }
 
 std::string_view validHandshake() {

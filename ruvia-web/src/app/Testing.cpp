@@ -330,6 +330,7 @@ TestResponse TestApp::request(const TestRequest& request) {
                     const auto targetRebindsHost =
                         targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
                         targetView.form == detail::HttpRequestTargetForm::kAuthority;
+                    detail::HttpRequestAccess::reserveHeaders(parsed, block.headerCount);
                     for (std::size_t i = 0; i < block.headerCount; ++i) {
                         const auto& header = block.headers[i];
                         auto value = header.value.bind(requestHead);

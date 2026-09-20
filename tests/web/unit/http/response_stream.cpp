@@ -1,3 +1,4 @@
+#include "memory_resource_fixture.h"
 #include "streaming_fixture.h"
 
 // Writing a streamed response: exclusive output, writeln, the terminal trailer section and the
@@ -135,6 +136,49 @@ RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
     io.run();
     future.get();
     RUVIA_CHECK_EQ(capture.writes.size(), std::size_t{1});
+}
+
+RUVIA_TEST(response_stream_byte_writes_own_and_reclaim_each_payload) {
+    ruvia::test::CountingMemoryResource resource;
+    SuspendedStreamSink sink;
+    sink.suspendNextWrite = false;
+    auto writer = ruvia::detail::StreamingAccess::makeResponseStreamWriter(resource,
+        &sink, &writeSuspendedStream, &endSuspendedStream, &sleepStream,
+        &bindContext, &releaseContext, &committed, &aborted);
+    const auto baseline = resource.liveAllocations();
+    std::vector<std::byte> payload(1024, std::byte{0xff});
+    payload.front() = std::byte{0};
+    {
+        auto discarded = writer.write(std::span<const std::byte>(payload));
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    RUVIA_CHECK(sink.writes.empty());
+    auto operation = [&]() -> ruvia::Task<void> {
+        for (int i = 0; i < 64; ++i) {
+            payload.back() = std::byte{0x80};
+            auto output = writer.write(std::span<const std::byte>(payload));
+            payload.back() = std::byte{0x7f};
+            co_await std::move(output);
+            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+            RUVIA_CHECK_EQ(sink.writes.back().size(), payload.size());
+            RUVIA_CHECK_EQ(sink.writes.back().front(), '\0');
+            RUVIA_CHECK_EQ(static_cast<unsigned char>(sink.writes.back().back()), 0x80);
+        }
+        sink.failNextWrite = true;
+        bool failed = false;
+        try {
+            co_await writer.write(std::span<const std::byte>(payload));
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+    };
+    asio::io_context io(1);
+    auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
+    io.run();
+    result.get();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
 }
 
 RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {

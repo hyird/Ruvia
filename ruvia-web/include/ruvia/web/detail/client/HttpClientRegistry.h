@@ -64,7 +64,7 @@ public:
 private:
     friend class WorkerCancellationMailbox<HttpClientPool>;
     friend class ::ruvia::HttpClientResponse;
-    friend class ::ruvia::HttpClientResponseBody;
+    friend class HttpClientResponseState;
 
     enum class WireProtocol : std::uint8_t { kUnknown,
         kHttp1,

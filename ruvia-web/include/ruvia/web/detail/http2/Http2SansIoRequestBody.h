@@ -26,34 +26,29 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t kHttp2WebRetainedBodyChunkCapacity = 16;
-
 // Web-owned storage for body/tunnel bytes that have already crossed the
 // Http2Connection event boundary. The HTTP/2 core owns framing and flow-control
 // debt; this queue owns only runtime buffering for a suspended route handler.
+// Pending DATA is concatenated so each frame is copied once, not into a new
+// string per frame. pop() swaps the pending buffer aside so enqueue cannot
+// invalidate the borrowed view.
 class Http2SansIoBodyQueue final {
 public:
     explicit Http2SansIoBodyQueue(std::pmr::memory_resource* resource = nullptr)
         : queuedChunk_(pmrResourceOrDefault(resource)),
-          activeChunk_(pmrResourceOrDefault(resource)),
-          overflowChunks_(pmrResourceOrDefault(resource)) {}
+          activeChunk_(pmrResourceOrDefault(resource)) {}
 
     void enqueue(std::string_view data) {
         if (data.empty()) {
             return;
         }
-        if (queuedChunk_.empty() && !hasOverflowChunk()) {
-            queuedChunk_.assign(data.data(), data.size());
-            queuedBytes_ += data.size();
-            return;
-        }
-        std::pmr::string chunk(data.data(), data.size(), overflowChunks_.get_allocator());
-        overflowChunks_.push_back(std::move(chunk));
-        queuedBytes_ += data.size();
+        const auto before = queuedChunk_.size();
+        queuedChunk_.append(data.data(), data.size());
+        queuedBytes_ += queuedChunk_.size() - before;
     }
 
     [[nodiscard]] bool empty() const noexcept {
-        return queuedChunk_.empty() && !hasOverflowChunk();
+        return queuedChunk_.empty();
     }
 
     [[nodiscard]] std::size_t queuedBytes() const noexcept {
@@ -63,52 +58,19 @@ public:
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() & {
         clearPmrStringRetainingSmall(activeChunk_);
-        if (!queuedChunk_.empty()) {
-            activeChunk_.swap(queuedChunk_);
-            queuedBytes_ -= activeChunk_.size();
-            clearPmrStringRetainingSmall(queuedChunk_);
-            return std::string_view(activeChunk_);
-        }
-        if (!hasOverflowChunk()) {
+        if (queuedChunk_.empty()) {
             return {};
         }
-        activeChunk_ = std::move(overflowChunks_[overflowOffset_++]);
-        queuedBytes_ -= activeChunk_.size();
-        compactOverflow();
+        activeChunk_.swap(queuedChunk_);
+        queuedBytes_ = 0;
+        clearPmrStringRetainingSmall(queuedChunk_);
         return std::string_view(activeChunk_);
     }
     std::string_view pop() && = delete;
 
 private:
-    [[nodiscard]] bool hasOverflowChunk() const noexcept {
-        return overflowOffset_ < overflowChunks_.size();
-    }
-
-    void compactOverflow() {
-        if (overflowOffset_ == overflowChunks_.size()) {
-            overflowChunks_.clear();
-            overflowOffset_ = 0;
-        } else if (overflowOffset_ >= kHttp2WebRetainedBodyChunkCapacity &&
-                   overflowOffset_ * 2 >= overflowChunks_.size()) {
-            const auto remaining = overflowChunks_.size() - overflowOffset_;
-            for (std::size_t i = 0; i < remaining; ++i) {
-                overflowChunks_[i] = std::move(overflowChunks_[overflowOffset_ + i]);
-            }
-            overflowChunks_.resize(remaining);
-            overflowOffset_ = 0;
-        }
-        if (!overflowChunks_.empty() ||
-            overflowChunks_.capacity() <= kHttp2WebRetainedBodyChunkCapacity) {
-            return;
-        }
-        std::pmr::vector<std::pmr::string> empty(overflowChunks_.get_allocator());
-        overflowChunks_.swap(empty);
-    }
-
     std::pmr::string queuedChunk_;
     std::pmr::string activeChunk_;
-    std::pmr::vector<std::pmr::string> overflowChunks_;
-    std::size_t overflowOffset_{0};
     std::size_t queuedBytes_{0};
 };
 

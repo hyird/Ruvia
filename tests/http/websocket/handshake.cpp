@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/HttpLimits.h"
@@ -24,8 +25,8 @@ using ruvia::detail::webSocketProtocolOffered;
 
 HttpRequest parseRequest(std::string_view rawRequest) {
     Http1ServerRequestParser parser;
-    const auto parsed = parser.parseMessage(rawRequest);
-    return parsed.request;
+    auto parsed = parser.parseMessage(rawRequest);
+    return std::move(parsed.request);
 }
 
 [[nodiscard]] auto validateRequest(std::string_view rawRequest) {

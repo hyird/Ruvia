@@ -46,7 +46,7 @@ public:
     RequestBindings requestBindings;
 
     std::optional<std::pmr::string> decodedBody;
-    std::optional<RequestFieldCache> headers;
+    std::optional<RequestNameValueList> headers;
     std::optional<RequestQueryCache> query;
     std::optional<RequestNameValueList> cookies;
     std::optional<RequestFieldCache> routeParams;

@@ -123,11 +123,11 @@ RUVIA_TEST(body_reader_preserves_octets_and_shares_text_read_lane) {
     struct Source {
         std::string_view bytes{"\0\xff\xc3\xa9", 4};
         bool consumed{false};
-        ruvia::Task<std::optional<std::string_view>> read() {
+        ruvia::Task<std::optional<std::span<const std::byte>>> read() {
             if (std::exchange(consumed, true)) {
                 co_return std::nullopt;
             }
-            co_return bytes;
+            co_return ruvia::asBytes(bytes);
         }
     };
     ruvia::detail::BodyReaderBinding<Source> binding;

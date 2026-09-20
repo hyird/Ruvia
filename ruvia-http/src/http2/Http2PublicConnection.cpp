@@ -360,7 +360,7 @@ Http2RequestHeadEvent::Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoin
     std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations,
     HttpRequestContentIndication content) noexcept
     : streamId_(streamId),
-      request_(request),
+      request_(std::move(request)),
       expectations_(expectations),
       content_(content),
       endpoint_(endpoint) {
@@ -377,7 +377,7 @@ Http2RequestHeadEvent::~Http2RequestHeadEvent() {
 
 Http2RequestHeadEvent::Http2RequestHeadEvent(Http2RequestHeadEvent&& other) noexcept
     : streamId_(std::exchange(other.streamId_, 0)),
-      request_(other.request_),
+      request_(std::move(other.request_)),
       expectations_(other.expectations_),
       content_(other.content_),
       endpoint_(std::exchange(other.endpoint_, nullptr)) {}
@@ -449,7 +449,7 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
             impl_->connection.pinStream(value->streamId());
-            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(), request,
+            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(), std::move(request),
                 stream->requestExpectations(), stream->requestContentIndication());
             impl_->connection.consumeEvent();
             return std::optional<Http2Event>(std::move(result));

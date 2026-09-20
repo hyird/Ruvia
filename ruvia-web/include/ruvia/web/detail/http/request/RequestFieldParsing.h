@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/web/RequestFields.h"
 
 // Primitives shared by everything that turns a delimited request field list into
 // a parsed name/value vector -- the query string, the Cookie header and the form
@@ -54,44 +56,37 @@ inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     }
 }
 
-[[nodiscard]] inline bool assignUrlDecodedOrCopy(
-    std::pmr::string& output, std::string_view input, detail::UrlDecodeMode mode) {
-    if (detail::hasUrlEncoding(input, mode)) {
-        auto decoded = detail::decodeUrlComponent(
-            input, {.mode = mode, .resource = output.get_allocator().resource()});
-        if (decoded.has_value()) {
-            output = std::move(*decoded);
-            return true;
-        }
-        return false;
-    }
-    output.assign(input.data(), input.size());
-    return true;
-}
-
 [[nodiscard]] inline std::string_view storedStringView(const std::pmr::string& value) noexcept {
     return value;
 }
 
-[[nodiscard]] inline std::string_view pairNameAt(
-    const std::pmr::vector<std::pmr::string>& storage, std::size_t index) noexcept {
-    return storedStringView(storage[index * 2]);
+// Unencoded components borrow `input`. Encoded components are owned in
+// `storage` so later lookups do not re-decode. Failure is malformed percent
+// encoding, not an absent value.
+[[nodiscard]] inline std::optional<std::string_view> borrowOrDecode(
+    std::pmr::vector<std::pmr::string>& storage, std::string_view input,
+    detail::UrlDecodeMode mode) {
+    if (!detail::hasUrlEncoding(input, mode)) {
+        return input;
+    }
+    auto decoded = detail::decodeUrlComponent(
+        input, {.mode = mode, .resource = storage.get_allocator().resource()});
+    if (!decoded) {
+        return std::nullopt;
+    }
+    return storedStringView(storage.emplace_back(std::move(*decoded)));
 }
 
-[[nodiscard]] inline std::pmr::vector<std::size_t> sortedPairOrder(
-    const std::pmr::vector<std::pmr::string>& storage, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::pmr::vector<std::size_t> sortedFieldOrder(
+    const RequestNameValueList& fields, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::size_t> order(resource);
-    const auto count = storage.size() / 2;
-    order.reserve(count);
-    for (std::size_t i = 0; i < count; ++i) {
+    order.reserve(fields.size());
+    for (std::size_t i = 0; i < fields.size(); ++i) {
         order.push_back(i);
     }
-    // The original position is an explicit tie-breaker, so an in-place sort has
-    // the same deterministic order as stable_sort without its non-PMR scratch
-    // allocation on the request path.
-    std::ranges::sort(order, [&storage](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = pairNameAt(storage, left);
-        const auto rightName = pairNameAt(storage, right);
+    std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
+        const auto leftName = fields[left].name();
+        const auto rightName = fields[right].name();
         if (leftName == rightName) {
             return left < right;
         }

@@ -5,7 +5,7 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
+Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readChunked() {
     compactPending();
     if (finished_) {
         co_return std::nullopt;
@@ -20,7 +20,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
             pendingCompactUntil_ = readCursor_ + result.consumedBytes();
         }
         if (const auto* bodyChunk = result.bodyChunk()) {
-            co_return bodyChunk->bytes();
+            co_return ::ruvia::asBytes(bodyChunk->bytes());
         }
         if (result.complete() != nullptr) {
             compactPending();
@@ -39,7 +39,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
 }
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDecodedChunked() {
+Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTransferDecodedChunked() {
     if (transferDecoder_ == nullptr) {
         auto chunk = co_await readChunked();
         if (!chunk) {
@@ -60,7 +60,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
             transferDecoder_->decode(transferInput_, std::span<char>(transferOutput_));
         transferInput_.remove_prefix(std::min(transferInput_.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {
-            co_return output->bytes();
+            co_return ::ruvia::asBytes(output->bytes());
         }
         if (const auto* failure = result.protocolFailure()) {
             throwTransferCodingProtocolFailure(*failure);
@@ -78,7 +78,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
             markFinished();
             co_return std::nullopt;
         }
-        transferInput_ = *chunk;
+        transferInput_ = ::ruvia::asChars(*chunk);
     }
 }
 
