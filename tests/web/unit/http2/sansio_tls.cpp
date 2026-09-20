@@ -52,7 +52,7 @@ struct TlsConnectionObservation final {
 
 ruvia::Task<ruvia::HttpResponse> tlsPongHandler(void* state, ruvia::Context& ctx) {
     auto& observation = *static_cast<TlsConnectionObservation*>(state);
-    const auto info = ruvia::getConnInfo(ctx);
+    const auto info = ctx.conn();
     observation.sawPlain = info.plain() != nullptr;
     observation.sawTls = info.tls() != nullptr;
     observation.clientCertificateEmpty =

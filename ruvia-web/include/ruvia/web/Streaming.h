@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -48,8 +49,14 @@ public:
     /// empty optional signals end-of-body. Only one read operation may be outstanding;
     /// creating another before it completes or is discarded throws because concurrent
     /// consumers cannot safely share the borrowed buffer.
-    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> read() &;
-    ScopedOperation<std::optional<std::string_view>> read() && = delete;
+    [[nodiscard]] ScopedOperation<std::optional<std::span<const std::byte>>> read() &;
+    ScopedOperation<std::optional<std::span<const std::byte>>> read() && = delete;
+
+    /// Reads the next chunk as characters without charset conversion or UTF-8
+    /// validation. Chunk boundaries may split encoded characters. Shares read()'s
+    /// lifetime and linear operation contract.
+    [[nodiscard]] ScopedOperation<std::optional<std::string_view>> text() &;
+    ScopedOperation<std::optional<std::string_view>> text() && = delete;
 
 private:
     detail::CallableRef<std::optional<std::string_view>> read_;
@@ -65,6 +72,8 @@ public:
     /// Each returned output operation reserves the lane immediately; creating another
     /// before it completes or is discarded throws std::logic_error. The string_view overload
     /// copies the chunk into owner-worker PMR storage before returning.
+    ScopedOperation<void> write(std::span<const std::byte> chunk) &;
+    ScopedOperation<void> write(std::span<const std::byte>) && = delete;
     ScopedOperation<void> write(std::string_view chunk) &;
     ScopedOperation<void> write(std::string_view) && = delete;
 

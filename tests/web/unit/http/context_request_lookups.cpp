@@ -3,6 +3,9 @@
 #include "context_request_fixture.h"
 #include "model_field_fixture.h"
 
+RUVIA_REQUEST_MODEL(HeaderSpellingModel,
+    RUVIA_REQUIRED_FIELD_NAME("x-oTHER", trace, ruvia::String));
+
 // Reading a request through Context: cookies, query, route params and headers, and the caches each
 // lookup shares.
 
@@ -373,19 +376,21 @@ RUVIA_TEST(context_request_header_fields_enumerate_every_field_in_order) {
     // Called on the prvalue req() returns: the borrowed list belongs to the
     // Context, so this must not be an rvalue-deleted overload.
     const auto& headers = context.req().headerFields();
-    // Names are normalized to lower case here, unlike the case-insensitive
-    // header(name) lookup over the request as received.
+    // Enumeration preserves spelling; both lookup surfaces ignore ASCII case.
     RUVIA_CHECK_EQ(headers.count("x-trace"), std::size_t(2));
-    RUVIA_CHECK_EQ(headers.count("X-Trace"), std::size_t(0));
-    RUVIA_CHECK_EQ(headers[0].name(), std::string_view("x-trace"));
+    RUVIA_CHECK_EQ(headers.count("X-Trace"), std::size_t(2));
+    RUVIA_CHECK_EQ(headers[0].name(), std::string_view("X-Trace"));
     RUVIA_CHECK_EQ(headers[0].value(), std::string_view("a"));
     RUVIA_CHECK_EQ(headers[1].value(), std::string_view("b"));
-    RUVIA_CHECK_EQ(headers[2].name(), std::string_view("x-other"));
+    RUVIA_CHECK_EQ(headers[2].name(), std::string_view("X-Other"));
     // Scalar lookup keeps last-occurrence semantics across the same list.
     RUVIA_CHECK_EQ(*headers.get("x-trace"), std::string_view("b"));
     // ...while the named lookup still accepts the sent spelling, and both paths
     // agree on last-occurrence-wins for a repeated name.
     RUVIA_CHECK_EQ(*context.req().header("X-Trace"), std::string_view("b"));
+    const auto model = ruvia::detail::ModelParseAccess::parseFormFields<HeaderSpellingModel>(headers, context.arena());
+    RUVIA_CHECK(model.has_value());
+    RUVIA_CHECK_EQ(model->get<"trace">().view(), std::string_view("c"));
 }
 
 RUVIA_TEST(context_request_query_fields_enumerate_repeated_names) {

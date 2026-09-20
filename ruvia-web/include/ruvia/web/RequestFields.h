@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Attributes.h"
 
 namespace ruvia {
@@ -90,10 +91,11 @@ public:
     [[nodiscard]] const RequestNameValueView& operator[](std::size_t) const&& = delete;
 
     // Duplicate fields are preserved in materialization order; scalar lookup uses
-    // the last occurrence, matching Context request parsing semantics.
+    // the last occurrence. Header lists compare names case-insensitively;
+    // other field sources compare exactly. Enumeration preserves name spelling.
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
         for (auto it = items_.rbegin(); it != items_.rend(); ++it) {
-            if (it->name() == name) {
+            if (namesEqual(it->name(), name)) {
                 return it->value();
             }
         }
@@ -103,7 +105,7 @@ public:
     [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
         std::size_t result = 0;
         for (const auto& item : items_) {
-            if (item.name() == name) {
+            if (namesEqual(item.name(), name)) {
                 ++result;
             }
         }
@@ -118,8 +120,13 @@ public:
 private:
     friend struct detail::RequestNameValueListAccess;
 
-    explicit RequestNameValueList(std::pmr::memory_resource* resource)
-        : items_(detail::pmrResourceOrDefault(resource)) {}
+    explicit RequestNameValueList(std::pmr::memory_resource* resource, bool caseInsensitive = false)
+        : items_(detail::pmrResourceOrDefault(resource)),
+          caseInsensitive_(caseInsensitive) {}
+
+    [[nodiscard]] bool namesEqual(std::string_view left, std::string_view right) const noexcept {
+        return caseInsensitive_ ? detail::httpAsciiEqualsIgnoreCase(left, right) : left == right;
+    }
 
     void reserve(std::size_t count) {
         items_.reserve(count);
@@ -130,6 +137,7 @@ private:
     }
 
     std::pmr::vector<RequestNameValueView> items_;
+    bool caseInsensitive_{false};
 };
 
 }  // namespace ruvia

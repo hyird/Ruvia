@@ -153,7 +153,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 - Context、Controller、Router、middleware、Next、route macro。
 - HTTP server runtime、TLS、HTTP/2 server、WebSocket route、response streaming。
 - Model、JSON/form parsing/serialization、validation middleware。
-- `HttpErrorInfo`、`HttpError`、JSON 错误响应和自定义 error/not-found handler。
+- `HttpErrorInfo`、`HttpError`、RFC 9457 Problem Details 默认错误响应和自定义 error/not-found handler。
 - Session、CSRF、RateLimit、CORS、安全头、静态文件、AutoHTTPS redirect。
 - 可选 MariaDB、Redis、JWT 集成。
 
@@ -272,10 +272,10 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。ORM 可以组合 SQL 表达式、实体/子查询 JOIN、CTE 和显式类型投影；SQL 片段只作为表达式节点，不能替换 Repository 绑定的完整语句。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
 - SQL 与 Redis 的实体声明使用各自的宏、字段描述符和配置类型；不得把 Redis 宏实现成 SQL 宏的别名，也不得跨后端接受实体。内部可以复用值存储与生命周期实现。
 
-- 普通 handler：`ruvia::Task<> handler(ruvia::Context& c)`，Web 层的默认结果类型为 `HttpResponse`；响应模型必须通过 `c.json(model)` 输出，不支持 handler 直接返回 `Task<Model>`。service 等内部异步函数仍可返回 `Task<T>`。core 层不提供默认结果类型，无结果操作显式使用 `Task<void>`。
+- 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`，core 与 Web 共用无默认结果类型的 `Task<T>`；响应模型必须通过 `c.json(model)` 输出，不支持 handler 直接返回 `Task<Model>`。service 等内部异步函数仍可返回 `Task<T>`。core 层不提供默认结果类型，无结果操作显式使用 `Task<void>`。
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
 - 公开协程返回类型统一是 `ruvia::Task<T>`，不暴露 `asio::awaitable<T>`。
-- 请求统一走 `c.req()`；连接元数据通过 `getConnInfo(c)` 读取。
+- 请求统一走 `c.req()`；连接元数据通过 `c.conn()` 读取。
 - `HttpRequest`、`ContextRequest`、`RawRequestClone` 不保存 remote address、TLS 状态或证书身份。
 - 响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)`。
 - 响应构造走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。
@@ -291,6 +291,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
 - 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套请求模型和 `Array<请求模型>` 自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`jsonIf`/`formIf` 只做内容协商探测，不跑字段规则。
+- JSON/form 的结构解析只提供 schema 路线；原始 body 和扁平 multipart 协议访问保留，不提供动态 JSON 对象或 form 点路径/分组语言。
 - 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
 - 可选请求字段缺失时保持 `std::nullopt`，显式 JSON `null` 默认是 `invalid_type`，optional 不等于 nullable。可选响应字段未设置时默认省略；只有 `RUVIA_EMIT_NULL` 输出 `null`，`RUVIA_OMIT_EMPTY` 处理已设置的空值。
 - JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。

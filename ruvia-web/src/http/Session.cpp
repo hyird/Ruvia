@@ -131,7 +131,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
         co_return;
     }
 
-    const auto connection = getConnInfo(c);
+    const auto connection = c.conn();
     const bool secure = connection.scheme() == HttpScheme::kHttps;
     if (const auto* cleared = state.cleared()) {
         auto& response = detail::ContextAccess::responseStorage(c);

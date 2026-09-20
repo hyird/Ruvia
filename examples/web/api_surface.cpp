@@ -71,7 +71,7 @@ RUVIA_RESPONSE_MODEL(SurfaceJsonResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::S
 
 }  // namespace
 
-ruvia::Task<> surfaceNotFound(ruvia::Context& c) {
+ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
     c.status(ruvia::http_status::kNotFound);
     c.header("X-Surface-Not-Found", "true");
     co_return c.text("surface not found\n");
@@ -105,7 +105,7 @@ public:
 
 class SurfaceReturnMiddleware final : public ruvia::Middleware {
 public:
-    ruvia::Task<> handle(ruvia::Context& c, ruvia::Next&) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next&) {
         c.status(ruvia::http_status::kAccepted);
         co_return c.text("returned by middleware\n");
     }
@@ -156,7 +156,6 @@ public:
     RUVIA_GET("/res-remove-buffered", removeBufferedResponse);
     RUVIA_GET("/res-assigned-prepared", assignedPreparedResponse);
     RUVIA_POST("/multipart", bufferedMultipart);
-    RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/json-object", jsonMessage, ruvia::JsonBody<SurfaceJsonMessage>);
@@ -176,7 +175,7 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::Task<> requestInfo(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> requestInfo(ruvia::Context& c) {
         const auto& request = c.req();
         std::pmr::string body(c.allocator<char>());
         body.append("method=");
@@ -216,7 +215,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> contextInfo(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("session=");
         const auto session = c.session();
@@ -227,7 +226,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> rawBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
         c.status(ruvia::http_status::kAccepted);
         c.header("X-Raw", "first");
         c.header("X-Raw", "second", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
@@ -235,7 +234,7 @@ private:
         co_return c.body("raw body\n");
     }
 
-    ruvia::Task<> responseSlot(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
         c.header("X-Response-Prepared", "true");
         ruvia::HttpResponse response({.resource = c.arena()});
         response.status(ruvia::http_status::kNonAuthoritativeInformation);
@@ -247,28 +246,28 @@ private:
         co_return response;
     }
 
-    ruvia::Task<> resSlotOnly(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> resSlotOnly(ruvia::Context& c) {
         c.status(ruvia::http_status::kInternalServerError);
         co_return c.text("handler should not run\n");
     }
 
-    ruvia::Task<> htmlBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> htmlBody(ruvia::Context& c) {
         co_return c.html("<strong>html body</strong>\n");
     }
 
-    ruvia::Task<> jsonResponse(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> jsonResponse(ruvia::Context& c) {
         SurfaceJsonResponse response({.resource = c.arena()});
         response.set<"message">("json response");
         co_return c.json(response);
     }
 
-    ruvia::Task<> nullBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> nullBody(ruvia::Context& c) {
         c.status(ruvia::http_status::kAccepted);
         c.header("X-Null-Body", "true");
         co_return c.body(nullptr);
     }
 
-    ruvia::Task<> binaryBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> binaryBody(ruvia::Context& c) {
         static constexpr std::array<std::byte, 3> bytes{
             std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
         c.status(ruvia::http_status::kPartialContent);
@@ -276,7 +275,7 @@ private:
         co_return c.body(std::span<const std::byte>(bytes));
     }
 
-    ruvia::Task<> headerRemove(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> headerRemove(ruvia::Context& c) {
         c.header("X-Remove-Me", "drop");
         c.header("X-Remove-Too", "drop");
         c.header("X-Keep-Me", "keep");
@@ -285,23 +284,23 @@ private:
         co_return c.text("header remove\n");
     }
 
-    ruvia::Task<> redirectUnicode(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> redirectUnicode(ruvia::Context& c) {
         co_return c.redirect({.location = "/目标?x=值", .status = ruvia::http_status::kSeeOther});
     }
 
-    ruvia::Task<> redirectPreparedLocation(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> redirectPreparedLocation(ruvia::Context& c) {
         c.header("Location", "/surface/wrong");
         co_return c.redirect({.location = "/surface/right"});
     }
 
-    ruvia::Task<> appError(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
         c.header("X-Error-Prepared", "true");
         co_return c.error({.status = ruvia::http_status::kBadRequest,
             .code = "example_error",
             .message = "the example request was rejected"});
     }
 
-    ruvia::Task<> throwError(ruvia::Context&) {
+    ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
         throw std::runtime_error("surface route failed");
     }
 
@@ -309,32 +308,32 @@ private:
         throw std::runtime_error("surface stream failed");
     }
 
-    ruvia::Task<> missing(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
         c.header("X-Not-Found-Prepared", "true");
         co_return co_await c.notFound();
     }
 
-    ruvia::Task<> middlewareReturnHandler(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> middlewareReturnHandler(ruvia::Context& c) {
         c.status(ruvia::http_status::kInternalServerError);
         co_return c.text("handler should not run\n");
     }
 
-    ruvia::Task<> preDirectResponse(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> preDirectResponse(ruvia::Context& c) {
         co_return c.text("pre direct response\n");
     }
 
-    ruvia::Task<> directBufferedResponse(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> directBufferedResponse(ruvia::Context& c) {
         c.header("X-Direct-Buffered", "true");
         co_return c.body("direct buffered response\n");
     }
 
-    ruvia::Task<> removeBufferedResponse(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> removeBufferedResponse(ruvia::Context& c) {
         c.header("X-Remove-Buffered", "drop");
         c.removeHeader("X-Remove-Buffered");
         co_return c.body("removed buffered response\n");
     }
 
-    ruvia::Task<> assignedPreparedResponse(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
         c.header("X-Surface-Prepared-Assigned", "true");
         ruvia::HttpResponse response({.resource = c.arena()});
         response.header("Content-Type", "text/plain; charset=UTF-8");
@@ -342,7 +341,7 @@ private:
         co_return response;
     }
 
-    ruvia::Task<> bufferedMultipart(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
         auto parts = co_await c.req().multipart();
         std::pmr::string body(c.allocator<char>());
         body.append("parts=");
@@ -361,127 +360,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> parsedBody(ruvia::Context& c) {
-        auto form = co_await c.req().parseBody({
-            .repeatedScalars = ruvia::ContextRequest::RepeatedScalarPolicy::kRetainAll,
-            .dottedNames = ruvia::ContextRequest::DottedNamePolicy::kExpandPath,
-        });
-        std::pmr::string body(c.allocator<char>());
-        body.append("fields=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nentries=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\ngroups=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nkeys=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nvalues=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nfirst-value-file=");
-        body.append(!form.fields().empty() && form.fields().front().isFile() ? "true" : "false");
-        body.append("\nhas-title=");
-        body.append(static_cast<bool>(form.get("title")) ? "true" : "false");
-        const auto title = form.get("title");
-        if (auto titleText = title.value()) {
-            body.append("\ntitle=");
-            body.append(*titleText);
-        }
-        body.append("\nhas-obj=");
-        body.append(static_cast<bool>(form.get("obj")) ? "true" : "false");
-        body.append("\nhas-obj-key1=");
-        body.append(static_cast<bool>(form.get("obj.key1")) ? "true" : "false");
-        if (auto directNested = form.get("obj.key1").value()) {
-            body.append("\nobj.key1-direct=");
-            body.append(*directNested);
-        }
-        body.append("\ntag-count=");
-        appendUnsigned(body, form.count("tag"));
-        if (auto tag = form.get("tag").value()) {
-            body.append("\ntag-single=");
-            body.append(*tag);
-        }
-        body.append("\ntag-array-count=");
-        appendUnsigned(body, form.count("tag[]"));
-        body.append("\ntag-array-values=");
-        appendUnsigned(body, form.get("tag[]").size());
-        body.append("\ntag-array-name=");
-        body.append(form.get("tag[]").hasArrayName() ? "true" : "false");
-        body.append("\ntag-has-array-name=");
-        body.append(form.get("tag").hasArrayName() ? "true" : "false");
-        const auto nestedObject = form.object("obj");
-        const auto nested = nestedObject.get("key1");
-        if (auto nestedText = nested.value()) {
-            body.append("\nobj.key1=");
-            body.append(*nestedText);
-        }
-        if (auto nestedValue = nestedObject.get("key1").value()) {
-            body.append("\nobj.key1-value=");
-            body.append(*nestedValue);
-        }
-        const auto exactNested = form.get("obj.key1");
-        if (auto exactNestedText = exactNested.value()) {
-            body.append("\nobj.key1-exact=");
-            body.append(*exactNestedText);
-        }
-        body.append("\nobj.key1-exact-all=");
-        appendUnsigned(body, exactNested.size());
-        body.append("\nobj.key1-exact-array-name=");
-        body.append(exactNested.hasArrayName() ? "true" : "false");
-        body.append("\nobj.key1-all=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.key1-values=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.key1-array-name=");
-        body.append(nestedObject.get("key1").hasArrayName() ? "true" : "false");
-        body.append("\nobj.key-count=");
-        appendUnsigned(body, nestedObject.count("key1"));
-        body.append("\nobj.entries=");
-        appendUnsigned(body, nestedObject.groups().size());
-        body.append("\nobj.groups=");
-        appendUnsigned(body, nestedObject.groups().size());
-        body.append("\nobj.keys=");
-        appendUnsigned(body, nestedObject.groups().size());
-        const auto childObject = nestedObject.object("child");
-        body.append("\nobj.child.keys=");
-        appendUnsigned(body, childObject.groups().size());
-        for (const auto& field : form.fields()) {
-            body.append("\n");
-            body.append(field.name());
-            body.push_back('=');
-            body.append(field.value());
-            if (field.isFile()) {
-                const auto blob = field.blob();
-                body.append(";filename=");
-                body.append(field.filename());
-                body.append(";content-type=");
-                body.append(blob.contentType());
-                body.append(";bytes=");
-                appendUnsigned(body, blob.size());
-            }
-            const auto path = field.path();
-            if (!path.empty()) {
-                body.append(";path=");
-                for (std::size_t i = 0; i < path.size(); ++i) {
-                    if (i != 0) {
-                        body.push_back('/');
-                    }
-                    body.append(path[i]);
-                }
-            }
-        }
-        for (const auto& group : form.groups()) {
-            body.append("\ngroup=");
-            body.append(group.name());
-            body.append(";values=");
-            appendUnsigned(body, group.size());
-            body.append(";array-name=");
-            body.append(group.hasArrayName() ? "true" : "false");
-        }
-        body.push_back('\n');
-        co_return c.text(std::move(body));
-    }
-
-    ruvia::Task<> bytesBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> bytesBody(ruvia::Context& c) {
         const auto bytes = co_await c.req().bytes();
         std::pmr::string body(c.allocator<char>());
         body.append("bytes bytes=");
@@ -490,7 +369,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> blobBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> blobBody(ruvia::Context& c) {
         const auto blob = co_await c.req().blob();
         const auto bytes = blob.bytes();
         const auto text = blob.text();
@@ -507,7 +386,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> jsonMessage(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> jsonMessage(ruvia::Context& c) {
         const auto json = c.req().validatedJson<SurfaceJsonMessage>();
         std::pmr::string body(c.allocator<char>());
         body.append("json-value bytes=");
@@ -520,13 +399,13 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> discard(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> discard(ruvia::Context& c) {
         co_await c.req().discardBody();
         c.status(ruvia::http_status::kNoContent);
         co_return c.text("");
     }
 
-    ruvia::Task<> replaceItem(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> replaceItem(ruvia::Context& c) {
         const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("replace id=");
@@ -537,7 +416,7 @@ private:
         co_return c.text(std::move(output));
     }
 
-    ruvia::Task<> patchItem(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> patchItem(ruvia::Context& c) {
         const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("patch id=");
@@ -548,7 +427,7 @@ private:
         co_return c.text(std::move(output));
     }
 
-    ruvia::Task<> deleteItem(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> deleteItem(ruvia::Context& c) {
         std::pmr::string output(c.allocator<char>());
         output.append("deleted id=");
         output.append(c.req().param("id").value_or(""));
@@ -556,7 +435,7 @@ private:
         co_return c.text(std::move(output));
     }
 
-    ruvia::Task<> cookies(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
         c.setCookie({
             .name = "session",
             .value = "example",
@@ -591,7 +470,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> anyMethod(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> anyMethod(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("all method=");
         body.append(c.req().method());
@@ -599,7 +478,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> onItem(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> onItem(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("on method=");
         body.append(c.req().method());
@@ -609,7 +488,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> signedCookies(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> signedCookies(ruvia::Context& c) {
         static constexpr std::string_view kSecret = "surface-signing-secret";
         c.setSignedCookie({.name = "signed-session", .value = "signed-value", .secret = kSecret});
         const auto verified = c.req().signedCookie({.name = "signed-session", .secret = kSecret});
@@ -623,7 +502,7 @@ private:
         co_return c.text(std::move(body));
     }
 
-    ruvia::Task<> manualBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> manualBody(ruvia::Context& c) {
         ruvia::HttpResponse response({.resource = c.arena()});
         response.status(ruvia::http_status::kAccepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
@@ -632,15 +511,15 @@ private:
         co_return response;
     }
 
-    ruvia::Task<> streamPut(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> streamPut(ruvia::Context& c) {
         co_return co_await countStreamingBody(c, "put");
     }
 
-    ruvia::Task<> streamPatch(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> streamPatch(ruvia::Context& c) {
         co_return co_await countStreamingBody(c, "patch");
     }
 
-    static ruvia::Task<> countStreamingBody(
+    static ruvia::Task<ruvia::HttpResponse> countStreamingBody(
         ruvia::Context& c, std::string_view verb) {
         std::uint64_t bytes = 0;
         auto& reader = c.req().bodyReader();

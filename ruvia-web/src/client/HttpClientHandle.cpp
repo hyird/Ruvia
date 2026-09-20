@@ -115,14 +115,22 @@ bool HttpClientResponseBody::complete() const noexcept {
                                     state_->pending.empty());
 }
 
-ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::read() & {
+ScopedOperation<std::optional<std::span<const std::byte>>> HttpClientResponseBody::read() & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, readTask(*state_));
+    return detail::makeScopedOperation(state_->bodyOperationScope, readTask<std::span<const std::byte>>(*state_));
 }
 
-Task<std::optional<std::string_view>> HttpClientResponseBody::readTask(
+ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::text() & {
+    if (state_->bodyOperationScope.hasPendingOperations()) {
+        throw std::logic_error("HTTP client response body operation is already active");
+    }
+    return detail::makeScopedOperation(state_->bodyOperationScope, readTask<std::string_view>(*state_));
+}
+
+template <typename View>
+Task<std::optional<View>> HttpClientResponseBody::readTask(
     detail::HttpClientResponseState& state) {
     state.incrementalRead = true;
     while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
@@ -144,17 +152,21 @@ Task<std::optional<std::string_view>> HttpClientResponseBody::readTask(
     const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
     const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
     state.offset += count;
-    co_return chunk;
+    if constexpr (std::same_as<View, std::string_view>) {
+        co_return chunk;
+    } else {
+        co_return std::as_bytes(std::span(chunk.data(), chunk.size()));
+    }
 }
 
-ScopedOperation<std::pmr::string> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
+ScopedOperation<std::pmr::vector<std::byte>> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     return detail::makeScopedOperation(state_->bodyOperationScope, readAllTask(*state_, maxBytes));
 }
 
-Task<std::pmr::string> HttpClientResponseBody::readAllTask(
+Task<std::pmr::vector<std::byte>> HttpClientResponseBody::readAllTask(
     detail::HttpClientResponseState& state, std::size_t maxBytes) {
     state.collectAll = true;
     if (state.http2DataCredit && state.pool != nullptr) {
@@ -178,9 +190,12 @@ Task<std::pmr::string> HttpClientResponseBody::readAllTask(
         throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
             "HTTP response body exceeds readAll byte limit");
     }
-    std::pmr::string result(state.resource);
-    result.assign(state.buffered.data() + state.offset, remaining);
-    result.append(state.pending);
+    std::pmr::vector<std::byte> result(state.resource);
+    result.reserve(totalRemaining);
+    const auto buffered = std::as_bytes(std::span(state.buffered.data() + state.offset, remaining));
+    const auto pending = std::as_bytes(std::span(state.pending.data(), state.pending.size()));
+    result.insert(result.end(), buffered.begin(), buffered.end());
+    result.insert(result.end(), pending.begin(), pending.end());
     state.offset = state.buffered.size();
     state.pending.clear();
     co_return result;
@@ -216,7 +231,7 @@ Task<void> HttpClientResponseBody::pipeToTask(
         const auto count =
             std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
         const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
-        co_await output.write(chunk);
+        co_await output.write(std::as_bytes(std::span(chunk.data(), chunk.size())));
         state.offset += count;
     }
 }

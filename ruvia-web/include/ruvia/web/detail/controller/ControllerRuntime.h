@@ -13,6 +13,7 @@
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
+#include "ruvia/web/detail/model/parse/Parser.h"
 
 namespace ruvia {
 
@@ -114,9 +115,9 @@ class ControllerRegistrationAccess final {
     [[nodiscard]] static ControllerRouteHandler bind(ControllerT* instance) noexcept {
         using ResultT = typename ContextTaskResult<decltype(Handler)>::type;
         static_assert(ContextTaskResult<decltype(Handler)>::ok,
-            "handler must take Context& and return Task<>");
+            "handler must take Context& and return Task<HttpResponse>");
         static_assert(std::is_same_v<ResultT, HttpResponse>,
-            "ordinary handlers must return Task<>; serialize response models with c.json(model)");
+            "ordinary handlers must return Task<HttpResponse>; serialize response models with c.json(model)");
         return ControllerRouteHandler(instance, &invoke<Handler>);
     }
 

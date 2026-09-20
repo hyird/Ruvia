@@ -27,6 +27,15 @@ struct RequestNameValueListAccess final {
         return RequestNameValueList(resource);
     }
 
+    [[nodiscard]] static RequestNameValueList makeHeaders(std::pmr::memory_resource* resource) {
+        return RequestNameValueList(resource, true);
+    }
+
+    [[nodiscard]] static bool namesEqual(const RequestNameValueList& list,
+        std::string_view left, std::string_view right) noexcept {
+        return list.namesEqual(left, right);
+    }
+
     static void reserve(RequestNameValueList& list, std::size_t count) {
         list.reserve(count);
     }
