@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -299,29 +300,32 @@ std::optional<std::string_view> Context::requestNegotiate(
     // either is the offered token or is "*".
     const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
 
+    std::array<std::string_view, kMaxHttpHeaderFields> fieldValues{};
+    std::size_t fieldValueCount = 0;
+    bool sawField = false;
+    for (const auto& header : request_.headers()) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
+            continue;
+        }
+        sawField = true;
+        if (header.value().empty() || fieldValueCount == fieldValues.size()) {
+            continue;
+        }
+        fieldValues[fieldValueCount++] = header.value();
+    }
+
     std::optional<std::string_view> best;
     int bestQuality = 0;
-    bool sawField = false;
-
     for (const auto offered : supported) {
-        // Each candidate gets its own accumulator folded over every field line,
-        // for the same multi-line reason requestAccepts documents.
         int specificity = -1;
         int quality = 0;
-        for (const auto& header : request_.headers()) {
-            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
-                continue;
-            }
-            sawField = true;
-            if (header.value().empty()) {
-                continue;
-            }
+        for (std::size_t i = 0; i < fieldValueCount; ++i) {
             if (mediaType) {
                 detail::httpAccumulateMediaTypeAcceptance(
-                    header.value(), offered, specificity, quality);
+                    fieldValues[i], offered, specificity, quality);
             } else {
                 detail::httpAccumulateTokenAcceptance(
-                    header.value(), offered, prefixMatching, specificity, quality);
+                    fieldValues[i], offered, prefixMatching, specificity, quality);
             }
         }
         if (specificity < 0 || quality <= 0) {
