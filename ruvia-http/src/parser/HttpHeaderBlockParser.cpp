@@ -201,6 +201,10 @@ namespace {
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kForwarded:
+        case RequestHeaderKind::kXForwardedFor:
+        case RequestHeaderKind::kXForwardedProto:
+        case RequestHeaderKind::kSecWebSocketExtensions:
             break;
         case RequestHeaderKind::kAccessControlRequestHeaders:
             if (!isValidHttpCorsRequestHeaderNames(value)) {

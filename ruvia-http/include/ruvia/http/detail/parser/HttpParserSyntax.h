@@ -81,6 +81,10 @@ inline constexpr std::size_t kRequestHeaderKindCount =
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kForwarded:
+        case RequestHeaderKind::kXForwardedFor:
+        case RequestHeaderKind::kXForwardedProto:
+        case RequestHeaderKind::kSecWebSocketExtensions:
             return 0;
     }
     return 0;

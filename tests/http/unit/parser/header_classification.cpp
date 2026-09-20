@@ -1,3 +1,4 @@
+#include <iterator>
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -114,8 +115,14 @@ RUVIA_TEST(request_header_singleton_policy_table) {
         RequestHeaderKind::kSecWebSocketProtocol,
         RequestHeaderKind::kTransferEncoding,
         RequestHeaderKind::kUpgrade,
+        RequestHeaderKind::kForwarded,
+        RequestHeaderKind::kXForwardedFor,
+        RequestHeaderKind::kXForwardedProto,
+        RequestHeaderKind::kSecWebSocketExtensions,
     };
     for (const auto kind : repeatableOrSpecial) {
         RUVIA_CHECK(singletonRequestHeaderBit(kind) == 0U);
     }
+    RUVIA_CHECK(std::size(singleton) + std::size(repeatableOrSpecial) ==
+                ruvia::detail::kRequestHeaderKindCount);
 }
