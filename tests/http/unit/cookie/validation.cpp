@@ -28,20 +28,6 @@ bool rejects(const ruvia::CookieOptions& options) {
 
 }  // namespace
 
-// Naming only the two attributes under test is the point of a designated
-// initializer, and every other CookieOptions member has a default member
-// initializer, so nothing is left uninitialized. GCC still reports the omitted
-// ones; suppressed here rather than project-wide so the warning keeps working
-// where a member genuinely has no default.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
-#endif
-constexpr ruvia::CookieOptions kLiteralCookieOptions{.path = "/app", .domain = "example.com"};
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
 RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const std::string path = "/account";
     const std::string domain = "example.com";

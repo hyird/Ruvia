@@ -16,8 +16,6 @@ using ruvia::httpParseProtocolError;
 using ruvia::HttpProtocolError;
 using ruvia::httpReasonPhrase;
 
-inline constexpr auto kOkStatusToken = ruvia::detail::httpStatusCodeToken(ruvia::http_status::kOk);
-
 }  // namespace
 
 RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {

@@ -60,12 +60,6 @@ RUVIA_TEST(http_client_origin_target_validation) {
     RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%2"));
 }
 
-constexpr HttpClientRequestView kLiteralHttpClientRequestView{.method = "POST", .target = "/items"};
-
-constexpr auto kWithoutExpectation = Http1ClientRequestWirePolicy{};
-constexpr auto kExpectContinue =
-    Http1ClientRequestWirePolicy{.expectation = ruvia::HttpClientRequestExpectation::kContinue};
-
 template <std::size_t N = 2048>
 struct PreparedFixture final {
     std::array<char, N> buffer{};
