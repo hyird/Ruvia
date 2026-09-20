@@ -98,6 +98,25 @@ RUVIA_TEST(context_request_query_single_lookup_materializes_one_shared_cache) {
     RUVIA_CHECK(repeated->data() == stableData);
 }
 
+RUVIA_TEST(context_request_query_unencoded_fields_borrow_the_query_string) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "tag=x&page=2");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request, ruvia::test::testContextServices());
+
+    const auto tag = context.req().query("tag");
+    RUVIA_CHECK(tag.has_value());
+    RUVIA_CHECK_EQ(*tag, std::string_view("x"));
+    RUVIA_CHECK(tag->data() == request.queryString().data() + 4);
+    const auto page = context.req().query("page");
+    RUVIA_CHECK(page.has_value());
+    RUVIA_CHECK(page->data() == request.queryString().data() + 11);
+}
+
 RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();

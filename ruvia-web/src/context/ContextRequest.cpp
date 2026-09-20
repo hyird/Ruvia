@@ -100,24 +100,23 @@ void Context::ensureRequestQuery() const {
     if (requestStorage_->queryInvalid) {
         detail::throwInvalidQuery();
     }
-    // Percent-encoding is validated while decoding each component. A separate
-    // pre-scan of the raw query would walk the same bytes again.
+    // Percent-encoding is validated while decoding each component. Unencoded
+    // names and values borrow the request query string instead of copying.
     std::pmr::vector<std::pmr::string> storage(arena());
-    storage.reserve(detail::boundedFieldReserve(16));
+    auto query = detail::RequestNameValueListAccess::make(arena());
     bool valid = true;
     const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
-        [this, &storage, &valid](std::string_view key, std::string_view value) {
-            std::pmr::string decodedName(arena());
-            std::pmr::string decodedValue(arena());
-            if (!detail::assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm) ||
-                !detail::assignUrlDecodedOrCopy(
-                    decodedValue, value, detail::UrlDecodeMode::kForm)) {
+        [&storage, &query, &valid](std::string_view key, std::string_view value) {
+            const auto name =
+                detail::borrowOrDecode(storage, key, detail::UrlDecodeMode::kForm);
+            const auto decodedValue =
+                detail::borrowOrDecode(storage, value, detail::UrlDecodeMode::kForm);
+            if (!name || !decodedValue) {
                 valid = false;
                 return false;
             }
-
-            storage.push_back(std::move(decodedName));
-            storage.push_back(std::move(decodedValue));
+            detail::RequestNameValueListAccess::pushBack(
+                query, detail::RequestNameValueViewAccess::make(*name, *decodedValue));
             return true;
         });
     if (!completed || !valid) {
@@ -131,44 +130,33 @@ void Context::ensureRequestQuery() const {
         std::size_t end;
     };
 
-    const auto order = detail::sortedPairOrder(storage, arena());
+    const auto order = detail::sortedFieldOrder(query, arena());
     std::pmr::vector<QueryBuild> builds(arena());
     builds.reserve(order.size());
     for (std::size_t offset = 0; offset < order.size();) {
         const auto begin = offset;
         const auto firstIndex = order[offset];
-        const auto name = detail::pairNameAt(storage, firstIndex);
+        const auto name = query[firstIndex].name();
         do {
             ++offset;
-        } while (offset < order.size() && detail::pairNameAt(storage, order[offset]) == name);
+        } while (offset < order.size() && query[order[offset]].name() == name);
         builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
     std::ranges::sort(builds, [](const QueryBuild& left, const QueryBuild& right) noexcept {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto query = detail::RequestNameValueListAccess::make(arena());
     detail::RequestQueryValues groups{arena()};
-    const auto decodedPairCount = storage.size() / 2;
-    detail::RequestNameValueListAccess::reserve(query, decodedPairCount);
     groups.reserve(builds.size());
-    for (std::size_t pairIndex = 0; pairIndex < decodedPairCount; ++pairIndex) {
-        detail::RequestNameValueListAccess::pushBack(
-            query, detail::RequestNameValueViewAccess::make(
-                       detail::storedStringView(storage[pairIndex * 2]),
-                       detail::storedStringView(storage[pairIndex * 2 + 1])));
-    }
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
-        // the parsed-form scalar compaction, RequestNameValueList::get(), and the
-        // raw cookie lookup all take the last occurrence. Keep the public field
-        // list duplicate-preserving so model binding can still reject ambiguity;
-        // this grouped index only backs requestQueries(name).
-        auto& group = groups.append(detail::pairNameAt(storage, build.firstIndex));
+        // and RequestNameValueList::get() all take the last occurrence. Keep the
+        // public field list duplicate-preserving so model binding can still reject
+        // ambiguity; this grouped index only backs requestQueries(name).
+        auto& group = groups.append(query[build.firstIndex].name());
         for (std::size_t i = build.begin; i < build.end; ++i) {
-            const auto pairIndex = order[i];
-            group.add(detail::storedStringView(storage[pairIndex * 2 + 1]));
+            group.add(query[order[i]].value());
         }
     }
 
