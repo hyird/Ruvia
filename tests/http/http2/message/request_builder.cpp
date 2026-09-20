@@ -55,7 +55,7 @@ RUVIA_TEST(h2_request_header_blocks_release_independently_of_retained_stream_dat
     const auto retainedBuild = Http2RequestBuilder::build(stream, retained, &resource, {});
     RUVIA_CHECK(retainedBuild.built() != nullptr);
     const auto baseline = resource.liveBytes;
-    RUVIA_CHECK_EQ(baseline, sizeof(ruvia::HttpHeaderView));
+    RUVIA_CHECK_EQ(baseline, sizeof(ruvia::HttpHeaderView) + 1);
     for (int i = 0; i < 64; ++i) {
         {
             auto request = HttpRequestAccess::make();

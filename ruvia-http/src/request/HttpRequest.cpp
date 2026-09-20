@@ -70,7 +70,8 @@ std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const
     for (std::size_t i = headers_.size(); i > 0; --i) {
         const auto index = i - 1;
         const auto header = headers_[index];
-        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie") ||
+        if (headers_.kindAt(index) !=
+                std::to_underlying(detail::RequestHeaderKind::kCookie) ||
             header.value().data() == lastCookie.data()) {
             continue;
         }
