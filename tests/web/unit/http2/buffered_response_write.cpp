@@ -8,10 +8,6 @@
 
 #include "test_harness.h"
 
-namespace {
-
-}  // namespace
-
 RUVIA_TEST(http2_buffered_response_write_result_preserves_terminal_cause) {
     using Result = ruvia::detail::Http2BufferedResponseWriteResult;
 

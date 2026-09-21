@@ -1,44 +1,38 @@
 #pragma once
 
-#include <memory_resource>
-#include <optional>
-#include <string_view>
-#include <tuple>
 #include <type_traits>
-#include <utility>
 
 #include "ruvia/web/detail/model/rule/RuleSupport.h"
 
 namespace ruvia::detail::model {
 
+// Field options are type-level metadata, not per-model runtime objects.
 template <typename... OptionTs>
 class ModelOptions final {
+    static_assert((isModelOption<OptionTs>() && ... && true),
+        "model field options must be RUVIA_DEFAULT, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
+    static_assert(((isDefaultRule<OptionTs>() ? 1 : 0) + ... + 0) <= 1,
+        "a model field may have at most one RUVIA_DEFAULT");
+
 public:
     static constexpr bool nullable = (std::is_same_v<OptionTs, Nullable> || ... || false);
 
-    constexpr ModelOptions() noexcept
-        : options_(OptionTs{}...) {
-        static_assert((isModelOption<OptionTs>() && ... && true),
-            "model field options must be RUVIA_DEFAULT, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
-    }
-
-    [[nodiscard]] constexpr bool emitNull() const noexcept {
+    [[nodiscard]] static constexpr bool emitNull() noexcept {
         return containsOption<EmitNull>();
     }
 
-    [[nodiscard]] constexpr bool omitEmpty() const noexcept {
+    [[nodiscard]] static constexpr bool omitEmpty() noexcept {
         return containsOption<OmitEmpty>();
     }
 
-    template <typename OptionalT>
-    void applyDefault(OptionalT& value, std::pmr::memory_resource* resource) const {
-        if (value) {
-            return;
+    // The field owns assignment, nullability and allocator normalization.
+    template <typename ConsumerT>
+    static void applyDefault(ConsumerT&& consume) {
+        if constexpr (sizeof...(OptionTs) != 0) {
+            (applyDefaultOption<OptionTs>(consume), ...);
+        } else {
+            (void)consume;
         }
-        std::apply(
-            [&value, resource](
-                const auto&... options) { (applyDefaultOption(value, resource, options), ...); },
-            options_);
     }
 
 private:
@@ -47,31 +41,14 @@ private:
         return (std::is_same_v<std::remove_cvref_t<OptionTs>, OptionT> || ... || false);
     }
 
-    template <typename OptionalT, typename OptionT>
-    static void applyDefaultOption(
-        OptionalT& value, std::pmr::memory_resource* resource, const OptionT& option) {
+    template <typename OptionT, typename ConsumerT>
+    static void applyDefaultOption(ConsumerT& consume) {
         if constexpr (isDefaultRule<OptionT>()) {
-            using FieldT = typename OptionalT::value_type;
-            assignDefaultValue<FieldT>(value, option.value, resource);
+            consume(OptionT::value());
         } else {
-            (void)value;
-            (void)resource;
-            (void)option;
+            (void)consume;
         }
     }
-
-    template <typename FieldT, typename ValueT>
-    static void assignDefaultValue(
-        std::optional<FieldT>& target, const ValueT& value, std::pmr::memory_resource* resource) {
-        if constexpr (detail::isRuviaString<FieldT> &&
-                      std::is_convertible_v<const ValueT&, std::string_view>) {
-            target.emplace(std::string_view(value), ::ruvia::ModelOptions{.resource = resource});
-        } else {
-            target.emplace(value);
-        }
-    }
-
-    std::tuple<OptionTs...> options_;
 };
 
 }  // namespace ruvia::detail::model

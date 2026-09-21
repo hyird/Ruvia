@@ -1,4 +1,5 @@
 #include <array>
+#include <barrier>
 #include <chrono>
 #include <exception>
 #include <future>
@@ -326,6 +327,24 @@ RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {
     closing.get();
     pool.join();
     RUVIA_CHECK(cancelled);
+}
+
+RUVIA_TEST(redis_client_fresh_close_and_loop_stop_share_worker_completion) {
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        ruvia::EventLoopPool pool({.loopCount = 1});
+        ruvia::RedisClient client(pool.loop(0), {.poolSizePerWorker = 1});
+        pool.start();
+        std::barrier rendezvous(2);
+        std::thread closer([&] {
+            rendezvous.arrive_and_wait();
+            client.close();
+        });
+        rendezvous.arrive_and_wait();
+        pool.stop();
+        closer.join();
+        pool.join();
+        RUVIA_CHECK(!client.worker().accepting());
+    }
 }
 
 RUVIA_TEST(redis_client_cold_connect_can_be_discarded_without_starting_the_pool) {

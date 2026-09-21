@@ -29,6 +29,8 @@ class ModelStorage;
 
 template <typename ValueT, bool Required, typename OptionsT, FixedString WireName>
 class ModelField final {
+    static_assert(std::is_empty_v<OptionsT>, "model field options must be stateless metadata");
+
 public:
     using value_type = ValueT;
     static constexpr bool required = Required;
@@ -112,18 +114,17 @@ public:
         if (Required || state_ != detail::ModelFieldState::kMissing) {
             return;
         }
-        options_.applyDefault(value_, resource);
-        if (value_) {
-            state_ = detail::ModelFieldState::kParsed;
-        }
+        OptionsT::applyDefault([this, resource]<typename InputT>(InputT&& value) {
+            this->assign(std::forward<InputT>(value), resource);
+        });
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
-        return options_.emitNull();
+        return OptionsT::emitNull();
     }
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
-        return options_.omitEmpty();
+        return OptionsT::omitEmpty();
     }
 
     void markDuplicate() noexcept {
@@ -174,7 +175,6 @@ private:
         state_ = detail::ModelFieldState::kMissing;
     }
 
-    OptionsT options_;
     detail::ModelFieldState state_{detail::ModelFieldState::kMissing};
     bool present_{false};
     std::optional<ValueT> value_;

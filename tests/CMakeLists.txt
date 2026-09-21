@@ -7,7 +7,7 @@ function(ruvia_apply_test_warnings name)
     else()
         target_compile_options(${name} PRIVATE -Wall)
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-            target_compile_options(${name} PRIVATE -Wshadow=local -Wno-dangling-reference)
+            target_compile_options(${name} PRIVATE -Wshadow=local)
         endif()
     endif()
 endfunction()
@@ -103,6 +103,7 @@ if(RUVIA_BUILD_WEB)
         web/unit/auth/jwt.cpp
         web/unit/db/client.cpp
         web/unit/db/entity.cpp
+        web/unit/db/event_loop_client.cpp
         web/unit/db/mapped_query.cpp
         web/unit/db/migration.cpp
         web/unit/db/postgresql.cpp
@@ -149,7 +150,9 @@ if(RUVIA_BUILD_WEB)
         list(APPEND _ruvia_web_unit_sources web/unit/db/sql.cpp)
     endif()
     if(RUVIA_ENABLE_POSTGRESQL)
-        list(APPEND _ruvia_web_unit_sources web/unit/db/postgresql.cpp)
+        list(APPEND _ruvia_web_unit_sources
+            web/unit/db/event_loop_client.cpp
+            web/unit/db/postgresql.cpp)
     endif()
 
     list(APPEND _ruvia_web_unit_sources support/test_main.cpp)

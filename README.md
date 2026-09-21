@@ -588,7 +588,11 @@ On startup failure, close already-started clients and observe all startup tasks.
 For shutdown, stop business admission, await each client's `shutdown()` on its
 loop, then stop/join the loop pool. Loop-stop hooks also cancel pending I/O if
 normal shutdown is interrupted. `close()` may request Redis teardown from another
-thread, but never performs socket operations there.
+thread, but never performs socket operations there. Even a never-connected SQL
+or Redis client completes teardown on its owning loop. If a pool was never
+started, `EventLoopPool::join()` (also called by its destructor) drains this
+accepted cleanup work; do not abandon an attached external loop before draining
+its accepted work.
 
 [`examples/web/event_loop_data.cpp`](examples/web/event_loop_data.cpp) demonstrates
 this complete lifecycle with PostgreSQL and Redis ORM on two application-owned
@@ -1939,8 +1943,14 @@ Presence and nullability are independent:
 `RUVIA_DEFAULT(value)` applies only to a **missing optional** input. An explicit
 null, wrong type, duplicate, empty string, zero, or false never triggers a
 default. `REQUIRED + DEFAULT` still rejects missing input: a default does not
-satisfy the required field. During route validation, defaulted values pass the
-same field rules as supplied values, including nested models. `fromJson()`,
+satisfy the required field. Each field accepts at most one default expression;
+it is evaluated only when that optional input is missing, never just because a
+model is constructed or moved. The resulting value is owned/normalized to the
+model's resource and follows the same nullability rules as `set()` (including
+`RUVIA_DEFAULT(nullptr)` for nullable fields). Evaluation failures propagate
+normally and release partially parsed data. During route validation, defaulted
+values pass the same field rules as supplied values, including nested models.
+`fromJson()`,
 `fromForm()`, `jsonIf()` and `formIf()` remain parsing-only APIs; they check
 structure, not field rules, for both supplied and defaulted values.
 
