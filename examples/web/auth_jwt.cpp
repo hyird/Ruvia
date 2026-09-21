@@ -12,7 +12,10 @@
 
 namespace {
 
-constexpr std::string_view kJwtSecret = "replace-this-development-secret";
+// Demonstration only. Production must load an independently generated random
+// key from protected configuration, never reuse this public example key.
+constexpr std::string_view kJwtSecret =
+    "development-only-not-for-production-0123456789abcdef0123456789abcdef";
 
 ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     ruvia::JwtSignOptions options;
