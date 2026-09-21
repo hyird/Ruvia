@@ -213,7 +213,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
   listener 创建独立 acceptor；连接由接受它的 worker 终身拥有，不跨线程迁移。
 - Web 启动必须先为全部 worker 完成 listener prepare，再启动全部 worker 并等待 worker-local DB/Redis 等能力全部 ready，最后一次性释放 serve 门禁；任何 worker 准备或启动失败都不得留下部分 worker 对外接收连接。`onStart` 只能在全部 worker 已进入 serving 后执行。
 - `App::run()` 的调用线程是 App 生命周期的唯一执行线程，负责 `onStart`、`onStop`、join 和失败重抛。`App::stop()`、信号线程和 worker failure 只能提交单调 stop request 并关闭稳定 endpoint，不得在调用方线程执行用户 hook；App 单例的配置、运行和 runtime 借用必须继续受同一生命周期门禁保护。
-- outbound HTTP 与 DB 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
+- outbound HTTP、DB 与 Redis 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient` / `RedisClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
 - App 内 outbound HTTP origin 必须通过 `App::httpClient(HttpClientRegistrationConfig)` 在启动前按 alias 固定注册；每个 worker 启动时一次性构造相同集合，`Context`/`WebWorkerContext` 只按默认项或 alias 取 handle。不得恢复请求期按 `HttpClientConfig` 建池、origin cache 或容量 setter。
 - standalone `DbClient::connect()` 必须保持绑定 loop 上启动的 lazy `Task<void>`，与后续 query/execute 使用同一 worker-affine coroutine 契约；不得恢复由调用线程隐式调度的 `std::future` 特例。
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。

@@ -18,6 +18,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled and double as co
 | `ruvia_example_testing` | `web/testing.cpp` | In-memory application testing with `TestApp`/`TestRequest`/`TestResponse`: production routing, middleware, model bodies, fallbacks, urlFor and worker state without a socket. |
 | `ruvia_example_auth_jwt` | `web/auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
 | `ruvia_example_database` | `web/database.cpp` | Unified MariaDB/PostgreSQL configuration, query, execute, streaming query, transaction and optional migration. Built with either database feature. |
+| `ruvia_example_event_loop_data` | `web/event_loop_data.cpp` | Application-owned `EventLoopPool`, per-loop SQL/Redis clients and ORM, readiness barrier and shutdown. Requires PostgreSQL and Redis features; use `--run` after the ORM example's migration. |
 | `ruvia_example_orm` | `web/orm.cpp` | SQL entity repositories, typed queries, transactions and schema compilation. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |
 | `ruvia_example_orm_columns` | `web/orm_columns.cpp` | Generated columns, CHAR/VARCHAR length, and computed field writes. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |
 | `ruvia_example_orm_relations` | `web/orm_relations.cpp` | Entity relations, join tables and nested relation queries. Built only with `RUVIA_ENABLE_POSTGRESQL=ON`. |

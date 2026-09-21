@@ -553,6 +553,47 @@ loop is destroyed. App handlers use
 Enable `RUVIA_ENABLE_POSTGRESQL` or `RUVIA_ENABLE_MARIADB` for `DbClient` and
 link `ruvia::web`; `ruvia::core` keeps no HTTP-client or database dependency.
 
+Redis follows the same standalone model. Enable `RUVIA_ENABLE_REDIS` and include
+`<ruvia/web/redis/RedisClient.h>`:
+
+```cpp
+ruvia::RedisClient redis(loop, ruvia::RedisConfig{
+    .host = "127.0.0.1",
+    .poolSizePerWorker = 2,
+});
+// Start/await on loop, just like db.connect():
+// co_await redis.connect();
+// auto value = co_await redis.get("device:42");
+// co_await redis.shutdown();
+```
+
+`RedisClient` exposes the same typed commands, pipelines, transactions and
+`withOptions()` policies as `RedisHandle`. SQL and Redis ORM are available through
+`db.getRepository<SqlEntity>()` and
+`redis.getRepository<RedisEntity>(repositoryConfig)`; each uses its own entity
+macros and the client's existing connections, cancellation and reclaimable memory.
+Neither ORM requires App or an HTTP request. Direct SQL/Redis commands remain a
+separate route, not an escape hatch on repositories.
+
+For multiple loops, let an application-owned typed object hold one `DbClient`
+and one `RedisClient` per loop. Select the loop **before** starting a business
+coroutine; do not move clients, repositories, transactions, or PMR results between
+loops. Redis pool capacities are per client/loop, not process-wide. Redis rejects a
+second `connect()` without interrupting the first connection. Results must be destroyed on the
+owner loop before the client; completing an operation or calling `shutdown()`
+does not extend its allocator lifetime.
+
+Start the loop pool, await **all** clients' readiness, then admit business work.
+On startup failure, close already-started clients and observe all startup tasks.
+For shutdown, stop business admission, await each client's `shutdown()` on its
+loop, then stop/join the loop pool. Loop-stop hooks also cancel pending I/O if
+normal shutdown is interrupted. `close()` may request Redis teardown from another
+thread, but never performs socket operations there.
+
+[`examples/web/event_loop_data.cpp`](examples/web/event_loop_data.cpp) demonstrates
+this complete lifecycle with PostgreSQL and Redis ORM on two application-owned
+loops, without `App`, `Context`, or a framework capability registry.
+
 Web handlers obtain their current core worker with `Context::worker()`; its reference is
 borrowed for the request, so use `auto worker = c.worker()` before capturing it. Background
 components select a stable Web worker with `App::workerFor()` and submit a job with worker-local DB and Redis
