@@ -1924,6 +1924,11 @@ elements. Move construction transfers the complete value; move assignment keeps
 the destination resource and can allocate. JSON view parsing still borrows its
 input, which must outlive the parsed view.
 
+JSON string values and wire names must be valid UTF-8. Serialization escapes
+JSON syntax and control characters, but does not transcode, validate, or repair
+UTF-8 byte sequences. Convert legacy encodings before assigning strings; encode
+binary data explicitly (for example, as base64) rather than treating it as text.
+
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
 `model.reset<"avatar">()`. Required, non-nullable `get` returns `const T&`;
