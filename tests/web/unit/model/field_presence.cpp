@@ -71,10 +71,15 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (remaining_ == 0) {
-            throw std::bad_alloc();
+        // Inject failures into the >=256-byte JSON token buffers, not small
+        // debug-iterator metadata. MSVC's noexcept string move can allocate
+        // such metadata; failing it tests termination, not parser unwinding.
+        if (bytes >= 256) {
+            if (remaining_ == 0) {
+                throw std::bad_alloc();
+            }
+            --remaining_;
         }
-        --remaining_;
         return memory_.allocate(bytes, alignment);
     }
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
@@ -314,9 +319,11 @@ RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim
                 return;
             }
             input.assign(input.size(), '?');
-            const auto beforeMove = source.allocationCount();
+            const auto* tokenStorage = parsed->get<"value">()->view().data();
             OwnedValues moved(std::move(*parsed));
-            RUVIA_CHECK_EQ(source.allocationCount(), beforeMove);
+            // Transfer the owned data buffer; debug bookkeeping allocations
+            // are implementation-dependent and are checked for release below.
+            RUVIA_CHECK(moved.get<"value">()->view().data() == tokenStorage);
             RUVIA_CHECK(moved.isPresent<"value">() && !moved.isPresent<"note">());
             retained = std::move(moved);
         }
@@ -344,7 +351,7 @@ RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim
     RUVIA_CHECK_EQ(destination.liveAllocations(), std::size_t{0});
 }
 
-RUVIA_TEST(model_dynamic_allocation_failures_release_partial_values_and_defaults) {
+RUVIA_TEST(model_dynamic_token_allocation_failures_release_partial_values) {
     const std::string text(256, 'x');
     const std::string body = "{\"value\":{\"text\":\"" + text + "\"},\"object\":{\"text\":\"" + text + "\"}}";
     bool sawFailure = false;
