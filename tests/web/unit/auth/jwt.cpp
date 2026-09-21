@@ -447,6 +447,59 @@ RUVIA_TEST(jwt_exp_nbf_boundaries_follow_rfc7519) {
         ruvia::detail::jwtTokenNotYetValid(t - seconds{11}, t, seconds{10}));  // before nbf-leeway
 }
 
+RUVIA_TEST(jwt_time_offset_preserves_clock_ticks) {
+    using Clock = std::chrono::system_clock;
+    using std::chrono::seconds;
+    for (const auto base : {Clock::time_point::max() - seconds{2},
+             Clock::time_point::min() + seconds{2}, Clock::time_point{seconds{2'000'000'000}}}) {
+        for (int index = 0; index < 4096; ++index) {
+            const auto time = base + Clock::duration{index};
+            const auto unchanged = ruvia::detail::jwtTimeWithOffset(time, seconds{0});
+            RUVIA_CHECK(unchanged == time);
+            if (unchanged != time) {
+                return;
+            }
+            RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(time, seconds{1}) == time + seconds{1});
+            RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(time, seconds{-1}) == time - seconds{1});
+        }
+    }
+}
+
+RUVIA_TEST(jwt_time_offset_saturates_extreme_offsets_and_partial_seconds) {
+    using Clock = std::chrono::system_clock;
+    using std::chrono::seconds;
+    const auto tick = Clock::duration{1};
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::min(), seconds::max()) == Clock::time_point::max());
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::max(), seconds::min()) == Clock::time_point::min());
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::min() + seconds{1}, seconds{-1}) == Clock::time_point::min());
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point::max() - seconds{1}, seconds{1}) == Clock::time_point::max());
+    RUVIA_CHECK(ruvia::detail::jwtFromEpochSeconds(std::numeric_limits<std::int64_t>::max()) == Clock::time_point::max());
+    RUVIA_CHECK(ruvia::detail::jwtFromEpochSeconds(std::numeric_limits<std::int64_t>::min()) == Clock::time_point::min());
+    RUVIA_CHECK(ruvia::detail::jwtFromEpochSeconds(-1) == Clock::time_point{seconds{-1}});
+    const auto highSeconds = std::chrono::duration_cast<seconds>(Clock::duration::max());
+    const auto high = Clock::time_point{highSeconds};
+    const auto fraction = (Clock::time_point::max() - high) / 2;
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point{fraction - seconds{1}}, highSeconds + seconds{1}) == high + fraction);
+    RUVIA_CHECK(ruvia::detail::jwtTimeWithOffset(Clock::time_point{-tick}, highSeconds) == high - tick);
+}
+
+RUVIA_TEST(jwt_time_predicates_distinguish_adjacent_clock_ticks) {
+    using Clock = std::chrono::system_clock;
+    using std::chrono::seconds;
+    const auto tick = Clock::duration{1};
+    for (const auto time : {Clock::time_point{seconds{2'147'483'648}},
+             Clock::time_point::max() - seconds{20}, Clock::time_point::min() + seconds{20}}) {
+        RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(time - tick, time, seconds{0}));
+        RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(time - tick, time, seconds{0}));
+        RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(time + seconds{10} - tick, time, seconds{10}));
+        RUVIA_CHECK(ruvia::detail::jwtTokenExpired(time + seconds{10}, time, seconds{10}));
+        RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(time - seconds{10} - tick, time, seconds{10}));
+        RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(time - seconds{10}, time, seconds{10}));
+    }
+    RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(Clock::time_point::max(), Clock::time_point::min(), seconds::max()));
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(Clock::time_point::min(), Clock::time_point::max(), seconds::max()));
+}
+
 RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
     // jwtDecodeUnverified reads the payload WITHOUT checking the signature -- it
     // provides no authentication. Pin that contract: it returns the claims even

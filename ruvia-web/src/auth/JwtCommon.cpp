@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <chrono>
 #include <stdexcept>
 
@@ -16,35 +15,36 @@ std::int64_t jwtEpochSeconds(std::chrono::system_clock::time_point value) {
 }
 
 std::chrono::system_clock::time_point jwtFromEpochSeconds(std::int64_t value) {
-    // Building a time_point converts the seconds count into the clock's finer
-    // duration (nanoseconds on libstdc++), multiplying by 1e9 and overflowing
-    // int64 for |value| beyond ~9.2e9 (≈ year 2262) -- undefined behaviour on an
-    // attacker-controlled exp/nbf/iat. Saturate to the representable range so a
-    // huge exp reads as "far future" (never expired) and a huge nbf as "far
-    // future" (not yet valid); both stay fail-closed and free of UB.
-    using Clock = std::chrono::system_clock;
-    constexpr std::int64_t kMaxSeconds =
-        std::chrono::duration_cast<std::chrono::seconds>(Clock::duration::max()).count();
-    constexpr std::int64_t kMinSeconds =
-        std::chrono::duration_cast<std::chrono::seconds>(Clock::duration::min()).count();
-    return Clock::time_point(std::chrono::seconds(std::clamp(value, kMinSeconds, kMaxSeconds)));
+    // Use the same saturating conversion for integer NumericDates and offsets.
+    // Converting unbounded seconds directly to clock ticks would overflow.
+    return jwtTimeWithOffset(std::chrono::system_clock::time_point{}, std::chrono::seconds{value});
 }
 
 std::chrono::system_clock::time_point jwtTimeWithOffset(
     std::chrono::system_clock::time_point value, std::chrono::seconds offset) noexcept {
     using Clock = std::chrono::system_clock;
-    const auto valueSeconds = std::chrono::duration<long double>(value.time_since_epoch()).count();
-    const auto targetSeconds = valueSeconds + static_cast<long double>(offset.count());
-    const auto maxSeconds = std::chrono::duration<long double>(Clock::duration::max()).count();
-    const auto minSeconds = std::chrono::duration<long double>(Clock::duration::min()).count();
-    if (targetSeconds >= maxSeconds) {
+    const auto parts = jwtSplitClockTime(value);
+    const auto minimum = jwtSplitClockTime(Clock::time_point::min());
+    const auto maximum = jwtSplitClockTime(Clock::time_point::max());
+    if (offset > maximum.wholeSeconds - parts.wholeSeconds) {
         return Clock::time_point::max();
     }
-    if (targetSeconds <= minSeconds) {
+    if (offset < minimum.wholeSeconds - parts.wholeSeconds) {
         return Clock::time_point::min();
     }
-    return Clock::time_point(std::chrono::duration_cast<Clock::duration>(
-        std::chrono::duration<long double>(targetSeconds)));
+    const auto target = parts.wholeSeconds + offset;
+    if (target == minimum.wholeSeconds) {
+        if (parts.fraction < minimum.fraction) {
+            return Clock::time_point::min();
+        }
+        // Do not convert the minimum's floored seconds back into clock ticks:
+        // that intermediate can underflow even when the final value fits.
+        return Clock::time_point::min() + (parts.fraction - minimum.fraction);
+    }
+    if (target == maximum.wholeSeconds && parts.fraction > maximum.fraction) {
+        return Clock::time_point::max();
+    }
+    return Clock::time_point(std::chrono::duration_cast<Clock::duration>(target) + parts.fraction);
 }
 
 JwtTokenParts jwtSplitToken(std::string_view token) {

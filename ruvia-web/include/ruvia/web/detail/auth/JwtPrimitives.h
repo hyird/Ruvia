@@ -4,7 +4,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
+#include <ratio>
 #include <string_view>
 
 #include "ruvia/http/detail/util/BorrowedView.h"
@@ -42,16 +44,47 @@ void jwtAppendJsonMember(
 [[nodiscard]] std::chrono::system_clock::time_point jwtTimeWithOffset(
     std::chrono::system_clock::time_point value, std::chrono::seconds offset) noexcept;
 
+// Split without subtracting a rounded time_point: floor(seconds) at the
+// clock's minimum can itself lie below the representable clock range.
+using JwtClockSecondRatio = std::ratio_divide<std::chrono::seconds::period,
+    std::chrono::system_clock::period>;
+static_assert(JwtClockSecondRatio::den == 1 && JwtClockSecondRatio::num > 1,
+    "JWT time arithmetic requires an integral subsecond system clock");
+static_assert(std::numeric_limits<std::chrono::system_clock::rep>::is_integer &&
+                  std::numeric_limits<std::chrono::system_clock::rep>::is_signed &&
+                  std::numeric_limits<std::chrono::system_clock::rep>::digits <=
+                      std::numeric_limits<std::chrono::seconds::rep>::digits,
+    "JWT whole-second distances must fit in the signed seconds representation");
+
+struct JwtClockParts final {
+    std::chrono::seconds wholeSeconds{};
+    std::chrono::system_clock::duration fraction{};
+};
+
+[[nodiscard]] inline JwtClockParts jwtSplitClockTime(
+    std::chrono::system_clock::time_point value) noexcept {
+    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch());
+    auto remainder = value.time_since_epoch().count() % JwtClockSecondRatio::num;
+    if (remainder < 0) {
+        seconds -= std::chrono::seconds{1};
+        remainder += JwtClockSecondRatio::num;
+    }
+    return {seconds, std::chrono::system_clock::duration{remainder}};
+}
+
 // RFC 7519 §4.1.4: a token is valid only while the current time is *before*
 // "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
 // accepted window past exp. Split out as a pure predicate so the exact boundary
 // is deterministically testable without a live-clock dependency.
 [[nodiscard]] inline bool jwtTokenExpired(std::chrono::system_clock::time_point now,
     std::chrono::system_clock::time_point expiresAt, std::chrono::seconds leeway) noexcept {
-    const auto nowSeconds = std::chrono::duration<long double>(now.time_since_epoch()).count();
-    const auto expiresSeconds =
-        std::chrono::duration<long double>(expiresAt.time_since_epoch()).count();
-    return nowSeconds - expiresSeconds >= static_cast<long double>(leeway.count());
+    const auto nowParts = jwtSplitClockTime(now);
+    const auto expiresParts = jwtSplitClockTime(expiresAt);
+    // Subsecond clock resolution keeps the whole-second distance representable
+    // even when subtracting time_points directly would overflow their duration.
+    const auto distance = nowParts.wholeSeconds - expiresParts.wholeSeconds;
+    return distance > leeway ||
+           (distance == leeway && nowParts.fraction >= expiresParts.fraction);
 }
 
 // RFC 7519 §4.1.5: a token is valid only when the current time is *after or
@@ -59,10 +92,11 @@ void jwtAppendJsonMember(
 // now (plus leeway) is still strictly before nbf.
 [[nodiscard]] inline bool jwtTokenNotYetValid(std::chrono::system_clock::time_point now,
     std::chrono::system_clock::time_point notBefore, std::chrono::seconds leeway) noexcept {
-    const auto nowSeconds = std::chrono::duration<long double>(now.time_since_epoch()).count();
-    const auto notBeforeSeconds =
-        std::chrono::duration<long double>(notBefore.time_since_epoch()).count();
-    return notBeforeSeconds - nowSeconds > static_cast<long double>(leeway.count());
+    const auto nowParts = jwtSplitClockTime(now);
+    const auto notBeforeParts = jwtSplitClockTime(notBefore);
+    const auto distance = notBeforeParts.wholeSeconds - nowParts.wholeSeconds;
+    return distance > leeway ||
+           (distance == leeway && notBeforeParts.fraction > nowParts.fraction);
 }
 
 struct JwtTokenParts final {
