@@ -13,7 +13,7 @@
 namespace ruvia {
 class JsonObject;
 class JsonValue;
-}
+}  // namespace ruvia
 
 namespace ruvia::detail {
 

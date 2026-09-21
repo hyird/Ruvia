@@ -87,7 +87,7 @@ struct ModelValidationAccess final {
                 std::pmr::string path(validator.resource());
                 model::appendPath(path, prefix, slot.wireName());
                 typename DescriptorT::rules_type{}.validate(
-                    slot.state(), DescriptorT::required, slot.value(), path, validator);
+                    slot.state(), slot.value(), path, validator);
 
                 if (slot.state() != ModelFieldState::kParsed || !slot.value()) {
                     return;

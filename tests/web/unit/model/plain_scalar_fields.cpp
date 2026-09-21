@@ -61,12 +61,7 @@ RUVIA_TEST(model_wrapper_scalar_fields_reject_mistyped_values_but_allow_missing_
 
     const auto nullCount =
         ruvia::fromJson<WrappedScalars>(R"({"count":null})", {.resource = &wrappedResource});
-    RUVIA_CHECK(nullCount.has_value());
-    if (nullCount) {
-        RUVIA_CHECK(!nullCount->get<"count">().has_value());
-        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"count">(*nullCount) ==
-                    ruvia::detail::ModelFieldState::kNull);
-    }
+    RUVIA_CHECK(!nullCount.has_value());
 
     std::pmr::monotonic_buffer_resource resource;
     RUVIA_CHECK(ruvia::fromJson<WrappedScalars>("{}", {.resource = &resource}).has_value());

@@ -10,15 +10,15 @@
 
 namespace {
 
-RUVIA_REQUEST_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String));
+RUVIA_REQUEST_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
 
 RUVIA_REQUEST_MODEL(RemarkWithDefaultRequest,
-    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_DEFAULT("fallback")));
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
 
 RUVIA_REQUEST_MODEL(RequiredRemarkRequest, RUVIA_REQUIRED_FIELD(remark, ruvia::String));
 
-RUVIA_REQUEST_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
-    RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject),
+RUVIA_REQUEST_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue, RUVIA_NULLABLE),
+    RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(items, ruvia::Array<ruvia::JsonValue>));
 
 RUVIA_RESPONSE_MODEL(JsonBagResponse, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
@@ -35,8 +35,8 @@ RUVIA_TEST(nullable_optional_string_accepts_json_null) {
         return;
     }
     RUVIA_CHECK(!parsed->get<"remark">().has_value());
-    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"remark">(*parsed) ==
-                ruvia::detail::ModelFieldState::kNull);
+    RUVIA_CHECK(parsed->isPresent<"remark">());
+    RUVIA_CHECK(parsed->isNull<"remark">());
 
     ruvia::Validator validator;
     ruvia::detail::ModelValidationAccess::validateModel(*parsed, validator);
@@ -63,8 +63,8 @@ RUVIA_TEST(nullable_null_does_not_apply_default) {
         return;
     }
     RUVIA_CHECK(!parsed->get<"remark">().has_value());
-    RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"remark">(*parsed) ==
-                ruvia::detail::ModelFieldState::kNull);
+    RUVIA_CHECK(parsed->isPresent<"remark">());
+    RUVIA_CHECK(parsed->isNull<"remark">());
 
     const auto missing =
         ruvia::fromJson<RemarkWithDefaultRequest>("{}", {.resource = &resource});
@@ -120,8 +120,8 @@ RUVIA_TEST(json_object_model_field_rejects_non_objects) {
     RUVIA_CHECK(nullObject.has_value());
     if (nullObject) {
         RUVIA_CHECK(!nullObject->get<"object">().has_value());
-        RUVIA_CHECK(ruvia::detail::ModelValidationAccess::fieldState<"object">(*nullObject) ==
-                    ruvia::detail::ModelFieldState::kNull);
+        RUVIA_CHECK(nullObject->isPresent<"object">());
+        RUVIA_CHECK(nullObject->isNull<"object">());
     }
 }
 

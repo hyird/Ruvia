@@ -21,7 +21,7 @@ public:
     }
 
     template <typename ValueT, typename ValidatorT>
-    void validate(ModelFieldState state, bool, const std::optional<ValueT>& value,
+    void validate(ModelFieldState state, const std::optional<ValueT>& value,
         std::string_view path, ValidatorT& validator) const {
         if (state != ModelFieldState::kParsed || !value) {
             return;

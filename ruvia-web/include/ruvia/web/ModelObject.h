@@ -18,7 +18,7 @@
 namespace ruvia {
 class JsonValue;
 class JsonObject;
-}
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -35,6 +35,11 @@ namespace ruvia {
 // owning string passed to parse() must therefore outlive the parsed view;
 // basic_string rvalues are rejected before a dangling view can be created.
 // Model fields may copy the JSON token when the parse owns its strings.
+// Dynamic JSON token, not an ordinary field-validation schema. parse() borrows
+// the complete token; fromJson<Model>() owns it in the model resource instead.
+// Move construction preserves borrowing/ownership. Move assignment keeps the
+// target resource and owns the result (copying borrowed/incompatible storage).
+// Views and potentially borrowed get<T>() results must not outlive their token.
 class JsonValue final {
 public:
     enum class Kind : unsigned char { kObject,
@@ -192,6 +197,8 @@ private:
     Storage storage_;
 };
 
+// Object-only dynamic token with the same borrowing, ownership and move
+// contract as JsonValue. Supplying a resource to parse() does not copy input.
 class JsonObject final {
 public:
     explicit JsonObject(ModelOptions options = {})
