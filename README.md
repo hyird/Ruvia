@@ -859,6 +859,12 @@ padded, stretched, or implicitly decoded from base64/hex. Decode encoded secrets
 before passing them, and do not use passwords or the public demonstration key
 from `examples/web/auth_jwt.cpp` as production keys.
 
+Verification accepts ordinary base64url-encoded compact JWTs, not critical JOSE
+extensions. Headers containing `crit` or `b64` are rejected, including malformed
+uses of `b64` without `crit`. Omit `b64` to use standard JWT encoding; unencoded
+payloads are forbidden for JWTs by RFC 7797. Unrelated noncritical header fields
+remain ignorable.
+
 ## Database Drivers
 
 MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction

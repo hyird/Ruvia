@@ -271,6 +271,34 @@ RUVIA_TEST(jwt_verify_requires_unique_complete_json_objects) {
     }
 }
 
+RUVIA_TEST(jwt_verify_rejects_unsupported_payload_encoding_headers) {
+    constexpr std::string_view payload = R"({"sub":"user-1","exp":4102444800})";
+    for (const auto header : {
+             R"({"alg":"HS256","b64":false})",
+             R"({"alg":"HS256","\u006264":false})",
+             R"({"alg":"HS256","b64":false,"crit":["b64"]})",
+             R"({"alg":"HS256","b64":true})",
+             R"({"alg":"HS256","b64":true,"crit":["b64"]})",
+             R"({"alg":"HS256","b64":"false"})",
+             R"({"alg":"HS256","b64":null})"}) {
+        // The MAC is valid. Reject the encoding extension itself, including
+        // malformed uses that omit crit, rather than misinterpreting payloads.
+        const auto token = signedTokenWithHeaderAndPayload(kSecret, header, payload);
+        bool rejected = false;
+        try {
+            (void)verifyJwt(token, verifyOptions(kSecret));
+        } catch (const std::runtime_error& error) {
+            rejected = std::string_view(error.what()) == "JWT JOSE header is invalid";
+        }
+        RUVIA_CHECK(rejected);
+    }
+    // Noncritical, unrelated extensions remain ignorable; names are case-sensitive.
+    const auto ordinary = signedTokenWithHeaderAndPayload(
+        kSecret, R"({"alg":"HS256","kid":"key-1","B64":false})", payload);
+    const auto verified = verifyJwt(ordinary, verifyOptions(kSecret));
+    RUVIA_CHECK_EQ(verified.subject(), std::string_view("user-1"));
+}
+
 RUVIA_TEST(jwt_verify_rejects_malformed_registered_claim_values) {
     for (const auto* payload : {R"({"iss":1,"exp":4102444800})",
              R"({"sub":false,"exp":4102444800})", R"({"jti":{},"exp":4102444800})",
