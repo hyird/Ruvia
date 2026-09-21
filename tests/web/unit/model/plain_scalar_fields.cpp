@@ -24,10 +24,6 @@ RUVIA_RESPONSE_MODEL(WrappedScalarsResponse, RUVIA_OPTIONAL_FIELD(count, ruvia::
 RUVIA_REQUEST_MODEL(
     WrappedDefaulted, RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(3)));
 
-namespace {
-
-}  // namespace
-
 RUVIA_TEST(model_wrapper_scalar_fields_parse_json_and_forms) {
     constexpr std::string_view body = R"({"count":36,"ratio":9.5,"enabled":true,"delta":-7})";
 

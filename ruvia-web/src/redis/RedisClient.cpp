@@ -45,7 +45,7 @@ void RedisClientState::bindStop() {
     } catch (...) {
         runtime_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeState_.completeBeforeWorkerStart();
+        closeState_.completeBeforePublication();
         throw;
     }
 }
@@ -122,24 +122,14 @@ void RedisClientState::requestClose() noexcept {
         if (phase == Phase::kClosed || phase == Phase::kClosing) {
             return;
         }
-        if (phase == Phase::kFresh) {
-            // A fresh client has not published any backend operation or
-            // worker-owned connection yet. Closing it here preserves the
-            // no-loop-needed destruction path while the atomic transition
-            // excludes a concurrent connect() from entering the backend.
-            if (phase_.compare_exchange_weak(
-                    phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                closeState_.completeBeforeWorkerStart();
-                return;
-            }
-            continue;
-        }
         if (phase_.compare_exchange_weak(
                 phase, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
             break;
         }
     }
 
+    // Completion is worker-affine even before connect(): a fresh client's
+    // close request may race the loop's stop callback.
     if (worker_.isCurrent()) {
         startCloseOnWorker();
         return;

@@ -45,7 +45,7 @@ void DbClientState::bindStop() {
     } catch (...) {
         databases_.closeNow();
         phase_.store(Phase::kClosed, std::memory_order_release);
-        closeState_.completeBeforeWorkerStart();
+        closeState_.completeBeforePublication();
         throw;
     }
 }
@@ -63,15 +63,17 @@ Task<void> DbClientState::connectOnWorker() {
         throw std::logic_error("database client must connect on its bound event loop");
     }
 
-    try {
-        auto expected = Phase::kFresh;
-        if (!phase_.compare_exchange_strong(expected, Phase::kConnecting, std::memory_order_acq_rel,
-                std::memory_order_acquire)) {
-            if (expected == Phase::kClosing || expected == Phase::kClosed) {
-                throw std::runtime_error("database client closed before connecting");
-            }
-            throw std::logic_error("database client can only connect once");
+    auto expected = Phase::kFresh;
+    if (!phase_.compare_exchange_strong(expected, Phase::kConnecting, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+        if (expected == Phase::kClosing || expected == Phase::kClosed) {
+            throw std::runtime_error("database client closed before connecting");
         }
+        throw std::logic_error("database client can only connect once");
+    }
+    // Only the task that acquired startup may close the backend on failure.
+    // Rejected callers must not clear another task's in-flight state or pools.
+    try {
         connectInFlight_ = true;
         if (stopSource_.stopRequested() || !worker_.accepting()) {
             throw std::runtime_error("database client closed before connecting");
@@ -122,24 +124,14 @@ void DbClientState::requestClose() noexcept {
         if (phase == Phase::kClosed || phase == Phase::kClosing) {
             return;
         }
-        if (phase == Phase::kFresh) {
-            // A fresh client has not published any backend operation or
-            // worker-owned connection yet. Closing it here preserves the
-            // no-loop-needed destruction path while the atomic transition
-            // excludes a concurrent connect() from entering the backend.
-            if (phase_.compare_exchange_weak(
-                    phase, Phase::kClosed, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                closeState_.completeBeforeWorkerStart();
-                return;
-            }
-            continue;
-        }
         if (phase_.compare_exchange_weak(
                 phase, Phase::kClosing, std::memory_order_acq_rel, std::memory_order_acquire)) {
             break;
         }
     }
 
+    // Even a fresh client can race the loop's stop callback. Publish only the
+    // close request here; completion and backend teardown belong to the worker.
     if (worker_.isCurrent()) {
         startCloseOnWorker();
         return;

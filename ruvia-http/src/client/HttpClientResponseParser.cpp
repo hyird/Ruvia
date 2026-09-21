@@ -53,7 +53,6 @@ namespace {
 }
 
 }  // namespace
-namespace {}  // namespace
 
 std::string_view http1ClientResponseParseErrorMessage(
     Http1ClientResponseParseError error) noexcept {
