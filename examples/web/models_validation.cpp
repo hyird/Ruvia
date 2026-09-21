@@ -1,10 +1,11 @@
-// Typed request/response models and validation: rules live on the request
-// model fields; routes select the source with JsonBody/FormBody/Query/Param/
-// Header/Cookie. Handlers return HTTP responses using c.json(model).
+// Typed models and validation: rules live on model fields; routes select the
+// source with JsonBody/FormBody/Query/Path/Header/Cookie.
+// Handlers return HTTP responses using c.json(model).
 // jsonIf/formIf still parse without field rules.
 
 #include <charconv>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "ruvia/web/App.h"
@@ -14,20 +15,20 @@ static bool hasRuviaCodePrefix(const ruvia::String& code) {
     return code.view().starts_with("CY-");
 }
 
-RUVIA_REQUEST_MODEL(ProfileRequest,
+RUVIA_MODEL(ProfileRequest,
     RUVIA_REQUIRED_FIELD(displayName, ruvia::String, RUVIA_MIN(2, "display name is too short"),
         RUVIA_MAX(64, "display name is too long")),
     RUVIA_REQUIRED_FIELD(email, ruvia::String, RUVIA_EMAIL("email format is invalid")),
     RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32, RUVIA_MIN(0, "age is too small"),
         RUVIA_MAX(130, "age is too large")));
 
-RUVIA_REQUEST_MODEL(RoleRequest,
+RUVIA_MODEL(RoleRequest,
     RUVIA_REQUIRED_FIELD(
         name, ruvia::String, RUVIA_ONE_OF("role is not allowed", "admin", "user", "editor")),
     RUVIA_OPTIONAL_FIELD(level, ruvia::UInt32, RUVIA_MIN(1, "level is too small"),
         RUVIA_MAX(10, "level is too large")));
 
-RUVIA_REQUEST_MODEL(RegisterRequest,
+RUVIA_MODEL(RegisterRequest,
     RUVIA_OPTIONAL_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest"),
         RUVIA_PATTERN("username format is invalid", "^[a-z][a-z0-9_]*$")),
     RUVIA_REQUIRED_FIELD(password, ruvia::String, RUVIA_MIN(8, "password is too short")),
@@ -39,39 +40,40 @@ RUVIA_REQUEST_MODEL(RegisterRequest,
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>),
     RUVIA_OPTIONAL_FIELD(newsletter, ruvia::Bool));
 
-RUVIA_RESPONSE_MODEL(RegisterResponse, RUVIA_OPTIONAL_FIELD(username, ruvia::String),
+RUVIA_MODEL(RegisterResponse, RUVIA_OPTIONAL_FIELD(username, ruvia::String),
     RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
-RUVIA_REQUEST_MODEL(PatchProfileRequest,
+RUVIA_MODEL(ProfileChanges,
     RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
     RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
 
-RUVIA_RESPONSE_MODEL(ProfileChangesResponse,
-    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
-    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+RUVIA_MODEL(ModelConfig,
+    RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt8, RUVIA_INITIAL(3)),
+    RUVIA_OPTIONAL_FIELD(timeoutMs, ruvia::UInt16, RUVIA_INITIAL(250)),
+    RUVIA_OPTIONAL_FIELD(payload, ruvia::Bytes));
 
-RUVIA_REQUEST_MODEL(ContactForm,
+RUVIA_MODEL(ContactForm,
     RUVIA_OPTIONAL_FIELD(name, ruvia::String, RUVIA_MIN(2, "name is too short")),
     RUVIA_OPTIONAL_FIELD(email, ruvia::String, RUVIA_EMAIL("email format is invalid")),
     RUVIA_OPTIONAL_FIELD(message, ruvia::String, RUVIA_MIN(10, "message is too short")));
 
-RUVIA_REQUEST_MODEL(SearchQuery,
+RUVIA_MODEL(SearchQuery,
     RUVIA_REQUIRED_FIELD(q, ruvia::String, RUVIA_MIN(2, "query is too short")),
     RUVIA_OPTIONAL_FIELD(page, ruvia::UInt32, RUVIA_MIN(1, "page is too small")));
 
-RUVIA_REQUEST_MODEL(
+RUVIA_MODEL(
     CategoryParams, RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(2, "category id is too short")));
 
-RUVIA_REQUEST_MODEL(RequestHeaders,
+RUVIA_MODEL(RequestHeaders,
     RUVIA_REQUIRED_FIELD_NAME(
         "x-request-id", requestId, ruvia::String, RUVIA_MIN(8, "request id is too short")));
 
-RUVIA_REQUEST_MODEL(PreferencesCookie,
+RUVIA_MODEL(PreferencesCookie,
     RUVIA_REQUIRED_FIELD(
         theme, ruvia::String, RUVIA_ONE_OF("theme is not allowed", "light", "dark")));
 
-RUVIA_RESPONSE_MODEL(Category, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+RUVIA_MODEL(Category, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<Category>));
 
 class ModelController final : public ruvia::Controller<ModelController> {
@@ -80,10 +82,11 @@ public:
 
     RUVIA_ROUTES_BEGIN
     RUVIA_POST("/register", registerUser, ruvia::JsonBody<RegisterRequest>);
-    RUVIA_PATCH("/profile", patchProfile, ruvia::JsonBody<PatchProfileRequest>);
+    RUVIA_PATCH("/profile", patchProfile, ruvia::JsonBody<ProfileChanges>);
     RUVIA_POST("/contact", contact, ruvia::FormBody<ContactForm>);
     RUVIA_GET("/search", search, ruvia::QueryModel<SearchQuery>);
     RUVIA_GET("/category", category);
+    RUVIA_GET("/config", config);
     RUVIA_GET("/category/:id", categoryById, ruvia::PathModel<CategoryParams>);
     RUVIA_GET("/headers", headers, ruvia::HeaderModel<RequestHeaders>);
     RUVIA_GET("/cookies", cookies, ruvia::CookieModel<PreferencesCookie>);
@@ -91,22 +94,19 @@ public:
     RUVIA_ROUTES_END
 
 private:
+    ruvia::Task<ruvia::HttpResponse> config(ruvia::Context& c) {
+        // INITIAL applies to this construction, not to JSON request parsing.
+        ModelConfig value({.resource = c.arena()});
+        constexpr std::uint8_t bytes[] = {0, 1, 2, 255};
+        value.set<"payload">(std::span<const std::uint8_t>(bytes));
+        co_return c.json(value);  // payload is the base64 string "AAEC/w==".
+    }
+
     // Echo the requested changes: omission means leave unchanged, null means
     // clear, and a concrete value means assign. No raw JSON inspection needed.
     ruvia::Task<ruvia::HttpResponse> patchProfile(ruvia::Context& c) {
-        const auto& patch = c.req().validated<PatchProfileRequest>();
-        ProfileChangesResponse changes({.resource = c.arena()});
-        if (patch.isPresent<"enabled">()) {
-            changes.set<"enabled">(*patch.get<"enabled">());
-        }
-        if (patch.isPresent<"remark">()) {
-            if (patch.isNull<"remark">()) {
-                changes.set<"remark">(nullptr);
-            } else {
-                changes.set<"remark">(patch.get<"remark">()->view());
-            }
-        }
-        co_return c.json(changes);
+        const auto& patch = c.req().validated<ProfileChanges>();
+        co_return c.json(patch);
     }
 
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {

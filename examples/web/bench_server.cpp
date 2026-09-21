@@ -7,19 +7,16 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-RUVIA_REQUEST_MODEL(UserDTO, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
+RUVIA_MODEL(User, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(UserEcho, RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32), RUVIA_OPTIONAL_FIELD(email, ruvia::String));
-
-RUVIA_RESPONSE_MODEL(StatusResponse, RUVIA_OPTIONAL_FIELD(status, ruvia::String),
+RUVIA_MODEL(StatusResponse, RUVIA_OPTIONAL_FIELD(status, ruvia::String),
     RUVIA_OPTIONAL_FIELD(framework, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
+RUVIA_MODEL(UserByIdResponse, RUVIA_OPTIONAL_FIELD(userId, ruvia::String),
     RUVIA_OPTIONAL_FIELD(name, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(MiddlewareResponse, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
+RUVIA_MODEL(MiddlewareResponse, RUVIA_OPTIONAL_FIELD(middleware_count, ruvia::UInt32));
 
 template <int N>
 class Passthrough final : public ruvia::Middleware {
@@ -36,7 +33,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", hello);
     RUVIA_GET("/api/status", status);
-    RUVIA_POST("/api/echo", echo, ruvia::JsonBody<UserDTO>);
+    RUVIA_POST("/api/echo", echo, ruvia::JsonBody<User>);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/middleware/0", middleware0);
     RUVIA_GET("/middleware/3", middleware3, Passthrough<0>, Passthrough<1>, Passthrough<2>);
@@ -57,18 +54,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto& user = c.req().validated<UserDTO>();
-        UserEcho response({.resource = c.arena()});
-        if (const auto& name = user.get<"name">()) {
-            response.set<"name">(name->view());
-        }
-        if (const auto& age = user.get<"age">()) {
-            response.set<"age">(*age);
-        }
-        if (const auto& email = user.get<"email">()) {
-            response.set<"email">(email->view());
-        }
-        co_return c.json(response);
+        const auto& user = c.req().validated<User>();
+        co_return c.json(user);
     }
 
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {

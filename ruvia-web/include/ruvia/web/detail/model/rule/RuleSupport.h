@@ -66,8 +66,8 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] bool isEmptyValue(const T& value) noexcept {
-    if constexpr (detail::isRuviaString<T> || detail::isRuviaArray<T> ||
-                  detail::isRuviaBoxedArray<T>) {
+    if constexpr (detail::isRuviaString<T> || detail::isRuviaBytes<T> ||
+                  detail::isRuviaArray<T> || detail::isRuviaBoxedArray<T>) {
         return value.empty();
     } else {
         return false;
@@ -77,11 +77,13 @@ template <typename T>
 template <typename T>
 [[nodiscard]] constexpr std::string_view expectedTypeName() noexcept {
     using ValueT = std::remove_cvref_t<T>;
-    if constexpr (detail::isRuviaString<ValueT>) {
+    if constexpr (detail::isRuviaBytes<ValueT>) {
+        return "must be a padded base64 string";
+    } else if constexpr (detail::isRuviaString<ValueT>) {
         return "must be a string";
     } else if constexpr (detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>) {
         return "must be an array";
-    } else if constexpr (detail::isRuviaJsonObject<ValueT> || isRequestModel<ValueT>) {
+    } else if constexpr (detail::isRuviaJsonObject<ValueT> || isModel<ValueT>) {
         return "must be an object";
     } else if constexpr (detail::isRuviaJsonValue<ValueT>) {
         return "must be a JSON value";
@@ -99,8 +101,8 @@ template <typename T>
 template <typename T>
 [[nodiscard]] constexpr bool modelHasSizeRule() noexcept {
     using ValueT = std::remove_cvref_t<T>;
-    return detail::isRuviaString<ValueT> || detail::isRuviaArray<ValueT> ||
-           detail::isRuviaBoxedArray<ValueT>;
+    return detail::isRuviaString<ValueT> || detail::isRuviaBytes<ValueT> ||
+           detail::isRuviaArray<ValueT> || detail::isRuviaBoxedArray<ValueT>;
 }
 
 template <typename T>
@@ -141,6 +143,22 @@ template <typename Rule>
 [[nodiscard]] constexpr bool isDefaultRule() noexcept {
     using RuleT = std::remove_cvref_t<Rule>;
     return requires { typename RuleT::RuviaDefaultRuleMarker; };
+}
+
+template <auto Provider>
+struct Initial final {
+    using RuviaInitialRuleMarker = void;
+    using RuviaModelOptionMarker = void;
+
+    [[nodiscard]] static constexpr decltype(auto) value() {
+        return Provider();
+    }
+};
+
+template <typename Rule>
+[[nodiscard]] constexpr bool isInitialRule() noexcept {
+    using RuleT = std::remove_cvref_t<Rule>;
+    return requires { typename RuleT::RuviaInitialRuleMarker; };
 }
 
 template <typename Rule>

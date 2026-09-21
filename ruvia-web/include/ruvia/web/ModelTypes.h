@@ -8,6 +8,8 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -25,6 +27,12 @@ namespace ruvia {
 class RequestNameValueList;
 
 namespace detail {
+
+template <typename T>
+inline constexpr bool isModelNarrowInteger =
+    std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, char> &&
+    !std::is_same_v<T, wchar_t> && !std::is_same_v<T, char8_t> &&
+    !std::is_same_v<T, char16_t> && !std::is_same_v<T, char32_t>;
 
 class ModelInput;
 struct ModelValueFactory;
@@ -137,6 +145,10 @@ public:
     }
     operator std::string_view() const&& = delete;
 
+    friend bool operator==(const String& left, const String& right) noexcept {
+        return left.view() == right.view();
+    }
+
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
@@ -224,6 +236,114 @@ struct Double final {
     }
 };
 
+struct Int8 final {
+    std::int8_t value{0};
+    constexpr Int8() noexcept = default;
+    constexpr Int8(std::int8_t input) noexcept
+        : value(input) {}
+    template <typename T>
+        requires(detail::isModelNarrowInteger<T> &&
+                 !std::is_same_v<std::remove_cv_t<T>, std::int8_t>)
+    constexpr Int8(T input)
+        : value(checked(input)) {}
+    template <typename T>
+        requires(!detail::isModelNarrowInteger<T>)
+    Int8(T) = delete;
+    [[nodiscard]] constexpr operator std::int8_t() const noexcept {
+        return value;
+    }
+
+private:
+    template <typename T>
+    static constexpr std::int8_t checked(T input) {
+        if (!std::in_range<std::int8_t>(input)) {
+            throw std::out_of_range("Int8 value is out of range");
+        }
+        return static_cast<std::int8_t>(input);
+    }
+};
+
+struct UInt8 final {
+    std::uint8_t value{0};
+    constexpr UInt8() noexcept = default;
+    constexpr UInt8(std::uint8_t input) noexcept
+        : value(input) {}
+    template <typename T>
+        requires(detail::isModelNarrowInteger<T> &&
+                 !std::is_same_v<std::remove_cv_t<T>, std::uint8_t>)
+    constexpr UInt8(T input)
+        : value(checked(input)) {}
+    template <typename T>
+        requires(!detail::isModelNarrowInteger<T>)
+    UInt8(T) = delete;
+    [[nodiscard]] constexpr operator std::uint8_t() const noexcept {
+        return value;
+    }
+
+private:
+    template <typename T>
+    static constexpr std::uint8_t checked(T input) {
+        if (!std::in_range<std::uint8_t>(input)) {
+            throw std::out_of_range("UInt8 value is out of range");
+        }
+        return static_cast<std::uint8_t>(input);
+    }
+};
+
+struct Int16 final {
+    std::int16_t value{0};
+    constexpr Int16() noexcept = default;
+    constexpr Int16(std::int16_t input) noexcept
+        : value(input) {}
+    template <typename T>
+        requires(detail::isModelNarrowInteger<T> &&
+                 !std::is_same_v<std::remove_cv_t<T>, std::int16_t>)
+    constexpr Int16(T input)
+        : value(checked(input)) {}
+    template <typename T>
+        requires(!detail::isModelNarrowInteger<T>)
+    Int16(T) = delete;
+    [[nodiscard]] constexpr operator std::int16_t() const noexcept {
+        return value;
+    }
+
+private:
+    template <typename T>
+    static constexpr std::int16_t checked(T input) {
+        if (!std::in_range<std::int16_t>(input)) {
+            throw std::out_of_range("Int16 value is out of range");
+        }
+        return static_cast<std::int16_t>(input);
+    }
+};
+
+struct UInt16 final {
+    std::uint16_t value{0};
+    constexpr UInt16() noexcept = default;
+    constexpr UInt16(std::uint16_t input) noexcept
+        : value(input) {}
+    template <typename T>
+        requires(detail::isModelNarrowInteger<T> &&
+                 !std::is_same_v<std::remove_cv_t<T>, std::uint16_t>)
+    constexpr UInt16(T input)
+        : value(checked(input)) {}
+    template <typename T>
+        requires(!detail::isModelNarrowInteger<T>)
+    UInt16(T) = delete;
+    [[nodiscard]] constexpr operator std::uint16_t() const noexcept {
+        return value;
+    }
+
+private:
+    template <typename T>
+    static constexpr std::uint16_t checked(T input) {
+        if (!std::in_range<std::uint16_t>(input)) {
+            throw std::out_of_range("UInt16 value is out of range");
+        }
+        return static_cast<std::uint16_t>(input);
+    }
+};
+
 struct Int32 final {
     std::int32_t value{0};
     constexpr Int32() noexcept = default;
@@ -262,6 +382,86 @@ struct UInt64 final {
     [[nodiscard]] constexpr operator std::uint64_t() const noexcept {
         return value;
     }
+};
+
+class Bytes final {
+public:
+    explicit Bytes(ModelOptions options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
+          items_(resource_) {}
+
+    Bytes(std::span<const std::uint8_t> value, ModelOptions options = {})
+        : resource_(detail::pmrResourceOrDefault(options.resource)),
+          items_(value.begin(), value.end(), resource_) {}
+
+    Bytes(const Bytes&) = delete;
+    Bytes& operator=(const Bytes&) = delete;
+
+    Bytes(Bytes&& other) noexcept
+        : resource_(other.resource_),
+          items_(std::move(other.items_)) {}
+
+    Bytes& operator=(Bytes&& other) {
+        if (this == &other) {
+            return *this;
+        }
+        auto rebound = std::move(other).rebindForModel(resource_);
+        items_ = std::move(rebound.items_);
+        return *this;
+    }
+
+    [[nodiscard]] std::span<const std::uint8_t> view() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_;
+    }
+    [[nodiscard]] std::span<const std::uint8_t> view() const&& = delete;
+    [[nodiscard]] std::size_t size() const noexcept {
+        return items_.size();
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return items_.empty();
+    }
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
+    void assignOwned(std::span<const std::uint8_t> value) {
+        std::pmr::vector<std::uint8_t> owned(value.begin(), value.end(), resource_);
+        items_ = std::move(owned);
+    }
+
+    void assignOwned(std::pmr::vector<std::uint8_t>&& value) {
+        if (value.get_allocator().resource() == resource_) {
+            items_ = std::move(value);
+            return;
+        }
+        std::pmr::vector<std::uint8_t> owned(value.begin(), value.end(), resource_);
+        items_ = std::move(owned);
+    }
+
+    friend bool operator==(const Bytes& left, const Bytes& right) noexcept {
+        return left.size() == right.size() &&
+               std::equal(left.view().begin(), left.view().end(), right.view().begin());
+    }
+
+private:
+    friend struct detail::ModelValueRebindAccess;
+
+    [[nodiscard]] Bytes rebindForModel(std::pmr::memory_resource* resource) const& {
+        return Bytes(view(), {.resource = resource});
+    }
+
+    [[nodiscard]] Bytes rebindForModel(std::pmr::memory_resource* resource) && {
+        Bytes rebound(ModelOptions{.resource = resource});
+        if (resource_ == resource) {
+            rebound.items_ = std::move(items_);
+        } else {
+            rebound.assignOwned(view());
+        }
+        return rebound;
+    }
+
+    std::pmr::memory_resource* resource_;
+    std::pmr::vector<std::uint8_t> items_;
 };
 
 template <typename T>
@@ -417,6 +617,10 @@ public:
 
     void push_back(T&& value) & {
         (void)emplaceOwned(std::move(value));
+    }
+
+    friend bool operator==(const Array& left, const Array& right) {
+        return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin());
     }
 
 private:
@@ -607,6 +811,18 @@ public:
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
+    }
+
+    friend bool operator==(const BoxedArray& left, const BoxedArray& right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            if (!(left[i] == right[i])) {
+                return false;
+            }
+        }
+        return true;
     }
 
 private:

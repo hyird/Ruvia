@@ -21,17 +21,17 @@ namespace {
 using ruvia::Validator;
 using ruvia::test::CountingMemoryResource;
 
-RUVIA_REQUEST_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
+RUVIA_MODEL(RequiredOptionalModel, RUVIA_REQUIRED_FIELD(requiredValue, ruvia::String),
     RUVIA_OPTIONAL_FIELD(optionalValue, ruvia::String));
 
-RUVIA_REQUEST_MODEL(RequiredRulesModel,
+RUVIA_MODEL(RequiredRulesModel,
     RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is too short"),
         RUVIA_MAX(64, "id is too long")),
     RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is too short"),
         RUVIA_MAX(120, "name is too long")),
     RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_REQUEST_MODEL(OptionalRulesModel,
+RUVIA_MODEL(OptionalRulesModel,
     RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_MIN(1, "value is empty")));
 
 [[nodiscard]] std::exception_ptr captureValidationException(

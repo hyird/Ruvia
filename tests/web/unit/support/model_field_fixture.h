@@ -15,26 +15,26 @@
 
 namespace model_field_test {
 
-RUVIA_REQUEST_MODEL(AccessorSurfaceRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(AccessorSurfaceRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(AccessorSurfaceResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(AccessorSurfaceResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
-RUVIA_REQUEST_MODEL(NestedModelItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
+RUVIA_MODEL(NestedModelItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(label, ruvia::String));
 
-RUVIA_REQUEST_MODEL(NestedModelEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedModelItem),
+RUVIA_MODEL(NestedModelEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedModelItem),
     RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedModelItem>),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
-RUVIA_RESPONSE_MODEL(NestedResponseItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
+RUVIA_MODEL(NestedResponseItem, RUVIA_REQUIRED_FIELD(id, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(label, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(NestedResponseEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedResponseItem),
+RUVIA_MODEL(NestedResponseEnvelope, RUVIA_REQUIRED_FIELD(primary, NestedResponseItem),
     RUVIA_REQUIRED_FIELD(items, ruvia::Array<NestedResponseItem>),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
 #define RUVIA_TEST_BOOL_FIELD(field) RUVIA_OPTIONAL_FIELD(field, ruvia::Bool)
-RUVIA_RESPONSE_MODEL(UnlimitedFieldCountResponse, RUVIA_TEST_BOOL_FIELD(f01),
+RUVIA_MODEL(UnlimitedFieldCountResponse, RUVIA_TEST_BOOL_FIELD(f01),
     RUVIA_TEST_BOOL_FIELD(f02), RUVIA_TEST_BOOL_FIELD(f03), RUVIA_TEST_BOOL_FIELD(f04),
     RUVIA_TEST_BOOL_FIELD(f05), RUVIA_TEST_BOOL_FIELD(f06), RUVIA_TEST_BOOL_FIELD(f07),
     RUVIA_TEST_BOOL_FIELD(f08), RUVIA_TEST_BOOL_FIELD(f09), RUVIA_TEST_BOOL_FIELD(f10),

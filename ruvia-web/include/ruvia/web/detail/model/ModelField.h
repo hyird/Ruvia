@@ -109,6 +109,12 @@ public:
         value_.reset();
     }
 
+    void applyInitial(std::pmr::memory_resource* resource) {
+        OptionsT::applyInitial([this, resource]<typename InputT>(InputT&& value) {
+            this->assign(std::forward<InputT>(value), resource);
+        });
+    }
+
     void applyDefault(std::pmr::memory_resource* resource) {
         // A default never satisfies a required input field.
         if (Required || state_ != detail::ModelFieldState::kMissing) {
@@ -125,6 +131,16 @@ public:
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
         return OptionsT::omitEmpty();
+    }
+
+    friend bool operator==(const ModelField& left, const ModelField& right) {
+        if (left.state_ != right.state_) {
+            return false;
+        }
+        if (left.state_ == detail::ModelFieldState::kParsed) {
+            return left.value_ == right.value_;
+        }
+        return true;
     }
 
     void markDuplicate() noexcept {

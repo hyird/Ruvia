@@ -3,7 +3,7 @@
 #include "context_request_fixture.h"
 #include "model_field_fixture.h"
 
-RUVIA_REQUEST_MODEL(HeaderSpellingModel,
+RUVIA_MODEL(HeaderSpellingModel,
     RUVIA_REQUIRED_FIELD_NAME("x-oTHER", trace, ruvia::String));
 
 // Reading a request through Context: cookies, query, route params and headers, and the caches each

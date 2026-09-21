@@ -174,7 +174,7 @@ template <ValidationTarget Target>
 
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
-    static_assert(isRequestModel<BodyT>, "field validator body type must use RUVIA_REQUEST_MODEL");
+    static_assert(isModel<BodyT>, "field validator body type must use RUVIA_MODEL");
     auto parsed = detail::ModelParseAccess::parseFormFieldsPartial<BodyT>(fields, c.arena());
     if (!parsed) {
         throwInvalidValidationTarget<Target>();

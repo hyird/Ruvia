@@ -7,19 +7,19 @@
 
 #include "test_harness.h"
 
-RUVIA_REQUEST_MODEL(RequestBindingParams,
+RUVIA_MODEL(RequestBindingParams,
     RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(2, "id is too short")));
 
-RUVIA_REQUEST_MODEL(RequestBindingBody,
+RUVIA_MODEL(RequestBindingBody,
     RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(2, "name is too short")));
 
-RUVIA_REQUEST_MODEL(PatchBindingBody,
+RUVIA_MODEL(PatchBindingBody,
     RUVIA_REQUIRED_FIELD(token, ruvia::String, RUVIA_DEFAULT("not-a-required-input")),
     RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(0), RUVIA_MIN(1, "must be positive")),
     RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")),
     RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool));
 
-RUVIA_RESPONSE_MODEL(RequestBindingOut, RUVIA_REQUIRED_FIELD(id, ruvia::String),
+RUVIA_MODEL(RequestBindingOut, RUVIA_REQUIRED_FIELD(id, ruvia::String),
     RUVIA_REQUIRED_FIELD(name, ruvia::String));
 
 namespace {
@@ -40,7 +40,12 @@ public:
     RUVIA_PUT("/request-binding/:id", update, ruvia::PathModel<RequestBindingParams>,
         ruvia::JsonBody<RequestBindingBody>);
     RUVIA_PATCH("/request-binding-patch", patch, ruvia::JsonBody<PatchBindingBody>);
+    RUVIA_POST("/request-binding-echo", echo, ruvia::JsonBody<RequestBindingBody>);
     RUVIA_ROUTES_END
+
+    ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
+        co_return c.json(c.req().validated<RequestBindingBody>());
+    }
 
     ruvia::Task<ruvia::HttpResponse> patch(ruvia::Context& c) {
         const auto& body = c.req().validated<PatchBindingBody>();
@@ -80,6 +85,18 @@ RUVIA_TEST(request_binding_enforces_defaults_and_exposes_patch_states) {
         const auto response = app.request(ruvia::TestRequest::patch("/request-binding-patch").json(body));
         RUVIA_CHECK(response.status() == ruvia::http_status::kBadRequest);
         RUVIA_CHECK(response.body().find(code) != std::string_view::npos);
+    }
+}
+
+RUVIA_TEST(request_binding_serializes_the_validated_model_without_copying_fields) {
+    ruvia::TestApp app;
+    const auto ok = app.request(
+        ruvia::TestRequest::post("/request-binding-echo").json(R"({"name":"A\u006c"})"));
+    RUVIA_CHECK(ok.status() == ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(ok.body(), std::string_view(R"({"name":"Al"})"));
+    for (const auto body : {R"({"name":"A"})", R"({"name":null})", R"({})", R"({"name":"Al","name":"Bob"})"}) {
+        const auto rejected = app.request(ruvia::TestRequest::post("/request-binding-echo").json(body));
+        RUVIA_CHECK(rejected.status() == ruvia::http_status::kBadRequest);
     }
 }
 

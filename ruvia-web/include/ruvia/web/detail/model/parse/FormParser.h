@@ -16,7 +16,7 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Traits.h"
 
-// Internal URL-encoded form parser for RUVIA_REQUEST_MODEL.
+// Internal URL-encoded form parser for RUVIA_MODEL.
 
 namespace ruvia::detail {
 

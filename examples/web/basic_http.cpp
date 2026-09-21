@@ -38,7 +38,7 @@ public:
     }
 };
 
-RUVIA_RESPONSE_MODEL(UserResponse, RUVIA_OPTIONAL_FIELD(id, ruvia::String),
+RUVIA_MODEL(UserResponse, RUVIA_OPTIONAL_FIELD(id, ruvia::String),
     RUVIA_OPTIONAL_FIELD(name, ruvia::String), RUVIA_OPTIONAL_FIELD(active, ruvia::Bool));
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(

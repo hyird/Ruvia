@@ -17,30 +17,30 @@
 
 namespace {
 
-RUVIA_REQUEST_MODEL(RequiredValue, RUVIA_REQUIRED_FIELD(value, ruvia::String));
-RUVIA_REQUEST_MODEL(OptionalValue, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
-RUVIA_REQUEST_MODEL(RequiredNullableValue,
+RUVIA_MODEL(RequiredValue, RUVIA_REQUIRED_FIELD(value, ruvia::String));
+RUVIA_MODEL(OptionalValue, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
+RUVIA_MODEL(RequiredNullableValue,
     RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_NULLABLE));
-RUVIA_REQUEST_MODEL(OptionalNullableValue,
+RUVIA_MODEL(OptionalNullableValue,
     RUVIA_OPTIONAL_FIELD(value, ruvia::String, RUVIA_NULLABLE));
-RUVIA_REQUEST_MODEL(DefaultValue,
+RUVIA_MODEL(DefaultValue,
     RUVIA_OPTIONAL_FIELD(value, ruvia::String, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")));
-RUVIA_REQUEST_MODEL(NullableDefaultValue,
+RUVIA_MODEL(NullableDefaultValue,
     RUVIA_OPTIONAL_FIELD(value, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")));
-RUVIA_REQUEST_MODEL(InvalidDefaultValue,
+RUVIA_MODEL(InvalidDefaultValue,
     RUVIA_OPTIONAL_FIELD(value, ruvia::UInt32, RUVIA_DEFAULT(3), RUVIA_MIN(5, "too small")));
-RUVIA_REQUEST_MODEL(RequiredDefaultValue,
+RUVIA_MODEL(RequiredDefaultValue,
     RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_DEFAULT("fallback")));
-RUVIA_REQUEST_MODEL(RequiredNullableDefaultValue,
+RUVIA_MODEL(RequiredNullableDefaultValue,
     RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
-RUVIA_REQUEST_MODEL(NamedValue,
+RUVIA_MODEL(NamedValue,
     RUVIA_OPTIONAL_FIELD_NAME("wire_value", value, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
-RUVIA_REQUEST_MODEL(PatchValue,
+RUVIA_MODEL(PatchValue,
     RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
     RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
-RUVIA_REQUEST_MODEL(NestedValues,
+RUVIA_MODEL(NestedValues,
     RUVIA_REQUIRED_FIELD(children, ruvia::Array<NullableDefaultValue>));
-RUVIA_REQUEST_MODEL(NullableKinds,
+RUVIA_MODEL(NullableKinds,
     RUVIA_REQUIRED_FIELD(flag, ruvia::Bool, RUVIA_NULLABLE),
     RUVIA_REQUIRED_FIELD(number, ruvia::UInt32, RUVIA_NULLABLE),
     RUVIA_REQUIRED_FIELD(child, RequiredValue, RUVIA_NULLABLE),
@@ -48,15 +48,15 @@ RUVIA_REQUEST_MODEL(NullableKinds,
     RUVIA_REQUIRED_FIELD(boxes, ruvia::BoxedArray<RequiredValue>, RUVIA_NULLABLE),
     RUVIA_REQUIRED_FIELD(payload, ruvia::JsonValue, RUVIA_NULLABLE),
     RUVIA_REQUIRED_FIELD(object, ruvia::JsonObject, RUVIA_NULLABLE));
-RUVIA_REQUEST_MODEL(DynamicValue,
+RUVIA_MODEL(DynamicValue,
     RUVIA_OPTIONAL_FIELD(value, ruvia::JsonValue));
-RUVIA_REQUEST_MODEL(DynamicObject,
+RUVIA_MODEL(DynamicObject,
     RUVIA_OPTIONAL_FIELD(value, ruvia::JsonObject));
-RUVIA_REQUEST_MODEL(OwnedValues,
+RUVIA_MODEL(OwnedValues,
     RUVIA_OPTIONAL_FIELD(value, ruvia::JsonValue, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(note, ruvia::String, RUVIA_DEFAULT("a default string long enough to allocate storage")));
-RUVIA_RESPONSE_MODEL(NullableResponse,
+RUVIA_MODEL(NullableResponse,
     RUVIA_REQUIRED_FIELD(required, ruvia::String, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(optional, ruvia::String, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(dynamic, ruvia::JsonValue, RUVIA_NULLABLE));

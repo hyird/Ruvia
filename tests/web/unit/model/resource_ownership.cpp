@@ -12,21 +12,21 @@
 
 namespace {
 
-RUVIA_REQUEST_MODEL(ResourceChild,
+RUVIA_MODEL(ResourceChild,
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
-RUVIA_REQUEST_MODEL(ResourceParent,
+RUVIA_MODEL(ResourceParent,
     RUVIA_REQUIRED_FIELD(title, ruvia::String),
     RUVIA_OPTIONAL_FIELD(child, ResourceChild),
     RUVIA_OPTIONAL_FIELD(children, ruvia::Array<ResourceChild>),
     RUVIA_OPTIONAL_FIELD(boxed, ruvia::BoxedArray<ResourceChild>));
-RUVIA_REQUEST_MODEL(ResourceNode,
+RUVIA_MODEL(ResourceNode,
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(children, ruvia::BoxedArray<ResourceNode>));
-RUVIA_REQUEST_MODEL(ResourceDenseNode,
+RUVIA_MODEL(ResourceDenseNode,
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(children, ruvia::Array<ResourceDenseNode>));
-RUVIA_REQUEST_MODEL(ResourcePair,
+RUVIA_MODEL(ResourcePair,
     RUVIA_REQUIRED_FIELD(first, ruvia::String),
     RUVIA_REQUIRED_FIELD(second, ruvia::String));
 
