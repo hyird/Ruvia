@@ -139,16 +139,6 @@ bool throwsInvalidArgument(Fn&& fn) {
     }
 }
 
-// Command arguments passed as ordinary arguments rather than a prepared span.
-
-// Alternating name/value commands need complete pairs.
-
-// Variadic commands synchronously clone owning-string temporaries.
-
-constexpr ruvia::RedisScanOptions kLiteralRedisScanOptions{
-    .match = "session:*",
-};
-
 }  // namespace
 
 RUVIA_TEST(

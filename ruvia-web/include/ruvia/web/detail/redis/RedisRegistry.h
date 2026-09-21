@@ -4,7 +4,7 @@
 #include "ruvia/core/detail/worker/WorkerCancellationPost.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/web/redis/Redis.h"
+#include "ruvia/web/redis/RedisHandle.h"
 
 #ifndef RUVIA_ENABLE_REDIS
 
@@ -61,6 +61,7 @@ public:
 #include "ruvia/core/detail/io/OperationDeadline.h"
 #include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/web/detail/redis/RedisClientRuntime.h"
 
 struct redisReader;
 
@@ -220,19 +221,7 @@ public:
     [[nodiscard]] RedisHandle get(std::string_view alias, ScopedOperationScope& operationScope) const;
 
 private:
-    using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
-
-    struct Entry final {
-        Entry(const RedisConfigStorage& config, std::pmr::memory_resource* resource)
-            : config(config, resource) {}
-
-        // Declared before the pools so their borrowed config reference remains
-        // valid through pool destruction. The registry reserves the complete
-        // entry set before construction, keeping this address stable at runtime.
-        RedisConfigStorage config;
-        std::unique_ptr<RedisPool, RedisPoolDeleter> general;
-        std::unique_ptr<RedisPool, RedisPoolDeleter> blocking;
-    };
+    using Entry = std::unique_ptr<RedisClientRuntime, PmrObjectDeleter<RedisClientRuntime>>;
 
     WorkerHandle worker_;
     std::pmr::memory_resource* resource_;
