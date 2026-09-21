@@ -1,9 +1,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
-#include <memory_resource>
+#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
@@ -14,7 +15,7 @@
 namespace {
 
 std::string formatDate(std::time_t time) {
-    const auto out = ruvia::detail::httpFormatDate(std::pmr::get_default_resource(), time);
+    const auto out = ruvia::detail::httpFormatDate(time).value();
     return std::string(out.data(), out.size());
 }
 
@@ -201,10 +202,15 @@ RUVIA_TEST(http_format_date_known_vectors) {
 
 RUVIA_TEST(http_format_date_round_trips_with_parse) {
     using ruvia::detail::httpParseImfFixdate;
-    const std::time_t samples[] = {
-        0, 1, 59, 3661, 86400, 784111777, 1000000000, 1600000000, 2000000000, 2147483647};
+    const std::int64_t samples[] = {
+        -62167219200LL, -11644473600LL, -315619200, -1,
+        0, 1, 59, 3661, 86400, 784111777, 1000000000, 1600000000, 2000000000, 2147483647,
+        32535216000LL, 253402300799LL};
     for (const auto sample : samples) {
-        const auto formatted = formatDate(sample);
+        if (!std::in_range<std::time_t>(sample)) {
+            continue;
+        }
+        const auto formatted = formatDate(static_cast<std::time_t>(sample));
         RUVIA_CHECK_EQ(formatted.size(), std::size_t{29});
         const auto parsed = httpParseImfFixdate(formatted);
         RUVIA_CHECK(parsed.has_value());
@@ -214,33 +220,48 @@ RUVIA_TEST(http_format_date_round_trips_with_parse) {
     }
 }
 
-RUVIA_TEST(imf_fixdate_writer_known_vector) {
-    std::tm utc{};
-    utc.tm_wday = 0;  // Sunday
-    utc.tm_mday = 6;
-    utc.tm_mon = 10;   // November
-    utc.tm_year = 94;  // 1994
-    utc.tm_hour = 8;
-    utc.tm_min = 49;
-    utc.tm_sec = 37;
-    char buffer[ruvia::detail::kImfFixdateSize];
-    const auto written = ruvia::detail::httpWriteImfFixdate(buffer, utc);
-    RUVIA_CHECK_EQ(written, ruvia::detail::kImfFixdateSize);
-    RUVIA_CHECK_EQ(std::string(buffer, written), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
+RUVIA_TEST(http_date_conversion_rejects_unrepresentable_years) {
+    for (const auto time : {std::int64_t{-62167219201LL}, std::int64_t{253402300800LL},
+             std::numeric_limits<std::int64_t>::min(), std::numeric_limits<std::int64_t>::max()}) {
+        if (!std::in_range<std::time_t>(time)) {
+            continue;
+        }
+        const auto date = ruvia::detail::httpFormatDate(static_cast<std::time_t>(time));
+        RUVIA_CHECK(!date);
+        if (!date) {
+            RUVIA_CHECK(date.error() == ruvia::detail::HttpDateFormatError::kOutOfRange);
+        }
+    }
+    RUVIA_CHECK_EQ(formatDate(-315619200), std::string("Fri, 01 Jan 1960 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(-1), std::string("Wed, 31 Dec 1969 23:59:59 GMT"));
+    if (std::in_range<std::time_t>(253402300799LL)) {
+        RUVIA_CHECK_EQ(formatDate(static_cast<std::time_t>(253402300799LL)), std::string("Fri, 31 Dec 9999 23:59:59 GMT"));
+    }
 }
 
-RUVIA_TEST(imf_fixdate_writer_clamps_out_of_range_indices) {
-    // A corrupt tm must not index the day/month tables out of bounds.
-    std::tm utc{};
-    utc.tm_wday = 99;
-    utc.tm_mon = 99;
-    utc.tm_mday = 1;
-    utc.tm_year = 70;
-    char buffer[ruvia::detail::kImfFixdateSize];
-    const auto written = ruvia::detail::httpWriteImfFixdate(buffer, utc);
-    RUVIA_CHECK_EQ(written, ruvia::detail::kImfFixdateSize);
-    RUVIA_CHECK_EQ(std::string(buffer, 3), std::string("Sun"));      // wday 99 -> 0
-    RUVIA_CHECK_EQ(std::string(buffer + 8, 3), std::string("Jan"));  // mon 99 -> 0
+RUVIA_TEST(http_date_cache_omits_unavailable_dates_and_recovers) {
+    using ruvia::detail::cachedDateHeader;
+    using ruvia::detail::cachedDateValue;
+    RUVIA_CHECK(!cachedDateHeader(0).empty());
+    for (const auto value : {std::int64_t{-1}, std::numeric_limits<std::int64_t>::max(),
+             std::numeric_limits<std::int64_t>::min()}) {
+        if (!std::in_range<std::time_t>(value)) {
+            continue;
+        }
+        const auto time = static_cast<std::time_t>(value);
+        RUVIA_CHECK(cachedDateHeader(time).empty());
+        RUVIA_CHECK(cachedDateValue(time).empty());
+        RUVIA_CHECK(cachedDateHeader(time).empty());
+    }
+    RUVIA_CHECK_EQ(cachedDateValue(-2), std::string_view("Wed, 31 Dec 1969 23:59:58 GMT"));
+    RUVIA_CHECK_EQ(cachedDateHeader(0), std::string_view("Date: Thu, 01 Jan 1970 00:00:00 GMT\r\n"));
+    RUVIA_CHECK_EQ(cachedDateValue(0), std::string_view("Thu, 01 Jan 1970 00:00:00 GMT"));
+}
+
+RUVIA_TEST(imf_fixdate_format_known_vector) {
+    const auto date = ruvia::detail::httpFormatDate(784111777).value();
+    RUVIA_CHECK_EQ(date.size(), ruvia::detail::kImfFixdateSize);
+    RUVIA_CHECK_EQ(std::string(date.data(), date.size()), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
 }
 
 RUVIA_TEST(cached_date_header_framing_and_validity) {

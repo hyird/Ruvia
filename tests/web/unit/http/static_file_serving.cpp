@@ -9,6 +9,7 @@
 #include <limits>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -986,7 +987,7 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     const std::time_t modified = lastModified.value_or(0);
 
     const auto fmt = [](std::time_t t) {
-        const auto out = ruvia::detail::httpFormatDate(std::pmr::get_default_resource(), t);
+        const auto out = ruvia::detail::httpFormatDate(t).value();
         return std::string(out.data(), out.size());
     };
 
@@ -1007,6 +1008,61 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     // If-Range date OLDER than Last-Modified: representation has since changed -> 200.
     RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, ruvia::http_status::kOk);
 
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
+    namespace fs = std::filesystem;
+    using namespace std::chrono;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_historical_mtime_dir";
+    fs::create_directories(dir);
+    const auto path = dir / "data.txt";
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out << "historical";
+    }
+    // Relate the two native clocks without depending on vendor-specific
+    // file_clock::from_sys/from_utc APIs. Sub-second sampling is immaterial.
+    const auto offset = seconds{-315619200} - duration_cast<seconds>(system_clock::now().time_since_epoch());
+    std::error_code ec;
+    fs::last_write_time(path, fs::file_time_type::clock::now() + offset, ec);
+    RUVIA_CHECK(!ec);
+    ruvia::StaticRootOptions options;
+    options.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
+    ruvia::StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&](bool snapshot, std::optional<std::string_view> since) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        auto request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, "GET");
+        HttpRequestAccess::setResource(request, memory.resource());
+        if (since) {
+            HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"If-Modified-Since", *since},
+                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfModifiedSince));
+        }
+        auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
+        const auto response = snapshot
+                                  ? context.staticFile(root, {.relativePath = "data.txt", .contentType = "text/plain"})
+                                  : context.file({.path = path, .contentType = "text/plain"});
+        return std::pair(response.status(), std::string(response.header("Last-Modified").value_or("")));
+    };
+    for (const auto snapshot : {false, true}) {
+        const auto base = serve(snapshot, std::nullopt);
+        RUVIA_CHECK_EQ(base.first, ruvia::http_status::kOk);
+        const auto date = ruvia::detail::httpParseHttpDate(base.second);
+        RUVIA_CHECK(date.has_value());
+        if (date) {
+            RUVIA_CHECK(*date >= -315619260 && *date <= -315619140);
+        }
+        RUVIA_CHECK_EQ(serve(snapshot, base.second).first, ruvia::http_status::kNotModified);
+        RUVIA_CHECK_EQ(serve(snapshot, "Thu, 01 Jan 1959 00:00:00 GMT").first, ruvia::http_status::kOk);
+    }
     fs::remove_all(dir);
 }
 

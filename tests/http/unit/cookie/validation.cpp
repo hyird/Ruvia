@@ -45,6 +45,48 @@ RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
 }
 
+RUVIA_TEST(cookie_expires_formats_historical_dates_at_second_resolution) {
+    using namespace std::chrono;
+    ruvia::CookieOptions options;
+    options.expires = system_clock::time_point{seconds{-315619200}};
+    RUVIA_CHECK(!rejects(options));
+    const ruvia::detail::SetCookiePlan historical("sid", "value", options);
+    std::string wire(historical.size(), '\0');
+    historical.write(wire.data());
+    RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/; Expires=Fri, 01 Jan 1960 00:00:00 GMT"));
+
+    options.expires = system_clock::time_point{} - system_clock::duration{1};
+    const ruvia::detail::SetCookiePlan fractional("sid", "value", options);
+    wire.resize(fractional.size());
+    fractional.write(wire.data());
+    RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT"));
+}
+
+RUVIA_TEST(cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
+    using namespace std::chrono;
+    constexpr auto cutoff = duration_cast<seconds>(sys_days{year{1601} / January / 1}.time_since_epoch());
+    // Clocks with nanosecond int64 storage cannot represent dates this early;
+    // wider calendar ranges (including MSVC's 100ns clock) exercise the edge.
+    if constexpr (ceil<seconds>(system_clock::duration::min()) <= cutoff) {
+        ruvia::CookieOptions options;
+        options.expires = system_clock::time_point{duration_cast<system_clock::duration>(cutoff)};
+        RUVIA_CHECK(!rejects(options));
+        const ruvia::detail::SetCookiePlan first("sid", "value", options);
+        std::string wire(first.size(), '\0');
+        first.write(wire.data());
+        RUVIA_CHECK(wire.find("01 Jan 1601") != std::string::npos);
+        options.expires = *options.expires - system_clock::duration{1};
+        RUVIA_CHECK(rejects(options));
+        bool rejected = false;
+        try {
+            (void)ruvia::detail::SetCookiePlan("sid", "value", options);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+}
+
 RUVIA_TEST(cookie_plan_rejects_wrapped_wire_length_before_scanning) {
     const auto oversizedName = std::string_view("x", std::numeric_limits<std::size_t>::max());
     bool lengthError = false;

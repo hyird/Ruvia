@@ -163,10 +163,19 @@ inline void validateCookie(
             throw std::invalid_argument("cookie Max-Age must not exceed 400 days");
         }
     }
-    if (options.expires.has_value() &&
-        *options.expires >
-            std::chrono::system_clock::now() + std::chrono::seconds(kMaxCookieAgeSeconds)) {
-        throw std::invalid_argument("cookie Expires must not exceed 400 days ahead");
+    if (options.expires.has_value()) {
+        using namespace std::chrono;
+        constexpr auto minimum = duration_cast<seconds>(sys_days{year{1601} / January / 1}.time_since_epoch());
+        const auto expires = floor<seconds>(options.expires->time_since_epoch());
+        if (expires < minimum) {
+            throw std::invalid_argument("cookie Expires must not precede year 1601");
+        }
+        // Compare at the wire's second resolution, without adding a large
+        // offset to the native clock duration near its representable limit.
+        const auto now = floor<seconds>(system_clock::now().time_since_epoch());
+        if (expires > now && expires - now > seconds(kMaxCookieAgeSeconds)) {
+            throw std::invalid_argument("cookie Expires must not exceed 400 days ahead");
+        }
     }
     if (options.priority && cookiePriorityToken(*options.priority).empty()) {
         throw std::invalid_argument("invalid cookie Priority");

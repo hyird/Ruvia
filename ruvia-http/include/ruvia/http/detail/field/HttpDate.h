@@ -6,24 +6,12 @@
 #include <cstdint>
 #include <ctime>
 #include <limits>
-#include <memory_resource>
 #include <optional>
-#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline std::pmr::string httpFormatDate(
-    std::pmr::memory_resource* resource, std::time_t time) {
-    const auto utc = httpUtcTm(time);
-    char buffer[kImfFixdateSize];
-    const auto written = httpWriteImfFixdate(buffer, utc);
-    std::pmr::string output(resource);
-    output.assign(buffer, written);
-    return output;
-}
 
 [[nodiscard]] inline int httpMonthIndex(std::string_view value) noexcept {
     constexpr std::array<std::string_view, 12> months{
@@ -177,8 +165,15 @@ namespace ruvia::detail {
     if (!day || month == 0 || !shortYear || !hour || !minute || !second) {
         return std::nullopt;
     }
-    const auto currentUtc = httpUtcTm(std::time(nullptr));
-    const int currentYear = currentUtc.tm_year + 1900;
+    const auto now = std::time(nullptr);
+    if (now == std::time_t{-1}) {
+        return std::nullopt;
+    }
+    const auto currentUtc = httpUtcTm(now);
+    if (!currentUtc) {
+        return std::nullopt;
+    }
+    const int currentYear = currentUtc->tm_year + 1900;
     const int year = httpResolveRfc850Year(*shortYear, currentYear);
     return httpCivilToTimeT(year, month, *day, *hour, *minute, *second);
 }

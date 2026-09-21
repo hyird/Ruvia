@@ -165,7 +165,7 @@ void emitResponseHead(const HttpResponse& response, RawHeadSink& sink, HttpStatu
     }
 
     const auto knownBits = responseKnownHeaderBits(response);
-    if ((knownBits & kResponseHeaderDate) == 0) {
+    if ((knownBits & kResponseHeaderDate) == 0 && !dateHeader.empty()) {
         sink.append(dateHeader);
     }
     if (flags.emitChunkedTransferEncoding) {
@@ -254,7 +254,7 @@ void appendResponseHead(
         addResponseHeadBytes(headBytes, header.value().size());
         addResponseHeadBytes(headBytes, 4);
     }
-    if ((knownBits & kResponseHeaderDate) == 0) {
+    if ((knownBits & kResponseHeaderDate) == 0 && !dateHeader.empty()) {
         ++fieldCount;
         addResponseHeadBytes(headBytes, dateHeader.size());
     }

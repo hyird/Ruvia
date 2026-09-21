@@ -40,6 +40,7 @@ struct CookieOptions final {
     ::ruvia::BorrowedText domain{};
     std::optional<CookieSameSite> sameSite{};
     std::optional<CookiePriority> priority{};
+    // UTC, rounded down to whole seconds; year >= 1601 and at most 400 days ahead.
     std::optional<std::chrono::system_clock::time_point> expires{};
     std::optional<std::chrono::seconds> maxAge{};
     std::optional<CookiePrefix> prefix{};

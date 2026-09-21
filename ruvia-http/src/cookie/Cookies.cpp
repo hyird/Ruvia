@@ -4,6 +4,7 @@
 #include <limits>
 #include <stdexcept>
 #include <system_error>
+#include <utility>
 
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 #include "ruvia/http/detail/cookie/SetCookiePlan.h"
@@ -26,9 +27,16 @@ SetCookiePlan::SetCookiePlan(
       secure_(cookieAttributeEmitted(options.secure)),
       partitioned_(cookieAttributeEmitted(options.partitioned)) {
     if (options.expires.has_value()) {
-        const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
-        const auto utc = httpUtcTm(expiresTime);
-        expiresSize_ = httpWriteImfFixdate(expiresBuffer_.data(), utc);
+        const auto seconds = std::chrono::floor<std::chrono::seconds>(options.expires->time_since_epoch()).count();
+        if (!std::in_range<std::time_t>(seconds)) {
+            throw std::invalid_argument("cookie Expires is not representable");
+        }
+        const auto date = httpFormatDate(static_cast<std::time_t>(seconds));
+        if (!date) {
+            throw std::invalid_argument("cookie Expires is not representable");
+        }
+        expiresSize_ = date->size();
+        std::memcpy(expiresBuffer_.data(), date->data(), expiresSize_);
     }
     if (hasMaxAge_) {
         maxAgeValue_ = static_cast<std::uint64_t>(options.maxAge->count());
