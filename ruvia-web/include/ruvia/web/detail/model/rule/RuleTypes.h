@@ -1,7 +1,5 @@
 #pragma once
 
-#include <type_traits>
-
 #include "ruvia/web/detail/model/pattern/PatternCompiler.h"
 
 namespace ruvia::detail::model {
@@ -44,24 +42,16 @@ struct Custom final {
     static constexpr auto message = Message;
 };
 
-template <typename ValueT>
+template <auto Provider>
 struct Default final {
     using RuviaDefaultRuleMarker = void;
     using RuviaModelOptionMarker = void;
 
-    ValueT value;
-};
-
-template <typename ValueT>
-Default(ValueT) -> Default<ValueT>;
-
-template <auto Provider>
-struct StaticDefault final {
-    using RuviaDefaultRuleMarker = void;
-    using RuviaModelOptionMarker = void;
-
-    using value_type = std::remove_cvref_t<decltype(Provider())>;
-    value_type value{Provider()};
+    // Metadata is stateless. Evaluate only when consuming a missing optional
+    // field, never while constructing or moving a model.
+    [[nodiscard]] static constexpr decltype(auto) value() {
+        return Provider();
+    }
 };
 
 struct Nullable final {

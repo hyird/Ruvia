@@ -1943,8 +1943,14 @@ Presence and nullability are independent:
 `RUVIA_DEFAULT(value)` applies only to a **missing optional** input. An explicit
 null, wrong type, duplicate, empty string, zero, or false never triggers a
 default. `REQUIRED + DEFAULT` still rejects missing input: a default does not
-satisfy the required field. During route validation, defaulted values pass the
-same field rules as supplied values, including nested models. `fromJson()`,
+satisfy the required field. Each field accepts at most one default expression;
+it is evaluated only when that optional input is missing, never just because a
+model is constructed or moved. The resulting value is owned/normalized to the
+model's resource and follows the same nullability rules as `set()` (including
+`RUVIA_DEFAULT(nullptr)` for nullable fields). Evaluation failures propagate
+normally and release partially parsed data. During route validation, defaulted
+values pass the same field rules as supplied values, including nested models.
+`fromJson()`,
 `fromForm()`, `jsonIf()` and `formIf()` remain parsing-only APIs; they check
 structure, not field rules, for both supplied and defaulted values.
 
