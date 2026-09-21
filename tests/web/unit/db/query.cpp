@@ -124,7 +124,7 @@ RUVIA_TEST(db_query_expression_helpers_render_postgresql_and_reject_empty_inputs
     const auto left = query.column("left");
     const auto right = query.column("right");
     const auto values = query.array({query.value(1), query.value(2)});
-    const std::array<DbOrderTerm, 1> orderedBy{{query.column("score"), DbOrderDirection::kDesc}};
+    const std::array orderedBy{DbOrderTerm{query.column("score"), DbOrderDirection::kDesc}};
     const auto ordered = query.withinGroup(
         query.aggregate("percentile_cont", {query.value(0.5)}),
         orderedBy);
@@ -158,7 +158,7 @@ RUVIA_TEST(db_query_expression_helpers_render_postgresql_and_reject_empty_inputs
 
     DbQuery mariaWithinGroup;
     const auto aggregate = mariaWithinGroup.aggregate("percentile_cont", {mariaWithinGroup.value(0.5)});
-    const std::array<DbOrderTerm, 1> mariaOrder{{mariaWithinGroup.column("score"), DbOrderDirection::kAsc}};
+    const std::array mariaOrder{DbOrderTerm{mariaWithinGroup.column("score"), DbOrderDirection::kAsc}};
     mariaWithinGroup.select(mariaWithinGroup.withinGroup(aggregate, mariaOrder))
         .from("metrics");
     RUVIA_CHECK(testing::throwsOn([&] { (void)mariaWithinGroup.compile(DbDriver::kMariaDb, nullptr); }));
