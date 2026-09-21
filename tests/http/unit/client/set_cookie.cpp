@@ -15,10 +15,6 @@
 
 #include "test_harness.h"
 
-namespace {
-
-}  // namespace
-
 RUVIA_TEST(set_cookie_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state = 0x5345'5443'4F4F'4B49ULL;
     const auto next = [&state]() {

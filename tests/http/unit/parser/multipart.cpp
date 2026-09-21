@@ -15,10 +15,6 @@
 
 #include "test_harness.h"
 
-namespace {
-
-}  // namespace
-
 RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state = 0x4D55'4C54'4950'4152ULL;
     const auto next = [&state]() {
