@@ -47,7 +47,9 @@ public:
 
     ModelStorage(ModelStorage&& other) noexcept
         : resource_(other.resource_),
-          fields_(std::move(other.fields_)) {}
+          fields_(std::move(other.fields_)) {
+        resetMovedFields(other.fields_);
+    }
 
     ModelStorage& operator=(ModelStorage&& other) {
         if (this == &other) {
@@ -65,7 +67,7 @@ public:
         constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
         using DescriptorT = std::tuple_element_t<index, std::tuple<DescriptorTs...>>;
         const auto& slot = std::get<index>(fields_);
-        if constexpr (DescriptorT::required) {
+        if constexpr (DescriptorT::required && !DescriptorT::nullable) {
             return slot.requiredValue();
         } else {
             return slot.value();
@@ -74,6 +76,21 @@ public:
 
     template <FixedString Field>
     [[nodiscard]] decltype(auto) get() const&& = delete;
+
+    // Whether the original parsed input contained this field. Defaults and
+    // set/ensure/reset do not rewrite input provenance; unparsed models have
+    // no input presence. Use get()/isNull() for the current value state.
+    template <FixedString Field>
+    [[nodiscard]] bool isPresent() const noexcept {
+        constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
+        return std::get<index>(fields_).isPresent();
+    }
+
+    template <FixedString Field>
+    [[nodiscard]] bool isNull() const noexcept {
+        constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
+        return std::get<index>(fields_).isNull();
+    }
 
     template <FixedString Field, typename ValueT>
     DerivedT& set(ValueT&& value) & {
@@ -347,22 +364,22 @@ private:
                 bool fieldResult = true;
                 const bool matched = detail::model::visitModelFieldByWireName(this->derived(),
                     Base::ruviaSchema(), keyHash, key, fieldResult, [&](auto& slot) -> bool {
-                        if (slot.state() != detail::ModelFieldState::kMissing) {
+                        if (slot.isPresent()) {
                             slot.markDuplicate();
                             return detail::skipJsonValue(valueInput, depth + 1);
                         }
                         const auto originalInput = valueInput;
                         using SlotT = std::remove_cvref_t<decltype(slot)>;
                         using ValueT = typename SlotT::value_type;
-                        if constexpr (!SlotT::required) {
-                            if constexpr (!detail::isRuviaJsonValue<ValueT>) {
-                                auto nullInput = valueInput;
-                                if (detail::consumeJsonLiteral(nullInput, "null")) {
-                                    valueInput = nullInput;
-                                    slot.markNull();
-                                    return true;
-                                }
+                        auto nullInput = valueInput;
+                        if (detail::consumeJsonLiteral(nullInput, "null")) {
+                            valueInput = nullInput;
+                            if constexpr (SlotT::nullable) {
+                                slot.markNull();
+                            } else {
+                                slot.markInvalidType();
                             }
+                            return true;
                         }
                         if (auto value = detail::parseJsonValue<ValueT>(
                                 valueInput, resource, depth + 1, stringStorage);
@@ -408,7 +425,7 @@ private:
                     if constexpr (!detail::isFormField<typename SlotT::value_type>) {
                         return;
                     } else {
-                        if (slot.state() != detail::ModelFieldState::kMissing) {
+                        if (slot.isPresent()) {
                             slot.markDuplicate();
                             return;
                         }
@@ -497,7 +514,7 @@ private:
                     detail::appendJsonString(output, slot.wireName());
                     output.push_back(':');
                     detail::appendJsonValue(output, *value);
-                } else if (!value && slot.emitNull()) {
+                } else if (!value && (slot.isNull() || slot.emitNull())) {
                     if (!first) {
                         output.push_back(',');
                     }
@@ -522,7 +539,7 @@ private:
                     first = false;
                     size += detail::jsonStringSizeHint(slot.wireName()) + 1;
                     size += detail::jsonSizeHintValue(*value);
-                } else if (!value && slot.emitNull()) {
+                } else if (!value && (slot.isNull() || slot.emitNull())) {
                     if (!first) {
                         ++size;
                     }

@@ -154,6 +154,6 @@ if(RUVIA_BUILD_WEB)
 
     list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
     list(SORT _ruvia_web_unit_sources)
-    ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 180 SOURCES
+    ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
 endif()

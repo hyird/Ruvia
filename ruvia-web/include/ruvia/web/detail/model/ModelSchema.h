@@ -42,7 +42,7 @@ template <FixedString SourceName, FixedString WireName, typename ValueT, bool Re
 struct ModelFieldDescriptor final {
     static_assert(((isModelOption<ArgTs>() || isValidationRule<ArgTs>()) && ... && true),
         "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept model options (RUVIA_DEFAULT, "
-        "RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL) and validation rules (RUVIA_MIN, RUVIA_EMAIL, ...)");
+        "RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL) and validation rules (RUVIA_MIN, RUVIA_EMAIL, ...)");
 
     using value_type = ValueT;
     using options_type = typename TupleModelOptions<decltype(std::tuple_cat(std::tuple<>{},
@@ -55,7 +55,12 @@ struct ModelFieldDescriptor final {
     static constexpr auto wireName = WireName;
     static constexpr auto wireHash = modelFieldNameHash(WireName.view());
     static constexpr bool required = Required;
+    static constexpr bool nullable = options_type::nullable;
     static constexpr bool hasFieldRules = !std::is_same_v<rules_type, Rules<>>;
+
+    static_assert(!hasFieldRules ||
+                      !(detail::isRuviaJsonValue<ValueT> || detail::isRuviaJsonObject<ValueT>),
+        "JsonValue/JsonObject are dynamic content, not typed field validation schemas");
 };
 
 template <typename... DescriptorTs>

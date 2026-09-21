@@ -1766,7 +1766,7 @@ Routes and schemas use these macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD` |
+| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_NULLABLE` |
 | Validation | Field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`; route bindings `JsonBody<T>` / `QueryModel<T>` / `PathModel<T>` |
 
 Route tables, middleware chains, and controller instances are finalized before
@@ -1922,22 +1922,83 @@ input, which must outlive the parsed view.
 
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
-`model.reset<"avatar">()`. Required `get` returns `const T&`; optional `get`
-returns `const std::optional<T>&`. A missing optional request property stays
-empty. An explicit JSON `null` on an optional field is also empty (`kNull`) and
-does not apply `RUVIA_DEFAULT`; on a required field it is `invalid_type`. An unset
-optional response property is omitted by default; `RUVIA_EMIT_NULL` writes it as
-`null`, and `RUVIA_OMIT_EMPTY` omits present empty values. The source field name
-(`username`) is used by `get`/`set`; a `*_FIELD_NAME` wire name (`user_name`) is
-used in JSON and validation paths.
+`model.reset<"avatar">()`. Required, non-nullable `get` returns `const T&`;
+optional **or nullable** `get` returns `const std::optional<T>&`. The source field
+name (`username`) is used by these accessors; a `*_FIELD_NAME` wire name
+(`user_name`) is used in JSON and validation paths.
+
+Presence and nullability are independent:
+
+| Declaration | Missing input | Explicit JSON `null` |
+| --- | --- | --- |
+| `RUVIA_REQUIRED_FIELD(value, T)` | `required` error | `invalid_type` error |
+| `RUVIA_REQUIRED_FIELD(value, T, RUVIA_NULLABLE)` | `required` error | accepted |
+| `RUVIA_OPTIONAL_FIELD(value, T)` | accepted | `invalid_type` error |
+| `RUVIA_OPTIONAL_FIELD(value, T, RUVIA_NULLABLE)` | accepted | accepted |
+
+`RUVIA_DEFAULT(value)` applies only to a **missing optional** input. An explicit
+null, wrong type, duplicate, empty string, zero, or false never triggers a
+default. `REQUIRED + DEFAULT` still rejects missing input: a default does not
+satisfy the required field. During route validation, defaulted values pass the
+same field rules as supplied values, including nested models. `fromJson()`,
+`fromForm()`, `jsonIf()` and `formIf()` remain parsing-only APIs; they check
+structure, not field rules, for both supplied and defaulted values.
+
+`model.isPresent<"remark">()` records whether the original input contained the
+field, independently of defaults. `model.isNull<"remark">()` reports an accepted
+explicit null in the current field state. Missing and null both have an empty
+optional value when no default applies. A PATCH handler can distinguish all
+three cases without accessing internals or rescanning JSON:
+
+```cpp
+RUVIA_REQUEST_MODEL(ProfilePatch,
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+
+// const auto& patch = c.req().validated<ProfilePatch>();
+// !patch.isPresent<"remark">()  -> leave unchanged
+// patch.isNull<"remark">()      -> clear
+// otherwise                    -> assign patch.get<"remark">()->view()
+```
+
+Input presence is provenance: `set`, `ensure`, and `reset` do not rewrite it;
+a manually constructed model has no input presence. Moves transfer this
+provenance along with the value. `set<"remark">(nullptr)` explicitly clears a
+nullable field; `reset<"remark">()` removes an optional field's current value.
+Neither operation reapplies defaults.
+
+Unset response fields are omitted by default. An explicitly set nullable null
+is emitted as `null`; `RUVIA_EMIT_NULL` additionally emits unset fields as null,
+while `RUVIA_OMIT_EMPTY` omits concrete empty values. These response serialization
+options do not change request presence/nullability rules.
 
 `ValidationError` owns its message, code, and all issue details independently of
 the validator or request arena, including when the exception is copied or moved.
 
-Request and response models bind JSON through schema. `JsonValue` and
-`JsonObject` may be model fields; they also parse a complete JSON document for
-`isObject()` / `isArray()` / `isNull()`, `view()`, and `get<T>("field")`. They
-are not a `c.json()` / `toJson()` writer. URL-encoded form binding stays schema-based. Raw `bytes()` /
+Request and response models bind JSON through schema. Use concrete field types
+for ordinary validation. `JsonValue` and `JsonObject` represent dynamic content;
+field validation rules on these two types are rejected at compile time. Their
+field-level nulls still require `RUVIA_NULLABLE`; nulls **inside** a dynamic token
+(or `Array<JsonValue>`) remain ordinary JSON values. `JsonObject` requires an
+object token, while `JsonValue` can represent any JSON token.
+
+They expose `isObject()` / `isArray()` / `isNull()`, `view()`, and
+`get<T>("field")`, but are not a `c.json()` / `toJson()` writer. Their ownership
+contract is explicit:
+
+- `JsonValue::parse()` / `JsonObject::parse()` borrow the supplied complete token;
+  passing a memory resource does not copy it. The input must outlive the value
+  and any borrowed views or subvalues.
+- Request-bound parsing borrows the request body. `fromJson<Model>()` instead
+  owns dynamic tokens and strings in the model's PMR resource, so its input may
+  be destroyed after parsing. The resource must outlive the model and results.
+- Move construction preserves the borrowed/owned mode; it does not turn a borrow
+  into ownership or extend an allocator's lifetime. Field assignment owns/rebinds
+  to the destination model resource. Move assignment of a dynamic value keeps
+  the destination resource, transfers compatible owned storage, and copies
+  borrowed or incompatible storage.
+
+URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
