@@ -6,5 +6,6 @@
 #include "ruvia/web/redis/RedisTypes.h"
 
 #ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/RedisClient.h"
 #include "ruvia/web/redis/RedisRepository.h"
 #endif

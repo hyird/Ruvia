@@ -61,6 +61,8 @@ endif()
 if(RUVIA_ENABLE_REDIS)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/Redis.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisClient.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisClientRuntime.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisCommandArgs.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleCommandOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleAdvanced.cpp

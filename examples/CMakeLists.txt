@@ -31,6 +31,10 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_database web/database.cpp)
 endif()
 
+if(RUVIA_ENABLE_POSTGRESQL AND RUVIA_ENABLE_REDIS)
+    ruvia_add_example(ruvia_example_event_loop_data web/event_loop_data.cpp)
+endif()
+
 if(RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_orm web/orm.cpp)
     ruvia_add_example(ruvia_example_orm_columns web/orm_columns.cpp)

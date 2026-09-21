@@ -21,6 +21,10 @@
 
 namespace ruvia {
 
+namespace detail {
+class RedisClientRuntime;
+}
+
 template <typename Entity>
 class RedisRepository;
 
@@ -258,7 +262,7 @@ private:
         return pairs;
     }
 
-    friend class detail::RedisRegistry;
+    friend class detail::RedisClientRuntime;
     template <typename Entity>
     friend class RedisRepository;
 
