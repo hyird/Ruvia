@@ -32,6 +32,7 @@ class ModelField final {
 public:
     using value_type = ValueT;
     static constexpr bool required = Required;
+    static constexpr bool nullable = OptionsT::nullable;
 
     constexpr ModelField() noexcept = default;
 
@@ -41,6 +42,15 @@ public:
 
     [[nodiscard]] detail::ModelFieldState state() const noexcept {
         return state_;
+    }
+
+    // Input provenance survives defaults and later application mutations.
+    [[nodiscard]] bool isPresent() const noexcept {
+        return present_;
+    }
+
+    [[nodiscard]] bool isNull() const noexcept {
+        return state_ == detail::ModelFieldState::kNull;
     }
 
     [[nodiscard]] const std::optional<ValueT>& value() const& noexcept {
@@ -73,8 +83,22 @@ public:
 
     template <typename InputT>
     void assign(InputT&& input, std::pmr::memory_resource* resource) {
-        assignFieldValue(value_, std::forward<InputT>(input), resource);
-        state_ = detail::ModelFieldState::kParsed;
+        if constexpr (std::is_null_pointer_v<std::remove_cvref_t<InputT>>) {
+            static_assert(nullable, "setting null requires RUVIA_NULLABLE");
+            assignNull();
+        } else {
+            if constexpr (detail::isRuviaJsonValue<InputT>) {
+                if (input.isNull()) {
+                    if constexpr (!nullable) {
+                        throw std::invalid_argument("setting JSON null requires RUVIA_NULLABLE");
+                    }
+                    assignNull();
+                    return;
+                }
+            }
+            assignFieldValue(value_, std::forward<InputT>(input), resource);
+            state_ = detail::ModelFieldState::kParsed;
+        }
     }
 
     void reset() noexcept {
@@ -83,7 +107,8 @@ public:
     }
 
     void applyDefault(std::pmr::memory_resource* resource) {
-        if (state_ != detail::ModelFieldState::kMissing) {
+        // A default never satisfies a required input field.
+        if (Required || state_ != detail::ModelFieldState::kMissing) {
             return;
         }
         options_.applyDefault(value_, resource);
@@ -101,16 +126,18 @@ public:
     }
 
     void markDuplicate() noexcept {
+        present_ = true;
         state_ = detail::ModelFieldState::kDuplicate;
     }
 
     void markInvalidType() noexcept {
+        present_ = true;
         state_ = detail::ModelFieldState::kInvalidType;
     }
 
     void markNull() noexcept {
-        value_.reset();
-        state_ = detail::ModelFieldState::kNull;
+        present_ = true;
+        assignNull();
     }
 
 private:
@@ -118,8 +145,14 @@ private:
     friend class ModelStorage;
     friend struct ::ruvia::detail::ModelValueFactory;
 
+    void assignNull() noexcept {
+        value_.reset();
+        state_ = detail::ModelFieldState::kNull;
+    }
+
     void emplaceParsed(ValueT&& value) {
         value_.emplace(std::move(value));
+        present_ = true;
         state_ = detail::ModelFieldState::kParsed;
     }
 
@@ -127,6 +160,7 @@ private:
         const ModelField& source, std::pmr::memory_resource* resource) const {
         ModelField rebound;
         rebound.state_ = source.state_;
+        rebound.present_ = source.present_;
         if (source.value_) {
             rebound.value_.emplace(detail::rebindModelValue(*source.value_, resource));
         }
@@ -134,12 +168,14 @@ private:
     }
 
     void resetAfterMove() noexcept {
+        present_ = false;
         value_.reset();
         state_ = detail::ModelFieldState::kMissing;
     }
 
     OptionsT options_;
     detail::ModelFieldState state_{detail::ModelFieldState::kMissing};
+    bool present_{false};
     std::optional<ValueT> value_;
 };
 

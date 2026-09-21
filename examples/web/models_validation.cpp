@@ -43,6 +43,14 @@ RUVIA_RESPONSE_MODEL(RegisterResponse, RUVIA_OPTIONAL_FIELD(username, ruvia::Str
     RUVIA_OPTIONAL_FIELD(roleCount, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
+RUVIA_REQUEST_MODEL(PatchProfileRequest,
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+
+RUVIA_RESPONSE_MODEL(ProfileChangesResponse,
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+
 RUVIA_REQUEST_MODEL(ContactForm,
     RUVIA_OPTIONAL_FIELD(name, ruvia::String, RUVIA_MIN(2, "name is too short")),
     RUVIA_OPTIONAL_FIELD(email, ruvia::String, RUVIA_EMAIL("email format is invalid")),
@@ -72,6 +80,7 @@ public:
 
     RUVIA_ROUTES_BEGIN
     RUVIA_POST("/register", registerUser, ruvia::JsonBody<RegisterRequest>);
+    RUVIA_PATCH("/profile", patchProfile, ruvia::JsonBody<PatchProfileRequest>);
     RUVIA_POST("/contact", contact, ruvia::FormBody<ContactForm>);
     RUVIA_GET("/search", search, ruvia::QueryModel<SearchQuery>);
     RUVIA_GET("/category", category);
@@ -82,6 +91,24 @@ public:
     RUVIA_ROUTES_END
 
 private:
+    // Echo the requested changes: omission means leave unchanged, null means
+    // clear, and a concrete value means assign. No raw JSON inspection needed.
+    ruvia::Task<ruvia::HttpResponse> patchProfile(ruvia::Context& c) {
+        const auto& patch = c.req().validated<PatchProfileRequest>();
+        ProfileChangesResponse changes({.resource = c.arena()});
+        if (patch.isPresent<"enabled">()) {
+            changes.set<"enabled">(*patch.get<"enabled">());
+        }
+        if (patch.isPresent<"remark">()) {
+            if (patch.isNull<"remark">()) {
+                changes.set<"remark">(nullptr);
+            } else {
+                changes.set<"remark">(patch.get<"remark">()->view());
+            }
+        }
+        co_return c.json(changes);
+    }
+
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
         const auto& request = c.req().validated<RegisterRequest>();
 

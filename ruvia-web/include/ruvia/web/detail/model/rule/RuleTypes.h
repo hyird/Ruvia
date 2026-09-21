@@ -64,6 +64,10 @@ struct StaticDefault final {
     value_type value{Provider()};
 };
 
+struct Nullable final {
+    using RuviaModelOptionMarker = void;
+};
+
 struct OmitEmpty final {
     using RuviaModelOptionMarker = void;
 };

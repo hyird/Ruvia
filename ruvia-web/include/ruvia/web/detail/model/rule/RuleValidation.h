@@ -83,14 +83,4 @@ void validateRule(const ValueT& value, std::string_view path, ValidatorT& valida
     }
 }
 
-template <typename ValueT, typename ValidatorT, typename RuleT>
-void validateRule(const ValueT& value, std::string_view path, ValidatorT& validator, const RuleT&)
-    requires(isDefaultRule<RuleT>() || std::is_same_v<std::remove_cvref_t<RuleT>, OmitEmpty> ||
-             std::is_same_v<std::remove_cvref_t<RuleT>, EmitNull>)
-{
-    (void)value;
-    (void)path;
-    (void)validator;
-}
-
 }  // namespace ruvia::detail::model

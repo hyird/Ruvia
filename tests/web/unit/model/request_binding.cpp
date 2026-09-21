@@ -1,5 +1,6 @@
 #include <memory_resource>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/Testing.h"
@@ -11,6 +12,12 @@ RUVIA_REQUEST_MODEL(RequestBindingParams,
 
 RUVIA_REQUEST_MODEL(RequestBindingBody,
     RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(2, "name is too short")));
+
+RUVIA_REQUEST_MODEL(PatchBindingBody,
+    RUVIA_REQUIRED_FIELD(token, ruvia::String, RUVIA_DEFAULT("not-a-required-input")),
+    RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(0), RUVIA_MIN(1, "must be positive")),
+    RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")),
+    RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool));
 
 RUVIA_RESPONSE_MODEL(RequestBindingOut, RUVIA_REQUIRED_FIELD(id, ruvia::String),
     RUVIA_REQUIRED_FIELD(name, ruvia::String));
@@ -32,7 +39,19 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_PUT("/request-binding/:id", update, ruvia::PathModel<RequestBindingParams>,
         ruvia::JsonBody<RequestBindingBody>);
+    RUVIA_PATCH("/request-binding-patch", patch, ruvia::JsonBody<PatchBindingBody>);
     RUVIA_ROUTES_END
+
+    ruvia::Task<ruvia::HttpResponse> patch(ruvia::Context& c) {
+        const auto& body = c.req().validated<PatchBindingBody>();
+        if (!body.isPresent<"remark">()) {
+            co_return c.text("unchanged");
+        }
+        if (body.isNull<"remark">()) {
+            co_return c.text("clear");
+        }
+        co_return c.text(body.get<"remark">()->view());
+    }
 
     ruvia::Task<ruvia::HttpResponse> update(ruvia::Context& c) {
         const auto& params = c.req().validated<RequestBindingParams>();
@@ -41,6 +60,28 @@ public:
         co_return c.json(response);
     }
 };
+
+RUVIA_TEST(request_binding_enforces_defaults_and_exposes_patch_states) {
+    ruvia::TestApp app;
+    for (const auto& [body, expected] : {
+             std::pair{R"({"token":"ok","retries":1})", "unchanged"},
+             std::pair{R"({"token":"ok","retries":1,"remark":null})", "clear"},
+             std::pair{R"({"token":"ok","retries":1,"remark":"changed"})", "changed"}}) {
+        const auto response = app.request(ruvia::TestRequest::patch("/request-binding-patch").json(body));
+        RUVIA_CHECK(response.status() == ruvia::http_status::kOk);
+        RUVIA_CHECK_EQ(response.body(), std::string_view(expected));
+    }
+    for (const auto& [body, code] : {
+             std::pair{R"({"token":"ok"})", "too_small"},
+             std::pair{R"({"retries":1})", "required"},
+             std::pair{R"({"token":"ok","retries":1,"enabled":null})", "invalid_type"},
+             std::pair{R"({"token":"ok","retries":1,"remark":""})", "too_small"},
+             std::pair{R"({"token":"ok","retries":1,"remark":null,"remark":"changed"})", "duplicate"}}) {
+        const auto response = app.request(ruvia::TestRequest::patch("/request-binding-patch").json(body));
+        RUVIA_CHECK(response.status() == ruvia::http_status::kBadRequest);
+        RUVIA_CHECK(response.body().find(code) != std::string_view::npos);
+    }
+}
 
 RUVIA_TEST(request_binding_validates_inputs_and_serializes_service_model) {
     ruvia::TestApp app;

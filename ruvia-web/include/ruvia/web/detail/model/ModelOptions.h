@@ -14,10 +14,12 @@ namespace ruvia::detail::model {
 template <typename... OptionTs>
 class ModelOptions final {
 public:
+    static constexpr bool nullable = (std::is_same_v<OptionTs, Nullable> || ... || false);
+
     constexpr ModelOptions() noexcept
         : options_(OptionTs{}...) {
         static_assert((isModelOption<OptionTs>() && ... && true),
-            "model field options must be RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
+            "model field options must be RUVIA_DEFAULT, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
@@ -26,10 +28,6 @@ public:
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
         return containsOption<OmitEmpty>();
-    }
-
-    [[nodiscard]] constexpr bool hasDefault() const noexcept {
-        return containsDefault();
     }
 
     template <typename OptionalT>
@@ -47,10 +45,6 @@ private:
     template <typename OptionT>
     [[nodiscard]] static constexpr bool containsOption() noexcept {
         return (std::is_same_v<std::remove_cvref_t<OptionTs>, OptionT> || ... || false);
-    }
-
-    [[nodiscard]] static constexpr bool containsDefault() noexcept {
-        return (isDefaultRule<std::remove_cvref_t<OptionTs>>() || ... || false);
     }
 
     template <typename OptionalT, typename OptionT>
