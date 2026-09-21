@@ -44,11 +44,10 @@ public:
         signal_.notify();
     }
 
-    // Before any close task can have started, no coroutine can be waiting on
-    // the worker-affine signal. This covers clients closed before their event
-    // loop is first driven, where notifying would violate WorkerSignal's
-    // affinity contract.
-    void completeBeforeWorkerStart() noexcept {
+    // Construction failed before a client or stop callback was published.
+    // No worker can observe this state yet, so no signal notification is needed.
+    // A published client must complete on its worker, even if never connected.
+    void completeBeforePublication() noexcept {
         if (taskStarted_ || complete_) {
             std::terminate();
         }

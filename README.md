@@ -588,7 +588,11 @@ On startup failure, close already-started clients and observe all startup tasks.
 For shutdown, stop business admission, await each client's `shutdown()` on its
 loop, then stop/join the loop pool. Loop-stop hooks also cancel pending I/O if
 normal shutdown is interrupted. `close()` may request Redis teardown from another
-thread, but never performs socket operations there.
+thread, but never performs socket operations there. Even a never-connected SQL
+or Redis client completes teardown on its owning loop. If a pool was never
+started, `EventLoopPool::join()` (also called by its destructor) drains this
+accepted cleanup work; do not abandon an attached external loop before draining
+its accepted work.
 
 [`examples/web/event_loop_data.cpp`](examples/web/event_loop_data.cpp) demonstrates
 this complete lifecycle with PostgreSQL and Redis ORM on two application-owned
