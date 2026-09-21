@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -258,6 +259,26 @@ RUVIA_TEST(model_nullable_applies_to_scalar_container_nested_and_dynamic_types) 
     checkInput<DynamicValue>(ruvia_ctx, R"({"value":{"nested":null}})", "", true, false);
     checkInput<DynamicValue>(ruvia_ctx, R"({"value":[null,false,1]})", "", true, false);
     checkInput<DynamicObject>(ruvia_ctx, R"({"value":{"nested":null}})", "", true, false);
+}
+
+RUVIA_TEST(model_nonnullable_dynamic_assignment_rejects_null_without_changing_value) {
+    auto model = ruvia::fromJson<DynamicValue>(R"({"value":1})");
+    RUVIA_CHECK(model.has_value());
+    if (!model) {
+        return;
+    }
+    auto null = ruvia::JsonValue::parse("null");
+    bool rejected = false;
+    try {
+        model->set<"value">(std::move(*null));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(model->isPresent<"value">());
+    RUVIA_CHECK(!model->isNull<"value">());
+    RUVIA_CHECK_EQ(model->get<"value">()->view(), std::string_view("1"));
+    RUVIA_CHECK(null->isNull());
 }
 
 RUVIA_TEST(model_nullable_response_emits_explicit_null_without_emitting_absence) {

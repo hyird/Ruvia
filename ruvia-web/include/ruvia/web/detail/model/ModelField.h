@@ -89,11 +89,12 @@ public:
         } else {
             if constexpr (detail::isRuviaJsonValue<InputT>) {
                 if (input.isNull()) {
-                    if constexpr (!nullable) {
+                    if constexpr (nullable) {
+                        assignNull();
+                        return;
+                    } else {
                         throw std::invalid_argument("setting JSON null requires RUVIA_NULLABLE");
                     }
-                    assignNull();
-                    return;
                 }
             }
             assignFieldValue(value_, std::forward<InputT>(input), resource);
