@@ -125,7 +125,7 @@ std::pmr::string jwtParseJoseAlgorithm(std::string_view json, std::pmr::memory_r
     std::pmr::string algorithm(resolved);
     bool algorithmSeen = false;
     bool algorithmValid = false;
-    bool unsupportedCriticalHeader = false;
+    bool unsupportedExtension = false;
     const bool valid = visitUniqueJwtJsonObjectFields(
         json, resolved, [&](std::string_view name, std::string_view value) {
             if (name == "alg") {
@@ -134,11 +134,16 @@ std::pmr::string jwtParseJoseAlgorithm(std::string_view json, std::pmr::memory_r
                     algorithm = std::move(*decoded);
                     algorithmValid = true;
                 }
-            } else if (name == "crit") {
-                unsupportedCriticalHeader = true;
+            } else if (name == "crit" || name == "b64") {
+                // No critical extensions are implemented. RFC 7797 section 7
+                // forbids b64=false in JWTs; section 6 requires crit whenever
+                // b64 is present, even when true. Reject this extension also
+                // when crit is missing, rather than silently decoding a payload
+                // whose header declares different encoding semantics.
+                unsupportedExtension = true;
             }
         });
-    if (!valid || !algorithmSeen || !algorithmValid || unsupportedCriticalHeader) {
+    if (!valid || !algorithmSeen || !algorithmValid || unsupportedExtension) {
         throw std::runtime_error("JWT JOSE header is invalid");
     }
     return algorithm;

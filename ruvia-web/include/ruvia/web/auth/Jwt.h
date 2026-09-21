@@ -74,6 +74,8 @@ private:
 
 struct JwtSignOptions final {
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
+    // Raw key bytes: at least 32/48/64 bytes for HS256/HS384/HS512 (RFC 7518).
+    // Use cryptographically random keys; byte length alone is not entropy.
     BorrowedText secret{};
     std::string issuer{};
     std::string subject{};
@@ -88,6 +90,7 @@ struct JwtSignOptions final {
 struct JwtVerifyOptions final {
     BorrowedText token{};
     JwtAlgorithm algorithm{JwtAlgorithm::kHs256};
+    // Same raw-key requirements as JwtSignOptions::secret.
     BorrowedText secret{};
     std::string issuer{};
     std::string subject{};

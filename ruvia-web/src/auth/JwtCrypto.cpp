@@ -24,12 +24,13 @@ namespace {
     throw std::invalid_argument("unsupported JWT algorithm");
 }
 
-void validateSecret(std::string_view secret) {
-    if (secret.empty()) {
-        throw std::invalid_argument("JWT secret must not be empty");
-    }
+void validateSecret(std::string_view secret, std::size_t minimumBytes) {
     if (secret.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
         throw std::length_error("JWT secret is too large");
+    }
+    // RFC 7518 section 3.2: the key must be at least as large as the hash output.
+    if (secret.size() < minimumBytes) {
+        throw std::invalid_argument("JWT secret is shorter than the selected algorithm's digest");
     }
 }
 
@@ -55,11 +56,12 @@ std::string_view jwtAlgorithmName(JwtAlgorithm algorithm) {
 
 std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data,
     std::pmr::memory_resource* resource) {
-    validateSecret(secret);
+    const auto* const method = digestFor(algorithm);
+    validateSecret(secret, static_cast<std::size_t>(EVP_MD_size(method)));
     validateHmacData(data);
     unsigned int length = 0;
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    if (HMAC(digestFor(algorithm), secret.data(), static_cast<int>(secret.size()),
+    if (HMAC(method, secret.data(), static_cast<int>(secret.size()),
             reinterpret_cast<const unsigned char*>(data.data()), data.size(), digest.data(),
             &length) == nullptr) {
         throw std::runtime_error("JWT HMAC signing failed");

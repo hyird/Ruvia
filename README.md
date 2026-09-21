@@ -851,6 +851,20 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 `RUVIA_ENABLE_JWT=ON`. Consumers linking `ruvia::web` inherit that feature
 definition from the target and should not define it themselves.
 
+JWT signing and verification enforce RFC 7518's minimum raw key sizes:
+32 bytes for HS256, 48 for HS384, and 64 for HS512. Supply cryptographically
+random key bytes through `JwtSignOptions::secret` / `JwtVerifyOptions::secret`;
+short keys (including empty keys) throw `std::invalid_argument`. Keys are not
+padded, stretched, or implicitly decoded from base64/hex. Decode encoded secrets
+before passing them, and do not use passwords or the public demonstration key
+from `examples/web/auth_jwt.cpp` as production keys.
+
+Verification accepts ordinary base64url-encoded compact JWTs, not critical JOSE
+extensions. Headers containing `crit` or `b64` are rejected, including malformed
+uses of `b64` without `crit`. Omit `b64` to use standard JWT encoding; unencoded
+payloads are forbidden for JWTs by RFC 7797. Unrelated noncritical header fields
+remain ignorable.
+
 ## Database Drivers
 
 MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction
@@ -1923,6 +1937,11 @@ insertion own strings and recursively normalize nested values to that resource.
 elements. Move construction transfers the complete value; move assignment keeps
 the destination resource and can allocate. JSON view parsing still borrows its
 input, which must outlive the parsed view.
+
+JSON string values and wire names must be valid UTF-8. Serialization escapes
+JSON syntax and control characters, but does not transcode, validate, or repair
+UTF-8 byte sequences. Convert legacy encodings before assigning strings; encode
+binary data explicitly (for example, as base64) rather than treating it as text.
 
 Fields use compile-time accessors: `model.get<"username">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
