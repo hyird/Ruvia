@@ -71,8 +71,10 @@ inline void http2EncodeWebSocketHandshakeHeaders(
             return field.name() == "date";
         });
         if (!hasDate) {
-            HpackEncoder::encodeHeaderWithNameIndex(
-                headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+            if (const auto date = cachedDateValue(); !date.empty()) {
+                HpackEncoder::encodeHeaderWithNameIndex(
+                    headerBlock, HpackStaticIndex::kDate, date);
+            }
         }
         if (!negotiation.subprotocol().empty()) {
             HpackEncoder::encodeHeader(

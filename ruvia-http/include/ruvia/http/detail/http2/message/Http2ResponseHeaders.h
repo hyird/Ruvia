@@ -226,10 +226,14 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
             return false;
         }
     }
+    std::string_view generatedDate;
     if ((knownBits & kResponseHeaderDate) == 0) {
-        ++fieldCount;
-        if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add("date", cachedDateValue())) {
-            return false;
+        generatedDate = cachedDateValue();
+        if (!generatedDate.empty()) {
+            ++fieldCount;
+            if (fieldCount > kMaxHttpHeaderFields || !sectionSize.add("date", generatedDate)) {
+                return false;
+            }
         }
     }
     std::array<char, 20> contentLengthBytes{};
@@ -265,9 +269,9 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
             appendHttp2EncodedResponseHeader(headerBlock, header.name(), header.value(), knownBit,
                 lowerNameStack, lowerNameScratch);
         }
-        if ((knownBits & kResponseHeaderDate) == 0) {
+        if (!generatedDate.empty()) {
             HpackEncoder::encodeHeaderWithNameIndex(
-                headerBlock, HpackStaticIndex::kDate, cachedDateValue());
+                headerBlock, HpackStaticIndex::kDate, generatedDate);
         }
         if (!contentLengthValue.empty()) {
             HpackEncoder::encodeHeaderWithNameIndex(

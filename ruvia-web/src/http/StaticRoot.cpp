@@ -650,7 +650,9 @@ StaticRoot::StaticRoot(PreparedConstruction prepared)
         if (emitResponseValidators) {
             entry.etag = detail::makeStaticFileSnapshotEtag(
                 upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
-            entry.lastModified = detail::httpFormatDate(upstream, snapshot.modifiedSeconds);
+            if (const auto date = detail::httpFormatDate(snapshot.modifiedSeconds)) {
+                entry.lastModified.assign(date->data(), date->size());
+            }
         }
         state.entries.push_back(std::move(entry));
     }
