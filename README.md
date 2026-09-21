@@ -45,6 +45,7 @@ protocol library do not require the full Web framework.
 - [Redis ORM](#redis-orm)
 - [Install and Consume](#install-and-consume)
 - [Web API Shape](#web-api-shape)
+- [Models and JSON](#models-and-json)
 - [HTTP Protocol Library](#http-protocol-library)
 - [License](#license)
 
@@ -1719,7 +1720,7 @@ execution. Results retain their own reclaimable storage independently of later
 operations and must be destroyed before that worker resource expires.
 
 [redis_orm.cpp](examples/web/redis_orm.cpp) demonstrates validated JSON input,
-insertion with TTL, primary-key lookup, indexed queries and response models.
+insertion with TTL, primary-key lookup, indexed queries and typed models.
 Build `ruvia_example_redis_orm`; run once with `--create-index` against Redis Search,
 then without arguments to serve on `127.0.0.1:8091`. It reads `RUVIA_REDIS_HOST`,
 `RUVIA_REDIS_PORT`, `RUVIA_REDIS_USER` and `RUVIA_REDIS_PASSWORD` from environment
@@ -1784,7 +1785,7 @@ Routes and schemas use these macros:
 | HTTP methods | `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE` |
 | Streaming / SSE | `RUVIA_GET_STREAM`, `RUVIA_GET_SSE` |
 | WebSocket | `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS` |
-| Models | `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_NULLABLE` |
+| Models | `RUVIA_MODEL`, `RUVIA_REQUIRED_FIELD`, `RUVIA_OPTIONAL_FIELD`, `RUVIA_NULLABLE` |
 | Validation | Field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`; route bindings `JsonBody<T>` / `QueryModel<T>` / `PathModel<T>` |
 
 Route tables, middleware chains, and controller instances are finalized before
@@ -1904,50 +1905,57 @@ tracking versus Redis `NOACK`. `blpop()` and `brpop()` take `RedisBlockWait`,
 using `forDuration()` for a finite Redis wait or `indefinitely()` for an
 explicit unbounded wait.
 
-Request and response models have separate roles and a compact declaration:
+A model is declared once with `RUVIA_MODEL`; the generated type derives from
+public `ruvia::Model<DerivedT, ...>` and is usable for both input and output.
+There are no request/response role markers or duplicate declarations:
 
 ```cpp
-RUVIA_REQUEST_MODEL(AddressRequest,
-    RUVIA_REQUIRED_FIELD(city, ruvia::String));
-
-RUVIA_REQUEST_MODEL(CreateUserRequest,
-    RUVIA_REQUIRED_FIELD_NAME("user_name", username, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32),
-    RUVIA_REQUIRED_FIELD(address, AddressRequest),
+RUVIA_MODEL(User,
+    RUVIA_REQUIRED_FIELD(id, ruvia::UInt64),
+    RUVIA_REQUIRED_FIELD_NAME("user_name", name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32, RUVIA_DEFAULT(18)),
     RUVIA_OPTIONAL_FIELD(tags, ruvia::Array<ruvia::String>));
 
-RUVIA_RESPONSE_MODEL(UserResponse,
-    RUVIA_REQUIRED_FIELD(id, ruvia::UInt64),
-    RUVIA_OPTIONAL_FIELD(name, ruvia::String),
-    RUVIA_OPTIONAL_FIELD(avatar, ruvia::String, RUVIA_EMIT_NULL));
+// One declaration: JSON -> the same model -> JSON.
+auto user = ruvia::fromJson<User>(body);       // structure parsing
+if (user) {
+    auto json = ruvia::toJson(*user);
+    auto response = c.json(*user);
+}
 ```
 
-`RUVIA_REQUEST_MODEL` supports `fromJson<T>()`, `fromForm<T>()` (parse only, no
-field rules), route parsing, and validation. Every JSON response is first
-represented by a `RUVIA_RESPONSE_MODEL`; `toJson()` and `c.json()` accept
-response models only, and there is no dynamic object/array writer API.
-Runtime-sized collections are declared as `ruvia::Array<T>` fields. A request
-model may only nest request models, and a response model may only nest response
-models. Both roles support `ruvia::Array<T>` and recursive `ruvia::BoxedArray<T>`
-fields. Form, query, param, header, and cookie binding remain flat scalar inputs.
+`fromJson<T>()` performs complete structure parsing for a typed Model, a Ruvia
+scalar/String/Bytes, or a recursive `Array<T>` / `BoxedArray<T>` root. The
+parsed values own their data in the supplied PMR resource; unknown model fields
+are skipped. Parsing does not run field rules. `toJson()` supports the same typed roots (but not a
+root `JsonValue`/`JsonObject` dynamic writer). `Context::json()` and HTTP
+`JsonBody<T>` bindings remain Model-root APIs; they do not make `c.json()` or
+`jsonIf()` accept root arrays.
+
+`fromForm()` is the form parser. Field rules run only through the existing
+binding middleware (`JsonBody<T>`, `FormBody<T>`, and the other typed bindings);
+there is no public `validate()` function. Runtime-sized model collections use
+`ruvia::Array<T>` or recursive/address-stable `ruvia::BoxedArray<T>` fields.
+Do not directly echo a model containing sensitive input fields without
+selecting what is safe to expose deliberately.
 
 A model's allocation resource stays fixed. Public field assignment and collection
 insertion own strings and recursively normalize nested values to that resource.
 `Array<T>` and `BoxedArray<T>` also use their resource for newly constructed
 elements. Move construction transfers the complete value; move assignment keeps
-the destination resource and can allocate. JSON view parsing still borrows its
-input, which must outlive the parsed view.
+the destination resource and can allocate. Moving never extends the lifetime of
+a PMR resource or borrowed input.
 
 JSON string values and wire names must be valid UTF-8. Serialization escapes
 JSON syntax and control characters, but does not transcode, validate, or repair
 UTF-8 byte sequences. Convert legacy encodings before assigning strings; encode
 binary data explicitly (for example, as base64) rather than treating it as text.
 
-Fields use compile-time accessors: `model.get<"username">()`,
+Fields use compile-time accessors: `model.get<"name">()`,
 `model.set<"name">("Ada")`, `model.ensure<"tags">()`, and
-`model.reset<"avatar">()`. Required, non-nullable `get` returns `const T&`;
+`model.reset<"age">()`. Required, non-nullable `get` returns `const T&`;
 optional **or nullable** `get` returns `const std::optional<T>&`. The source field
-name (`username`) is used by these accessors; a `*_FIELD_NAME` wire name
+name (`name`) is used by these accessors; a `*_FIELD_NAME` wire name
 (`user_name`) is used in JSON and validation paths.
 
 Presence and nullability are independent:
@@ -1959,19 +1967,16 @@ Presence and nullability are independent:
 | `RUVIA_OPTIONAL_FIELD(value, T)` | accepted | `invalid_type` error |
 | `RUVIA_OPTIONAL_FIELD(value, T, RUVIA_NULLABLE)` | accepted | accepted |
 
-`RUVIA_DEFAULT(value)` applies only to a **missing optional** input. An explicit
-null, wrong type, duplicate, empty string, zero, or false never triggers a
-default. `REQUIRED + DEFAULT` still rejects missing input: a default does not
-satisfy the required field. Each field accepts at most one default expression;
-it is evaluated only when that optional input is missing, never just because a
-model is constructed or moved. The resulting value is owned/normalized to the
-model's resource and follows the same nullability rules as `set()` (including
-`RUVIA_DEFAULT(nullptr)` for nullable fields). Evaluation failures propagate
-normally and release partially parsed data. During route validation, defaulted
-values pass the same field rules as supplied values, including nested models.
-`fromJson()`,
-`fromForm()`, `jsonIf()` and `formIf()` remain parsing-only APIs; they check
-structure, not field rules, for both supplied and defaulted values.
+`RUVIA_INITIAL(expr)` is for an explicitly constructed business value: it is
+evaluated at construction only, at most once per field, and starts with
+`presence == false`. Parsing, moving, and resource rebinding do not evaluate it.
+`RUVIA_DEFAULT(expr)` is a separate rule: it is evaluated only for a missing
+optional input. An explicit null, wrong type, duplicate, or a present empty/
+zero/false value never triggers it; `REQUIRED + DEFAULT` still rejects missing
+input. The two options may coexist, but each is independently limited to one
+expression. Defaulted values are normalized to the model resource and undergo
+the same field rules as supplied values during route validation. `fromJson()`,
+`fromForm()`, `jsonIf()` and `formIf()` parse structure only.
 
 `model.isPresent<"remark">()` records whether the original input contained the
 field, independently of defaults. `model.isNull<"remark">()` reports an accepted
@@ -1980,7 +1985,7 @@ optional value when no default applies. A PATCH handler can distinguish all
 three cases without accessing internals or rescanning JSON:
 
 ```cpp
-RUVIA_REQUEST_MODEL(ProfilePatch,
+RUVIA_MODEL(ProfilePatch,
     RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
     RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
 
@@ -1996,15 +2001,15 @@ provenance along with the value. `set<"remark">(nullptr)` explicitly clears a
 nullable field; `reset<"remark">()` removes an optional field's current value.
 Neither operation reapplies defaults.
 
-Unset response fields are omitted by default. An explicitly set nullable null
-is emitted as `null`; `RUVIA_EMIT_NULL` additionally emits unset fields as null,
-while `RUVIA_OMIT_EMPTY` omits concrete empty values. These response serialization
-options do not change request presence/nullability rules.
+Unset model fields are omitted by default. An explicitly set nullable null is
+emitted as `null`; `RUVIA_EMIT_NULL` additionally emits unset fields as null,
+while `RUVIA_OMIT_EMPTY` omits concrete empty values. These serialization options
+do not change input presence/nullability rules.
 
 `ValidationError` owns its message, code, and all issue details independently of
 the validator or request arena, including when the exception is copied or moved.
 
-Request and response models bind JSON through schema. Use concrete field types
+Models bind JSON through schema. Use concrete field types
 for ordinary validation. `JsonValue` and `JsonObject` represent dynamic content;
 field validation rules on these two types are rejected at compile time. Their
 field-level nulls still require `RUVIA_NULLABLE`; nulls **inside** a dynamic token
@@ -2012,13 +2017,19 @@ field-level nulls still require `RUVIA_NULLABLE`; nulls **inside** a dynamic tok
 object token, while `JsonValue` can represent any JSON token.
 
 They expose `isObject()` / `isArray()` / `isNull()`, `view()`, and
-`get<T>("field")`, but are not a `c.json()` / `toJson()` writer. Their ownership
-contract is explicit:
+`get<T>("field")`, but are not a `c.json()` / `toJson()` writer. `JsonValue`
+also provides root-token `get<T>()`; `forEachElement()` and
+`forEachField()` visit dynamic arrays/objects. `JsonObject::forEachField()`
+visits decoded `string_view` keys. Visitors receive scoped-borrowed values and
+return `bool`: `true` continues and `false` stops early. The traversal returns
+`true` only when it finishes, and `false` for early stop or a mismatched kind.
+Keep the source and its PMR resource alive for every callback borrow.
+Their ownership contract is explicit:
 
 - `JsonValue::parse()` / `JsonObject::parse()` borrow the supplied complete token;
   passing a memory resource does not copy it. The input must outlive the value
   and any borrowed views or subvalues.
-- Request-bound parsing borrows the request body. `fromJson<Model>()` instead
+- Request-bound parsing borrows the request body. Standalone `fromJson<Model>()`
   owns dynamic tokens and strings in the model's PMR resource, so its input may
   be destroyed after parsing. The resource must outlive the model and results.
 - Move construction preserves the borrowed/owned mode; it does not turn a borrow
@@ -2032,18 +2043,19 @@ URL-encoded form binding stays schema-based. Raw `bytes()` /
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
 
-Request models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
+Models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
-`QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`. A
-handler returns `Task<HttpResponse>` and explicitly serializes a response model with `c.json(model)`.
+`QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`; these
+bindings perform the explicit validation step. A handler returns
+`Task<HttpResponse>` and serializes the same model with `c.json(model)`.
 Core and Web use the same `Task<T>` with an explicit result type;
 operations without a result use `Task<void>`. Ordinary route
 handlers return HTTP responses, while services can return typed model values:
 
 ```cpp
-ruvia::Task<UserResponse> getUser(std::uint64_t id,
+ruvia::Task<User> getUser(std::uint64_t id,
     std::pmr::memory_resource* requestResource) {
-    UserResponse response({.resource = requestResource});
+    User response({.resource = requestResource});
     response.set<"id">(ruvia::UInt64{id});
     response.set<"name">("Alice");
     co_return response;
@@ -2063,7 +2075,54 @@ Route middleware keeps the typed `c.req().validated<T>()` API, while
 `c.req().validatedJson<T>()` also exposes the validated original bytes through
 `raw()` for JSONB passthrough. See the compiled
 [`models_validation.cpp`](examples/web/models_validation.cpp) example for a
-complete request/response, nested, array, default, and validation example.
+complete model parsing, nested, array, default, and validation example.
+
+### Model values and JSON traversal
+
+Use Ruvia value types in one `RUVIA_MODEL` declaration. Narrow integers
+(`Int8`/`UInt8`/`Int16`/`UInt16`) check their exact range on construction.
+`Bytes` owns PMR bytes, exposes `view()` as `std::span<const std::uint8_t>`, and
+accepts spans or vectors through `set()`. Its JSON representation is a padded,
+canonical RFC 4648 base64 string, never raw text or hex. Invalid characters,
+missing padding and nonzero padding bits are rejected.
+
+```cpp
+RUVIA_MODEL(Config,
+    RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt8, RUVIA_INITIAL(3)),
+    RUVIA_OPTIONAL_FIELD(timeoutMs, ruvia::UInt16, RUVIA_INITIAL(250)),
+    RUVIA_OPTIONAL_FIELD(secret, ruvia::Bytes));
+
+Config config({.resource = requestResource});
+config.set<"secret">(std::span<const std::uint8_t>(bytes));
+if (config.get<"retries">() == ruvia::UInt8{3}) {
+    // compare values, not allocator or input provenance
+}
+```
+
+`String`, `Bytes`, `Array`, `BoxedArray`, and Models compare their values.
+Model equality compares each field's current state and value, ignoring allocator
+and input presence; missing and null remain different. `JsonValue` and
+`JsonObject` instead compare their retained original token bytes, not a
+semantically normalized JSON tree.
+
+Typed root JSON is also available outside HTTP bindings:
+
+```cpp
+auto values = ruvia::fromJson<ruvia::Array<ruvia::UInt16>>(R"([1, 2, 3])");
+if (values) {
+    auto body = ruvia::toJson(*values);
+}
+
+if (auto value = ruvia::JsonValue::parse(R"({"enabled":true,"n":2})")) {
+    const bool complete = value->forEachField([](std::string_view key, const ruvia::JsonValue& item) {
+        return !key.empty() && !item.isNull();
+    });
+    // complete is false if the visitor stopped early.
+}
+```
+
+Dynamic visitors borrow the source token only for the callback. Keep its input
+and PMR resource alive; moving a value does not extend either lifetime.
 
 `TestApp` uses the production route graph and one real Ruvia worker, preserving
 worker-local state, route body and rate limits, and `Deadline` cancellation.

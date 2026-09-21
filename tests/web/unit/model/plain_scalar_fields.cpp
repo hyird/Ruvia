@@ -13,15 +13,15 @@
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/Validation.h"
 
-RUVIA_REQUEST_MODEL(WrappedScalars, RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
+RUVIA_MODEL(WrappedScalars, RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(ratio, ruvia::Double), RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
     RUVIA_OPTIONAL_FIELD(delta, ruvia::Int64));
 
-RUVIA_RESPONSE_MODEL(WrappedScalarsResponse, RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
+RUVIA_MODEL(WrappedScalarsResponse, RUVIA_OPTIONAL_FIELD(count, ruvia::UInt32),
     RUVIA_OPTIONAL_FIELD(ratio, ruvia::Double), RUVIA_OPTIONAL_FIELD(enabled, ruvia::Bool),
     RUVIA_OPTIONAL_FIELD(delta, ruvia::Int64));
 
-RUVIA_REQUEST_MODEL(
+RUVIA_MODEL(
     WrappedDefaulted, RUVIA_OPTIONAL_FIELD(retries, ruvia::UInt32, RUVIA_DEFAULT(3)));
 
 RUVIA_TEST(model_wrapper_scalar_fields_parse_json_and_forms) {

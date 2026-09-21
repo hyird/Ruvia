@@ -22,7 +22,7 @@
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
-RUVIA_RESPONSE_MODEL(ContextJsonResponse, RUVIA_REQUIRED_FIELD(number, ruvia::Int64),
+RUVIA_MODEL(ContextJsonResponse, RUVIA_REQUIRED_FIELD(number, ruvia::Int64),
     RUVIA_REQUIRED_FIELD(boolean, ruvia::Bool), RUVIA_REQUIRED_FIELD(real, ruvia::Double));
 
 namespace {

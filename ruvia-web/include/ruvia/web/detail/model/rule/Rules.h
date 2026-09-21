@@ -96,15 +96,14 @@ struct ModelValidationAccess final {
             });
     }
 
-private:
     template <typename ValueT>
     [[nodiscard]] static bool valueStructureValid(const ValueT& value) {
         using T = std::remove_cvref_t<ValueT>;
-        if constexpr (isRequestModel<T>) {
+        if constexpr (isModel<T>) {
             return structureValid(value);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
+            if constexpr (isModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 for (const auto& element : value) {
                     if (!valueStructureValid(element)) {
                         return false;
@@ -117,15 +116,16 @@ private:
         }
     }
 
+private:
     template <typename ValueT, typename ValidatorT>
     static void validateValueStructure(
         const ValueT& value, std::string_view path, ValidatorT& validator) {
         using T = std::remove_cvref_t<ValueT>;
-        if constexpr (isRequestModel<T>) {
+        if constexpr (isModel<T>) {
             validateStructure(value, path, validator);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
+            if constexpr (isModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     std::pmr::string itemPath(validator.resource());
@@ -140,11 +140,11 @@ private:
     static void validateNestedFieldRules(
         const ValueT& value, std::string_view path, ValidatorT& validator) {
         using T = std::remove_cvref_t<ValueT>;
-        if constexpr (isRequestModel<T>) {
+        if constexpr (isModel<T>) {
             validateFieldRules(value, path, validator);
         } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
             using ElementT = typename T::value_type;
-            if constexpr (isRequestModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
+            if constexpr (isModel<ElementT> || isRuviaArray<ElementT> || isRuviaBoxedArray<ElementT>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     std::pmr::string itemPath(validator.resource());

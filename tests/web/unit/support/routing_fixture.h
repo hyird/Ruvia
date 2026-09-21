@@ -40,7 +40,7 @@
 #include "context_services_fixture.h"
 #include "test_harness.h"
 
-RUVIA_REQUEST_MODEL(ScopedValidationRequest, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
+RUVIA_MODEL(ScopedValidationRequest, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 
 namespace routing_test {
 

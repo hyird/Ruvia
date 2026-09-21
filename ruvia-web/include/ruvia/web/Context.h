@@ -340,7 +340,7 @@ public:
     [[nodiscard]] HttpResponse text(const char (&body)[N]) const;
 
     template <typename T>
-        requires detail::isResponseModel<T>
+        requires detail::isModel<T>
     [[nodiscard]] HttpResponse json(const T& value) const;
 
     [[nodiscard]] HttpResponse html(std::string_view body) const;

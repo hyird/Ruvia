@@ -10,18 +10,18 @@
 
 namespace {
 
-RUVIA_REQUEST_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
+RUVIA_MODEL(RemarkRequest, RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE));
 
-RUVIA_REQUEST_MODEL(RemarkWithDefaultRequest,
+RUVIA_MODEL(RemarkWithDefaultRequest,
     RUVIA_OPTIONAL_FIELD(remark, ruvia::String, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
 
-RUVIA_REQUEST_MODEL(RequiredRemarkRequest, RUVIA_REQUIRED_FIELD(remark, ruvia::String));
+RUVIA_MODEL(RequiredRemarkRequest, RUVIA_REQUIRED_FIELD(remark, ruvia::String));
 
-RUVIA_REQUEST_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue, RUVIA_NULLABLE),
+RUVIA_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject, RUVIA_NULLABLE),
     RUVIA_OPTIONAL_FIELD(items, ruvia::Array<ruvia::JsonValue>));
 
-RUVIA_RESPONSE_MODEL(JsonBagResponse, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
+RUVIA_MODEL(JsonBagResponse, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
     RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject));
 
 }  // namespace

@@ -40,7 +40,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     RUVIA_CHECK(response.ensure<"message">().resource() == &modelResource);
 }
 
-RUVIA_REQUEST_MODEL(TwoFieldRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String),
+RUVIA_MODEL(TwoFieldRequest, RUVIA_OPTIONAL_FIELD(message, ruvia::String),
     RUVIA_OPTIONAL_FIELD(tag, ruvia::String));
 
 RUVIA_TEST(json_invalid_type_does_not_rescan_before_the_next_field) {

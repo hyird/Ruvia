@@ -15,10 +15,10 @@
 namespace ruvia {
 namespace {
 
-RUVIA_RESPONSE_MODEL(HttpValidationIssueResponseModel, RUVIA_REQUIRED_FIELD(field, ruvia::String),
+RUVIA_MODEL(HttpValidationIssueResponseModel, RUVIA_REQUIRED_FIELD(field, ruvia::String),
     RUVIA_REQUIRED_FIELD(code, ruvia::String), RUVIA_REQUIRED_FIELD(message, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(HttpErrorResponseModel,
+RUVIA_MODEL(HttpErrorResponseModel,
     RUVIA_REQUIRED_FIELD(type, ruvia::String),
     RUVIA_REQUIRED_FIELD(title, ruvia::String),
     RUVIA_REQUIRED_FIELD(status, ruvia::Int32),

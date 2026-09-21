@@ -45,7 +45,7 @@ namespace ruvia::detail {
 class RouteRateLimitResult;
 }  // namespace ruvia::detail
 
-RUVIA_REQUEST_MODEL(SurfaceJsonMessage, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(SurfaceJsonMessage, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
 #ifdef RUVIA_GET_DYNAMIC
 #error \
@@ -67,7 +67,7 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     }
 }
 
-RUVIA_RESPONSE_MODEL(SurfaceJsonResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
+RUVIA_MODEL(SurfaceJsonResponse, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
 
 }  // namespace
 

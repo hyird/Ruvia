@@ -132,6 +132,10 @@ function(ruvia_configure_library target)
         # builds with GCC, so the check runs on every push either way.
         if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
             target_compile_options(${target} PRIVATE -Wshadow=local)
+            # GCC prints a psABI note when a function returns std::expected of
+            # long double. The note is not a defect in that return and cannot
+            # be silenced with a diagnostic pragma.
+            target_compile_options(${target} PRIVATE -Wno-psabi)
         endif()
     endif()
 

@@ -12,7 +12,7 @@ namespace ruvia {
 template <typename BodyT>
 class JsonBody final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "JsonBody requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "JsonBody requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {
@@ -27,7 +27,7 @@ public:
 template <typename BodyT>
 class FormBody final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "FormBody requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "FormBody requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {
@@ -42,7 +42,7 @@ public:
 template <typename BodyT>
 class QueryModel final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "QueryModel requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "QueryModel requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {
@@ -57,7 +57,7 @@ public:
 template <typename BodyT>
 class PathModel final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "PathModel requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "PathModel requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {
@@ -72,7 +72,7 @@ public:
 template <typename BodyT>
 class HeaderModel final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "HeaderModel requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "HeaderModel requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {
@@ -87,7 +87,7 @@ public:
 template <typename BodyT>
 class CookieModel final : public Middleware {
 public:
-    static_assert(detail::isRequestModel<BodyT>, "CookieModel requires a RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<BodyT>, "CookieModel requires a RUVIA_MODEL");
     using RuviaValidationBody = BodyT;
 
     void validate(const BodyT& body, Validator& validator) const {

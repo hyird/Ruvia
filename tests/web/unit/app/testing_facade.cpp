@@ -25,9 +25,9 @@
 #include "ruvia/web/Session.h"
 #include "ruvia/web/Testing.h"
 
-RUVIA_REQUEST_MODEL(TestingFacadeEcho, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
+RUVIA_MODEL(TestingFacadeEcho, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 
-RUVIA_RESPONSE_MODEL(TestingFacadeReport, RUVIA_REQUIRED_FIELD(path, ruvia::String),
+RUVIA_MODEL(TestingFacadeReport, RUVIA_REQUIRED_FIELD(path, ruvia::String),
     RUVIA_REQUIRED_FIELD(count, ruvia::UInt64),
     RUVIA_REQUIRED_FIELD(tags, ruvia::Array<ruvia::String>));
 

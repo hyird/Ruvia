@@ -154,7 +154,30 @@ public:
     }
 
     template <typename T>
+        requires detail::isModelField<T>
+    [[nodiscard]] std::optional<T> get() const {
+        return detail::parseJsonDocument<T>(view(), resource_, detail::ModelStringStorage::kBorrowed);
+    }
+
+    template <typename T>
+        requires detail::isModelField<T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const;
+
+    // The callback receives a JsonValue borrowing this object's token; it is
+    // valid only for the duration of the callback.
+    template <typename Visitor>
+    [[nodiscard]] bool forEachElement(Visitor&& visitor) const;
+
+    // The callback receives a field name and JsonValue borrowing this object's
+    // token; both are valid only for the duration of the callback.
+    template <typename Visitor>
+    [[nodiscard]] bool forEachField(Visitor&& visitor) const;
+
+    // Compare retained token bytes exactly, ignoring allocator and JSON
+    // normalization, to preserve the zero-cost view semantics.
+    [[nodiscard]] bool operator==(const JsonValue& other) const noexcept {
+        return view() == other.view();
+    }
 
 private:
     friend struct detail::ModelValueFactory;
@@ -258,7 +281,19 @@ public:
         return resource_;
     }
 
+    // The callback receives a field name and JsonValue borrowing this object's
+    // token; both are valid only for the duration of the callback.
+    template <typename Visitor>
+    [[nodiscard]] bool forEachField(Visitor&& visitor) const;
+
+    // Compare retained token bytes exactly, ignoring allocator and JSON
+    // normalization, to preserve the zero-cost view semantics.
+    [[nodiscard]] bool operator==(const JsonObject& other) const noexcept {
+        return view() == other.view();
+    }
+
     template <typename T>
+        requires detail::isModelField<T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
         auto* const resource = resource_;
         std::optional<T> result;
@@ -269,10 +304,10 @@ public:
                     return true;
                 }
 
-                auto valueInput = valueView;
-                auto value = detail::parseJsonValue<T>(valueInput, resource);
-                detail::skipJsonWhitespace(valueInput);
-                if (!value || !valueInput.empty()) {
+                detail::skipJsonWhitespace(valueView);
+                auto value = detail::parseJsonDocument<T>(valueView, resource,
+                    detail::ModelStringStorage::kBorrowed);
+                if (!value) {
                     result.reset();
                     lastMatchFailed = true;
                     return true;
@@ -330,11 +365,77 @@ private:
 };
 
 template <typename T>
+    requires detail::isModelField<T>
 [[nodiscard]] inline std::optional<T> JsonValue::get(std::string_view field) const {
     if (!isObject()) {
         return std::nullopt;
     }
     return JsonObject(detail::ResolvedPmrResourceTag{}, view(), resource_).get<T>(field);
+}
+
+template <typename Visitor>
+[[nodiscard]] inline bool JsonValue::forEachElement(Visitor&& visitor) const {
+    if (!isArray()) {
+        return false;
+    }
+    auto input = view();
+    detail::skipJsonWhitespace(input);
+    if (!detail::consumeJsonChar(input, '[')) {
+        return false;
+    }
+    detail::skipJsonWhitespace(input);
+    if (!input.empty() && input.front() == ']') {
+        input.remove_prefix(1);
+        detail::skipJsonWhitespace(input);
+        return input.empty();
+    }
+    while (true) {
+        detail::skipJsonWhitespace(input);
+        const auto start = input;
+        if (!detail::skipJsonValue(input)) {
+            return false;
+        }
+        JsonValue value(detail::ResolvedPmrResourceTag{},
+            start.substr(0, start.size() - input.size()), resource_);
+        if (!static_cast<bool>(visitor(value))) {
+            return false;
+        }
+        detail::skipJsonWhitespace(input);
+        if (!input.empty() && input.front() == ']') {
+            input.remove_prefix(1);
+            detail::skipJsonWhitespace(input);
+            return input.empty();
+        }
+        if (!detail::consumeJsonChar(input, ',')) {
+            return false;
+        }
+    }
+}
+
+template <typename Visitor>
+[[nodiscard]] inline bool JsonValue::forEachField(Visitor&& visitor) const {
+    if (!isObject()) {
+        return false;
+    }
+
+    bool stopped = false;
+    const bool valid = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, view(),
+        resource_, [&](std::string_view key, std::string_view valueView) {
+            detail::skipJsonWhitespace(valueView);
+            JsonValue value(detail::ResolvedPmrResourceTag{}, valueView, resource_);
+            if (!static_cast<bool>(visitor(key, value))) {
+                stopped = true;
+                return false;
+            }
+            return true;
+        });
+    return valid && !stopped;
+}
+
+template <typename Visitor>
+[[nodiscard]] inline bool JsonObject::forEachField(Visitor&& visitor) const {
+    JsonValue value(detail::ResolvedPmrResourceTag{}, view(), resource_);
+    return value.forEachField(std::forward<Visitor>(visitor));
 }
 
 }  // namespace ruvia

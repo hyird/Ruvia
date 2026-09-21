@@ -24,19 +24,19 @@ const ruvia::RedisRepositoryConfig userRedisConfig{
         {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric},
     },
 };
-RUVIA_REQUEST_MODEL(CreateCachedUser,
+RUVIA_MODEL(CreateCachedUser,
     RUVIA_REQUIRED_FIELD(id, ruvia::String, RUVIA_MIN(1, "id is required"),
         RUVIA_MAX(64, "id is too long")),
     RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(1, "name is required"),
         RUVIA_MAX(120, "name is too long")),
     RUVIA_REQUIRED_FIELD(age, ruvia::UInt32, RUVIA_MAX(130, "age is too large")));
 
-RUVIA_RESPONSE_MODEL(CachedUserResponse,
+RUVIA_MODEL(CachedUserResponse,
     RUVIA_REQUIRED_FIELD(id, ruvia::String),
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_REQUIRED_FIELD(age, ruvia::UInt32));
 
-RUVIA_RESPONSE_MODEL(CachedUsersResponse,
+RUVIA_MODEL(CachedUsersResponse,
     RUVIA_REQUIRED_FIELD(users, ruvia::Array<CachedUserResponse>));
 
 class CachedUserController final : public ruvia::Controller<CachedUserController> {

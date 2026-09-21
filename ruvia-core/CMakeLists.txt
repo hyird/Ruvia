@@ -45,6 +45,7 @@ ruvia_install_public_header_closure(core include/ruvia/core)
 ruvia_install_public_headers(core
     include/ruvia/core/detail/io/IpAddress.h
     include/ruvia/core/detail/number/DecimalNumber.h
+    include/ruvia/core/detail/util/Base64.h
     include/ruvia/core/detail/util/DnsHost.h)
 
 if(WIN32)
