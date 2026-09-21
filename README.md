@@ -851,6 +851,14 @@ then run `ctest --test-dir build -C Release --output-on-failure`.
 `RUVIA_ENABLE_JWT=ON`. Consumers linking `ruvia::web` inherit that feature
 definition from the target and should not define it themselves.
 
+JWT signing and verification enforce RFC 7518's minimum raw key sizes:
+32 bytes for HS256, 48 for HS384, and 64 for HS512. Supply cryptographically
+random key bytes through `JwtSignOptions::secret` / `JwtVerifyOptions::secret`;
+short keys (including empty keys) throw `std::invalid_argument`. Keys are not
+padded, stretched, or implicitly decoded from base64/hex. Decode encoded secrets
+before passing them, and do not use passwords or the public demonstration key
+from `examples/web/auth_jwt.cpp` as production keys.
+
 ## Database Drivers
 
 MariaDB and PostgreSQL use the same `DbHandle`, result, streaming, transaction

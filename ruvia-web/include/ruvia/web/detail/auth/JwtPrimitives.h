@@ -32,7 +32,8 @@ void jwtAppendJsonMember(
     std::string_view input, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::string_view jwtAlgorithmName(JwtAlgorithm algorithm);
-// Throws std::invalid_argument for an empty secret and std::length_error when
+// Throws std::invalid_argument for a key shorter than the selected digest,
+// and std::length_error when
 // the secret or signing input cannot be represented by OpenSSL's HMAC length
 // parameters.
 [[nodiscard]] std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret,

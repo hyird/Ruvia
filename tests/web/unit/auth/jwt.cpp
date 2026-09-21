@@ -29,6 +29,12 @@ using ruvia::JwtSignOptions;
 using ruvia::JwtVerifyOptions;
 using ruvia::testing::throwsOn;
 
+// Deterministic test keys, not production secrets. Large enough for HS512.
+constexpr std::string_view kSecret =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+constexpr std::string_view kOtherSecret =
+    "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
     options.secret = secret;
@@ -109,12 +115,12 @@ RUVIA_TEST(jwt_json_escape_preserves_exact_bytes) {
 }
 
 RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
-    auto options = signOptions("supersecret");
+    auto options = signOptions(kSecret);
     options.claims.push_back(
         JwtClaim({.name = std::string_view("role"), .value = std::string_view("admin")}));
     const auto token = sign(options);
 
-    const auto payload = verifyJwt(token, verifyOptions("supersecret"));
+    const auto payload = verifyJwt(token, verifyOptions(kSecret));
     RUVIA_CHECK_EQ(payload.issuer(), std::string_view("ruvia"));
     RUVIA_CHECK_EQ(payload.subject(), std::string_view("user-1"));
     const auto role = payload.claim("role");
@@ -122,19 +128,67 @@ RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
 }
 
 RUVIA_TEST(jwt_sign_rejects_duplicate_custom_claim_names) {
-    auto options = signOptions("secret");
+    auto options = signOptions(kSecret);
     options.claims.push_back(JwtClaim({.name = "role", .value = "admin"}));
     options.claims.push_back(JwtClaim({.name = "role", .value = "operator"}));
     RUVIA_CHECK(throwsOn([&] { (void)jwtSign(options); }));
 
-    auto reserved = signOptions("secret");
+    auto reserved = signOptions(kSecret);
     reserved.claims.push_back(JwtClaim({.name = "iss", .value = "forbidden"}));
     RUVIA_CHECK(throwsOn([&] { (void)jwtSign(reserved); }));
 }
 
 RUVIA_TEST(jwt_verify_rejects_wrong_secret) {
-    const auto token = sign(signOptions("secretA"));
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions("secretB")); }));
+    const auto token = sign(signOptions(kSecret));
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions(kOtherSecret)); }));
+}
+
+RUVIA_TEST(jwt_hmac_enforces_algorithm_key_lengths_for_signing_and_verification) {
+    const struct {
+        JwtAlgorithm algorithm;
+        std::size_t minimumBytes;
+    } cases[] = {
+        {JwtAlgorithm::kHs256, 32},
+        {JwtAlgorithm::kHs384, 48},
+        {JwtAlgorithm::kHs512, 64},
+    };
+    for (const auto& test : cases) {
+        // Include NUL bytes: this is a raw key, not a C string or encoded text.
+        std::string key(257, '\0');
+        key.back() = 'k';
+        for (const auto size : {test.minimumBytes, test.minimumBytes + 1, key.size()}) {
+            const std::string_view validKey(key.data(), size);
+            auto signing = signOptions(validKey);
+            signing.algorithm = test.algorithm;
+            const auto token = sign(signing);
+            auto verification = verifyOptions(validKey);
+            verification.algorithm = test.algorithm;
+            const auto verified = verifyJwt(token, verification);
+            RUVIA_CHECK_EQ(verified.subject(), std::string_view("user-1"));
+
+            for (const auto shortSize : {std::size_t{0}, std::size_t{1}, test.minimumBytes - 1}) {
+                const std::string_view shortKey(key.data(), shortSize);
+                signing.secret = shortKey;
+                bool signingRejected = false;
+                try {
+                    (void)jwtSign(signing);
+                } catch (const std::invalid_argument&) {
+                    signingRejected = true;
+                }
+                RUVIA_CHECK(signingRejected);
+                verification.secret = shortKey;
+                bool verificationRejected = false;
+                try {
+                    (void)verifyJwt(token, verification);
+                } catch (const std::invalid_argument&) {
+                    verificationRejected = true;
+                } catch (const std::runtime_error&) {
+                    // A MAC mismatch is not configuration validation.
+                }
+                RUVIA_CHECK(verificationRejected);
+            }
+        }
+    }
 }
 
 RUVIA_TEST(jwt_hmac_rejects_unrepresentable_secret_length) {
@@ -155,7 +209,7 @@ RUVIA_TEST(jwt_hmac_rejects_unrepresentable_secret_length) {
             static_cast<std::size_t>((std::numeric_limits<int>::max)()) + 1;
         rejected = false;
         try {
-            (void)ruvia::detail::jwtHmacSign(JwtAlgorithm::kHs256, "secret",
+            (void)ruvia::detail::jwtHmacSign(JwtAlgorithm::kHs256, kSecret,
                 std::string_view("x", oversizedDataSize), std::pmr::get_default_resource());
         } catch (const std::length_error&) {
             rejected = true;
@@ -165,54 +219,54 @@ RUVIA_TEST(jwt_hmac_rejects_unrepresentable_secret_length) {
 }
 
 RUVIA_TEST(jwt_verify_rejects_tampered_payload) {
-    auto token = sign(signOptions("secret"));
+    auto token = sign(signOptions(kSecret));
     // Corrupt a byte inside the payload section (after the first '.').
     const auto firstDot = token.find('.');
     RUVIA_CHECK(firstDot != std::string::npos);
     const auto i = firstDot + 2;
     token[i] = token[i] == 'A' ? 'B' : 'A';
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions("secret")); }));
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions(kSecret)); }));
 }
 
 RUVIA_TEST(jwt_verify_rejects_algorithm_mismatch) {
     // Signed HS256; verifying as HS512 recomputes a different MAC and fails. The
     // server's configured algorithm is authoritative, so the token cannot dictate
     // the verification algorithm.
-    auto options = signOptions("secret");
+    auto options = signOptions(kSecret);
     options.algorithm = JwtAlgorithm::kHs256;
     const auto token = sign(options);
 
-    auto verify = verifyOptions("secret");
+    auto verify = verifyOptions(kSecret);
     verify.algorithm = JwtAlgorithm::kHs512;
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verify); }));
 }
 
 RUVIA_TEST(jwt_verify_requires_unique_complete_json_objects) {
-    const auto duplicateAlgorithm = signedTokenWithHeaderAndPayload("secret",
+    const auto duplicateAlgorithm = signedTokenWithHeaderAndPayload(kSecret,
         R"({"alg":"HS256","alg":"HS256","typ":"JWT"})", R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(duplicateAlgorithm, verifyOptions("secret")); }));
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(duplicateAlgorithm, verifyOptions(kSecret)); }));
 
     const auto duplicateUnknownHeader = signedTokenWithHeaderAndPayload(
-        "secret", R"({"alg":"HS256","kid":"a","kid":"b"})", R"({"sub":"user-1","exp":4102444800})");
+        kSecret, R"({"alg":"HS256","kid":"a","kid":"b"})", R"({"sub":"user-1","exp":4102444800})");
     RUVIA_CHECK(
-        throwsOn([&] { (void)verifyJwt(duplicateUnknownHeader, verifyOptions("secret")); }));
+        throwsOn([&] { (void)verifyJwt(duplicateUnknownHeader, verifyOptions(kSecret)); }));
 
     const auto trailingHeader = signedTokenWithHeaderAndPayload(
-        "secret", R"({"alg":"HS256"}junk)", R"({"sub":"user-1","exp":4102444800})");
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(trailingHeader, verifyOptions("secret")); }));
+        kSecret, R"({"alg":"HS256"}junk)", R"({"sub":"user-1","exp":4102444800})");
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(trailingHeader, verifyOptions(kSecret)); }));
 
-    const auto unsupportedCriticalHeader = signedTokenWithHeaderAndPayload("secret",
+    const auto unsupportedCriticalHeader = signedTokenWithHeaderAndPayload(kSecret,
         R"({"alg":"HS256","crit":["custom"],"custom":true})",
         R"({"sub":"user-1","exp":4102444800})");
     RUVIA_CHECK(
-        throwsOn([&] { (void)verifyJwt(unsupportedCriticalHeader, verifyOptions("secret")); }));
+        throwsOn([&] { (void)verifyJwt(unsupportedCriticalHeader, verifyOptions(kSecret)); }));
 
     for (const auto* payload : {R"({"sub":"first","sub":"second","exp":4102444800})",
              R"({"role":"first","role":"second","exp":4102444800})",
              R"({"role":"first","\u0072ole":"second","exp":4102444800})",
              R"({"sub":"user-1","exp":4102444800}junk)"}) {
-        const auto token = signedTokenWithPayload("secret", payload);
-        RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions("secret")); }));
+        const auto token = signedTokenWithPayload(kSecret, payload);
+        RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions(kSecret)); }));
         RUVIA_CHECK(throwsOn([&] { (void)decodeJwtUnverified(token); }));
     }
 }
@@ -222,29 +276,29 @@ RUVIA_TEST(jwt_verify_rejects_malformed_registered_claim_values) {
              R"({"sub":false,"exp":4102444800})", R"({"jti":{},"exp":4102444800})",
              R"({"aud":["api",2],"exp":4102444800})", R"({"exp":"4102444800"})",
              R"({"nbf":"0","exp":4102444800})", R"({"iat":null,"exp":4102444800})"}) {
-        const auto token = signedTokenWithPayload("secret", payload);
-        RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions("secret")); }));
+        const auto token = signedTokenWithPayload(kSecret, payload);
+        RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verifyOptions(kSecret)); }));
     }
 }
 
 RUVIA_TEST(jwt_verify_enforces_time_claims) {
     // A token minted without exp is rejected by default, and accepted only when
     // the caller opts out. Absence is explicit; zero means "expires now".
-    auto noExp = signOptions("secret");
+    auto noExp = signOptions(kSecret);
     noExp.expiresIn = std::nullopt;
     const auto tokenNoExp = sign(noExp);
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenNoExp, verifyOptions("secret")); }));
-    auto allowNoExp = verifyOptions("secret");
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenNoExp, verifyOptions(kSecret)); }));
+    auto allowNoExp = verifyOptions(kSecret);
     allowNoExp.expirationClaim = JwtExpirationClaimPolicy::kAllowMissing;
     const auto noExpPayload = verifyJwt(tokenNoExp, allowNoExp);
     RUVIA_CHECK_EQ(noExpPayload.subject(), std::string_view("user-1"));
 
-    auto expiresNow = signOptions("secret");
+    auto expiresNow = signOptions(kSecret);
     expiresNow.expiresIn = std::chrono::seconds(0);
     const auto tokenExpiresNow = sign(expiresNow);
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenExpiresNow, verifyOptions("secret")); }));
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenExpiresNow, verifyOptions(kSecret)); }));
 
-    auto validNow = signOptions("secret");
+    auto validNow = signOptions(kSecret);
     validNow.notBeforeDelay = std::chrono::seconds(0);
     const auto validNowToken = sign(validNow);
     const auto validNowPayload = decodeJwtUnverified(validNowToken);
@@ -252,54 +306,54 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
 
     // notBefore: a token whose nbf is in the future is not yet valid, unless the
     // configured leeway covers the gap.
-    auto future = signOptions("secret");
+    auto future = signOptions(kSecret);
     future.notBeforeDelay = std::chrono::seconds{3600};
     const auto tokenFuture = sign(future);
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenFuture, verifyOptions("secret")); }));
-    auto lenient = verifyOptions("secret");
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(tokenFuture, verifyOptions(kSecret)); }));
+    auto lenient = verifyOptions(kSecret);
     lenient.leeway = std::chrono::seconds{7200};
     const auto futurePayload = verifyJwt(tokenFuture, lenient);
     RUVIA_CHECK_EQ(futurePayload.subject(), std::string_view("user-1"));
 }
 
 RUVIA_TEST(jwt_time_options_reject_negative_offsets) {
-    auto negativeExpiration = signOptions("secret");
+    auto negativeExpiration = signOptions(kSecret);
     negativeExpiration.expiresIn = std::chrono::seconds(-1);
     RUVIA_CHECK(throwsOn([&] { (void)jwtSign(negativeExpiration); }));
 
-    auto negativeNotBefore = signOptions("secret");
+    auto negativeNotBefore = signOptions(kSecret);
     negativeNotBefore.notBeforeDelay = std::chrono::seconds(-1);
     RUVIA_CHECK(throwsOn([&] { (void)jwtSign(negativeNotBefore); }));
 
-    auto negativeLeeway = verifyOptions("secret");
+    auto negativeLeeway = verifyOptions(kSecret);
     negativeLeeway.leeway = std::chrono::seconds(-1);
-    const auto token = sign(signOptions("secret"));
+    const auto token = sign(signOptions(kSecret));
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, negativeLeeway); }));
 
-    auto invalidExpirationClaim = verifyOptions("secret");
+    auto invalidExpirationClaim = verifyOptions(kSecret);
     invalidExpirationClaim.expirationClaim = static_cast<JwtExpirationClaimPolicy>(0xFF);
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, invalidExpirationClaim); }));
 }
 
 RUVIA_TEST(jwt_verify_enforces_registered_claims) {
-    auto options = signOptions("secret");
+    auto options = signOptions(kSecret);
     options.audience.assign("api");
     const auto token = sign(options);
 
     // Matching issuer/audience passes.
-    auto ok = verifyOptions("secret");
+    auto ok = verifyOptions(kSecret);
     ok.issuer.assign("ruvia");
     ok.audience.assign("api");
     const auto verified = verifyJwt(token, ok);
     RUVIA_CHECK_EQ(verified.audience(), std::string_view("api"));
 
     // A wrong expected issuer is rejected.
-    auto badIssuer = verifyOptions("secret");
+    auto badIssuer = verifyOptions(kSecret);
     badIssuer.issuer.assign("evil");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, badIssuer); }));
 
     // A wrong expected audience is rejected.
-    auto badAudience = verifyOptions("secret");
+    auto badAudience = verifyOptions(kSecret);
     badAudience.audience.assign("other");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, badAudience); }));
 }
@@ -308,23 +362,23 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     // RFC 7519 §4.1.3: aud may be a single string OR an array of strings. A
     // configured audience must be accepted iff it is one of the token's values.
     const auto multi =
-        signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":["api","web"]})");
+        signedTokenWithPayload(kSecret, R"({"sub":"u","exp":4102444800,"aud":["api","web"]})");
 
-    auto forApi = verifyOptions("secret");
+    auto forApi = verifyOptions(kSecret);
     forApi.audience.assign("api");
     const auto apiPayload = verifyJwt(multi, forApi);
     RUVIA_CHECK_EQ(apiPayload.subject(), std::string_view("u"));
-    auto forWeb = verifyOptions("secret");
+    auto forWeb = verifyOptions(kSecret);
     forWeb.audience.assign("web");
     RUVIA_CHECK(verifyJwt(multi, forWeb).hasAudience("web"));
 
     const auto spaced =
-        signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":[ "api" , "web" ]})");
+        signedTokenWithPayload(kSecret, R"({"sub":"u","exp":4102444800,"aud":[ "api" , "web" ]})");
     RUVIA_CHECK(verifyJwt(spaced, forWeb).hasAudience("web"));
 
     // The critical negative: an audience NOT in the array must be rejected --
     // array support must not become a fail-open path.
-    auto forMobile = verifyOptions("secret");
+    auto forMobile = verifyOptions(kSecret);
     forMobile.audience.assign("mobile");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(multi, forMobile); }));
 
@@ -337,8 +391,8 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
 
     // An escaped array element is decoded before matching.
     const auto escaped =
-        signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":["a\"b"]})");
-    auto forEscaped = verifyOptions("secret");
+        signedTokenWithPayload(kSecret, R"({"sub":"u","exp":4102444800,"aud":["a\"b"]})");
+    auto forEscaped = verifyOptions(kSecret);
     forEscaped.audience.assign("a\"b");
     RUVIA_CHECK(verifyJwt(escaped, forEscaped).hasAudience("a\"b"));
 
@@ -346,20 +400,20 @@ RUVIA_TEST(jwt_verify_supports_audience_array) {
     for (const auto* payload :
         {R"({"sub":"u","exp":4102444800,"aud":[]})", R"({"sub":"u","exp":4102444800,"aud":[1]})",
             R"({"sub":"u","exp":4102444800,"aud":["api",2]})"}) {
-        const auto bad = signedTokenWithPayload("secret", payload);
-        auto wantApi = verifyOptions("secret");
+        const auto bad = signedTokenWithPayload(kSecret, payload);
+        auto wantApi = verifyOptions(kSecret);
         wantApi.audience.assign("api");
         RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(bad, wantApi); }));
     }
 
     // The single-string form is unchanged (regression guard).
     const auto single =
-        signedTokenWithPayload("secret", R"({"sub":"u","exp":4102444800,"aud":"api"})");
-    auto wantApiSingle = verifyOptions("secret");
+        signedTokenWithPayload(kSecret, R"({"sub":"u","exp":4102444800,"aud":"api"})");
+    auto wantApiSingle = verifyOptions(kSecret);
     wantApiSingle.audience.assign("api");
     const auto singlePayload = verifyJwt(single, wantApiSingle);
     RUVIA_CHECK_EQ(singlePayload.audience(), std::string_view("api"));
-    auto wantOtherSingle = verifyOptions("secret");
+    auto wantOtherSingle = verifyOptions(kSecret);
     wantOtherSingle.audience.assign("other");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(single, wantOtherSingle); }));
 }
@@ -369,14 +423,14 @@ RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
     // int64 nanoseconds when converted to a time_point (UB on attacker-controlled
     // claims); jwtFromEpochSeconds must saturate instead. A huge exp then reads as
     // far-future (not expired) and a huge nbf as far-future (not yet valid).
-    const auto farExp = signedTokenWithPayload("secret", R"({"sub":"u","exp":99999999999})");
-    const auto farExpPayload = verifyJwt(farExp, verifyOptions("secret"));
+    const auto farExp = signedTokenWithPayload(kSecret, R"({"sub":"u","exp":99999999999})");
+    const auto farExpPayload = verifyJwt(farExp, verifyOptions(kSecret));
     RUVIA_CHECK_EQ(farExpPayload.subject(), std::string_view("u"));
 
     // int64 max must not overflow the saturating conversion either.
     const auto maxExp =
-        signedTokenWithPayload("secret", R"({"sub":"u","exp":9223372036854775807})");
-    const auto maxExpPayload = verifyJwt(maxExp, verifyOptions("secret"));
+        signedTokenWithPayload(kSecret, R"({"sub":"u","exp":9223372036854775807})");
+    const auto maxExpPayload = verifyJwt(maxExp, verifyOptions(kSecret));
     RUVIA_CHECK_EQ(maxExpPayload.subject(), std::string_view("u"));
 
     using Clock = std::chrono::system_clock;
@@ -386,17 +440,17 @@ RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
                     std::chrono::seconds(-1)) == Clock::time_point::min());
 
     const auto fractional =
-        signedTokenWithPayload("secret", R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
-    const auto fractionalPayload = verifyJwt(fractional, verifyOptions("secret"));
+        signedTokenWithPayload(kSecret, R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
+    const auto fractionalPayload = verifyJwt(fractional, verifyOptions(kSecret));
     RUVIA_CHECK(fractionalPayload.issuedAt().has_value());
     const auto issuedSeconds =
         std::chrono::duration<long double>(fractionalPayload.issuedAt()->time_since_epoch())
             .count();
     RUVIA_CHECK(issuedSeconds > 1.49L && issuedSeconds < 1.51L);
 
-    auto allowNoExp = verifyOptions("secret");
+    auto allowNoExp = verifyOptions(kSecret);
     allowNoExp.expirationClaim = JwtExpirationClaimPolicy::kAllowMissing;
-    const auto farNbf = signedTokenWithPayload("secret", R"({"sub":"u","nbf":99999999999})");
+    const auto farNbf = signedTokenWithPayload(kSecret, R"({"sub":"u","nbf":99999999999})");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(farNbf, allowNoExp); }));
 }
 
@@ -404,8 +458,8 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
     // exp is a Unix timestamp; 1 (1970) is far in the past, so this token is
     // expired regardless of the current clock and must be rejected -- the core
     // reason exp exists. jwtSign can only mint future exp, so craft it directly.
-    const auto expired = signedTokenWithPayload("secret", R"({"sub":"user-1","exp":1})");
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(expired, verifyOptions("secret")); }));
+    const auto expired = signedTokenWithPayload(kSecret, R"({"sub":"user-1","exp":1})");
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(expired, verifyOptions(kSecret)); }));
 
     // leeway applies to exp as well as nbf: a token that expired a few seconds
     // ago is rejected by default but accepted when leeway covers the gap.
@@ -414,9 +468,9 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
                                 .count();
     const std::string recentPayload =
         R"({"sub":"user-1","exp":)" + std::to_string(nowSeconds - 10) + "}";
-    const auto recentlyExpired = signedTokenWithPayload("secret", recentPayload);
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(recentlyExpired, verifyOptions("secret")); }));
-    auto lenient = verifyOptions("secret");
+    const auto recentlyExpired = signedTokenWithPayload(kSecret, recentPayload);
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(recentlyExpired, verifyOptions(kSecret)); }));
+    auto lenient = verifyOptions(kSecret);
     lenient.leeway = std::chrono::seconds{3600};
     const auto recentlyExpiredPayload = verifyJwt(recentlyExpired, lenient);
     RUVIA_CHECK_EQ(recentlyExpiredPayload.subject(), std::string_view("user-1"));
@@ -505,18 +559,18 @@ RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
     // provides no authentication. Pin that contract: it returns the claims even
     // for a token whose signature has been corrupted, while jwtVerify rejects the
     // same token. Callers must never treat the unverified payload as trusted.
-    const auto token = sign(signOptions("secret"));
+    const auto token = sign(signOptions(kSecret));
     const auto decoded = decodeJwtUnverified(token);
     RUVIA_CHECK_EQ(decoded.subject(), std::string_view("user-1"));
 
     std::string forged = token.substr(0, token.rfind('.') + 1) + "corruptedsignature";
     const auto decodedForged = decodeJwtUnverified(forged);
     RUVIA_CHECK_EQ(decodedForged.subject(), std::string_view("user-1"));
-    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(forged, verifyOptions("secret")); }));
+    RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(forged, verifyOptions(kSecret)); }));
 }
 
 RUVIA_TEST(jwt_verify_rejects_malformed_token) {
-    const auto verify = verifyOptions("secret");
+    const auto verify = verifyOptions(kSecret);
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt("not-a-jwt", verify); }));
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt("only.two", verify); }));  // two sections
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt("a.b.c.d", verify); }));   // four sections
@@ -542,7 +596,7 @@ RUVIA_TEST(jwt_verify_rejects_none_algorithm_downgrade) {
     forged.append(payload.data(), payload.size());
     forged.push_back('.');
 
-    auto verify = verifyOptions("secret");
+    auto verify = verifyOptions(kSecret);
     verify.expirationClaim = JwtExpirationClaimPolicy::kAllowMissing;
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(forged, verify); }));
 
@@ -553,9 +607,9 @@ RUVIA_TEST(jwt_verify_rejects_none_algorithm_downgrade) {
 }
 
 RUVIA_TEST(jwt_verify_rejects_signed_non_object_payload) {
-    auto verify = verifyOptions("secret");
+    auto verify = verifyOptions(kSecret);
     verify.expirationClaim = JwtExpirationClaimPolicy::kAllowMissing;
-    const auto token = signedTokenWithPayload("secret", "not-json");
+    const auto token = signedTokenWithPayload(kSecret, "not-json");
     RUVIA_CHECK(throwsOn([&] { (void)verifyJwt(token, verify); }));
 }
 
