@@ -12,7 +12,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-RUVIA_REQUEST_MODEL(NoteRequest, RUVIA_OPTIONAL_FIELD(text, ruvia::String));
+RUVIA_MODEL(NoteRequest, RUVIA_OPTIONAL_FIELD(text, ruvia::String));
 
 namespace {
 

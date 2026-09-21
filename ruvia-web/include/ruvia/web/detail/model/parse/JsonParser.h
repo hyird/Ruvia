@@ -10,10 +10,12 @@
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonScanner.h"
 #include "ruvia/web/detail/json/JsonString.h"
+#include "ruvia/web/detail/model/ModelBinary.h"
 #include "ruvia/web/detail/model/Traits.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
+#include "ruvia/web/detail/model/rule/Rules.h"
 
-// Internal JSON value parser for RUVIA_REQUEST_MODEL.
+// Internal JSON value parser for RUVIA_MODEL.
 
 namespace ruvia::detail {
 
@@ -162,6 +164,8 @@ template <typename T>
         FieldT value = makeRequestValue<FieldT>(resource);
         value.assignOwned(std::move(*decoded));
         return value;
+    } else if constexpr (isRuviaBytes<FieldT>) {
+        return parseModelBinaryValue(input, resource);
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         const auto parsed = parseJsonString(remaining);
         if (!parsed.has_value() || parsed->encoding() != JsonStringEncoding::kLiteral) {
@@ -194,7 +198,7 @@ template <typename T>
         }
         input = remaining;
         return FieldT(parsed);
-    } else if constexpr (isRequestModel<FieldT>) {
+    } else if constexpr (isModel<FieldT>) {
         auto nested =
             ModelParseAccess::parseValue<FieldT>(remaining, resource, depth, stringStorage);
         if (!nested.has_value()) {
@@ -203,8 +207,21 @@ template <typename T>
         input = remaining;
         return nested;
     } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL JSON field type is not supported");
+        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL JSON field type is not supported");
     }
+}
+
+// One complete typed JSON value, including structural checks inside arrays.
+// Borrowed reads are used by JSON views; standalone codecs request owned data.
+template <typename T>
+[[nodiscard]] std::optional<T> parseJsonDocument(std::string_view input,
+    std::pmr::memory_resource* resource, ModelStringStorage stringStorage) {
+    auto value = parseJsonValue<T>(input, resource, 0, stringStorage);
+    skipJsonWhitespace(input);
+    if (!value || !input.empty() || !ModelValidationAccess::valueStructureValid(*value)) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 }  // namespace ruvia::detail

@@ -5,24 +5,17 @@
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
-#include <optional>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <type_traits>
 
 #include "ruvia/web/detail/json/JsonEscape.h"
+#include "ruvia/web/detail/model/ModelBinary.h"
 #include "ruvia/web/detail/model/Traits.h"
 
 namespace ruvia::detail {
 
 struct ModelJsonAccess final {
-    template <typename ModelT>
-    [[nodiscard]] static std::optional<ModelT> parseOwned(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        return ModelT::ruviaParseJsonBodyOwned(body, resource);
-    }
-
     template <typename ModelT>
     [[nodiscard]] static std::size_t sizeHint(const ModelT& model) {
         return model.ruviaJsonSizeHint();
@@ -45,9 +38,11 @@ template <typename ValueT>
         return static_cast<std::size_t>(std::numeric_limits<T>::digits10) + 3;
     } else if constexpr (std::is_floating_point_v<T>) {
         return 32;
+    } else if constexpr (isRuviaBytes<T>) {
+        return base64EncodedSize(value.size()) + 2;
     } else if constexpr (isRuviaString<T>) {
         return jsonStringSizeHint(value.view());
-    } else if constexpr (isResponseModel<T>) {
+    } else if constexpr (isModel<T>) {
         return ModelJsonAccess::sizeHint(value);
     } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         std::size_t size = 2;
@@ -62,7 +57,7 @@ template <typename ValueT>
         return size;
     } else {
         static_assert(
-            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
+            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
     }
 }
 
@@ -105,15 +100,17 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         if (ec == std::errc{}) {
             output.append(buffer, static_cast<std::size_t>(ptr - buffer));
         }
+    } else if constexpr (isRuviaBytes<T>) {
+        appendModelBinary(output, value);
     } else if constexpr (isRuviaString<T>) {
         appendJsonString(output, value.view());
-    } else if constexpr (isResponseModel<T>) {
+    } else if constexpr (isModel<T>) {
         ModelJsonAccess::append(output, value);
     } else if constexpr (isRuviaArray<T> || isRuviaBoxedArray<T>) {
         appendJsonSequence(output, value);
     } else {
         static_assert(
-            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
+            alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_MODEL");
     }
 }
 

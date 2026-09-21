@@ -37,22 +37,22 @@ ruvia::JsonValue dynamicNullDefault() {
     return std::move(*value);
 }
 
-RUVIA_REQUEST_MODEL(OptionalDefault,
+RUVIA_MODEL(OptionalDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::Int32, RUVIA_DEFAULT(evaluatedDefault()), RUVIA_MIN(5, "too small")));
-RUVIA_REQUEST_MODEL(NullableDefault,
+RUVIA_MODEL(NullableDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::Int32, RUVIA_NULLABLE, RUVIA_DEFAULT(evaluatedDefault())));
-RUVIA_REQUEST_MODEL(NullDefault,
+RUVIA_MODEL(NullDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::Int32, RUVIA_NULLABLE, RUVIA_DEFAULT(nullptr)));
-RUVIA_REQUEST_MODEL(NullableDynamicDefault,
+RUVIA_MODEL(NullableDynamicDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::JsonValue, RUVIA_NULLABLE, RUVIA_DEFAULT(dynamicNullDefault())));
-RUVIA_REQUEST_MODEL(NonnullableDynamicDefault,
+RUVIA_MODEL(NonnullableDynamicDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::JsonValue, RUVIA_DEFAULT(dynamicNullDefault())));
-RUVIA_REQUEST_MODEL(RequiredDefault,
+RUVIA_MODEL(RequiredDefault,
     RUVIA_REQUIRED_FIELD(value, ruvia::Int32, RUVIA_DEFAULT(evaluatedDefault())));
-RUVIA_REQUEST_MODEL(FailingDefault,
+RUVIA_MODEL(FailingDefault,
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(value, ruvia::Int32, RUVIA_DEFAULT(failingDefault())));
-RUVIA_REQUEST_MODEL(OwnedDefault,
+RUVIA_MODEL(OwnedDefault,
     RUVIA_OPTIONAL_FIELD(value, ruvia::String, RUVIA_DEFAULT(ownedDefault())));
 
 }  // namespace

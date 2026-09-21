@@ -14,7 +14,7 @@ namespace ruvia {
 
 template <typename T>
 Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
-    static_assert(detail::isRequestModel<T>, "JSON body type must use RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<T>, "JSON body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/json")) {
         co_return std::nullopt;
     }
@@ -38,7 +38,7 @@ ScopedOperation<std::optional<T>> ContextRequest::jsonIf() const {
 
 template <typename T>
 Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
-    static_assert(detail::isRequestModel<T>, "form body type must use RUVIA_REQUEST_MODEL");
+    static_assert(detail::isModel<T>, "form body type must use RUVIA_MODEL");
     if (!contextContentTypeMatches(context, "application/x-www-form-urlencoded")) {
         co_return std::nullopt;
     }

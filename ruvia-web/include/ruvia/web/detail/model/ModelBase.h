@@ -22,6 +22,8 @@
 
 namespace ruvia::detail::model {
 
+struct EmptyModelTag final {};
+
 template <typename DerivedT, typename... DescriptorTs>
 class ModelStorage {
 public:
@@ -49,6 +51,10 @@ public:
         : resource_(other.resource_),
           fields_(std::move(other.fields_)) {
         resetMovedFields(other.fields_);
+    }
+
+    friend bool operator==(const ModelStorage& left, const ModelStorage& right) {
+        return left.fields_ == right.fields_;
     }
 
     ModelStorage& operator=(ModelStorage&& other) {
@@ -188,7 +194,7 @@ private:
     }
 
     [[nodiscard]] DerivedT rebindForModel(std::pmr::memory_resource* resource) const& {
-        DerivedT rebound(::ruvia::ModelOptions{.resource = resource});
+        DerivedT rebound(EmptyModelTag{}, ::ruvia::ModelOptions{.resource = resource});
         auto reboundFields = rebindFields(fields_, resource,
             std::index_sequence_for<DescriptorTs...>{});
         replaceFields(static_cast<ModelStorage&>(rebound).fields_, std::move(reboundFields));
@@ -196,7 +202,7 @@ private:
     }
 
     [[nodiscard]] DerivedT rebindForModel(std::pmr::memory_resource* resource) && {
-        DerivedT rebound(::ruvia::ModelOptions{.resource = resource});
+        DerivedT rebound(EmptyModelTag{}, ::ruvia::ModelOptions{.resource = resource});
         auto reboundFields = rebindFields(fields_, resource,
             std::index_sequence_for<DescriptorTs...>{});
         replaceFields(static_cast<ModelStorage&>(rebound).fields_, std::move(reboundFields));
@@ -223,26 +229,42 @@ private:
 namespace ruvia {
 
 template <typename DerivedT, typename... DescriptorTs>
-class RequestModel : public detail::model::ModelStorage<DerivedT, DescriptorTs...> {
+class Model : public detail::model::ModelStorage<DerivedT, DescriptorTs...> {
     using Base = detail::model::ModelStorage<DerivedT, DescriptorTs...>;
+    static constexpr bool hasInitialFields =
+        (DescriptorTs::options_type::hasInitial || ... || false);
 
 public:
-    using RuviaModelBase = RequestModel;
-    using RuviaRequestModelSchema = void;
+    using RuviaModelBase = Model;
+    using RuviaModelSchema = void;
 
-    explicit RequestModel(::ruvia::ModelOptions options = {}) noexcept
+    explicit Model(::ruvia::ModelOptions options = {}) noexcept(!hasInitialFields)
         : Base(options) {
         validateFieldTypes();
+        if constexpr (hasInitialFields) {
+            applyInitialFields();
+        }
     }
 
     template <typename ResourceOwnerT>
         requires requires(ResourceOwnerT& owner) {
             { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
         }
-    explicit RequestModel(ResourceOwnerT& owner) noexcept
-        : RequestModel(::ruvia::ModelOptions{.resource = owner.resource()}) {}
+    explicit Model(ResourceOwnerT& owner) noexcept(!hasInitialFields)
+        : Model(::ruvia::ModelOptions{.resource = owner.resource()}) {}
 
 private:
+    explicit Model(detail::model::EmptyModelTag, ::ruvia::ModelOptions options = {}) noexcept
+        : Base(options) {
+        validateFieldTypes();
+    }
+
+    void applyInitialFields() {
+        detail::model::visitModelFields(*this, Base::ruviaSchema(),
+            [resource = this->resource_](const auto&, auto& slot) { slot.applyInitial(resource); });
+    }
+
+    friend class detail::model::ModelStorage<DerivedT, DescriptorTs...>;
     friend struct detail::ModelJsonAccess;
     friend struct detail::ModelParseAccess;
 
@@ -259,26 +281,6 @@ private:
         std::string_view body, std::pmr::memory_resource* resource) {
         return ruviaParseJsonBodyDepthPartial(
             body, resource, 0, detail::ModelStringStorage::kBorrowed);
-    }
-
-    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyOwned(
-        std::string_view body, std::pmr::memory_resource* resource) {
-        auto model =
-            ruviaParseJsonBodyDepthPartial(body, resource, 0, detail::ModelStringStorage::kOwned);
-        if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
-            return std::nullopt;
-        }
-        return model;
-    }
-
-    [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepth(std::string_view body,
-        std::pmr::memory_resource* resource, std::size_t depth,
-        detail::ModelStringStorage stringStorage) {
-        auto model = ruviaParseJsonBodyDepthPartial(body, resource, depth, stringStorage);
-        if (!model || !detail::ModelValidationAccess::structureValid(*model)) {
-            return std::nullopt;
-        }
-        return model;
     }
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepthPartial(
@@ -299,7 +301,8 @@ private:
         if (depth > detail::kMaxJsonDepth) {
             return std::nullopt;
         }
-        DerivedT model{::ruvia::ModelOptions{.resource = resource}};
+        DerivedT model{detail::model::EmptyModelTag{},
+            ::ruvia::ModelOptions{.resource = resource}};
         if (!model.ruviaMaterializeJson(input, depth, stringStorage)) {
             return std::nullopt;
         }
@@ -346,7 +349,8 @@ private:
 
     [[nodiscard]] static std::optional<DerivedT> ruviaMaterializeFormInput(
         const detail::ModelInput& input) {
-        DerivedT model{::ruvia::ModelOptions{.resource = input.resource()}};
+        DerivedT model{detail::model::EmptyModelTag{},
+            ::ruvia::ModelOptions{.resource = input.resource()}};
         if (!model.ruviaMaterializeForm(input)) {
             return std::nullopt;
         }
@@ -471,35 +475,6 @@ private:
         return valid;
     }
 
-    static consteval void validateFieldTypes() {
-        static_assert((detail::isRequestModelField<typename DescriptorTs::value_type> && ...),
-            "request model fields must use Ruvia values or nested request models");
-    }
-};
-
-template <typename DerivedT, typename... DescriptorTs>
-class ResponseModel : public detail::model::ModelStorage<DerivedT, DescriptorTs...> {
-    using Base = detail::model::ModelStorage<DerivedT, DescriptorTs...>;
-
-public:
-    using RuviaModelBase = ResponseModel;
-    using RuviaResponseModelSchema = void;
-
-    explicit ResponseModel(::ruvia::ModelOptions options = {}) noexcept
-        : Base(options) {
-        validateFieldTypes();
-    }
-
-    template <typename ResourceOwnerT>
-        requires requires(ResourceOwnerT& owner) {
-            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        }
-    explicit ResponseModel(ResourceOwnerT& owner) noexcept
-        : ResponseModel(::ruvia::ModelOptions{.resource = owner.resource()}) {}
-
-private:
-    friend struct detail::ModelJsonAccess;
-
     void ruviaAppendJson(std::pmr::string& output) const {
         output.push_back('{');
         bool first = true;
@@ -551,10 +526,8 @@ private:
     }
 
     static consteval void validateFieldTypes() {
-        static_assert((detail::isResponseModelField<typename DescriptorTs::value_type> && ...),
-            "response model fields must use Ruvia values or nested response models");
-        static_assert(((!DescriptorTs::hasFieldRules) && ... && true),
-            "RUVIA_RESPONSE_MODEL fields cannot carry validation rules");
+        static_assert((detail::isModelField<typename DescriptorTs::value_type> && ...),
+            "model fields must use Ruvia values or nested models");
     }
 };
 

@@ -285,15 +285,16 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## Model 和校验
 
-- `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
-- 所有 HTTP JSON 输出必须先建立 `RUVIA_RESPONSE_MODEL`；`c.json()` 与 `toJson()` 只接受响应模型，不暴露动态 object/array writer 或原始 JSON details 注入入口。
+- Model 通过 `RUVIA_MODEL` 声明一次，生成继承公开 `ruvia::Model<DerivedT, ...>` 的类型，同一 Model 支持解析和输出。`fromJson<T>()` / `toJson()` 支持 Model、Ruvia 标量、字符串、字节值及递归 `Array`/`BoxedArray` 根值；HTTP `c.json()` 和请求模型绑定仍使用 Model 根对象，不暴露动态 object/array writer 或原始 JSON details 注入入口。
 - `RUVIA_REQUIRED_FIELD` 要求输入包含字段，`RUVIA_OPTIONAL_FIELD` 允许缺失；两者均不隐含可空，只有独立的 `RUVIA_NULLABLE` 允许显式 JSON `null`。自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，`isPresent<"field">()` 记录原始输入存在性且不受默认值和应用赋值影响，`isNull<"field">()` 查询当前空值状态，不生成逐字段成员函数别名。
-- Model 字段描述符必须由 `RUVIA_REQUEST_MODEL` / `RUVIA_RESPONSE_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
-- 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
-- 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套请求模型和 `Array<请求模型>` 自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`jsonIf`/`formIf` 只做内容协商探测，不跑字段规则。
-- 模型绑定只走 schema 路线。`JsonValue`/`JsonObject` 可作为动态请求/响应字段，但不得附加普通字段校验规则；具体类型负责普通字段校验。动态字段本身的 null 仍遵守 `RUVIA_NULLABLE`，token 内部的 null 不受外层字段约束。动态值借用或在 owned parse 时拷贝完整 JSON token，移动构造保留借用/拥有模式且不延长 allocator 寿命，赋值归一化到目标资源；提供 kind 判断、`view()` 和按运行时字段名的 `get<T>()`，不得作为 `c.json()`/`toJson()` 的动态 writer。原始 body 和扁平 multipart 协议访问保留，不提供 form 点路径/分组语言。
-- 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持 `Array`，递归/地址稳定数组使用 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。
-- `RUVIA_DEFAULT` 仅在缺失的可选输入被消费时求值，每字段至多一个；模型构造或移动不得提前求值或保存默认值实例。默认值通过同一字段赋值路径归一化到模型资源，求值异常正常传播并释放部分解析数据；显式 null、错误类型、重复字段和已提供的空值不得触发默认值。`REQUIRED + DEFAULT` 仍拒绝缺失；校验阶段默认值与输入值使用同一套字段规则。仅必填且非空字段的 `get` 返回 `const T&`，可选或可空字段返回 `const std::optional<T>&`。响应字段未设置时默认省略，显式 `set<"field">(nullptr)` 要求 `RUVIA_NULLABLE` 并输出 null；`RUVIA_EMIT_NULL` 额外将未设置字段输出为 null，`RUVIA_OMIT_EMPTY` 处理已设置的具体空值。
+- Model 字段描述符必须由 `RUVIA_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
+- 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。窄整数构造和赋值不得静默截断；二进制值拥有所属 PMR 存储，JSON 使用 RFC 4648 标准带填充的 canonical base64，不把 JSON 字符串解释为裸字节或 hex。
+- 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套 Model 和数组自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`fromJson`/`fromForm` 和 `jsonIf`/`formIf` 只解析结构，不跑字段规则；序列化也不执行规则。
+- 模型绑定只走 schema 路线。`JsonValue`/`JsonObject` 可作为动态字段，但不得附加普通字段校验规则；具体类型负责普通字段校验。动态字段本身的 null 仍遵守 `RUVIA_NULLABLE`，token 内部的 null 不受外层字段约束。动态值借用或在 owned parse 时拷贝完整 JSON token，移动构造保留借用/拥有模式且不延长 allocator 寿命，赋值归一化到目标资源；提供 kind 判断、`view()`、typed `get<T>()` 及对象/数组只读遍历，不得作为 `c.json()`/`toJson()` 的动态 writer。遍历回调返回 true 继续、false 早停；遍历方法只有完整完成时返回 true，类型不匹配或早停返回 false。解码后的 key 与子值在回调内借用，输入和资源必须覆盖使用期。
+- JSON 支持嵌套 Model、`Array` 和递归/地址稳定的 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。原始 body 和扁平 multipart 协议访问保留，不提供 form 点路径/分组语言。
+- `RUVIA_DEFAULT` 仅在缺失的可选输入被消费时求值，每字段至多一个；模型构造或移动不得提前求值或保存默认值实例。默认值通过同一字段赋值路径归一化到模型资源，求值异常正常传播并释放部分解析数据；显式 null、错误类型、重复字段和已提供的空值不得触发默认值。`REQUIRED + DEFAULT` 仍拒绝缺失；校验阶段默认值与输入值使用同一套字段规则。仅必填且非空字段的 `get` 返回 `const T&`，可选或可空字段返回 `const std::optional<T>&`。字段未设置时默认省略，显式 `set<"field">(nullptr)` 要求 `RUVIA_NULLABLE` 并输出 null；`RUVIA_EMIT_NULL` 额外将未设置字段输出为 null，`RUVIA_OMIT_EMPTY` 处理已设置的具体空值。
+- `RUVIA_INITIAL` 仅为显式业务构造求值，每字段至多一个，不改变输入 presence；解析、移动和资源归一化不得执行它。它与 `RUVIA_DEFAULT` 可共存，但不得用业务初始值满足缺失的输入约束。两种值均按模型资源归一化，异常时释放部分构造数据。
+- Model 相等比较当前字段状态和值，忽略 allocator 与原始输入 presence，缺失与 null 不相等；集合按元素值与顺序比较。动态 JSON 视图比较保留的 token 字节，不做 JSON 语义归一化。
 - JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。

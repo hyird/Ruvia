@@ -8,6 +8,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/model/Traits.h"
+#include "ruvia/web/detail/model/parse/JsonParser.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
 
 namespace ruvia {
@@ -41,18 +42,24 @@ private:
     std::string_view raw_;
 };
 
+// Owns parsed data in options.resource. Supports models, Ruvia scalar values,
+// strings, bytes and arrays of these types. Request middleware evaluates field
+// rules separately; the codec only checks the complete document's structure.
 template <typename T>
-    requires detail::isRequestModel<T>
+    requires detail::isModelJsonValue<T>
 [[nodiscard]] std::optional<T> fromJson(std::string_view body, ModelParseOptions options = {}) {
-    return detail::ModelJsonAccess::parseOwned<T>(
-        body, detail::pmrResourceOrDefault(options.resource));
+    return detail::parseJsonDocument<T>(body, detail::pmrResourceOrDefault(options.resource),
+        detail::ModelStringStorage::kOwned);
 }
 
+// Serializes current values without invoking field rules or initializers.
 template <typename T>
-    requires detail::isResponseModel<T>
+    requires detail::isModelJsonValue<T>
 [[nodiscard]] inline std::pmr::string toJson(const T& value, ModelSerializeOptions options = {}) {
     std::pmr::string output(detail::pmrResourceOrDefault(options.resource));
-    output.reserve(detail::jsonSizeHintValue(value));
+    // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
+    // allocates again. One extra byte stays in the same allocation.
+    output.reserve(detail::jsonSizeHintValue(value) + 1);
     detail::appendJsonValue(output, value);
     return output;
 }

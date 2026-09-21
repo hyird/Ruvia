@@ -7,23 +7,23 @@
 
 #include "test_harness.h"
 
-RUVIA_REQUEST_MODEL(FieldRuleProfile,
+RUVIA_MODEL(FieldRuleProfile,
     RUVIA_REQUIRED_FIELD(email, ruvia::String, RUVIA_EMAIL("email format is invalid")),
     RUVIA_OPTIONAL_FIELD(age, ruvia::UInt32, RUVIA_MIN(0, "age is too small"),
         RUVIA_MAX(130, "age is too large")));
 
-RUVIA_REQUEST_MODEL(FieldRuleUser,
+RUVIA_MODEL(FieldRuleUser,
     RUVIA_REQUIRED_FIELD(name, ruvia::String, RUVIA_MIN(2, "name is too short")),
     RUVIA_REQUIRED_FIELD(profile, FieldRuleProfile),
     RUVIA_REQUIRED_FIELD(roles, ruvia::Array<FieldRuleProfile>, RUVIA_MIN(1, "too few roles")));
 
-RUVIA_REQUEST_MODEL(FieldRuleMatrix,
+RUVIA_MODEL(FieldRuleMatrix,
     RUVIA_REQUIRED_FIELD(items, ruvia::Array<ruvia::Array<FieldRuleProfile>>));
 
-RUVIA_REQUEST_MODEL(FieldRuleBoxedMatrix,
+RUVIA_MODEL(FieldRuleBoxedMatrix,
     RUVIA_REQUIRED_FIELD(items, ruvia::BoxedArray<ruvia::BoxedArray<FieldRuleProfile>>));
 
-RUVIA_REQUEST_MODEL(FieldRuleMixedMatrix,
+RUVIA_MODEL(FieldRuleMixedMatrix,
     RUVIA_REQUIRED_FIELD(items, ruvia::Array<ruvia::BoxedArray<ruvia::Array<FieldRuleProfile>>>));
 
 namespace {
