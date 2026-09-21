@@ -1,47 +1,66 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <ctime>
+#include <expected>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 
-// Number of bytes an RFC 7231 §7.1.1.1 IMF-fixdate occupies, e.g.
+// Number of bytes an RFC 9110 §5.6.7 IMF-fixdate occupies, e.g.
 // "Sun, 06 Nov 1994 08:49:37 GMT".
 inline constexpr std::size_t kImfFixdateSize = 29;
 
-// Converts a time_t to a broken-down UTC std::tm, owning the gmtime_r / gmtime_s
-// platform split that every httpWriteImfFixdate caller (the response Date header,
-// Set-Cookie Expires, and Last-Modified) would otherwise repeat inline. A
-// conversion failure leaves the zero-initialized tm, matching the prior sites,
-// which likewise ignored the return value.
-inline std::tm httpUtcTm(std::time_t time) noexcept {
+enum class HttpDateFormatError { kOutOfRange };
+
+// Civil conversion is independent of the C runtime's date range and locale.
+// In particular, Windows gmtime_s cannot represent pre-1970 UTC timestamps.
+// Check before calendar conversion so huge time_t values cannot overflow it.
+[[nodiscard]] inline std::expected<std::tm, HttpDateFormatError> httpUtcTm(std::time_t time) noexcept {
+    using namespace std::chrono;
+    constexpr auto first = duration_cast<seconds>(sys_days{year{0} / January / 1}.time_since_epoch()).count();
+    constexpr auto end = duration_cast<seconds>(sys_days{year{10000} / January / 1}.time_since_epoch()).count();
+    if (std::cmp_less(time, first) || std::cmp_greater_equal(time, end)) {
+        return std::unexpected(HttpDateFormatError::kOutOfRange);
+    }
+    const sys_seconds instant{seconds{static_cast<seconds::rep>(time)}};
+    const auto date = floor<days>(instant);
+    const year_month_day calendar{date};
+    const hh_mm_ss clock{instant - date};
     std::tm utc{};
-#if defined(_WIN32)
-    gmtime_s(&utc, &time);
-#else
-    gmtime_r(&time, &utc);
-#endif
+    utc.tm_year = static_cast<int>(calendar.year()) - 1900;
+    utc.tm_mon = static_cast<int>(static_cast<unsigned>(calendar.month())) - 1;
+    utc.tm_mday = static_cast<int>(static_cast<unsigned>(calendar.day()));
+    utc.tm_wday = static_cast<int>(weekday{date}.c_encoding());
+    utc.tm_yday = static_cast<int>((date - sys_days{calendar.year() / January / 1}).count());
+    utc.tm_hour = static_cast<int>(clock.hours().count());
+    utc.tm_min = static_cast<int>(clock.minutes().count());
+    utc.tm_sec = static_cast<int>(clock.seconds().count());
     return utc;
 }
 
-// Writes the IMF-fixdate for `utc` (a UTC std::tm, as produced by httpUtcTm /
-// gmtime_r / gmtime_s) into `out`, which must have room for at least kImfFixdateSize bytes.
-// Returns the number of bytes written (always kImfFixdateSize).
-//
-// The day-of-week and month abbreviations are emitted from fixed English tables
-// rather than via strftime's locale-dependent %a/%b: RFC 7231 mandates the
-// English names regardless of the process locale, so this is the single owner of
-// HTTP date formatting for both the response Date header and Last-Modified.
-inline std::size_t httpWriteImfFixdate(char* out, const std::tm& utc) noexcept {
+// Allocation-free wire value; an unrepresentable date must not be truncated or
+// substituted with a different timestamp. Fixed English names are independent
+// of the process locale, as required by RFC 9110 section 5.6.7.
+[[nodiscard]] inline std::expected<std::array<char, kImfFixdateSize>, HttpDateFormatError>
+httpFormatDate(std::time_t time) noexcept {
+    const auto converted = httpUtcTm(time);
+    if (!converted) {
+        return std::unexpected(converted.error());
+    }
+    const auto& utc = *converted;
+    std::array<char, kImfFixdateSize> output{};
+    auto* out = output.data();
     static constexpr std::array<std::string_view, 7> dayNames{
         "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     static constexpr std::array<std::string_view, 12> monthNames{
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
-    const auto wday = (utc.tm_wday >= 0 && utc.tm_wday < 7) ? utc.tm_wday : 0;
-    const auto mon = (utc.tm_mon >= 0 && utc.tm_mon < 12) ? utc.tm_mon : 0;
+    const auto wday = utc.tm_wday;
+    const auto mon = utc.tm_mon;
     const long year = static_cast<long>(utc.tm_year) + 1900;
 
     std::size_t i = 0;
@@ -76,7 +95,7 @@ inline std::size_t httpWriteImfFixdate(char* out, const std::tm& utc) noexcept {
     out[i++] = 'G';
     out[i++] = 'M';
     out[i++] = 'T';
-    return i;
+    return output;
 }
 
 }  // namespace ruvia::detail

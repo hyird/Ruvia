@@ -13,18 +13,8 @@
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
 // (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
 
-// httpFormatDate must emit RFC 7231 IMF-fixdate with English day/month names
-// independent of the process locale (regression: it used strftime %a/%b).
-
-// httpWriteImfFixdate is the single owner of HTTP date formatting (used by both
-// httpFormatDate/Last-Modified and the response Date header cache). Test it in
-// isolation with a hand-built tm so no gmtime dependency is involved.
-
-// The response Date header cache must emit "Date: <IMF-fixdate>\r\n" with a valid
-// English date reflecting the current second (guards the shared formatter on the
-// hot per-response path).
-
-// Preconditions and the validators they compare: entity tags, strong and weak.
+// Date formatting, cache framing, and locale-independent IMF-fixdate coverage
+// live in date_parsing.cpp. This file covers precondition evaluation.
 
 RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
     using ruvia::detail::httpConditionalMethodPlan;

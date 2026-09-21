@@ -20,7 +20,8 @@ inline constexpr std::string_view kDateHeaderSuffix = "\r\n";
 struct DateCache final {
     std::array<char, 64> line{};
     std::size_t size{0};
-    std::time_t second{-1};
+    std::time_t second{};
+    bool initialized{false};
 };
 
 [[nodiscard]] DateCache& workerDateCache() noexcept {
@@ -30,33 +31,28 @@ struct DateCache final {
 
 }  // namespace
 
-void refreshCachedDateHeader(std::time_t now) noexcept {
+std::string_view cachedDateHeader(std::time_t now) noexcept {
     auto& cache = workerDateCache();
-    if (cache.second == now && cache.size != 0) {
-        return;
-    }
-
-    const auto utc = httpUtcTm(now);
-    std::memcpy(cache.line.data(), kDateHeaderPrefix.data(), kDateHeaderPrefix.size());
-    // "Date: " (6) + IMF-fixdate (29) + CRLF (2) = 37 bytes, well within line[64].
-    const auto written = httpWriteImfFixdate(cache.line.data() + kDateHeaderPrefix.size(), utc);
-    cache.size = kDateHeaderPrefix.size() + written;
-    cache.line[cache.size++] = kDateHeaderSuffix[0];
-    cache.line[cache.size++] = kDateHeaderSuffix[1];
-    cache.second = now;
-}
-
-std::string_view cachedDateHeader() noexcept {
-    auto& cache = workerDateCache();
-    const auto now = std::time(nullptr);
-    if (cache.second != now || cache.size == 0) {
-        refreshCachedDateHeader(now);
+    if (!cache.initialized || cache.second != now) {
+        cache.second = now;
+        cache.initialized = true;
+        cache.size = 0;
+        // RFC 9110 section 6.6.1: do not generate Date without a usable clock.
+        if (now != std::time_t{-1}) {
+            if (const auto date = httpFormatDate(now)) {
+                std::memcpy(cache.line.data(), kDateHeaderPrefix.data(), kDateHeaderPrefix.size());
+                std::memcpy(cache.line.data() + kDateHeaderPrefix.size(), date->data(), date->size());
+                cache.size = kDateHeaderPrefix.size() + date->size();
+                cache.line[cache.size++] = kDateHeaderSuffix[0];
+                cache.line[cache.size++] = kDateHeaderSuffix[1];
+            }
+        }
     }
     return std::string_view(cache.line.data(), cache.size);
 }
 
-std::string_view cachedDateValue() noexcept {
-    const auto line = cachedDateHeader();
+std::string_view cachedDateValue(std::time_t now) noexcept {
+    const auto line = cachedDateHeader(now);
     constexpr std::size_t framing = kDateHeaderPrefix.size() + kDateHeaderSuffix.size();
     if (line.size() <= framing) {
         return {};

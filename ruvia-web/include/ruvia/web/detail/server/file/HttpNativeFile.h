@@ -44,6 +44,21 @@ struct ResponseFileSnapshot final {
     std::time_t modifiedSeconds{0};
 };
 
+inline constexpr std::uint64_t kWindowsToUnixEpoch100ns = UINT64_C(116444736000000000);
+inline constexpr std::uint64_t kWindowsFileTimeTicksPerSecond = UINT64_C(10000000);
+
+// FILETIME is 100ns ticks from 1601-01-01. Floor fractional seconds, including
+// times before 1970; do not collapse them to the Unix epoch.
+[[nodiscard]] inline std::time_t unixSecondsFromWindowsFileTimeTicks(std::uint64_t ticks) noexcept {
+    if (ticks < kWindowsToUnixEpoch100ns) {
+        const auto beforeEpoch = kWindowsToUnixEpoch100ns - ticks;
+        return -static_cast<std::time_t>(beforeEpoch / kWindowsFileTimeTicksPerSecond) -
+               static_cast<std::time_t>(beforeEpoch % kWindowsFileTimeTicksPerSecond != 0);
+    }
+    return static_cast<std::time_t>(
+        (ticks - kWindowsToUnixEpoch100ns) / kWindowsFileTimeTicksPerSecond);
+}
+
 #if defined(__unix__)
 class NativeFileHandle final {
 public:
@@ -191,12 +206,7 @@ private:
 }
 
 [[nodiscard]] inline std::time_t windowsFileTimeSeconds(LARGE_INTEGER value) noexcept {
-    constexpr std::uint64_t kWindowsToUnixEpoch100ns = UINT64_C(116444736000000000);
-    const auto ticks = windowsFileTimeToken(value);
-    if (ticks <= kWindowsToUnixEpoch100ns) {
-        return 0;
-    }
-    return static_cast<std::time_t>((ticks - kWindowsToUnixEpoch100ns) / UINT64_C(10000000));
+    return unixSecondsFromWindowsFileTimeTicks(windowsFileTimeToken(value));
 }
 
 [[nodiscard]] inline ResponseFileSnapshot snapshotNativeFileHandle(

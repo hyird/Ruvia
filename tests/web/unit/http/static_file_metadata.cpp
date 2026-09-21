@@ -6,10 +6,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 #include "test_harness.h"
 
@@ -97,4 +99,24 @@ RUVIA_TEST(static_file_etag_deterministic_and_sensitive) {
     RUVIA_CHECK(base != fileEtag(100, 123457, identity));
     RUVIA_CHECK(base != fileEtag(100, 123456, replacement));
     RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
+}
+
+RUVIA_TEST(windows_file_time_ticks_floor_to_unix_seconds) {
+    using ruvia::detail::kWindowsFileTimeTicksPerSecond;
+    using ruvia::detail::kWindowsToUnixEpoch100ns;
+    using ruvia::detail::unixSecondsFromWindowsFileTimeTicks;
+    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns), std::time_t{0});
+    RUVIA_CHECK_EQ(
+        unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns + kWindowsFileTimeTicksPerSecond),
+        std::time_t{1});
+    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns - 1), std::time_t{-1});
+    RUVIA_CHECK_EQ(
+        unixSecondsFromWindowsFileTimeTicks(kWindowsToUnixEpoch100ns - kWindowsFileTimeTicksPerSecond),
+        std::time_t{-1});
+    RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(
+                       kWindowsToUnixEpoch100ns - kWindowsFileTimeTicksPerSecond - 1),
+        std::time_t{-2});
+    if (std::in_range<std::time_t>(-11644473600LL)) {
+        RUVIA_CHECK_EQ(unixSecondsFromWindowsFileTimeTicks(0), std::time_t{-11644473600LL});
+    }
 }

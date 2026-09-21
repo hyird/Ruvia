@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -164,7 +165,7 @@ template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(const Context& context, const HttpRequest& request,
     FileResponseSource source, ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.pool());
-    std::pmr::string lastModifiedStorage(context.pool());
+    std::array<char, detail::kImfFixdateSize> lastModifiedStorage{};
     std::string_view etag;
     std::string_view lastModified;
     const bool honorRangeRequests = source.rangeRequests == StaticRangeRequestPolicy::kHonor;
@@ -178,7 +179,8 @@ template <typename ApplyResponseState>
     // value is not the representation's actual validator and therefore cannot
     // be a strong If-Range validator (RFC 9110 §13.1.5).
     const auto responseSeconds = std::time(nullptr);
-    const bool lastModifiedIsActual = source.modifiedSeconds <= responseSeconds;
+    const bool hasResponseTime = responseSeconds != std::time_t{-1};
+    const bool lastModifiedIsActual = hasResponseTime && source.modifiedSeconds <= responseSeconds;
     const auto validatorModifiedSeconds =
         lastModifiedIsActual ? source.modifiedSeconds : responseSeconds;
     if (emitResponseValidators) {
@@ -189,10 +191,15 @@ template <typename ApplyResponseState>
         } else {
             etag = source.precomputedEtag;
         }
+    }
+    // Date preconditions also apply when response validators are not emitted.
+    // An unrepresentable date is unavailable, not a truncated wire validator.
+    if (hasResponseTime) {
         if (source.precomputedLastModified.empty() || !lastModifiedIsActual) {
-            lastModifiedStorage =
-                detail::httpFormatDate(context.pool(), validatorModifiedSeconds);
-            lastModified = lastModifiedStorage;
+            if (const auto date = detail::httpFormatDate(validatorModifiedSeconds)) {
+                lastModifiedStorage = *date;
+                lastModified = std::string_view(lastModifiedStorage.data(), lastModifiedStorage.size());
+            }
         } else {
             lastModified = source.precomputedLastModified;
         }
@@ -220,7 +227,9 @@ template <typename ApplyResponseState>
         }
         if (emitResponseValidators) {
             response.header("ETag", etag);
-            response.header("Last-Modified", lastModified);
+            if (!lastModified.empty()) {
+                response.header("Last-Modified", lastModified);
+            }
         }
     };
     auto applyFileResponseState = [&](HttpResponse& response,
@@ -274,7 +283,7 @@ template <typename ApplyResponseState>
         // condition MUST be ignored, exactly as If-Modified-Since is ignored below
         // when If-None-Match is present. Presence is tracked separately because an
         // empty list is still a present field and must take precedence over the date.
-        if (!etagConditions.ifMatch.present && !conditional.ifUnmodifiedSince.empty() &&
+        if (!etagConditions.ifMatch.present && !lastModified.empty() && !conditional.ifUnmodifiedSince.empty() &&
             !detail::httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
             throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
                 .code = "precondition_failed",
@@ -291,7 +300,7 @@ template <typename ApplyResponseState>
         }
 
         if (methodPlan.evaluatesIfModifiedSince && !etagConditions.ifNoneMatch.present &&
-            !conditional.ifModifiedSince.empty() &&
+            !lastModified.empty() && !conditional.ifModifiedSince.empty() &&
             detail::httpDateNotModified(conditional.ifModifiedSince, validatorModifiedSeconds)) {
             return makeHeaderOnlyResponse(http_status::kNotModified);
         }
@@ -311,7 +320,7 @@ template <typename ApplyResponseState>
         // no If-Range is still honored without response validator headers.
         if (conditional.hasIfRange &&
             (!emitResponseValidators || !detail::httpIfRangeAllows(conditional.ifRange, etag,
-                                            validatorModifiedSeconds, lastModifiedIsActual))) {
+                                            validatorModifiedSeconds, lastModifiedIsActual && !lastModified.empty()))) {
             return makeFullFileResponse(std::nullopt);
         }
 
