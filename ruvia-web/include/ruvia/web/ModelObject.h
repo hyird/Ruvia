@@ -298,7 +298,7 @@ public:
         auto* const resource = resource_;
         std::optional<T> result;
         bool lastMatchFailed = false;
-        const bool valid = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, view(),
+        const auto visited = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, view(),
             resource, [&](std::string_view key, std::string_view valueView) {
                 if (key != field) {
                     return true;
@@ -317,7 +317,7 @@ public:
                 return true;
             });
 
-        if (!valid || lastMatchFailed) {
+        if (visited != detail::JsonObjectVisitResult::kComplete || lastMatchFailed) {
             return std::nullopt;
         }
         return result;
@@ -418,18 +418,12 @@ template <typename Visitor>
         return false;
     }
 
-    bool stopped = false;
-    const bool valid = detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, view(),
-        resource_, [&](std::string_view key, std::string_view valueView) {
-            detail::skipJsonWhitespace(valueView);
-            JsonValue value(detail::ResolvedPmrResourceTag{}, valueView, resource_);
-            if (!static_cast<bool>(visitor(key, value))) {
-                stopped = true;
-                return false;
-            }
-            return true;
-        });
-    return valid && !stopped;
+    return detail::visitJsonObjectFields(detail::ResolvedPmrResourceTag{}, view(),
+               resource_, [&](std::string_view key, std::string_view valueView) {
+                   detail::skipJsonWhitespace(valueView);
+                   JsonValue value(detail::ResolvedPmrResourceTag{}, valueView, resource_);
+                   return static_cast<bool>(visitor(key, value));
+               }) == detail::JsonObjectVisitResult::kComplete;
 }
 
 template <typename Visitor>

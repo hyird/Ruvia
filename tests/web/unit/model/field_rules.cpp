@@ -26,6 +26,14 @@ RUVIA_MODEL(FieldRuleBoxedMatrix,
 RUVIA_MODEL(FieldRuleMixedMatrix,
     RUVIA_REQUIRED_FIELD(items, ruvia::Array<ruvia::BoxedArray<ruvia::Array<FieldRuleProfile>>>));
 
+RUVIA_MODEL(FieldRuleWideInteger,
+    RUVIA_REQUIRED_FIELD(value, ruvia::UInt64,
+        RUVIA_MIN(9007199254740993ULL, "below exact minimum"),
+        RUVIA_MAX(9007199254740995ULL, "above exact maximum")));
+
+RUVIA_MODEL(FieldRuleDecimal,
+    RUVIA_REQUIRED_FIELD(value, ruvia::Double, RUVIA_MIN(0.5, "below minimum")));
+
 namespace {
 
 void check(const FieldRuleUser& model, ruvia::Validator& validator) {
@@ -75,6 +83,32 @@ RUVIA_TEST(model_field_rules_validate_multidimensional_arrays) {
         "items[0][0][0].email", "required", false);
     checkArrayValidation<FieldRuleMixedMatrix>(ruvia_ctx, R"({"items":[[[{"email":"a@b.co"}]]]})",
         {}, {}, true);
+}
+
+RUVIA_TEST(model_field_rules_keep_exact_integer_and_decimal_bounds) {
+    FieldRuleWideInteger integer;
+    ruvia::Validator below;
+    integer.set<"value">(9007199254740992ULL);
+    ruvia::detail::ModelValidationAccess::validateModel(integer, below);
+    RUVIA_CHECK_EQ(below.issues().size(), 1U);
+    RUVIA_CHECK_EQ(below.issues().front().code(), std::string_view("too_small"));
+
+    ruvia::Validator within;
+    integer.set<"value">(9007199254740993ULL);
+    ruvia::detail::ModelValidationAccess::validateModel(integer, within);
+    RUVIA_CHECK(within.ok());
+
+    ruvia::Validator above;
+    integer.set<"value">(9007199254740996ULL);
+    ruvia::detail::ModelValidationAccess::validateModel(integer, above);
+    RUVIA_CHECK_EQ(above.issues().size(), 1U);
+    RUVIA_CHECK_EQ(above.issues().front().code(), std::string_view("too_big"));
+
+    FieldRuleDecimal decimal;
+    decimal.set<"value">(0.25);
+    ruvia::Validator decimalValidator;
+    ruvia::detail::ModelValidationAccess::validateModel(decimal, decimalValidator);
+    RUVIA_CHECK_EQ(decimalValidator.issues().size(), 1U);
 }
 
 RUVIA_TEST(model_field_rules_accept_valid_nested_payload) {

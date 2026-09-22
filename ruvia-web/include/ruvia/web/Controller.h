@@ -204,23 +204,35 @@ private:                                                                        
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 // Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
-#define RUVIA_ALL(path, handler, ...)                                              \
-    for (const auto ruviaRouteMethod : ::ruvia::detail::kRuviaAllRouteMethods)     \
-    RuviaControllerAccess::addRoute(ruviaRouteScope, ruviaRouteMethod, path,       \
-        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
-        ::ruvia::detail::RequestBodyMode::kBuffered,                               \
-        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
+#define RUVIA_ALL(path, handler, ...)                                                      \
+    {                                                                                      \
+        auto&& ruviaRoutePath = (path);                                                    \
+        for (const auto ruviaRouteMethod : ::ruvia::detail::kRuviaAllRouteMethods) {       \
+            RuviaControllerAccess::addRoute(ruviaRouteScope, ruviaRouteMethod,             \
+                ruviaRoutePath,                                                            \
+                RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
+                ::ruvia::detail::RequestBodyMode::kBuffered,                               \
+                RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>());           \
+        }                                                                                  \
+    }
 
 // Hono app.on: registers the handler for an explicit method x path list, e.g.
 // RUVIA_ON((ruvia::HttpKnownMethod::kPut, ruvia::HttpKnownMethod::kDelete),
 //     ("/items/:id", "/legacy/:id"), handler).
-#define RUVIA_ON(methods, paths, handler, ...)                                         \
-    for (const auto ruviaRouteMethod : ::ruvia::detail::RuviaMethodList methods)       \
-        for (const auto ruviaRoutePath : ::ruvia::detail::RuviaPathList paths)         \
-    RuviaControllerAccess::addRoute(ruviaRouteScope, ruviaRouteMethod, ruviaRoutePath, \
-        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this),     \
-        ::ruvia::detail::RequestBodyMode::kBuffered,                                   \
-        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
+#define RUVIA_ON(methods, paths, handler, ...)                                                 \
+    {                                                                                          \
+        auto ruviaRouteMethods = ::ruvia::detail::RuviaMethodList methods;                     \
+        auto ruviaRoutePaths = ::ruvia::detail::RuviaPathList paths;                           \
+        for (const auto ruviaRouteMethod : ruviaRouteMethods) {                                \
+            for (const auto ruviaRoutePath : ruviaRoutePaths) {                                \
+                RuviaControllerAccess::addRoute(ruviaRouteScope, ruviaRouteMethod,             \
+                    ruviaRoutePath,                                                            \
+                    RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
+                    ::ruvia::detail::RequestBodyMode::kBuffered,                               \
+                    RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>());           \
+            }                                                                                  \
+        }                                                                                      \
+    }
 
 #define RUVIA_POST_STREAM(path, handler, ...)                                               \
     RuviaControllerAccess::addRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kPost, path, \

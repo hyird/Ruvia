@@ -117,12 +117,14 @@ public:
 
     void applyDefault(std::pmr::memory_resource* resource) {
         // A default never satisfies a required input field.
-        if (Required || state_ != detail::ModelFieldState::kMissing) {
-            return;
+        if constexpr (!Required) {
+            if (state_ != detail::ModelFieldState::kMissing) {
+                return;
+            }
+            OptionsT::applyDefault([this, resource]<typename InputT>(InputT&& value) {
+                this->assign(std::forward<InputT>(value), resource);
+            });
         }
-        OptionsT::applyDefault([this, resource]<typename InputT>(InputT&& value) {
-            this->assign(std::forward<InputT>(value), resource);
-        });
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
