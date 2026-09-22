@@ -114,10 +114,10 @@ ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void* target,
 }
 
 ruvia::Task<void> writeWebSocketPayload(void* target,
-    ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view),
-    ruvia::WebSocketOpcode opcode, std::pmr::string payload, WebSocketActivityLease activity) {
+    ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view, bool),
+    ruvia::WebSocketOpcode opcode, std::pmr::string payload, WebSocketActivityLease activity, bool compress) {
     static_cast<void>(activity);
-    co_await write(target, opcode, payload);
+    co_await write(target, opcode, payload, compress);
 }
 
 ruvia::Task<void> closeWebSocketWithReason(void* target,
@@ -273,12 +273,12 @@ ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() & {
         operationScope_, readWebSocket(target_, read_, std::move(activity)));
 }
 
-ScopedOperation<void> WebSocket::text(std::string_view payload) & {
-    return write(WebSocketOpcode::kText, payload);
+ScopedOperation<void> WebSocket::text(std::string_view payload, WebSocketSendOptions options) & {
+    return write(WebSocketOpcode::kText, payload, options.compress);
 }
 
-ScopedOperation<void> WebSocket::binary(std::string_view payload) & {
-    return write(WebSocketOpcode::kBinary, payload);
+ScopedOperation<void> WebSocket::binary(std::string_view payload, WebSocketSendOptions options) & {
+    return write(WebSocketOpcode::kBinary, payload, options.compress);
 }
 
 ScopedOperation<void> WebSocket::pong(std::string_view payload) & {
@@ -289,12 +289,12 @@ ScopedOperation<void> WebSocket::ping(std::string_view payload) & {
     return write(WebSocketOpcode::kPing, payload);
 }
 
-ScopedOperation<void> WebSocket::text(std::pmr::string&& payload) & {
-    return write(WebSocketOpcode::kText, std::move(payload));
+ScopedOperation<void> WebSocket::text(std::pmr::string&& payload, WebSocketSendOptions options) & {
+    return write(WebSocketOpcode::kText, std::move(payload), options.compress);
 }
 
-ScopedOperation<void> WebSocket::binary(std::pmr::string&& payload) & {
-    return write(WebSocketOpcode::kBinary, std::move(payload));
+ScopedOperation<void> WebSocket::binary(std::pmr::string&& payload, WebSocketSendOptions options) & {
+    return write(WebSocketOpcode::kBinary, std::move(payload), options.compress);
 }
 
 ScopedOperation<void> WebSocket::pong(std::pmr::string&& payload) & {
@@ -324,19 +324,19 @@ void WebSocket::abort() noexcept {
     abort_(target_);
 }
 
-ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload) {
+ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view payload, bool compress) {
     requireActive();
     std::pmr::string owned(payload, resource_);
-    return write(opcode, std::move(owned));
+    return write(opcode, std::move(owned), compress);
 }
 
-ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&& payload) {
+ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&& payload, bool compress) {
     requireActive();
     WebSocketActivityLease activity(
         writeActive_, "concurrent websocket output operations are not supported");
     std::pmr::string owned(std::move(payload), resource_);
     return detail::makeScopedOperation(operationScope_,
-        writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity)));
+        writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity), compress));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {

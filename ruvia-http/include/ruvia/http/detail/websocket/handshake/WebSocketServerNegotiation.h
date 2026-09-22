@@ -18,6 +18,7 @@ struct WebSocketServerNegotiationOptions final {
     std::span<const std::string_view> supportedSubprotocols{};
     std::span<const HttpHeaderView> responseHeaders{};
     std::pmr::memory_resource* resource{nullptr};
+    WebSocketDeflateConfig deflate{};
 };
 
 // HTTP-version-independent result of one server-side WebSocket negotiation. HTTP/1

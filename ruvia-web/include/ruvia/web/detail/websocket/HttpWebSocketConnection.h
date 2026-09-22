@@ -41,12 +41,13 @@ public:
         ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions,
         ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource,
         std::string_view initialBytes = {},
-        WebSocketCompression compression = WebSocketCompression::kDisabled)
+        WebSocketCompression compression = WebSocketCompression::kDisabled,
+        int compressionLevel = 6)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
-          protocol_(buffer_, messageLimit, compression),
+          protocol_(buffer_, messageLimit, compression, WsConnectionRole::kServer, nullptr, nullptr, compressionLevel),
           backgroundWriteSignal_(worker),
           readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());
@@ -56,7 +57,7 @@ public:
 
     WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&,
         WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*,
-        std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled) = delete;
+        std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled, int = 6) = delete;
 
     ~WebSocketConnection() = default;
 
@@ -68,7 +69,7 @@ public:
     }
 
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
-    Task<void> write(WebSocketOpcode opcode, std::string_view payload);
+    Task<void> write(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     Task<void> close(::ruvia::WebSocketCloseOptions options = {});
     void abort() noexcept {
         abortTransport();
@@ -193,13 +194,13 @@ private:
     void heartbeatTick(std::int64_t now) noexcept;
     Task<std::optional<WebSocketMessage>> readOwned(ReadGuard readGuard);
     Task<void> writeOwned(
-        WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease);
+        WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease, bool compress);
     Task<void> closeOwned(::ruvia::WebSocketCloseOptions options, WriteOperationLease writeLease);
     Task<void> writeHeartbeatPing();
     Task<void> waitForHeartbeatWrite();
     Task<void> waitForWriteIdle();
-    Task<void> writeExclusive(WebSocketOpcode opcode, std::string_view payload);
-    Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload);
+    Task<void> writeExclusive(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
+    Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     Task<void> flushProtocolOutputExclusive();
     Task<void> flushProtocolOutputNow();
     void abortTransport() noexcept;

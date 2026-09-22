@@ -99,14 +99,16 @@ struct WebSocketSink final {
     std::vector<std::string> writes;
     std::string closeReason;
     bool failNext{false};
+    bool lastCompress{true};
 };
 
 ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void*) {
     co_return std::nullopt;
 }
 
-ruvia::Task<void> writeWebSocket(void* target, ruvia::WebSocketOpcode, std::string_view payload) {
+ruvia::Task<void> writeWebSocket(void* target, ruvia::WebSocketOpcode, std::string_view payload, bool compress) {
     auto& sink = *static_cast<WebSocketSink*>(target);
+    sink.lastCompress = compress;
     sink.writes.emplace_back(payload);
     if (std::exchange(sink.failNext, false)) {
         throw std::runtime_error("websocket output failed");
@@ -329,6 +331,26 @@ RUVIA_TEST(websocket_output_operations_return_owner_allocations_after_repeated_s
 
     RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{16});
+}
+
+RUVIA_TEST(websocket_send_options_survive_lazy_execution_and_owned_payload) {
+    ruvia::test::CountingMemoryResource owner;
+    WebSocketSink sink;
+    auto socket = makeWebSocket(sink, owner);
+    asio::io_context context(1);
+    {
+        auto discarded = socket.binary(std::string(256, 'd'), {.compress = false});
+    }
+    RUVIA_CHECK(sink.writes.empty());
+    RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
+    auto operation = socket.binary(std::pmr::string(256, 's', &owner), {.compress = false});
+    run(context, awaitOperation(operation));
+    RUVIA_CHECK(!sink.lastCompress);
+    RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
+    auto normal = socket.text(std::string(256, 'n'));
+    run(context, awaitOperation(normal));
+    RUVIA_CHECK(sink.lastCompress);
+    RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(websocket_rvalue_move_copies_incompatible_input_before_source_destruction) {

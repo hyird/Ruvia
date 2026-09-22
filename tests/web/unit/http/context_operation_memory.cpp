@@ -51,7 +51,7 @@ ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void*) {
     co_return std::nullopt;
 }
 
-ruvia::Task<void> writeWebSocket(void*, ruvia::WebSocketOpcode, std::string_view) {
+ruvia::Task<void> writeWebSocket(void*, ruvia::WebSocketOpcode, std::string_view, bool) {
     co_return;
 }
 

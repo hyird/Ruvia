@@ -23,6 +23,16 @@ enum class WebSocketCompression : std::uint8_t {
     kDisabled,
     kPermessageDeflate,
     kPermessageDeflateWithServerMaxWindowBits,
+    kPermessageDeflateContextTakeover,
+    kPermessageDeflateContextTakeoverWithServerMaxWindowBits,
+};
+
+struct WebSocketDeflateConfig final {
+    bool enabled{true};
+    int compressionLevel{6};
+    // Opt-in: never mix secrets and attacker-controlled content in one dictionary.
+    // A peer requesting no-context-takeover still receives independent messages.
+    bool contextTakeover{false};
 };
 
 namespace detail {
@@ -36,6 +46,10 @@ namespace detail {
         case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits:
             return "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
                    "server_max_window_bits=15";
+        case WebSocketCompression::kPermessageDeflateContextTakeover:
+            return "permessage-deflate";
+        case WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits:
+            return "permessage-deflate; server_max_window_bits=15";
     }
     return {};
 }

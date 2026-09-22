@@ -51,6 +51,50 @@ std::string drain(WebSocketConnection& connection) {
 }
 }  // namespace
 
+RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
+    CountingResource memory;
+    {
+        MaskSource mask;
+        WebSocketConnection sender({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = WebSocketCompression::kPermessageDeflateContextTakeover, .role = WebSocketConnectionRole::kClient, .maskKeyGenerator = &MaskSource::generate, .maskKeyContext = &mask, .compressionLevel = 9});
+        WebSocketConnection receiver({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = WebSocketCompression::kPermessageDeflateContextTakeover, .compressionLevel = 9});
+        std::string noise(1024, '\0');
+        std::uint32_t state = 1234567;
+        for (auto& byte : noise) {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            byte = static_cast<char>(state);
+        }
+        std::size_t stableMemory = 0;
+        for (int round = 0; round < 256; ++round) {
+            const std::string payload = round % 4 == 0 ? noise : std::string(8192, 'x');
+            const bool compress = round % 4 != 2;
+            RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kBinary, payload, compress) == WebSocketFrameSubmitStatus::kAccepted);
+            const auto wire = drain(sender);
+            if (!compress || round % 4 == 0) {
+                RUVIA_CHECK((static_cast<unsigned char>(wire[0]) & 0x40U) == 0);
+            }
+            RUVIA_CHECK(receiver.feed(wire) == WebSocketFeedStatus::kAccepted);
+            const auto event = receiver.nextEvent();
+            RUVIA_CHECK(event && event->message());
+            if (!event || !event->message()) {
+                return;
+            }
+            RUVIA_CHECK_EQ(event->message()->payload(), payload);
+            if (round == 63) {
+                stableMemory = memory.liveBytes;
+            }
+            if (round > 63) {
+                RUVIA_CHECK(memory.liveBytes <= stableMemory);
+            }
+        }
+        RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kPing, "ping") == WebSocketFrameSubmitStatus::kAccepted);
+        RUVIA_CHECK((static_cast<unsigned char>(drain(sender)[0]) & 0x40U) == 0);
+        RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kBinary, std::string(16385, 'x')) == WebSocketFrameSubmitStatus::kMessageTooLarge);
+    }
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+}
+
 RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
     MaskSource source;
     auto sender = client(source);

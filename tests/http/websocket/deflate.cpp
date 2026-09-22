@@ -64,6 +64,58 @@ std::string patterned(std::size_t n) {
 
 }  // namespace
 
+RUVIA_TEST(websocket_deflate_takeover_level_nine_and_discarded_trial) {
+    WebSocketDeflate sender(9, true), receiver(9, true);
+    const auto payload = patterned(12000);
+    std::size_t firstSize = 0;
+    for (int i = 0; i < 100; ++i) {
+        std::pmr::string compressed, restored;
+        RUVIA_CHECK(sender.compress(payload, compressed));
+        if (i == 0) {
+            firstSize = compressed.size();
+        }
+        if (i == 1) {
+            RUVIA_CHECK(compressed.size() < firstSize);
+        }
+        RUVIA_CHECK(receiver.decompress(compressed, restored, ProtocolByteLimit::limited(payload.size())) == WebSocketInflateResult::kOk);
+        RUVIA_CHECK_EQ(std::string_view(restored), std::string_view(payload));
+        if (i == 50) {
+            std::pmr::string discarded;
+            RUVIA_CHECK(sender.compress("trial-never-transmitted", discarded));
+            sender.discardCompression();
+        }
+    }
+    for (const int invalid : {-1, 10}) {
+        bool rejected = false;
+        try {
+            WebSocketDeflate codec(invalid, true);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    WebSocketDeflate newSender(9, true), newReceiver(9, true);
+    RUVIA_CHECK(roundTrips(newSender, payload));
+    std::pmr::string compressed, restored;
+    RUVIA_CHECK(newReceiver.compress(std::string(8192, 'a'), compressed));
+    RUVIA_CHECK(newReceiver.decompress(compressed, restored, ProtocolByteLimit::limited(100)) == WebSocketInflateResult::kTooLarge);
+}
+
+RUVIA_TEST(websocket_deflate_takeover_respects_peer_offer) {
+    using ruvia::detail::webSocketParseDeflateOffer;
+    RUVIA_CHECK(webSocketParseDeflateOffer("permessage-deflate", true) == WebSocketCompression::kPermessageDeflateContextTakeover);
+    RUVIA_CHECK(webSocketParseDeflateOffer("permessage-deflate; server_max_window_bits=15", true) == WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits);
+    for (const auto offer : {"permessage-deflate; server_no_context_takeover", "permessage-deflate; client_no_context_takeover"}) {
+        RUVIA_CHECK(webSocketParseDeflateOffer(offer, true) == WebSocketCompression::kPermessageDeflate);
+    }
+    RUVIA_CHECK(!webSocketParseDeflateOffer("permessage-deflate; server_max_window_bits=14", true));
+    const std::string raw = "GET / HTTP/1.1\r\nHost: x\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n";
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(raw);
+    RUVIA_CHECK(webSocketNegotiatePermessageDeflate(parsed.request, {.enabled = false}) == WebSocketCompression::kDisabled);
+    RUVIA_CHECK(webSocketNegotiatePermessageDeflate(parsed.request, {.compressionLevel = 9, .contextTakeover = true}) == WebSocketCompression::kPermessageDeflateContextTakeover);
+}
+
 RUVIA_TEST(websocket_deflate_construction_yields_a_valid_codec) {
     WebSocketDeflate codec;
 }

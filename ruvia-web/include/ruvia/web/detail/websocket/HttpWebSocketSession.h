@@ -21,8 +21,8 @@ template <typename Connection>
 }
 
 template <typename Connection>
-Task<void> webSocketWriteThunk(void* target, WebSocketOpcode opcode, std::string_view payload) {
-    return static_cast<Connection*>(target)->write(opcode, payload);
+Task<void> webSocketWriteThunk(void* target, WebSocketOpcode opcode, std::string_view payload, bool compress) {
+    return static_cast<Connection*>(target)->write(opcode, payload, compress);
 }
 
 template <typename Connection>

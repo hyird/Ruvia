@@ -28,15 +28,17 @@ enum class WebSocketInflateResult : std::uint8_t {
     kTooLarge,
 };
 
-// RFC 7692 permessage-deflate codec for one connection. The handshake negotiates
-// no-context-takeover in both directions, so the deflate/inflate state is reset
-// before every message and each message is an independent raw-DEFLATE block.
-// zlib owns its working memory, so no custom resource plumbing is needed.
+// RFC 7692 codec owned by one connection. Context reuse must match the negotiated
+// wire mode. zlib owns its working memory; destruction releases both dictionaries.
 class WebSocketDeflate final {
 public:
-    WebSocketDeflate() {
+    explicit WebSocketDeflate(int compressionLevel = 6, bool contextTakeover = false)
+        : contextTakeover_(contextTakeover) {
+        if (compressionLevel < 0 || compressionLevel > 9) {
+            throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+        }
         if (deflateInit2(
-                &deflate_, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+                &deflate_, compressionLevel, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             throw std::runtime_error("failed to initialize WebSocket deflate encoder");
         }
         if (inflateInit2(&inflate_, -15) != Z_OK) {
@@ -56,7 +58,7 @@ public:
     // Compresses a whole message, appending the raw-DEFLATE block to `out` with
     // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
     bool compress(std::string_view input, std::pmr::string& out) {
-        if (deflateReset(&deflate_) != Z_OK) {
+        if (!contextTakeover_ && deflateReset(&deflate_) != Z_OK) {
             return false;
         }
         // Messages can exceed zlib's 32-bit avail_in, so supply the input in
@@ -99,7 +101,7 @@ public:
     // message limit to defuse decompression bombs (RFC 7692 §7.2.2).
     WebSocketInflateResult decompress(
         std::string_view input, std::pmr::string& out, ProtocolByteLimit messageLimit) {
-        if (inflateReset(&inflate_) != Z_OK) {
+        if (!contextTakeover_ && inflateReset(&inflate_) != Z_OK) {
             return WebSocketInflateResult::kError;
         }
         static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
@@ -109,6 +111,15 @@ public:
         }
         return inflateChunk(
             reinterpret_cast<const char*>(kFlushMarker), sizeof(kFlushMarker), out, messageLimit);
+    }
+
+    // A trial that is not sent must not enter the peer's future dictionary.
+    // Starting the next compressed message with an empty sender dictionary is
+    // legal even when the receiver retains its prior dictionary (RFC 7692).
+    void discardCompression() {
+        if (deflateReset(&deflate_) != Z_OK) {
+            throw std::runtime_error("failed to reset discarded WebSocket compression");
+        }
     }
 
 private:
@@ -152,17 +163,21 @@ private:
 
     z_stream deflate_{};
     z_stream inflate_{};
+    bool contextTakeover_{false};
 };
 
 [[nodiscard]] constexpr bool webSocketDeflateNegotiated(WebSocketCompression negotiation) noexcept {
     return negotiation == WebSocketCompression::kPermessageDeflate ||
-           negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits;
+           negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits ||
+           negotiation == WebSocketCompression::kPermessageDeflateContextTakeover ||
+           negotiation == WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits;
 }
 
 // Decide whether the client offered permessage-deflate in a form we can honor. We
-// run a fixed 32 KiB (15-bit) server window with no context takeover, so a bare
-// offer, client_max_window_bits (our 15-bit inflate handles any smaller client
-// window), and the no-context-takeover hints are all fine. An offer that pins
+// run a fixed 32 KiB (15-bit) server window. Context takeover is opt-in and
+// falls back to independent messages when either peer hint requires it. A bare
+// offer and client_max_window_bits are fine (our 15-bit inflate handles smaller
+// client windows). An offer that pins
 // server_max_window_bits is honored only when it permits 15: a smaller bound would
 // require shrinking our compressor, so those offers are skipped (fall back to the
 // next offer / no compression). RFC 7692 §7.1.2.1.
@@ -212,7 +227,7 @@ private:
 }
 
 [[nodiscard]] inline std::optional<WebSocketCompression> webSocketParseDeflateOffer(
-    std::string_view offer) noexcept {
+    std::string_view offer, bool contextTakeover = false) noexcept {
     const auto firstSemicolon = httpFindUnquotedDelimiter(offer, 0, ';');
     const auto name = httpTrimOws(offer.substr(0, firstSemicolon));
     if (!httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
@@ -278,26 +293,33 @@ private:
     if (serverWindowSeen && serverWindow != 15) {
         return std::nullopt;
     }
+    if (contextTakeover && !serverNoContextTakeover && !clientNoContextTakeover) {
+        return serverWindowSeen ? WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits
+                                : WebSocketCompression::kPermessageDeflateContextTakeover;
+    }
     return serverWindowSeen ? WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits
                             : WebSocketCompression::kPermessageDeflate;
 }
 
 [[nodiscard]] inline WebSocketCompression webSocketScanDeflateOffers(
-    std::string_view offers) noexcept {
+    std::string_view offers, bool contextTakeover = false) noexcept {
     std::optional<WebSocketCompression> accepted;
-    httpVisitCommaSeparatedQuotedItems(offers, [&accepted](std::string_view offer) noexcept {
+    httpVisitCommaSeparatedQuotedItems(offers, [&accepted, contextTakeover](std::string_view offer) noexcept {
         if (offer.empty()) {
             return true;
         }
-        accepted = webSocketParseDeflateOffer(offer);
+        accepted = webSocketParseDeflateOffer(offer, contextTakeover);
         return !accepted.has_value();
     });
     return accepted.value_or(WebSocketCompression::kDisabled);
 }
 
 [[nodiscard]] inline WebSocketCompression webSocketNegotiatePermessageDeflate(
-    const HttpRequest& request) noexcept {
-    if (!webSocketExtensionOffersValid(request)) {
+    const HttpRequest& request, WebSocketDeflateConfig config = {}) {
+    if (config.compressionLevel < 0 || config.compressionLevel > 9) {
+        throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+    }
+    if (!config.enabled || !webSocketExtensionOffersValid(request)) {
         return WebSocketCompression::kDisabled;
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
@@ -312,7 +334,7 @@ private:
             std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions)) {
             continue;
         }
-        const auto negotiation = webSocketScanDeflateOffers(headers[i].value());
+        const auto negotiation = webSocketScanDeflateOffers(headers[i].value(), config.contextTakeover);
         if (webSocketDeflateNegotiated(negotiation)) {
             return negotiation;
         }

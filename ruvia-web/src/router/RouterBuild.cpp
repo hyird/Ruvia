@@ -123,6 +123,9 @@ void detail::RouteTable::captureRouteIdentities() {
             const auto& webSocket = *endpoint.webSocket();
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kWebSocket;
             identity.streamInvoke = webSocket.handler().invoke();
+            identity.webSocketDeflateEnabled = webSocket.deflate().enabled;
+            identity.webSocketCompressionLevel = webSocket.deflate().compressionLevel;
+            identity.webSocketContextTakeover = webSocket.deflate().contextTakeover;
             identity.webSocketSubprotocols.reserve(webSocket.subprotocols().size());
             for (const auto subprotocol : webSocket.subprotocols()) {
                 identity.webSocketSubprotocols.emplace_back(subprotocol);
@@ -216,7 +219,10 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
                     identity.webSocketSubprotocols, webSocket.subprotocols()) &&
                 identity.webSocketPingIntervalMs == pingIntervalMs &&
                 identity.webSocketPongTimeoutMs == pongTimeoutMs &&
-                identity.webSocketCloseTimeoutMs == closeTimeoutMs;
+                identity.webSocketCloseTimeoutMs == closeTimeoutMs &&
+                identity.webSocketDeflateEnabled == webSocket.deflate().enabled &&
+                identity.webSocketCompressionLevel == webSocket.deflate().compressionLevel &&
+                identity.webSocketContextTakeover == webSocket.deflate().contextTakeover;
         }
         if (!endpointMatches) {
             throw std::logic_error("worker route table differs from the compiled application plan");
