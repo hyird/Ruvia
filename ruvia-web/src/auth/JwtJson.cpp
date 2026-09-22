@@ -19,12 +19,10 @@ template <typename Visitor>
 [[nodiscard]] bool visitUniqueJwtJsonObjectFields(
     std::string_view json, std::pmr::memory_resource* resource, Visitor&& visitor) {
     std::pmr::vector<std::pmr::string> names(resource);
-    bool duplicate = false;
-    const bool valid = visitJsonObjectFields(ResolvedPmrResourceTag{}, json, resource,
+    const auto visited = visitJsonObjectFields(ResolvedPmrResourceTag{}, json, resource,
         [&](std::string_view name, std::string_view value) {
             for (const auto& existing : names) {
                 if (std::string_view(existing) == name) {
-                    duplicate = true;
                     return false;
                 }
             }
@@ -32,7 +30,7 @@ template <typename Visitor>
             visitor(name, value);
             return true;
         });
-    return valid && !duplicate;
+    return visited == JsonObjectVisitResult::kComplete;
 }
 
 [[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwtParseJsonNumericDate(

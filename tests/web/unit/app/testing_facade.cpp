@@ -130,11 +130,27 @@ public:
     }
 };
 
+int allPathEvaluations = 0;
+int onPathEvaluations = 0;
+
+std::string_view countedAllPath() {
+    ++allPathEvaluations;
+    return "/counted-all";
+}
+
+std::string_view countedOnPath() {
+    ++onPathEvaluations;
+    return "/counted-on";
+}
+
 class TestingFacadeController final : public ruvia::Controller<TestingFacadeController> {
 public:
     RUVIA_CONTROLLER_GROUP("/t")
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/hello", hello);
+    RUVIA_ALL(countedAllPath(), hello);
+    RUVIA_ON((::ruvia::HttpKnownMethod::kPut, ::ruvia::HttpKnownMethod::kDelete),
+        (countedOnPath()), hello);
     RUVIA_GET("/users/:id", user);
     RUVIA_GET("/greet", greet);
     RUVIA_GET("/link", link);
@@ -285,6 +301,18 @@ ruvia::Task<ruvia::HttpResponse> facadeError(ruvia::Context& c, ruvia::HttpError
 }
 
 }  // namespace
+
+RUVIA_TEST(testing_facade_multi_route_paths_are_evaluated_once_per_registration) {
+    const auto allBefore = allPathEvaluations;
+    const auto onBefore = onPathEvaluations;
+    ruvia::TestApp app;
+    const auto allResponse = app.request(ruvia::TestRequest::get("/t/counted-all"));
+    RUVIA_CHECK_EQ(allResponse.body(), std::string_view("hello"));
+    const auto onResponse = app.request(ruvia::TestRequest::put("/t/counted-on"));
+    RUVIA_CHECK_EQ(onResponse.body(), std::string_view("hello"));
+    RUVIA_CHECK(allPathEvaluations > allBefore);
+    RUVIA_CHECK_EQ(allPathEvaluations - allBefore, onPathEvaluations - onBefore);
+}
 
 RUVIA_TEST(testing_facade_dispatches_routes_params_query_and_cookies) {
     ruvia::TestApp app;

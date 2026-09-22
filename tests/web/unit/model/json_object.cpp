@@ -115,6 +115,31 @@ RUVIA_TEST(json_value_dynamic_traversal_handles_empty_wrong_kind_and_early_stop)
     RUVIA_CHECK_EQ(seen, 1);
 }
 
+RUVIA_TEST(json_value_object_traversal_reports_completion_and_stops_once) {
+    const auto empty = ruvia::JsonValue::parse("{}");
+    const auto object = ruvia::JsonValue::parse(R"({"a":1,"b":2,"c":3})");
+    int calls = 0;
+    const auto stop = [&](std::string_view, const ruvia::JsonValue&) {
+        ++calls;
+        return false;
+    };
+    RUVIA_CHECK(empty->forEachField(stop));
+    RUVIA_CHECK_EQ(calls, 0);
+    RUVIA_CHECK(!object->forEachField(stop));
+    RUVIA_CHECK_EQ(calls, 1);
+    calls = 0;
+    RUVIA_CHECK(!object->forEachField([&](std::string_view, const ruvia::JsonValue&) {
+        return ++calls < 2;
+    }));
+    RUVIA_CHECK_EQ(calls, 2);
+    calls = 0;
+    RUVIA_CHECK(object->forEachField([&](std::string_view, const ruvia::JsonValue&) {
+        ++calls;
+        return true;
+    }));
+    RUVIA_CHECK_EQ(calls, 3);
+}
+
 RUVIA_TEST(json_value_dynamic_traversal_propagates_callback_exceptions_and_compares_tokens) {
     auto first = ruvia::JsonValue::parse("[1]");
     auto second = ruvia::JsonValue::parse("[1]");

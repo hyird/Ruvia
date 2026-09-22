@@ -12,7 +12,7 @@ namespace ruvia::detail {
 template <typename Visitor>
 [[nodiscard]] bool visitModelInputJsonFields(const ModelInput& input, Visitor&& visitor) {
     return visitJsonObjectFields(
-        ResolvedPmrResourceTag{}, input.view(), input.resource(), std::forward<Visitor>(visitor));
+               ResolvedPmrResourceTag{}, input.view(), input.resource(), std::forward<Visitor>(visitor)) != JsonObjectVisitResult::kInvalid;
 }
 
 template <typename Visitor>

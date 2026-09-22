@@ -23,16 +23,6 @@ template <typename T>
 }
 
 template <typename T>
-[[nodiscard]] long double modelNumber(const T& value) noexcept {
-    using ValueT = std::remove_cvref_t<T>;
-    if constexpr (detail::isRuviaScalar<ValueT>) {
-        return static_cast<long double>(value.value);
-    } else {
-        return static_cast<long double>(value);
-    }
-}
-
-template <typename T>
 [[nodiscard]] std::string_view modelString(const T& value) noexcept {
     if constexpr (requires { value.view(); }) {
         return value.view();

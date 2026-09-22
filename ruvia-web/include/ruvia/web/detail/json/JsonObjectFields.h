@@ -26,59 +26,63 @@ template <typename Visitor>
     }
 }
 
+enum class JsonObjectVisitResult : unsigned char { kComplete,
+    kStopped,
+    kInvalid };
+
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(ResolvedPmrResourceTag, std::string_view body,
+[[nodiscard]] JsonObjectVisitResult visitJsonObjectFields(ResolvedPmrResourceTag, std::string_view body,
     std::pmr::memory_resource* resource, Visitor&& visitor) {
     auto input = body;
     if (!consumeJsonChar(input, '{')) {
-        return false;
+        return JsonObjectVisitResult::kInvalid;
     }
     skipJsonWhitespace(input);
     if (!input.empty() && input.front() == '}') {
         input.remove_prefix(1);
         skipJsonWhitespace(input);
-        return input.empty();
+        return input.empty() ? JsonObjectVisitResult::kComplete : JsonObjectVisitResult::kInvalid;
     }
 
     auto& visitorRef = visitor;
     while (true) {
         const auto key = parseJsonString(input);
         if (!key.has_value() || !consumeJsonChar(input, ':')) {
-            return false;
+            return JsonObjectVisitResult::kInvalid;
         }
 
         const auto valueStart = input;
         if (!skipJsonValue(input)) {
-            return false;
+            return JsonObjectVisitResult::kInvalid;
         }
         const auto consumed = valueStart.size() - input.size();
         const auto value = valueStart.substr(0, consumed);
         if (key->encoding() == JsonStringEncoding::kEscaped) {
             auto decodedKey = decodeJsonString(key->raw(), resource);
             if (!decodedKey.has_value()) {
-                return false;
+                return JsonObjectVisitResult::kInvalid;
             }
             if (!dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(*decodedKey), value)) {
-                return true;
+                return JsonObjectVisitResult::kStopped;
             }
         } else if (!dispatchJsonObjectFieldVisitor(visitorRef, key->raw(), value)) {
-            return true;
+            return JsonObjectVisitResult::kStopped;
         }
 
         skipJsonWhitespace(input);
         if (!input.empty() && input.front() == '}') {
             input.remove_prefix(1);
             skipJsonWhitespace(input);
-            return input.empty();
+            return input.empty() ? JsonObjectVisitResult::kComplete : JsonObjectVisitResult::kInvalid;
         }
         if (!consumeJsonChar(input, ',')) {
-            return false;
+            return JsonObjectVisitResult::kInvalid;
         }
     }
 }
 
 template <typename Visitor>
-[[nodiscard]] bool visitJsonObjectFields(
+[[nodiscard]] JsonObjectVisitResult visitJsonObjectFields(
     std::string_view body, std::pmr::memory_resource* resource, Visitor&& visitor) {
     return visitJsonObjectFields(ResolvedPmrResourceTag{}, body, pmrResourceOrDefault(resource),
         std::forward<Visitor>(visitor));

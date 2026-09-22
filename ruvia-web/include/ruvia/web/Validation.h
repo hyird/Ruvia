@@ -240,9 +240,9 @@ private:
 // codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
 // multibyte input in mind (for example a minimum-length rule on free text).
 #define RUVIA_MIN(value, message) \
-    ::ruvia::detail::model::Min<static_cast<long double>(value), ::ruvia::FixedString{message}>
+    ::ruvia::detail::model::Min<value, ::ruvia::FixedString{message}>
 #define RUVIA_MAX(value, message) \
-    ::ruvia::detail::model::Max<static_cast<long double>(value), ::ruvia::FixedString{message}>
+    ::ruvia::detail::model::Max<value, ::ruvia::FixedString{message}>
 #define RUVIA_ONE_OF(message, ...) \
     ::ruvia::detail::model::OneOf<::ruvia::FixedString{message}, __VA_ARGS__>
 #define RUVIA_EMAIL(message) ::ruvia::detail::model::Email<::ruvia::FixedString{message}>

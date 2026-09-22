@@ -1,22 +1,28 @@
 #pragma once
 
+#include <type_traits>
+
 #include "ruvia/web/detail/model/pattern/PatternCompiler.h"
 
 namespace ruvia::detail::model {
 
-template <long double Value, FixedString Message>
+template <auto Value, FixedString Message>
 struct Min final {
+    static_assert(std::is_arithmetic_v<decltype(Value)> && !std::is_same_v<decltype(Value), bool>,
+        "RUVIA_MIN requires a numeric bound");
     using RuviaValidationRuleMarker = void;
 
-    static constexpr long double value = Value;
+    static constexpr auto value = Value;
     static constexpr auto message = Message;
 };
 
-template <long double Value, FixedString Message>
+template <auto Value, FixedString Message>
 struct Max final {
+    static_assert(std::is_arithmetic_v<decltype(Value)> && !std::is_same_v<decltype(Value), bool>,
+        "RUVIA_MAX requires a numeric bound");
     using RuviaValidationRuleMarker = void;
 
-    static constexpr long double value = Value;
+    static constexpr auto value = Value;
     static constexpr auto message = Message;
 };
 
