@@ -99,7 +99,8 @@ public:
         ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
         WebSocketCompression compression = WebSocketCompression::kDisabled,
         WsConnectionRole role = WsConnectionRole::kServer,
-        WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr);
+        WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr,
+        int compressionLevel = 6);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
@@ -121,7 +122,7 @@ public:
     // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
-    [[nodiscard]] WsFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload);
+    [[nodiscard]] WsFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] WsCloseSubmitStatus submitClose(std::uint16_t code, std::string_view reason);
 
 private:

@@ -3,16 +3,16 @@
 namespace ruvia::detail {
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload) {
-    return writeOwned(opcode, payload, WriteOperationLease(writeActive_));
+Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload, bool compress) {
+    return writeOwned(opcode, payload, WriteOperationLease(writeActive_), compress);
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::writeOwned(WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease) {
+Task<void> WebSocketConnection<Transport>::writeOwned(WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease, bool compress) {
     {
         WriteOperationLease activeWrite(std::move(writeLease));
         static_cast<void>(activeWrite);
-        co_await writeExclusive(opcode, payload);
+        co_await writeExclusive(opcode, payload, compress);
     }
 }
 
@@ -114,15 +114,15 @@ void WebSocketConnection<Transport>::notifyWriteIdle() noexcept {
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::writeExclusive(WebSocketOpcode opcode, std::string_view payload) {
+Task<void> WebSocketConnection<Transport>::writeExclusive(WebSocketOpcode opcode, std::string_view payload, bool compress) {
     co_await waitForHeartbeatWrite();
     WriteGuard writeGuard(*this, WritePhase::kApplication);
-    co_await writeFrameNow(opcode, payload);
+    co_await writeFrameNow(opcode, payload, compress);
 }
 
 template <typename Transport>
-Task<void> WebSocketConnection<Transport>::writeFrameNow(WebSocketOpcode opcode, std::string_view payload) {
-    switch (protocol_.submitFrame(opcode, payload)) {
+Task<void> WebSocketConnection<Transport>::writeFrameNow(WebSocketOpcode opcode, std::string_view payload, bool compress) {
+    switch (protocol_.submitFrame(opcode, payload, compress)) {
         case WsFrameSubmitStatus::kAccepted:
             break;
         case WsFrameSubmitStatus::kNotOpen:

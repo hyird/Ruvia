@@ -58,6 +58,7 @@ struct WebSocketConnectionOptions final {
     WebSocketConnectionRole role{WebSocketConnectionRole::kServer};
     WebSocketMaskKeyGenerator maskKeyGenerator{nullptr};
     void* maskKeyContext{nullptr};
+    int compressionLevel{6};
 };
 
 class WebSocketOutputPlan final {
@@ -255,7 +256,7 @@ public:
     [[nodiscard]] WebSocketAbortDisposition abort() noexcept;
     [[nodiscard]] WebSocketLivenessMode livenessMode() const noexcept;
     [[nodiscard]] WebSocketFrameSubmitStatus submitFrame(
-        WebSocketOpcode opcode, std::string_view payload);
+        WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] WebSocketCloseSubmitStatus submitClose(
         std::uint16_t code, std::string_view reason);
 

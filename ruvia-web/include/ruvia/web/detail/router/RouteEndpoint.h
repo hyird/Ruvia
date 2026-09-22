@@ -85,6 +85,10 @@ public:
         return lifecycle_;
     }
 
+    [[nodiscard]] const WebSocketDeflateConfig& deflate() const noexcept {
+        return deflate_;
+    }
+
 private:
     friend class RouteEndpoint;
 
@@ -93,7 +97,8 @@ private:
         : handler_(handler),
           subprotocolStorage_(resource),
           subprotocols_(resource),
-          lifecycle_(options.lifecycle) {
+          lifecycle_(options.lifecycle),
+          deflate_(options.deflate) {
         subprotocolStorage_.reserve(options.subprotocols.size());
         for (const auto& subprotocol : options.subprotocols) {
             subprotocolStorage_.emplace_back(subprotocol);
@@ -108,6 +113,7 @@ private:
     std::pmr::vector<std::pmr::string> subprotocolStorage_;
     std::pmr::vector<std::string_view> subprotocols_;
     WebSocketLifecycleOptions lifecycle_;
+    WebSocketDeflateConfig deflate_;
 };
 
 // Startup-built endpoint contract. The handler shape and its only legal route
@@ -153,6 +159,9 @@ public:
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
         }
+        if (options.deflate.compressionLevel < 0 || options.deflate.compressionLevel > 9) {
+            throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+        }
         options.lifecycle.heartbeat =
             normalizeWebSocketHeartbeatConfig(options.lifecycle.heartbeat);
         WebSocketSubprotocolSet subprotocols;
@@ -174,7 +183,7 @@ public:
             return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());
         }
         const auto& endpoint = *webSocket();
-        WebSocketRouteConfig options{.lifecycle = endpoint.lifecycle()};
+        WebSocketRouteConfig options{.lifecycle = endpoint.lifecycle(), .deflate = endpoint.deflate()};
         options.subprotocols.reserve(endpoint.subprotocols().size());
         for (const auto subprotocol : endpoint.subprotocols()) {
             options.subprotocols.emplace_back(subprotocol);

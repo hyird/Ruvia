@@ -50,7 +50,8 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         const auto handshake = makeWebSocketServerHandshake(
             d.parsed.request, {.supportedSubprotocols = webSocketEndpoint.subprotocols(),
                                   .responseHeaders = responseHeaders,
-                                  .resource = d.memory.resource()});
+                                  .resource = d.memory.resource(),
+                                  .deflate = webSocketEndpoint.deflate()});
         ContextAccess::markWebSocketHandshakeStarted(context);
         if (const auto ec = co_await writeWebSocketHandshake(d.stream, handshake); ec) {
             co_return;
@@ -58,7 +59,7 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         webSocketConnection.emplace(WebSocketSocketTransport<Stream>{d.stream},
             d.baseRouteServices.worker(), d.scannerEntry, webSocketEndpoint.lifecycle(),
             ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes), d.memory.resource(),
-            pendingFrames, handshake.compression());
+            pendingFrames, handshake.compression(), webSocketEndpoint.deflate().compressionLevel);
         co_await invokeWebSocketHandler(
             *webSocketConnection, d.scannerEntry, webSocketEndpoint.handler(), context);
     };

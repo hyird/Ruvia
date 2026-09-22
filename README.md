@@ -1798,6 +1798,26 @@ controls close completion independently. Without heartbeat, an idle WebSocket
 has no framework idle deadline: the application owns any required liveness
 policy. Ordinary HTTP connection timeouts remain unchanged.
 
+### WebSocket 压缩
+
+服务端 HTTP/1 Upgrade 与 HTTP/2 Extended CONNECT 均通过路由的 `deflate` 配置协商 RFC 7692 `permessage-deflate`：
+
+```cpp
+ruvia::WebSocketRouteConfig options{
+    .deflate = {.enabled = true, .compressionLevel = 9, .contextTakeover = true},
+};
+// 在 Controller 路由声明中使用 RUVIA_GET_WS_OPTIONS("/connect", connect, options)。
+// 敏感消息不进入压缩字典：
+co_await socket.binary(payload, {.compress = false});
+```
+
+- 默认等级为 6、禁用跨消息字典；可选等级为 0–9，9 是 zlib 的最高压缩等级，不保证每种输入都更小。窗口为 32KiB，等级影响本端发送，不强制对端等级。
+- 只有客户端提供可接受的扩展时才启用压缩；客户端不支持时保持普通 WS。`enabled = false` 禁止该路由协商压缩。
+- `contextTakeover = true` 允许连接独立的双向字典；对端要求任一方向不复用字典时，本实现协商双向 `no_context_takeover`。连接关闭释放字典，新连接重新建立；不同连接、Worker 不共享字典。
+- 压缩后没有变小则原样发送，并丢弃本次压缩状态，避免后续引用对端未收到的字节。Ping、Pong、Close 从不压缩。`compress = false` 的消息既不压缩也不进入字典。
+- 解压后大小受 `ServerConfig::maxWebSocketMessageBytes` 限制。跨消息字典增加每条连接的内存占用，并可能泄露秘密与攻击者可控内容之间的长度相关性；不要混压此类内容。跳过压缩不能清除先前已经进入字典的秘密，应从首次发送起正确分类，必要时禁用整个路由的压缩。
+- sans-I/O 使用者可通过 `WebSocketServerHandshakeOptions::deflate` 协商，随后将握手结果的 `compression()` 和本端 `compressionLevel` 传给 `WebSocketConnectionOptions`；`submitFrame(..., false)` 跳过单条消息压缩。运行时 outbound client 的扩展支持仍以其自身公开能力为准。
+
 `Context::arena()` and `allocator()` use the request arena. For WebSocket
 and response-stream routes, that arena stays alive for the whole handler,
 including its handshake and middleware state. Destroying an arena-backed object
