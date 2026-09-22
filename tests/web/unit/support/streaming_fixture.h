@@ -162,7 +162,7 @@ inline ruvia::Task<std::optional<ruvia::WebSocketMessage>> readSocket(void*) {
 }
 
 inline ruvia::Task<void> writeSocket(
-    void* target, ruvia::WebSocketOpcode, std::string_view payload) {
+    void* target, ruvia::WebSocketOpcode, std::string_view payload, bool) {
     static_cast<CaptureWebSocket*>(target)->writes.emplace_back(payload);
     co_return;
 }

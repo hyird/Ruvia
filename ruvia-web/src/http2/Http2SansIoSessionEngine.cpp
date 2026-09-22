@@ -314,7 +314,8 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     auto negotiation = makeWebSocketServerNegotiation(
                         request, {.supportedSubprotocols = webSocketEndpoint->subprotocols(),
                                      .responseHeaders = responseHeaders,
-                                     .resource = requestMemory.resource()});
+                                     .resource = requestMemory.resource(),
+                                     .deflate = webSocketEndpoint->deflate()});
                     const auto handshakeResult =
                         connection_.submitWebSocketHandshake(streamId, std::move(negotiation));
                     const auto* submittedHandshake = handshakeResult.submitted();
@@ -329,7 +330,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                         baseServices.worker(), scannerEntry, webSocketEndpoint->lifecycle(),
                         ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
                         context.pool(), std::string_view{},
-                        submittedHandshake->compression());
+                        submittedHandshake->compression(), webSocketEndpoint->deflate().compressionLevel);
                     co_await invokeWebSocketHandler(
                         *webSocketConnection, scannerEntry, webSocketEndpoint->handler(), context);
                 };

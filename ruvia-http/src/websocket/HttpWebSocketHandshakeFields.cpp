@@ -308,7 +308,7 @@ WebSocketServerNegotiation makeWebSocketServerNegotiation(
     const HttpRequest& request, WebSocketServerNegotiationOptions options) {
     return WebSocketServerNegotiation(
         chooseWebSocketSubprotocol(request, options.supportedSubprotocols),
-        webSocketNegotiatePermessageDeflate(request), options.responseHeaders, options.resource);
+        webSocketNegotiatePermessageDeflate(request, options.deflate), options.responseHeaders, options.resource);
 }
 
 }  // namespace ruvia::detail
@@ -323,7 +323,7 @@ WebSocketServerHandshake makeWebSocketServerHandshake(
     std::pmr::string subprotocol(
         detail::chooseWebSocketSubprotocol(request, options.supportedSubprotocols),
         detail::httpPmrResourceOrDefault(options.resource));
-    const auto compression = detail::webSocketNegotiatePermessageDeflate(request);
+    const auto compression = detail::webSocketNegotiatePermessageDeflate(request, options.deflate);
     auto responseHeaders = detail::copyWebSocketResponseHeaders(options.responseHeaders,
         subprotocol, compression, detail::httpPmrResourceOrDefault(options.resource));
     return WebSocketServerHandshake(accept, std::move(subprotocol), compression, std::move(responseHeaders));

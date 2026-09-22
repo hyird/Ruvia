@@ -39,6 +39,12 @@ struct WebSocketRouteConfig final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::vector<std::string> subprotocols{};
     WebSocketLifecycleOptions lifecycle{};
+    WebSocketDeflateConfig deflate{};
+};
+
+struct WebSocketSendOptions final {
+    // False bypasses compression and never adds payload bytes to its dictionary.
+    bool compress{true};
 };
 
 struct WebSocketCloseOptions final {
@@ -63,41 +69,41 @@ public:
     /// The string_view overloads copy payloads into owner-worker PMR storage
     /// before returning. PMR-string inputs with the matching owner allocator
     /// can transfer their existing allocation; incompatible inputs are copied.
-    ScopedOperation<void> text(std::string_view payload) &;
-    ScopedOperation<void> text(std::string_view) && = delete;
+    ScopedOperation<void> text(std::string_view payload, WebSocketSendOptions options = {}) &;
+    ScopedOperation<void> text(std::string_view, WebSocketSendOptions = {}) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
                  std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> text(Text&& payload) & {
-        return text(std::string_view(std::forward<Text>(payload)));
+    ScopedOperation<void> text(Text&& payload, WebSocketSendOptions options = {}) & {
+        return text(std::string_view(std::forward<Text>(payload)), options);
     }
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
                     std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> text(Text&&) && = delete;
+    ScopedOperation<void> text(Text&&, WebSocketSendOptions = {}) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    ScopedOperation<void> text(std::pmr::string&& payload) &;
-    ScopedOperation<void> text(std::pmr::string&&) && = delete;
+    ScopedOperation<void> text(std::pmr::string&& payload, WebSocketSendOptions options = {}) &;
+    ScopedOperation<void> text(std::pmr::string&&, WebSocketSendOptions = {}) && = delete;
 
-    ScopedOperation<void> binary(std::string_view payload) &;
-    ScopedOperation<void> binary(std::string_view) && = delete;
+    ScopedOperation<void> binary(std::string_view payload, WebSocketSendOptions options = {}) &;
+    ScopedOperation<void> binary(std::string_view, WebSocketSendOptions = {}) && = delete;
 
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
                  std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> binary(Text&& payload) & {
-        return binary(std::string_view(std::forward<Text>(payload)));
+    ScopedOperation<void> binary(Text&& payload, WebSocketSendOptions options = {}) & {
+        return binary(std::string_view(std::forward<Text>(payload)), options);
     }
     template <typename Text>
         requires(!std::same_as<std::remove_cvref_t<Text>, std::pmr::string> &&
                     std::constructible_from<std::string_view, Text &&>)
-    ScopedOperation<void> binary(Text&&) && = delete;
+    ScopedOperation<void> binary(Text&&, WebSocketSendOptions = {}) && = delete;
 
     /// Zero-copy binary frame.
-    ScopedOperation<void> binary(std::pmr::string&& payload) &;
-    ScopedOperation<void> binary(std::pmr::string&&) && = delete;
+    ScopedOperation<void> binary(std::pmr::string&& payload, WebSocketSendOptions options = {}) &;
+    ScopedOperation<void> binary(std::pmr::string&&, WebSocketSendOptions = {}) && = delete;
 
     ScopedOperation<void> pong(std::string_view payload) &;
     ScopedOperation<void> pong(std::string_view) && = delete;
@@ -144,7 +150,7 @@ private:
     friend struct detail::WebSocketAccess;
 
     using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
-    using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
+    using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view, bool);
     using Close = Task<void> (*)(void*, WebSocketCloseOptions);
     using Abort = void (*)(void*) noexcept;
 
@@ -162,8 +168,8 @@ private:
         }
     }
 
-    ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload);
-    ScopedOperation<void> write(WebSocketOpcode opcode, std::pmr::string&& payload);
+    ScopedOperation<void> write(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
+    ScopedOperation<void> write(WebSocketOpcode opcode, std::pmr::string&& payload, bool compress = true);
 
     std::pmr::memory_resource* resource_;
     void* target_;

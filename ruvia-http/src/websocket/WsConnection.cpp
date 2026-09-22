@@ -10,7 +10,7 @@ namespace ruvia::detail {
 
 WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit,
     WebSocketCompression compression, WsConnectionRole role, WsMaskKeyGenerator maskKeyGenerator,
-    void* maskKeyContext)
+    void* maskKeyContext, int compressionLevel)
     : input_(&input),
       messageLimit_(messageLimit),
       outBuffer_(input.get_allocator().resource()),
@@ -23,8 +23,13 @@ WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLim
     if (role_ == WsConnectionRole::kClient && maskKeyGenerator_ == nullptr) {
         throw std::invalid_argument("WebSocket client connection requires a mask key generator");
     }
+    if (compressionLevel < 0 || compressionLevel > 9) {
+        throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+    }
     if (webSocketDeflateNegotiated(compression)) {
-        deflate_.emplace();
+        const bool takeover = compression == WebSocketCompression::kPermessageDeflateContextTakeover ||
+                              compression == WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits;
+        deflate_.emplace(compressionLevel, takeover);
     }
 }
 
@@ -167,7 +172,7 @@ void WsConnection::receivePeerClose() noexcept {
     }
 }
 
-WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload) {
+WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress) {
     if (closePhase_ != ClosePhase::kOpen) {
         return WsFrameSubmitStatus::kNotOpen;
     }
@@ -187,12 +192,14 @@ WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::strin
         return WsFrameSubmitStatus::kControlFrameTooLarge;
     }
     bool rsv1 = false;
-    if (dataFrame && deflate_.has_value()) {
+    if (dataFrame && compress && deflate_.has_value()) {
         outboundDeflated_.clear();
         if (deflate_->compress(payload, outboundDeflated_) &&
             outboundDeflated_.size() < payload.size()) {
             payload = outboundDeflated_;
             rsv1 = true;
+        } else {
+            deflate_->discardCompression();
         }
     }
     appendFrame(opcode, payload, rsv1);

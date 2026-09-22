@@ -73,6 +73,9 @@ private:
         std::int64_t webSocketPingIntervalMs{-1};
         std::int64_t webSocketPongTimeoutMs{-1};
         std::int64_t webSocketCloseTimeoutMs{-1};
+        bool webSocketDeflateEnabled{true};
+        int webSocketCompressionLevel{6};
+        bool webSocketContextTakeover{false};
         std::size_t maxRequestBodyBytes{0};
         std::int64_t deadlineMs{0};
         std::pmr::vector<RouteMiddleware::Invoke> middlewareInvokes;

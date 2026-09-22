@@ -32,6 +32,7 @@ struct WebSocketServerHandshakeOptions final {
     // Names/values must be valid fields; values cannot start or end with SP/HTAB.
     std::span<const HttpHeaderView> responseHeaders{};
     std::pmr::memory_resource* resource{nullptr};
+    WebSocketDeflateConfig deflate{};
 };
 
 class WebSocketHandshakeAccepted final {

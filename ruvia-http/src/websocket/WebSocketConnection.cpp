@@ -24,6 +24,8 @@ namespace {
         case WebSocketCompression::kDisabled:
         case WebSocketCompression::kPermessageDeflate:
         case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits:
+        case WebSocketCompression::kPermessageDeflateContextTakeover:
+        case WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits:
             return compression;
     }
     throw std::invalid_argument("invalid WebSocket compression mode");
@@ -105,7 +107,7 @@ public:
     explicit Impl(WebSocketConnectionOptions options)
         : input(detail::httpPmrResourceOrDefault(options.resource)),
           connection(input, options.messageLimit, validateCompression(options.compression),
-              toInternal(options.role), options.maskKeyGenerator, options.maskKeyContext) {}
+              toInternal(options.role), options.maskKeyGenerator, options.maskKeyContext, options.compressionLevel) {}
     std::pmr::string input;
     detail::WsConnection connection;
 };
@@ -172,8 +174,8 @@ WebSocketLivenessMode WebSocketConnection::livenessMode() const noexcept {
     return impl_->connection.livenessMode();
 }
 WebSocketFrameSubmitStatus WebSocketConnection::submitFrame(
-    WebSocketOpcode opcode, std::string_view payload) {
-    return toPublic(impl_->connection.submitFrame(opcode, payload));
+    WebSocketOpcode opcode, std::string_view payload, bool compress) {
+    return toPublic(impl_->connection.submitFrame(opcode, payload, compress));
 }
 WebSocketCloseSubmitStatus WebSocketConnection::submitClose(
     std::uint16_t code, std::string_view reason) {
