@@ -57,7 +57,9 @@ template <typename T>
     requires detail::isModelJsonValue<T>
 [[nodiscard]] inline std::pmr::string toJson(const T& value, ModelSerializeOptions options = {}) {
     std::pmr::string output(detail::pmrResourceOrDefault(options.resource));
-    output.reserve(detail::jsonSizeHintValue(value));
+    // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
+    // allocates again. One extra byte stays in the same allocation.
+    output.reserve(detail::jsonSizeHintValue(value) + 1);
     detail::appendJsonValue(output, value);
     return output;
 }

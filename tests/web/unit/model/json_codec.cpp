@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
@@ -85,12 +86,23 @@ public:
         return allocations_.deallocationCount();
     }
 
+    [[nodiscard]] std::size_t payloadAllocations() const noexcept {
+        return payloadAllocations_;
+    }
+
 private:
+    // See BinaryFailingResource: MSVC debug proxy nodes must not be the
+    // failure point. Payload buffers used below are larger than this cutoff.
+    static constexpr std::size_t kMinPayloadBytes = 64;
+
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (remaining_ == 0) {
-            throw std::bad_alloc();
+        if (bytes >= kMinPayloadBytes) {
+            if (remaining_ == 0) {
+                throw std::bad_alloc();
+            }
+            --remaining_;
+            ++payloadAllocations_;
         }
-        --remaining_;
         return allocations_.allocate(bytes, alignment);
     }
 
@@ -103,6 +115,7 @@ private:
     }
 
     std::size_t remaining_;
+    std::size_t payloadAllocations_{0};
     ruvia::test::CountingMemoryResource allocations_;
 };
 
@@ -132,15 +145,16 @@ RUVIA_TEST(model_json_codec_rejects_nested_wrong_null_and_duplicate_fields) {
 }
 
 RUVIA_TEST(model_json_codec_root_array_failure_cleans_partial_elements) {
-    constexpr std::string_view input = R"(["a long value","another value","last value"] )";
-    ruvia::test::CountingMemoryResource successfulResource;
+    const std::string input = "[\"" + std::string(80, 'a') + "\",\"" + std::string(80, 'b') +
+                              "\",\"" + std::string(80, 'c') + "\"] ";
+    FailingResource successfulResource((std::numeric_limits<std::size_t>::max)());
     auto successful = ruvia::fromJson<ruvia::Array<ruvia::String>>(input,
         {.resource = &successfulResource});
     RUVIA_CHECK(successful.has_value());
     if (!successful) {
         return;
     }
-    const auto allocations = successfulResource.allocationCount();
+    const auto allocations = successfulResource.payloadAllocations();
     RUVIA_CHECK(allocations > 1);
     for (std::size_t failure = 1; failure <= allocations; ++failure) {
         FailingResource resource(failure - 1);
@@ -151,6 +165,7 @@ RUVIA_TEST(model_json_codec_root_array_failure_cleans_partial_elements) {
             threw = true;
         }
         RUVIA_CHECK(threw);
+        RUVIA_CHECK_EQ(resource.payloadAllocations(), failure - 1);
         RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
         RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
     }
@@ -347,14 +362,16 @@ RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) 
 RUVIA_TEST(model_json_codec_releases_allocations_when_parse_or_serialize_fails) {
     std::string input = R"({"single":{"wire\"id":9,"text":")";
     input.append(192, 'x');
-    input += R"("},"array":[{"wire\"id":1}],"boxed":[{"wire\"id":2}],"tree":{"name":"root","children":[{"name":"leaf","children":[{"name":"end"}]}]}})";
-    ruvia::test::CountingMemoryResource successfulResource;
+    input += R"("},"array":[{"wire\"id":1,"text":")";
+    input.append(80, 'y');
+    input += R"("}],"boxed":[{"wire\"id":2}],"tree":{"name":"root","children":[{"name":"leaf","children":[{"name":"end"}]}]}})";
+    FailingResource successfulResource((std::numeric_limits<std::size_t>::max)());
     auto successful = ruvia::fromJson<CodecEnvelope>(input, {.resource = &successfulResource});
     RUVIA_CHECK(successful.has_value());
     if (!successful) {
         return;
     }
-    const auto successfulAllocations = successfulResource.allocationCount();
+    const auto successfulAllocations = successfulResource.payloadAllocations();
     RUVIA_CHECK(successfulAllocations > 1);
     bool sawPartialConstructionFailure = false;
     for (std::size_t failure = 1; failure <= successfulAllocations; ++failure) {
@@ -366,14 +383,17 @@ RUVIA_TEST(model_json_codec_releases_allocations_when_parse_or_serialize_fails) 
             failed = true;
         }
         RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(resource.allocationCount(), failure - 1);
-        sawPartialConstructionFailure = sawPartialConstructionFailure || resource.allocationCount() > 0;
+        RUVIA_CHECK_EQ(resource.payloadAllocations(), failure - 1);
+        sawPartialConstructionFailure =
+            sawPartialConstructionFailure || resource.payloadAllocations() > 0;
         RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
         RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
     }
     RUVIA_CHECK(sawPartialConstructionFailure);
 
-    auto model = ruvia::fromJson<CodecDynamic>(R"({"value":{"kept":true},"object":{}})");
+    const std::string kept(80, 'k');
+    auto model = ruvia::fromJson<CodecDynamic>(
+        "{\"value\":{\"kept\":\"" + kept + "\"},\"object\":{}}");
     RUVIA_CHECK(model.has_value());
     if (!model) {
         return;

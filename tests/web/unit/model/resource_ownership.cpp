@@ -37,7 +37,8 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (remaining) {
+        // Skip MSVC debug iterator-proxy nodes. See BinaryFailingResource.
+        if (remaining && bytes >= 64) {
             if (*remaining == 0) {
                 throw std::bad_alloc();
             }
