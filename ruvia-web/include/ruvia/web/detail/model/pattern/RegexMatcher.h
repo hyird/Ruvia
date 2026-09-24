@@ -1,68 +1,41 @@
 #pragma once
 
 #include <cstddef>
-#include <optional>
-#include <regex>
 #include <string_view>
 
 #include "ruvia/web/ModelTypes.h"
-#include "ruvia/web/detail/model/pattern/PatternTypes.h"
+#include "ruvia/web/detail/model/pattern/PatternCompiler.h"
+#include "ruvia/web/detail/model/pattern/PatternMatcher.h"
 
 namespace ruvia::detail::model {
 
-// libstdc++ implements std::regex with recursive backtracking whose stack depth
-// scales with the number of characters a quantifier matches, so even a benign
-// anchored pattern (e.g. "^\\w+$") overflows the worker thread's stack on a long
-// enough input -- a SIGSEGV that catching std::regex_error cannot intercept.
-// RUVIA_REGEX validates attacker-controlled request fields, so bound the input
-// length before matching: an over-long value fails the rule (fail-closed) rather
-// than crashing the worker. Fields validated by a format regex are short; longer
-// inputs that legitimately need pattern validation should use RUVIA_PATTERN,
-// whose engine enforces an explicit step budget (see PatternMatcher.h). This
-// does not defend a nested-quantifier pattern the application itself wrote
-// (e.g. "^(\\w+)*$") from catastrophic backtracking on a short input -- such a
-// pattern is a ReDoS the author must avoid; prefer RUVIA_PATTERN for untrusted
-// input.
+// RUVIA_REGEX retains its historical full-match use, but deliberately accepts
+// only the bounded RUVIA_PATTERN dialect. General std::regex is not safe for
+// attacker-controlled input because it may backtrack without bound. Unsupported
+// syntax is rejected at compile time; patterns are capped at 256 bytes to bound
+// compiler storage and matcher recursion. Inputs are capped at 4096 bytes, and
+// matching charges scanned bytes to the shared work budget; either limit fails the
+// validation rule closed.
 inline constexpr std::size_t kMaxRegexInputBytes = 4096;
 
-struct RegexPatternState final {
-    std::optional<std::regex> regex;
-
-    [[nodiscard]] bool valid() const noexcept {
-        return regex.has_value();
-    }
+template <FixedString Pattern>
+struct CompiledRegexPlan final {
+    static constexpr std::size_t capacity =
+        Pattern.view().size() < kMaxPatternBytes ? Pattern.view().size() : kMaxPatternBytes;
+    static constexpr auto value = compilePatternPlan<capacity>(Pattern.view());
+    static_assert(value.valid,
+        "RUVIA_REGEX supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
+        "General std::regex syntax is unsupported; use RUVIA_CUSTOM for other matching logic.");
 };
 
 template <FixedString Pattern>
-[[nodiscard]] const RegexPatternState& compiledRegexState() {
-    constexpr auto pattern = Pattern.view();
-    static const RegexPatternState state = [pattern] {
-        RegexPatternState compiled;
-        try {
-            compiled.regex.emplace(pattern.begin(), pattern.end(),
-                std::regex_constants::ECMAScript | std::regex_constants::optimize);
-        } catch (const std::regex_error&) {
-            compiled.regex.reset();
-        }
-        return compiled;
-    }();
-    return state;
-}
-
-template <FixedString Pattern>
-[[nodiscard]] bool matchRegexPattern(std::string_view value) noexcept {
+[[nodiscard]] constexpr bool matchRegexPattern(std::string_view value) noexcept {
     if (value.size() > kMaxRegexInputBytes) {
         return false;
     }
-    const auto& state = compiledRegexState<Pattern>();
-    if (!state.valid()) {
-        return false;
-    }
-    try {
-        return std::regex_match(value.begin(), value.end(), *state.regex);
-    } catch (const std::regex_error&) {
-        return false;
-    }
+    constexpr auto plan = CompiledRegexPlan<Pattern>::value;
+    std::size_t budget = kMaxPatternMatchSteps;
+    return matchPatternPlanFrom(plan, Pattern.view(), value, 0, 0, budget);
 }
 
 }  // namespace ruvia::detail::model
