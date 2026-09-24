@@ -59,8 +59,11 @@ if(RUVIA_BUILD_CORE)
         core/bytes.cpp
         core/decimal_number.cpp
         core/dns_host.cpp
+        core/hex.cpp
         core/integer.cpp
         core/ip_address.cpp
+        core/number_format.cpp
+        core/pmr_string.cpp
         core/pool_waiter_queue.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp

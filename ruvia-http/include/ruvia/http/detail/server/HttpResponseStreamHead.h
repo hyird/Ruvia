@@ -102,7 +102,7 @@ private:
 [[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
     ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
-    const auto bodyPlan = httpResponseBodyPlan(requestMethod, responseStatus);
+    const auto bodyPlan = ::ruvia::detail::httpResponseBodyPlan(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
         return ResponseStreamCommitPlan(framing, bodyPlan,
             ResponseStreamTrailerFraming::kHttp2TrailingHeaders,

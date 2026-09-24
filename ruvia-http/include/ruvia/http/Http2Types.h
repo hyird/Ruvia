@@ -1,12 +1,40 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
+
+#include "ruvia/http/HttpKnownMethod.h"
 
 namespace ruvia {
 
 enum class Http2Role : std::uint8_t {
     kServer,
     kClient,
+};
+
+// Read-only receive-side state for one stream; never exposes stream storage.
+enum class Http2StreamReceiveStatus : std::uint8_t {
+    kOpen,
+    kEnded,
+    kClosed,
+};
+
+// Borrowed route-selection snapshot for a server request. Views remain valid
+// only until the connection consumes more input; no stream storage is exposed.
+struct Http2ServerRequestRouteView final {
+    HttpKnownMethod method{HttpKnownMethod::kUnknown};
+    std::string_view requestMethod{};
+    std::string_view path{};
+    bool webSocketConnect{false};
+};
+
+// Read-only send-flow-control observation for a live stream. The available
+// amount is the minimum of the connection and stream windows, clamped at zero.
+struct Http2SendWindowState final {
+    std::int32_t connectionWindow{0};
+    std::int32_t streamWindow{0};
+    std::uint32_t available{0};
+    bool queuedData{false};
 };
 
 // feed() has all-or-nothing ownership for each supplied span; it never partially
@@ -46,6 +74,8 @@ enum class Http2SubmitStatus : std::uint8_t {
     kInvalidMessage,
     kPeerCapabilityUnavailable,
 };
+
+enum class Http2DataQueueState : std::uint8_t { kDrained, kQueued, kAborted };
 
 enum class Http2DataSubmitStatus : std::uint8_t {
     kAccepted,

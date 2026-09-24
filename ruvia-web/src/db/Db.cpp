@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/core/OperationTimeout.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbSql.h"
@@ -30,7 +30,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(std::pmr::string sql,
         throw std::invalid_argument("SQL must not be empty");
     }
 
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto slotIndex = co_await acquireSlot(operationTimeout, options.stopToken);
     DbSlotCancellationGuard cancellation(*this, slotIndex, options.stopToken);
     bool slotReleased = false;
@@ -72,8 +72,8 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(std::size_t slot, 
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
         throwIfCancelled(slots_[slot]);
-        const OperationTimeout deadline =
-            OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
+        const ruvia::OperationTimeout deadline =
+            ruvia::OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, rawResult);
         while (status != 0) {
@@ -126,8 +126,8 @@ Task<void> detail::MariaDbPool::closeStream(
     auto* rawResult = static_cast<MYSQL_RES*>(result);
     try {
         throwIfCancelled(slots_[slot]);
-        const OperationTimeout deadline =
-            OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
+        const ruvia::OperationTimeout deadline =
+            ruvia::OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
         int status = mysql_free_result_start(rawResult);
         while (status != 0) {
             status = mysql_free_result_cont(
@@ -167,7 +167,7 @@ Task<DbExecResult> detail::MariaDbPool::executeOnTransactionSlot(std::size_t slo
 
 Task<DbRows> detail::MariaDbPool::queryOnSlot(ConnectionSlot& slot, std::string_view sql,
     std::span<const DbValue> params, std::pmr::memory_resource* resource,
-    const OperationTimeout& operationTimeout) {
+    const ruvia::OperationTimeout& operationTimeout) {
     const auto deadline = co_await runMysqlStatement(slot, sql, params, resource, operationTimeout);
     auto& connection = *slot.connection;
 
@@ -214,7 +214,7 @@ Task<DbRows> detail::MariaDbPool::queryOnSlot(ConnectionSlot& slot, std::string_
 
 Task<DbExecResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std::string_view sql,
     std::span<const DbValue> params, std::pmr::memory_resource* resource,
-    const OperationTimeout& operationTimeout) {
+    const ruvia::OperationTimeout& operationTimeout) {
     const auto deadline = co_await runMysqlStatement(slot, sql, params, resource, operationTimeout);
     auto& connection = *slot.connection;
     const auto affectedRows = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
@@ -232,7 +232,7 @@ Task<DbExecResult> detail::MariaDbPool::executeOnSlot(ConnectionSlot& slot, std:
 }
 
 Task<void> detail::MariaDbPool::executeControl(ConnectionSlot& slot, std::string_view sql,
-    std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout) {
+    std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout) {
     (void)co_await executeOnSlot(slot, sql, std::span<const DbValue>(), resource, operationTimeout);
     co_return;
 }

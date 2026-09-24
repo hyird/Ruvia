@@ -6,9 +6,9 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpParseError.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"

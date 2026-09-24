@@ -8,8 +8,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
+#include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/WebSocketSubprotocolSet.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
@@ -164,7 +164,7 @@ public:
         }
         options.lifecycle.heartbeat =
             normalizeWebSocketHeartbeatConfig(options.lifecycle.heartbeat);
-        WebSocketSubprotocolSet subprotocols;
+        ruvia::WebSocketSubprotocolSet subprotocols;
         for (const auto& subprotocol : options.subprotocols) {
             if (!subprotocols.append(subprotocol)) {
                 throw std::invalid_argument(

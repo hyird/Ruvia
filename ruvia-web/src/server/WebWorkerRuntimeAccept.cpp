@@ -9,8 +9,8 @@
 #include <asio/recycling_allocator.hpp>
 
 #include "ruvia/core/Timer.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/SocketUtils.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/Socket.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"
@@ -31,7 +31,7 @@ Task<void> WebWorkerRuntime::superviseListener(HttpServerListener& listener) {
 Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
     for (;;) {
         auto acceptCompletion =
-            co_await asyncAsio<asio::ip::tcp::socket>([&listener](auto handler) mutable {
+            co_await ruvia::asyncAsio<asio::ip::tcp::socket>([&listener](auto handler) mutable {
                 listener.acceptor.async_accept(std::move(handler));
             });
         const auto ec = acceptCompletion.errorCode();
@@ -55,17 +55,17 @@ Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
         }
 
         if (!httpServerWorkerRunning(workerState_)) {
-            closeSocket(socket);
+            ruvia::closeSocket(socket);
             co_return;
         }
         if (options_.maxConnections.has_value() &&
             activeConnectionCount_.load(std::memory_order_relaxed) >= *options_.maxConnections) {
-            closeSocket(socket);
+            ruvia::closeSocket(socket);
             connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
 
-        configureAcceptedSocket(socket);
+        ruvia::configureAcceptedSocket(socket);
         // Starting the session is the one part of accepting that can throw
         // (coroutine frame allocation). Letting it escape would reach
         // asio::detached, which rethrows out of io_context::run() and fails the
@@ -76,7 +76,7 @@ Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
         try {
             AcceptedConnectionLease connection(std::move(socket), activeConnectionCount_);
             asio::co_spawn(ioContext_,
-                taskAsAwaitable(handleSession(listener, std::move(connection))),
+                ruvia::asAwaitable(handleSession(listener, std::move(connection))),
                 asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             continue;
         } catch (...) {

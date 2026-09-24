@@ -2,8 +2,8 @@
 
 #include <exception>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/WorkerSignal.h"
 
 namespace ruvia::detail {
 

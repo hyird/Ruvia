@@ -5,10 +5,22 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpUriGrammar.h"
 
 #include "test_harness.h"
+
+RUVIA_TEST(http_authority_host_public_parse_preserves_ip_literal_brackets) {
+    RUVIA_CHECK_EQ(ruvia::parseHttpAuthorityHost("[::1]:8080").value(), std::string_view("[::1]"));
+    RUVIA_CHECK_EQ(ruvia::parseHttpAuthorityHost("example.test:443").value(),
+        std::string_view("example.test"));
+    RUVIA_CHECK(!ruvia::parseHttpAuthorityHost("user@example.test"));
+    RUVIA_CHECK(ruvia::isValidHttpIpv4Literal("127.0.0.1"));
+    RUVIA_CHECK(!ruvia::isValidHttpIpv4Literal("999.0.0.1"));
+    RUVIA_CHECK(ruvia::isValidHttpIpv6Literal("::1"));
+    RUVIA_CHECK(!ruvia::isValidHttpIpv6Literal("not-an-ip"));
+}
 
 RUVIA_TEST(uri_port_parser_returns_typed_values_and_errors) {
     using ruvia::detail::parsePortValue;

@@ -14,8 +14,8 @@
 #include <asio/co_spawn.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/util/PmrString.h"
+#include "ruvia/core/PmrString.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/http2/Http2SansIoSessionEngine.h"
 #include "ruvia/web/detail/server/response/HttpResponseWriter.h"
 
@@ -41,7 +41,7 @@ Task<void> runHttp2SansIoWriter(Stream& stream, Http2SansIoSessionEngine& engine
                     writeError, writtenBytes);
             }
             if (!writeDone) {
-                const auto writeCompletion = co_await asyncAsio(
+                const auto writeCompletion = co_await ruvia::asyncAsio(
                     [&stream, &writeScratch, writtenBytes](auto handler) mutable {
                         asio::async_write(stream,
                             asio::buffer(writeScratch.data() + writtenBytes,
@@ -55,7 +55,8 @@ Task<void> runHttp2SansIoWriter(Stream& stream, Http2SansIoSessionEngine& engine
                 continue;
             }
             engine.touchActivity();
-            clearPmrStringRetainingSmall(writeScratch, 64 * 1024);
+            engine.outputWriteCompleted();
+            ::ruvia::clearPmrStringRetainingSmall(writeScratch, 16 * 1024);
         }
         if (engine.writerShouldExit()) {
             co_return;
@@ -71,9 +72,8 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
     auto executor = asio::any_io_executor(stream.get_executor());
     Http2SansIoSessionEngine engine(executor, socket, routes, worker, std::move(session));
 
-    engine.beginConnection();
     try {
-        asio::co_spawn(executor, taskAsAwaitable(runHttp2SansIoWriter(stream, engine)),
+        asio::co_spawn(executor, ruvia::asAwaitable(runHttp2SansIoWriter(stream, engine)),
             [&engine](
                 std::exception_ptr exception) noexcept { engine.writerCompleted(exception); });
     } catch (...) {
@@ -97,7 +97,7 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
             for (;;) {
                 engine.setInactivityPhase();
                 auto readCompletion =
-                    co_await asyncAsio<std::size_t>([&stream, &readBuffer](auto handler) mutable {
+                    co_await ruvia::asyncAsio<std::size_t>([&stream, &readBuffer](auto handler) mutable {
                         stream.async_read_some(
                             asio::buffer(readBuffer.data(), readBuffer.size()), std::move(handler));
                     });

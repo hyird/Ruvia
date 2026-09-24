@@ -7,7 +7,7 @@
 
 #include <asio/any_io_executor.hpp>
 
-#include "ruvia/core/detail/worker/WorkerPostCounters.h"
+#include "ruvia/core/WorkerPostCounters.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 

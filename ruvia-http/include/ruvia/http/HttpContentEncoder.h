@@ -5,9 +5,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/HttpContentCoding.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 enum class HttpContentEncodeStep : std::uint8_t {
     kProducedOrPending,
@@ -54,4 +54,4 @@ private:
     bool failed_{false};
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

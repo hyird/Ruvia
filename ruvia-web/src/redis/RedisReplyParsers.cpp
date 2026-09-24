@@ -2,7 +2,7 @@
 #include <cmath>
 #include <utility>
 
-#include "ruvia/core/detail/number/DecimalNumber.h"
+#include "ruvia/core/DecimalNumber.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
@@ -25,7 +25,7 @@ namespace {
 }  // namespace
 
 double parseRedisDouble(std::string_view value, std::string_view context) {
-    const auto output = parseDecimalNumber(value);
+    const auto output = ruvia::parseDecimalNumber(value);
     if (!output || !std::isfinite(*output)) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }

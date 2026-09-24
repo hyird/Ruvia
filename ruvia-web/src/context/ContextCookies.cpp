@@ -2,10 +2,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/auth/CookieSignature.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
@@ -25,7 +23,7 @@ namespace {
     if (!options.prefix) {
         return name;
     }
-    const auto prefix = ruvia::detail::cookiePrefixText(*options.prefix);
+    const auto prefix = ruvia::httpCookiePrefixText(*options.prefix);
     storage.reserve(prefix.size() + name.size());
     storage.append(prefix.data(), prefix.size());
     storage.append(name.data(), name.size());
@@ -48,10 +46,8 @@ namespace {
 
 void writeCookie(HttpResponse& response, std::string_view name, std::string_view value,
     const CookieOptions& options) {
-    const detail::SetCookiePlan plan(name, value, options);
-    auto& header = detail::upsertResponseSetCookieUninitializedValue(
-        response, plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
-    plan.write(detail::responseHeaderValueBegin(header));
+    const SetCookiePlan plan(name, value, options);
+    response.setCookie(plan);
 }
 
 }  // namespace

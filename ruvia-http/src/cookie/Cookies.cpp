@@ -1,3 +1,5 @@
+#include "ruvia/http/Cookies.h"
+
 #include <charconv>
 #include <chrono>
 #include <cstring>
@@ -6,12 +8,12 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
 #include "ruvia/http/detail/util/HttpNumberFormat.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 SetCookiePlan::SetCookiePlan(
     std::string_view name, std::string_view value, const CookieOptions& options)
@@ -19,19 +21,19 @@ SetCookiePlan::SetCookiePlan(
       value_(value),
       path_(options.path),
       domain_(options.domain),
-      prefixText_(options.prefix ? cookiePrefixText(*options.prefix) : std::string_view{}),
-      priorityText_(options.priority ? cookiePriorityToken(*options.priority) : std::string_view{}),
-      sameSiteText_(options.sameSite ? cookieSameSiteToken(*options.sameSite) : std::string_view{}),
+      prefixText_(options.prefix ? detail::cookiePrefixText(*options.prefix) : std::string_view{}),
+      priorityText_(options.priority ? detail::cookiePriorityToken(*options.priority) : std::string_view{}),
+      sameSiteText_(options.sameSite ? detail::cookieSameSiteToken(*options.sameSite) : std::string_view{}),
       hasMaxAge_(options.maxAge.has_value()),
-      httpOnly_(cookieAttributeEmitted(options.httpOnly)),
-      secure_(cookieAttributeEmitted(options.secure)),
-      partitioned_(cookieAttributeEmitted(options.partitioned)) {
+      httpOnly_(detail::cookieAttributeEmitted(options.httpOnly)),
+      secure_(detail::cookieAttributeEmitted(options.secure)),
+      partitioned_(detail::cookieAttributeEmitted(options.partitioned)) {
     if (options.expires.has_value()) {
         const auto seconds = std::chrono::floor<std::chrono::seconds>(options.expires->time_since_epoch()).count();
         if (!std::in_range<std::time_t>(seconds)) {
             throw std::invalid_argument("cookie Expires is not representable");
         }
-        const auto date = httpFormatDate(static_cast<std::time_t>(seconds));
+        const auto date = detail::httpFormatDate(static_cast<std::time_t>(seconds));
         if (!date) {
             throw std::invalid_argument("cookie Expires is not representable");
         }
@@ -40,7 +42,7 @@ SetCookiePlan::SetCookiePlan(
     }
     if (hasMaxAge_) {
         maxAgeValue_ = static_cast<std::uint64_t>(options.maxAge->count());
-        maxAgeSize_ = httpUnsignedDecimalSize(maxAgeValue_);
+        maxAgeSize_ = detail::httpUnsignedDecimalSize(maxAgeValue_);
     }
 
     const auto addSize = [this](std::size_t amount) {
@@ -92,7 +94,7 @@ SetCookiePlan::SetCookiePlan(
         addSize(std::string_view("; Partitioned").size());
     }
 
-    validateCookie(name, value, options);
+    detail::validateCookie(name, value, options);
 }
 
 void SetCookiePlan::write(char* cursor) const {
@@ -150,4 +152,20 @@ void SetCookiePlan::write(char* cursor) const {
     }
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia
+
+namespace ruvia {
+
+bool isValidCookieValue(std::string_view value) noexcept {
+    return detail::isValidCookieValue(value);
+}
+
+bool cookieNameStartsWithIgnoreCase(std::string_view name, std::string_view prefix) noexcept {
+    return detail::cookieNameStartsWithIgnoreCase(name, prefix);
+}
+
+std::string_view httpCookiePrefixText(CookiePrefix prefix) noexcept {
+    return detail::cookiePrefixText(prefix);
+}
+
+}  // namespace ruvia

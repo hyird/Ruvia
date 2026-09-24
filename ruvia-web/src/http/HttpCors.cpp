@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -9,52 +10,67 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpCorsFields.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpCorsFields.h"
 
 namespace ruvia::detail {
 namespace {
 
+bool hasResponseHeader(const HttpResponse& response, std::string_view name) {
+    return response.header(name).has_value();
+}
+
+void setResponseHeaderIfMissing(
+    HttpResponse& response, std::string_view name, std::string_view value) {
+    if (!hasResponseHeader(response, name)) {
+        response.header(name, value);
+    }
+}
+
+void addVaryTokens(HttpResponse& response, const std::string_view* tokens, std::size_t count) {
+    for (std::size_t i = 0; i < count; ++i) {
+        response.addVaryToken(tokens[i]);
+    }
+}
+
 void setCorsMaxAge(HttpResponse& response, const std::optional<std::chrono::seconds>& maxAge) {
-    if (!maxAge.has_value() ||
-        responseHasKnownHeader(response, kResponseHeaderAccessControlMaxAge)) {
+    if (!maxAge.has_value() || hasResponseHeader(response, "Access-Control-Max-Age")) {
         return;
     }
-    setResponseHeaderUnsigned(response, "Access-Control-Max-Age",
-        static_cast<std::uint64_t>(maxAge->count()), kResponseHeaderAccessControlMaxAge);
+    std::array<char, 32> buffer{};
+    const auto [end, error] = std::to_chars(
+        buffer.data(), buffer.data() + buffer.size(), maxAge->count());
+    if (error != std::errc{}) {
+        throw std::logic_error("CORS max age integer formatting failed");
+    }
+    response.header("Access-Control-Max-Age",
+        std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data())));
 }
 
 void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& response) {
-    if (responseHasKnownHeader(response, kResponseHeaderAccessControlAllowHeaders)) {
+    if (hasResponseHeader(response, "Access-Control-Allow-Headers")) {
         return;
     }
 
     bool first = true;
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (HttpRequestAccess::headerKind(request, i) !=
-            std::to_underlying(RequestHeaderKind::kAccessControlRequestHeaders)) {
+        const auto& header = headers[i];
+        if (!httpAsciiEqualsIgnoreCase(
+                header.name(), "Access-Control-Request-Headers")) {
             continue;
         }
-        const auto& header = headers[i];
-        const bool valid = visitHttpCorsRequestHeaderNames(
-            header.value(), [&response, &first](std::string_view name) {
-                if (first) {
-                    setResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders,
-                        "Access-Control-Allow-Headers", name);
-                    first = false;
-                } else {
-                    response.header("Access-Control-Allow-Headers", name,
-                        HttpResponse::HeaderOptions{
-                            .mode = ruvia::HttpResponseHeaderMode::kAppend});
-                }
-                return true;
-            });
-        if (!valid) {
+        HttpCorsRequestHeaderNames names(header.value());
+        while (const auto name = names.next()) {
+            if (first) {
+                setResponseHeaderIfMissing(response, "Access-Control-Allow-Headers", *name);
+                first = false;
+            } else {
+                response.header("Access-Control-Allow-Headers", *name,
+                    HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
+            }
+        }
+        if (!names.valid()) {
             throw std::logic_error("validated CORS request header list became invalid");
         }
     }
@@ -90,7 +106,7 @@ void validateCorsConfig(const CorsConfig& config) {
         case CorsOriginMode::kExact:
         case CorsOriginMode::kCredentialedExact:
             if (config.origin.value != "null" &&
-                !isValidHttpSerializedOrigin(config.origin.value)) {
+                !::ruvia::isValidHttpSerializedOrigin(config.origin.value)) {
                 throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
             }
             break;
@@ -139,7 +155,8 @@ CorsOptions makeCorsOptions(const CorsConfig& config, std::pmr::memory_resource*
 }
 
 void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsOptions& cors) {
-    const auto origin = requestKnownHeader(request, RequestKnownHeader::kOrigin);
+    const auto originField = request.header("Origin");
+    const auto origin = originField.value_or(std::string_view{});
     const bool wildcardOrigin = cors.originMode == CorsOriginMode::kAny;
     const auto allowOrigin = wildcardOrigin ? std::string_view("*") : std::string_view(cors.origin);
     std::array<std::string_view, 3> varyTokens{};
@@ -152,25 +169,20 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
             varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
         }
     }
-    setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowOrigin,
-        "Access-Control-Allow-Origin", allowOrigin);
-    if (cors.originMode == CorsOriginMode::kCredentialedExact &&
-        !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
-        setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
+    setResponseHeaderIfMissing(response, "Access-Control-Allow-Origin", allowOrigin);
+    if (cors.originMode == CorsOriginMode::kCredentialedExact) {
+        setResponseHeaderIfMissing(response, "Access-Control-Allow-Credentials", "true");
     }
 
-    const bool preflight =
-        options && !origin.empty() &&
-        !requestKnownHeader(request, RequestKnownHeader::kAccessControlRequestMethod).empty();
+    const auto requestedMethod = request.header("Access-Control-Request-Method");
+    const bool preflight = options && !origin.empty() && requestedMethod.has_value() &&
+        !requestedMethod->empty();
     if (preflight) {
-        if (const auto allow = responseKnownHeader(response, kResponseHeaderAllow);
-            !allow.empty()) {
-            setResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowMethods,
-                "Access-Control-Allow-Methods", allow);
+        if (const auto allow = response.header("Allow"); allow.has_value() && !allow->empty()) {
+            setResponseHeaderIfMissing(response, "Access-Control-Allow-Methods", *allow);
         }
         if (cors.requestHeadersMode == CorsRequestHeadersMode::kFixed) {
-            setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlAllowHeaders,
-                "Access-Control-Allow-Headers", cors.requestHeaders);
+            setResponseHeaderIfMissing(response, "Access-Control-Allow-Headers", cors.requestHeaders);
         } else {
             reflectCorsRequestHeaderNames(request, response);
         }
@@ -181,8 +193,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 
     addVaryTokens(response, varyTokens.data(), varyTokenCount);
     if (!cors.exposeHeaders.empty()) {
-        setStableResponseHeaderIfMissing(response, kResponseHeaderAccessControlExposeHeaders,
-            "Access-Control-Expose-Headers", cors.exposeHeaders);
+        setResponseHeaderIfMissing(response, "Access-Control-Expose-Headers", cors.exposeHeaders);
     }
 }
 

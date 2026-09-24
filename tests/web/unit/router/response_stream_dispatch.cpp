@@ -16,7 +16,7 @@
 
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
@@ -37,10 +37,10 @@ using ruvia::Context;
 using ruvia::HttpHeaderView;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
+using ruvia::HttpResponseCodingSelection;
 using ruvia::Task;
 using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::HttpResponseCodingSelection;
 using ruvia::detail::ResponseStreamCommitPlan;
 using ruvia::detail::ResponseStreamDispatchResult;
 using ruvia::detail::ResponseStreamFraming;

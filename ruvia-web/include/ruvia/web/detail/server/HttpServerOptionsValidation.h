@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/core/ConfigValidation.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/tls/TlsHost.h"
@@ -26,7 +26,7 @@ inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) 
     if (refresh == nullptr) {
         return;
     }
-    ensurePositiveDuration(
+    ruvia::ensurePositiveDuration(
         refresh->refreshInterval, "document root refresh interval must be greater than zero");
     if (options.blockingPool == nullptr) {
         throw std::invalid_argument(
@@ -36,7 +36,7 @@ inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) 
     if (precompression == nullptr) {
         return;
     }
-    ensurePositiveSize(precompression->minBytes,
+    ruvia::ensurePositiveSize(precompression->minBytes,
         "document root precompression minimum size must be greater than zero");
     if (precompression->maxBytes < precompression->minBytes) {
         throw std::invalid_argument(
@@ -45,28 +45,28 @@ inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) 
 }
 
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
-    ensurePositiveOptionalDurations("configured server timeouts must be greater than zero",
+    ruvia::ensurePositiveOptionalDurations("configured server timeouts must be greater than zero",
         options.idleTimeout, options.requestHeaderTimeout, options.requestBodyTimeout,
         options.writeTimeout);
-    ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
-    ensurePositiveSize(
+    ruvia::ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
+    ruvia::ensurePositiveSize(
         options.workerMailboxCapacity, "worker mailbox capacity must be greater than 0");
     if (!std::has_single_bit(options.rateLimitCapacityPerWorker)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
-    ensurePositiveSize(options.memoryConfig.requestInitialBufferBytes,
+    ruvia::ensurePositiveSize(options.memoryConfig.requestInitialBufferBytes,
         "memory pool config values must be greater than 0");
-    ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
-    ensurePositiveOptionalSize(
+    ruvia::ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
+    ruvia::ensurePositiveOptionalSize(
         options.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
-    ensurePositiveSize(
+    ruvia::ensurePositiveSize(
         options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
-    ensurePositiveOptionalSize(
+    ruvia::ensurePositiveOptionalSize(
         options.maxConnections, "configured connection limit must be greater than zero");
-    ensurePositiveOptionalSize(options.maxRequestsPerConnection,
+    ruvia::ensurePositiveOptionalSize(options.maxRequestsPerConnection,
         "configured requests-per-connection limit must be greater than zero");
     if (options.compression.has_value()) {
-        ensurePositiveSize(
+        ruvia::ensurePositiveSize(
             options.compression->minBytes, "compression minimum size must be greater than zero");
         if (options.compression->syncBytes < options.compression->minBytes) {
             throw std::invalid_argument(
@@ -112,7 +112,7 @@ inline void validateHttpServerListener(const HttpServerListenerDefinition& liste
     }
     if (const auto* redirect =
             std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&listener.transport)) {
-        ensureNonZeroPort(
+        ruvia::ensureNonZeroPort(
             redirect->httpsPort, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }
 }

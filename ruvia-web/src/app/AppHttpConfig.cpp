@@ -2,8 +2,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
-#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/ConfigValidation.h"
+#include "ruvia/core/NativePath.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
@@ -16,7 +16,7 @@ namespace {
 
 [[nodiscard]] detail::StaticRootPrecompressionOptions makeStaticRootPrecompressionOptions(
     const DocumentRootConfig& config) {
-    detail::ensurePositiveSize(config.precompressMinBytes,
+    ruvia::ensurePositiveSize(config.precompressMinBytes,
         "document root precompression minimum size must be greater than zero");
     if (config.precompressMaxBytes < config.precompressMinBytes) {
         throw std::invalid_argument(
@@ -37,7 +37,7 @@ App& App::compression(CompressionConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change compression config while app is running",
         [config = std::move(config)](detail::AppState& state) mutable {
-            detail::ensurePositiveSize(
+            ruvia::ensurePositiveSize(
                 config.minBytes, "compression minimum size must be greater than zero");
             if (config.syncBytes < config.minBytes) {
                 throw std::invalid_argument(
@@ -76,7 +76,7 @@ App& App::documentRoot(DocumentRootConfig config) {
             if (config.root.empty()) {
                 throw std::invalid_argument("document root must not be empty");
             }
-            detail::ensurePositiveDuration(config.runtime.refreshInterval,
+            ruvia::ensurePositiveDuration(config.runtime.refreshInterval,
                 "document root refresh interval must be greater than zero");
             if (config.staticOptions.indexFile.empty()) {
                 config.staticOptions.indexFile = "index.html";
@@ -87,7 +87,7 @@ App& App::documentRoot(DocumentRootConfig config) {
             detail::AppDocumentRootConfig replacement(
                 detail::appResource(), detail::storeValidatedStaticRootConfig(
                                            config.staticOptions, detail::appResource()));
-            detail::assignNativePath(replacement.root, config.root);
+            ruvia::assignNativePath(replacement.root, config.root);
             replacement.runtime = config.runtime;
             replacement.precompression = precompression;
 

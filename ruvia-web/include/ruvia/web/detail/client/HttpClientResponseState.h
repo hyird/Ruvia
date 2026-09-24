@@ -11,7 +11,7 @@
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"

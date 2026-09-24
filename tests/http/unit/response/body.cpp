@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseFileAccess.h"
@@ -152,6 +153,19 @@ RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
     RUVIA_CHECK(responseBody(response).file().has_value());
     RUVIA_CHECK_EQ(responseBody(response).size(), std::size_t{0});
     RUVIA_CHECK(responseBody(response).empty() == nullptr);
+}
+
+RUVIA_TEST(public_response_file_view_exposes_read_only_descriptor) {
+    const std::filesystem::path path("public-fixture.bin");
+    const auto identity = ruvia::HttpResponseFileIdentity::checked({1, 2, 3, 4});
+    const ruvia::HttpResponseFileView file(path.c_str(), 16, 3, 7, identity);
+
+    RUVIA_CHECK(file.toPath() == path);
+    RUVIA_CHECK_EQ(file.size(), std::uint64_t{16});
+    RUVIA_CHECK_EQ(file.offset(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(file.length(), std::uint64_t{7});
+    RUVIA_CHECK(file.identity().requiresValidation());
+    RUVIA_CHECK(file.identity() == identity);
 }
 
 RUVIA_TEST(response_body_file_transition_validates_before_replacement) {

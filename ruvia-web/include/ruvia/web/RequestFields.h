@@ -8,8 +8,8 @@
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Attributes.h"
 
 namespace ruvia {
@@ -119,7 +119,7 @@ private:
     }
 
     [[nodiscard]] bool namesEqual(std::string_view left, std::string_view right) const noexcept {
-        return caseInsensitive_ ? detail::httpAsciiEqualsIgnoreCase(left, right) : left == right;
+        return caseInsensitive_ ? httpAsciiEqualsIgnoreCase(left, right) : left == right;
     }
 
     void reserve(std::size_t count) {

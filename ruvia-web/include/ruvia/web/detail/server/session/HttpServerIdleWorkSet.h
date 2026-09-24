@@ -6,7 +6,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/server/session/HttpConnectionState.h"
 
 namespace ruvia::detail {

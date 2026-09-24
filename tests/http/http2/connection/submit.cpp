@@ -4,10 +4,13 @@
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 #include "http2_connection_fixture.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 
 // Http2Connection: submitting request and response heads.
 
 namespace {
+
+using ruvia::Http2DataQueueState;
 
 #if !defined(_MSC_VER)
 class ToggleRejectingMemoryResource final : public std::pmr::memory_resource {
@@ -163,26 +166,21 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
     }
     RUVIA_CHECK(stream->tunnel().pending() != nullptr);
 
-    // Let the fixed :status/date fields fit, then fail while appending the large
-    // selected subprotocol. The connection must not retain a partial HPACK block.
-    stream->localHeaderBlock().reserve(128);
-    const std::string largeProtocol(512, 'p');
+    // Fail while encoding the response head. The connection must not retain a
+    // partial HPACK block.
     ruvia::detail::Http1ServerRequestParser negotiationParser;
-    const std::string negotiationBytes = std::string(
-                                             "GET /ws HTTP/1.1\r\n"
-                                             "Host: example.test\r\n"
-                                             "Sec-WebSocket-Protocol: ") +
-                                         largeProtocol + "\r\n\r\n";
-    const auto negotiationRequest =
-        negotiationParser.parseMessage(std::string_view(negotiationBytes));
-    const std::array<std::string_view, 1> supportedProtocols{largeProtocol};
-    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request,
-        {.supportedSubprotocols = supportedProtocols, .resource = &resource});
+    const auto negotiationRequest = negotiationParser.parseMessage(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n");
+    const auto validation = ruvia::detail::validateHttp2WebSocketHandshake(
+        *stream, negotiationRequest.request);
 
     resource.rejectAllocations();
     bool allocationFailed = false;
     try {
-        (void)conn.submitWebSocketHandshake(1, std::move(negotiation));
+        (void)conn.submitWebSocketHandshake(1, negotiationRequest.request, validation);
     } catch (const std::bad_alloc&) {
         allocationFailed = true;
     }
@@ -194,10 +192,8 @@ RUVIA_TEST(http2_connection_websocket_handshake_clears_staged_block_on_encoding_
     RUVIA_CHECK(stream->localSend().headPending() != nullptr);
 
     resource.rejectAllocations(false);
-    auto retryNegotiation =
-        ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request,
-            {.supportedSubprotocols = supportedProtocols, .resource = &resource});
-    const auto retried = conn.submitWebSocketHandshake(1, std::move(retryNegotiation));
+    const auto retried =
+        conn.submitWebSocketHandshake(1, negotiationRequest.request, validation);
     RUVIA_CHECK(retried.submitted() != nullptr);
     RUVIA_CHECK(stream->localHeaderBlock().empty());
     RUVIA_CHECK(stream->tunnel().open() != nullptr);
@@ -928,8 +924,10 @@ RUVIA_TEST(http2_connection_request_known_length_is_exact_and_transactional) {
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{0});
     RUVIA_CHECK(stream->localSend().requestContentOpen() != nullptr);
 
+    RUVIA_CHECK(client.dataQueueState(streamId) == Http2DataQueueState::kDrained);
     RUVIA_CHECK(client.submitData(streamId, "he", Http2EndStream::kKeepOpen) ==
                 Http2DataSubmitStatus::kAccepted);
+    RUVIA_CHECK(client.dataQueueState(streamId) == Http2DataQueueState::kDrained);
     auto out = client.pendingOutput();
     auto data = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RUVIA_CHECK_EQ(data.type, static_cast<std::uint8_t>(Http2FrameType::kData));

@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/model/parse/FormParser.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
@@ -18,7 +18,7 @@ namespace ruvia::detail {
     if (contentType.empty()) {
         return false;
     }
-    return httpAsciiEqualsIgnoreCase(httpMediaTypeOnly(contentType), expected);
+    return httpAsciiEqualsIgnoreCase(::ruvia::httpMediaTypeOnly(contentType), expected);
 }
 
 }  // namespace ruvia::detail

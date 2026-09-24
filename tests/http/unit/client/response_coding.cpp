@@ -1,10 +1,11 @@
+#include "ruvia/http/HttpContentCoding.h"
+
 #include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: Content-Encoding and decoding the body.
 
 RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     using ruvia::HttpContentCoding;
-    using ruvia::detail::httpClientResponseContentCoding;
 
     struct Case final {
         std::string_view headers;
@@ -34,7 +35,7 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     for (const auto& test : cases) {
         auto parsed = parseResponse("GET", test.headers);
         RUVIA_CHECK_EQ(parsed.head.status(), ruvia::http_status::kOk);
-        const auto coding = httpClientResponseContentCoding(parsed.head);
+        const auto coding = ruvia::parseHttpContentCodingHeaders(parsed.head.headers());
         RUVIA_CHECK(coding.invalid() == nullptr);
         RUVIA_CHECK((coding.coding() != nullptr) == test.expected.has_value());
         RUVIA_CHECK((coding.unsupported() != nullptr) == !test.expected.has_value());
@@ -57,7 +58,7 @@ RUVIA_TEST(http_client_rejects_invalid_content_encoding_syntax) {
         "HTTP/1.1 200 OK\r\n"
         "Content-Encoding: , gzip,,\r\n"
         "Content-Length: 0");
-    const auto coding = ruvia::detail::httpClientResponseContentCoding(tolerant.head);
+    const auto coding = ruvia::parseHttpContentCodingHeaders(tolerant.head.headers());
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {
@@ -122,7 +123,7 @@ RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
     // Decoding is a separate representation; the sans-I/O driver's encoded
     // content remains independent from the immutable parsed response head.
     RUVIA_CHECK(!encodedContent.empty());
-    const auto coding = ruvia::detail::httpClientResponseContentCoding(parsed.head);
+    const auto coding = ruvia::parseHttpContentCodingHeaders(parsed.head.headers());
     RUVIA_CHECK(coding.coding() != nullptr);
     if (coding.coding() != nullptr) {
         RUVIA_CHECK(*coding.coding() == ruvia::HttpContentCoding::kGzip);

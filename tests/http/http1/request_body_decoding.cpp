@@ -1,10 +1,12 @@
 #include "content_decoding_fixture.h"
 
+#include "ruvia/http/Http1RequestParser.h"
+
 // Decoding a request body: what each coding accepts and what it refuses.
 
 RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
     const auto tooLarge =
-        ruvia::detail::httpRequestBodySizeFailure(5, ProtocolByteLimit::limited(4));
+        ruvia::httpRequestBodySizeFailure(5, ProtocolByteLimit::limited(4));
     RUVIA_CHECK(tooLarge.has_value());
     if (tooLarge) {
         const auto error = tooLarge->protocolError();
@@ -13,14 +15,39 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
             std::string_view(error.what()), std::string_view("request body is too large"));
     }
     RUVIA_CHECK(
-        !ruvia::detail::httpRequestBodyAdditionFailure(2, 2, ProtocolByteLimit::limited(4)));
-    RUVIA_CHECK(ruvia::detail::httpRequestBodyAdditionFailure(2, 3, ProtocolByteLimit::limited(4))
+        !ruvia::httpRequestBodyAdditionFailure(2, 2, ProtocolByteLimit::limited(4)));
+    RUVIA_CHECK(ruvia::httpRequestBodyAdditionFailure(2, 3, ProtocolByteLimit::limited(4))
             .has_value());
 
-    const auto incomplete = ruvia::detail::HttpRequestBodyFailure::incomplete().protocolError();
+    const auto incomplete = ruvia::HttpRequestBodyFailure::incomplete().protocolError();
     RUVIA_CHECK_EQ(incomplete.status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(
         std::string_view(incomplete.what()), std::string_view("incomplete request body"));
+}
+
+RUVIA_TEST(http1_public_parser_classifies_cleartext_request_line_failures) {
+    const ruvia::Http1RequestParser parser;
+    constexpr std::string_view invalidRequestLine = "GET / NOT-HTTP\r\n\r\n";
+    const auto parsedLine = parser.parse(invalidRequestLine);
+    const auto* lineFailure = parsedLine.failure();
+    RUVIA_CHECK(lineFailure != nullptr);
+    if (lineFailure != nullptr) {
+        RUVIA_CHECK(lineFailure->source() ==
+            ruvia::Http1RequestParseFailureSource::kRequestLine);
+        RUVIA_CHECK(ruvia::shouldDropInvalidCleartextHttp1Input(
+            invalidRequestLine, lineFailure->source()));
+    }
+
+    const auto malformedHeader = parser.parse("GET / HTTP/1.1\r\nBad Header\r\n\r\n");
+    const auto* messageFailure = malformedHeader.failure();
+    RUVIA_CHECK(messageFailure != nullptr);
+    if (messageFailure != nullptr) {
+        RUVIA_CHECK(messageFailure->source() ==
+            ruvia::Http1RequestParseFailureSource::kMessage);
+        RUVIA_CHECK(!ruvia::shouldDropInvalidCleartextHttp1Input(
+            "GET / HTTP/1.1\r\nBad Header\r\n\r\n",
+            messageFailure->source()));
+    }
 }
 
 RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {

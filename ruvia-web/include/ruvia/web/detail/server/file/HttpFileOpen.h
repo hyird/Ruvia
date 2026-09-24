@@ -11,7 +11,7 @@
 #include <limits>
 #include <system_error>
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 namespace ruvia::detail {
@@ -19,7 +19,7 @@ namespace ruvia::detail {
 #if defined(__unix__) || defined(_WIN32)
 class ResponseFileInput final {
 public:
-    explicit ResponseFileInput(ResponseFileBody file) noexcept {
+    explicit ResponseFileInput(HttpResponseFileView file) noexcept {
         handle_ = openNativeFileForRead(file, error_);
     }
 
@@ -85,7 +85,7 @@ public:
     // bytes while that descriptor remains valid. The ctime/change-time token
     // in ResponseFileIdentity makes that mutation visible to the runtime.
     [[nodiscard]] bool matchesSnapshot(
-        ResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
+        HttpResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
         if (!expected.requiresValidation()) {
             return true;
         }
@@ -102,7 +102,7 @@ private:
 #else
 class ResponseFileInput final {
 public:
-    explicit ResponseFileInput(ResponseFileBody file)
+    explicit ResponseFileInput(HttpResponseFileView file)
         : input_(file.toPath(), std::ios::binary) {
         if (!input_ || !file.identity().requiresValidation()) {
             return;
@@ -130,7 +130,7 @@ public:
     }
 
     [[nodiscard]] bool matchesSnapshot(
-        ResponseFileIdentity expected, std::uint64_t) const noexcept {
+        HttpResponseFileIdentity expected, std::uint64_t) const noexcept {
         // Checked identities are rejected by the portable fallback at open:
         // there is no native handle to validate without reopening a path.
         return !expected.requiresValidation();
@@ -141,7 +141,7 @@ private:
 };
 #endif
 
-[[nodiscard]] inline ResponseFileInput openResponseFileInput(ResponseFileBody file) {
+[[nodiscard]] inline ResponseFileInput openResponseFileInput(HttpResponseFileView file) {
     return ResponseFileInput(file);
 }
 

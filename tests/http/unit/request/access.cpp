@@ -10,8 +10,8 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpRequestContentDecoding.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 
 #include "request_header_memory_fixture.h"
 #include "test_harness.h"
@@ -24,9 +24,9 @@ using ruvia::HttpKnownMethod;
 using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequest;
 using ruvia::HttpRequestTargetForm;
+using ruvia::requestContentCoding;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::requestBodyBytes;
-using ruvia::detail::requestContentCoding;
 using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::requestKnownHeader;
 
@@ -104,6 +104,35 @@ RUVIA_TEST(request_access_reset_initializes_defaults) {
     RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(request.headers().empty());
     RUVIA_CHECK(requestBodyBytes(request).empty());
+}
+
+RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
+    HeaderMemory resource;
+    auto request = HttpRequestAccess::make();
+    HttpRequestAccess::setResource(request, &resource);
+    HttpRequestAccess::setMethod(request, "GET");
+    HttpRequestAccess::setTarget(request, "/path?key=value");
+    HttpRequestAccess::setScheme(request, "https");
+    HttpRequestAccess::setAuthority(request, "example.test");
+    HttpRequestAccess::setPath(request, "/path");
+    HttpRequestAccess::setQueryString(request, "key=value");
+    HttpRequestAccess::setBody(request, "payload");
+    HttpRequestAccess::reserveHeaders(request, 1);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, {"Host", "example.test"}));
+    RUVIA_CHECK(resource.liveBytes > 0);
+    request.reset();
+    RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+    RUVIA_CHECK(request.method().empty());
+    RUVIA_CHECK(request.target().empty());
+    RUVIA_CHECK(request.scheme().empty());
+    RUVIA_CHECK(request.authority().empty());
+    RUVIA_CHECK(request.path().empty());
+    RUVIA_CHECK(request.queryString().empty());
+    RUVIA_CHECK(request.headers().empty());
+    RUVIA_CHECK(!request.header("Host").has_value());
+    RUVIA_CHECK(requestBodyBytes(request).empty());
+    RUVIA_CHECK(request.protocolVersion() == HttpProtocolVersion::kHttp11);
+    RUVIA_CHECK(request.targetForm() == HttpRequestTargetForm::kOrigin);
 }
 
 RUVIA_TEST(request_access_preserves_target_components_and_form) {

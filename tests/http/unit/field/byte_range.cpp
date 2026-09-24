@@ -4,17 +4,17 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpByteRange.h"
+#include "ruvia/http/HttpByteRange.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::HttpByteRangeIgnored;
-using ruvia::detail::HttpByteRangeResolution;
-using ruvia::detail::HttpByteRangeUnsatisfiable;
-using ruvia::detail::HttpResolvedByteRange;
-using ruvia::detail::resolveHttpByteRange;
+using ruvia::HttpByteRangeIgnored;
+using ruvia::HttpByteRangeResolution;
+using ruvia::HttpByteRangeUnsatisfiable;
+using ruvia::HttpResolvedByteRange;
+using ruvia::resolveHttpByteRange;
 
 [[nodiscard]] bool isIgnoredRange(std::string_view value, std::uint64_t representationLength) {
     const auto resolution = resolveHttpByteRange(value, representationLength);

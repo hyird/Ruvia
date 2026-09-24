@@ -10,15 +10,14 @@
 #include <string_view>
 
 #include "ruvia/core/Bytes.h"
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequestBodyDecoders.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
-#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
-#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
-#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReaderErrors.h"
 
 namespace ruvia::detail {
@@ -30,7 +29,7 @@ class StreamBodyReader final {
 public:
     StreamBodyReader(Stream& stream, std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initialBodyAndPipeline, Http1RequestBodyPlan bodyPlan,
-        ProtocolByteLimit bodyLimit, ConnectionScanner::Entry& scannerEntry);
+        ProtocolByteLimit bodyLimit, ruvia::ConnectionScanner::Entry& scannerEntry);
     ~StreamBodyReader() = default;
 
     StreamBodyReader(const StreamBodyReader&) = delete;
@@ -73,7 +72,7 @@ private:
     Http1RequestBodyPlan bodyPlan_;
     ProtocolByteLimit bodyLimit_;
     Http1ChunkedBodyDecoder chunkDecoder_;
-    ConnectionScanner::Entry& scannerEntry_;
+    ruvia::ConnectionScanner::Entry& scannerEntry_;
     std::size_t readCursor_{0};
     std::size_t pendingCompactUntil_{0};
     std::size_t deliveredBytes_{0};

@@ -1,8 +1,8 @@
 #include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"

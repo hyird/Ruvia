@@ -13,8 +13,8 @@
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
-#include "ruvia/http/HttpClientRequestTarget.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequestTarget.h"
 
 #include "test_harness.h"
 
@@ -27,7 +27,7 @@ using ruvia::Http1ClosePolicy;
 using ruvia::HttpClientRequestContentView;
 using ruvia::HttpClientRequestView;
 using ruvia::HttpOriginView;
-using ruvia::isValidHttpClientOriginTarget;
+using ruvia::isValidHttpOriginFormTarget;
 
 class RejectingCharacterStorageResource final : public std::pmr::memory_resource {
 private:
@@ -49,15 +49,15 @@ private:
 };
 
 RUVIA_TEST(http_client_origin_target_validation) {
-    RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("*"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget(""));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("relative"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad#fragment"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad\\path"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%zz"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%"));
-    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%2"));
+    RUVIA_CHECK(isValidHttpOriginFormTarget("/ok%2F?q=%7B%7D"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("*"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget(""));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("relative"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("/bad#fragment"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("/bad\\path"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("/bad%zz"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("/bad%"));
+    RUVIA_CHECK(!isValidHttpOriginFormTarget("/bad%2"));
 }
 
 template <std::size_t N = 2048>

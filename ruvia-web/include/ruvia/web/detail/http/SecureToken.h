@@ -4,7 +4,7 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/core/detail/util/ConstantTime.h"
+#include "ruvia/core/ConstantTime.h"
 
 namespace ruvia::detail {
 
@@ -59,9 +59,9 @@ private:
 [[nodiscard]] SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept;
 
 // Length-checked constant-time compare of the double-submit CSRF token; see
-// constantTimeBytesEqual for the timing-safety rationale.
+// ruvia::constantTimeBytesEqual for the timing-safety rationale.
 [[nodiscard]] inline bool csrfTokensEqual(std::string_view left, std::string_view right) noexcept {
-    return constantTimeBytesEqual(left, right);
+    return ruvia::constantTimeBytesEqual(left, right);
 }
 
 }  // namespace ruvia::detail

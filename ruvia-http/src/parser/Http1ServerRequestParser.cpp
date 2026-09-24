@@ -1,23 +1,26 @@
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 namespace {
 
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::HttpRequestTargetForm;
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::RequestTargetView;
+using ruvia::detail::RequestHeaderKind;
+using ruvia::detail::singletonRequestHeaderBit;
+using ruvia::detail::scanHttpChunkedBody;
+using ruvia::detail::HttpChunkScanError;
 
 }  // namespace
 
@@ -87,8 +90,9 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     // disposition is already derived from the parsed Connection fields and is
     // tightened to close by body/response policy later.
     state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11
-                               ? http1PlanHttp11RequestConnection(block.connectionOptions)
-                               : http1PlanHttp10RequestConnection(block.connectionOptions);
+                               ? http1PlanHttp11RequestConnection(block.connectionOptions.close())
+                               : http1PlanHttp10RequestConnection(block.connectionOptions.close(),
+                                     block.connectionOptions.keepAlive());
     if (block.upgradeProtocols.hasField() && !block.connectionOptions.upgrade()) {
         return fail(HttpParseError::kInvalidConnection);
     }
@@ -180,8 +184,8 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
         // for absolute-form and authority-form. Rebind both headers() and the
         // known-header cache so application code cannot observe a conflicting
         // Host value as a second routing truth.
-        if ((targetView.form == HttpRequestTargetForm::kAbsolute ||
-                targetView.form == HttpRequestTargetForm::kAuthority) &&
+        if ((targetView.form == detail::HttpRequestTargetForm::kAbsolute ||
+                targetView.form == detail::HttpRequestTargetForm::kAuthority) &&
             hostHeaderIndex >= 0 && i == static_cast<std::size_t>(hostHeaderIndex)) {
             value = targetView.authority;
         }
@@ -308,9 +312,103 @@ Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
 
 namespace ruvia {
 
+std::pair<HttpRequest, std::optional<HttpParseError>> makeParsedHttpRequest(
+    std::string_view method, std::string_view target, std::span<const HttpHeaderView> headers,
+    std::span<const std::byte> body, std::pmr::memory_resource* resource) {
+    auto request = detail::HttpRequestAccess::make();
+    detail::HttpRequestAccess::setResource(request, resource);
+    detail::HttpRequestAccess::setMethod(request, method);
+    detail::HttpRequestAccess::setTarget(request, target);
+
+    std::optional<HttpParseError> error;
+    detail::RequestTargetView targetView;
+    if (!isValidHttpMethodToken(method)) {
+        error = HttpParseError::kInvalidRequestLine;
+    } else if (!detail::parseRequestTarget(request.knownMethod(), target, targetView)) {
+        error = HttpParseError::kInvalidRequestTarget;
+    } else if (headers.size() > kMaxHttpHeaderFields) {
+        error = HttpParseError::kTooManyHeaders;
+    } else {
+        std::size_t headerBytes = 0;
+        for (const auto& header : headers) {
+            if (!detail::isValidHttpHeaderName(header.name()) ||
+                !detail::isValidHttpHeaderValue(header.value())) {
+                error = HttpParseError::kInvalidHeader;
+                break;
+            }
+            const auto remaining = kMaxHttpHeaderBytes - headerBytes;
+            if (header.name().size() > remaining ||
+                header.value().size() > remaining - header.name().size() ||
+                remaining - header.name().size() - header.value().size() < 4) {
+                error = HttpParseError::kHeaderTooLarge;
+                break;
+            }
+            headerBytes += header.name().size() + header.value().size() + 4;
+        }
+    }
+    if (error.has_value()) {
+        return {std::move(request), error};
+    }
+
+    detail::HttpRequestAccess::setPath(request, targetView.path);
+    detail::HttpRequestAccess::setQueryString(request, targetView.query);
+    detail::HttpRequestAccess::setScheme(request, targetView.scheme);
+    detail::HttpRequestAccess::setAuthority(request, targetView.authority);
+    switch (targetView.form) {
+        case detail::HttpRequestTargetForm::kOrigin:
+            detail::HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kOrigin);
+            break;
+        case detail::HttpRequestTargetForm::kAbsolute:
+            detail::HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kAbsolute);
+            break;
+        case detail::HttpRequestTargetForm::kAuthority:
+            detail::HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kAuthority);
+            break;
+        case detail::HttpRequestTargetForm::kAsterisk:
+            detail::HttpRequestAccess::setTargetForm(request, ::ruvia::HttpRequestTargetForm::kAsterisk);
+            break;
+    }
+    detail::HttpRequestAccess::reserveHeaders(request, headers.size());
+    for (const auto& header : headers) {
+        if (!detail::HttpRequestAccess::addHeader(request, header)) {
+            error = HttpParseError::kTooManyHeaders;
+            break;
+        }
+    }
+    detail::HttpRequestAccess::setBody(request, body);
+    return {std::move(request), error};
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+bool shouldDropInvalidCleartextHttp1Input(
+    std::string_view buffer, Http1RequestParseFailureSource source) noexcept {
+    if (source != Http1RequestParseFailureSource::kRequestLine) {
+        return false;
+    }
+
+    const auto lineEnd = buffer.find("\r\n");
+    if (lineEnd == std::string_view::npos) {
+        return false;
+    }
+
+    auto line = buffer.substr(0, lineEnd);
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+        line.remove_suffix(1);
+    }
+
+    const auto versionStart = line.find_last_of(" \t");
+    if (versionStart == std::string_view::npos || versionStart + 1 >= line.size()) {
+        return false;
+    }
+    return !line.substr(versionStart + 1).starts_with("HTTP/");
+}
+
 Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer,
     Http1RequestParseOptions options) const {
-    detail::Http1ServerRequestParser parser;
+    Http1ServerRequestParser parser;
     auto parsed = parser.parseMessage(buffer, options.resource);
     if (parsed.needRequestHead() != nullptr) {
         return detail::Http1RequestParseResultAccess::needMore();

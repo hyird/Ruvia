@@ -14,7 +14,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/web/detail/http2/Http2SansIoRequestBody.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
@@ -110,6 +110,19 @@ public:
         return streamId_;
     }
 
+    [[nodiscard]] bool holdRequestHead(Http2RequestHeadEvent&& requestHead) noexcept {
+        if (requestHead_ || requestHead.streamId() != streamId_) {
+            return false;
+        }
+        requestHead_.emplace(std::move(requestHead));
+        return true;
+    }
+
+    [[nodiscard]] Http2RequestHeadEvent* requestHead() & noexcept {
+        return requestHead_ ? &*requestHead_ : nullptr;
+    }
+    Http2RequestHeadEvent* requestHead() && = delete;
+
     [[nodiscard]] bool selectRoute(RouteResolution resolution, RequestBodyMode bodyMode) noexcept {
         if (selectedRoute_) {
             return false;
@@ -156,6 +169,7 @@ private:
     std::uint32_t streamId_;
     std::pmr::memory_resource* resource_;
     std::optional<Http2SansIoSelectedRoute> selectedRoute_;
+    std::optional<Http2RequestHeadEvent> requestHead_;
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
@@ -206,12 +220,10 @@ public:
         return nullptr;
     }
 
-    // Protocol admission is already committed before Web receives the live
-    // Http2StreamState. This table only attaches application runtime state; it
-    // must not reapply the protocol's concurrent-stream limit or manufacture a
-    // nullable second admission result.
-    [[nodiscard]] Http2SansIoStreamRuntime& ensureAccepted(const Http2StreamState& acceptedStream) {
-        const auto streamId = acceptedStream.id();
+    // Protocol admission is already committed before Web attaches application
+    // runtime state. The HTTP stream identifier is sufficient here; this table
+    // does not retain or inspect protocol stream storage.
+    [[nodiscard]] Http2SansIoStreamRuntime& ensureAccepted(std::uint32_t streamId) {
         if (auto* existing = find(streamId)) {
             return *existing;
         }

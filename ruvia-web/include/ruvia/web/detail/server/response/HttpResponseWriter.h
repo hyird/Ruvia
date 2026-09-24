@@ -9,13 +9,10 @@
 #include <asio.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/server/HttpResponseHead.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/detail/server/file/HttpFileWrite.h"
 #include "ruvia/web/detail/server/http1/Http1BufferedResponseWrite.h"
 
@@ -62,14 +59,13 @@ template <typename ConstBufferSequence>
 
 template <typename Stream>
 Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(Stream& stream,
-    WorkerMemory& memory, ResponseHeadBuffer& head, std::pmr::string* fileChunkBuffer,
+    WorkerMemory& memory, HttpResponseHeadBuffer& head, std::pmr::string* fileChunkBuffer,
     const HttpResponse& response, const Http1BufferedResponsePlan& responsePlan) {
     head.reset();
-    appendResponseHead(response, head, responsePlan.headPlan());
+    appendHttp1ResponseHead(response, head, responsePlan.headPlan());
     const auto responseHeadBytes = head.view().size();
-    const auto& responseContent = responseBody(response);
-    if (const auto fileBody = responseContent.file()) {
-        auto writeCompletion = co_await asyncAsio<std::size_t>(
+    if (const auto fileBody = response.fileBody()) {
+        auto writeCompletion = co_await ruvia::asyncAsio<std::size_t>(
             [&stream, headView = head.view()](auto handler) mutable {
                 asio::async_write(stream, asio::buffer(headView), std::move(handler));
             });
@@ -92,7 +88,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(Stream& stream,
 
     constexpr bool kPlainTcpStream =
         std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>;
-    auto body = responsePlan.sendBody() ? responseContent.bytes() : std::string_view{};
+    auto body = responsePlan.sendBody() ? response.bodyBytes() : std::string_view{};
     if (!body.empty() && head.canAppendOnStack(body.size())) {
         head.append(body);
         body = {};
@@ -107,7 +103,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(Stream& stream,
                 stream, asio::buffer(headView), headView.size(), writeEc, writtenBytes);
         }
         if (!writeDone) {
-            auto writeCompletion = co_await asyncAsio<std::size_t>(
+            auto writeCompletion = co_await ruvia::asyncAsio<std::size_t>(
                 [&stream, remaining = headView.substr(writtenBytes)](auto handler) mutable {
                     asio::async_write(stream, asio::buffer(remaining), std::move(handler));
                 });
@@ -135,7 +131,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(Stream& stream,
                       asio::buffer(body.substr(writtenBytes - headView.size())),
                       asio::const_buffer{}};
         auto writeCompletion =
-            co_await asyncAsio<std::size_t>([&stream, &remaining](auto handler) mutable {
+            co_await ruvia::asyncAsio<std::size_t>([&stream, &remaining](auto handler) mutable {
                 asio::async_write(stream, remaining, std::move(handler));
             });
         writeEc = writeCompletion.errorCode();
@@ -149,14 +145,14 @@ template <typename Stream>
 Task<Http1BufferedResponseWriteResult> writeResponseWithLocalHead(Stream& stream,
     WorkerMemory& memory, std::pmr::string* fileChunkBuffer, const HttpResponse& response,
     const Http1BufferedResponsePlan& responsePlan) {
-    ResponseHeadBuffer localHead(memory.allocator<char>());
+    HttpResponseHeadBuffer localHead(memory.allocator<char>());
     co_return co_await writeResponseWithScratch(
         stream, memory, localHead, fileChunkBuffer, response, responsePlan);
 }
 
 template <typename Stream>
 Task<Http1BufferedResponseWriteResult> writeResponse(Stream& stream, WorkerMemory& memory,
-    ResponseHeadBuffer* reusableHead, std::pmr::string* fileChunkBuffer,
+    HttpResponseHeadBuffer* reusableHead, std::pmr::string* fileChunkBuffer,
     const HttpResponse& response, const Http1BufferedResponsePlan& responsePlan) {
     if (reusableHead != nullptr) {
         return writeResponseWithScratch(

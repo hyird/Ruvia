@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/Cookies.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
@@ -20,7 +20,8 @@ public:
     SetCookiePlan(std::string_view name, std::string_view value, const CookieOptions& options);
 
     template <typename Name, typename Value>
-        requires(HttpTemporaryOwningCharString<Name> || HttpTemporaryOwningCharString<Value>)
+        requires(detail::HttpTemporaryOwningCharString<Name> ||
+                    detail::HttpTemporaryOwningCharString<Value>)
     SetCookiePlan(Name&&, Value&&, const CookieOptions&) = delete;
 
     SetCookiePlan(std::string_view, std::string_view, CookieOptions&&) = delete;
@@ -67,4 +68,4 @@ private:
     bool partitioned_{false};
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

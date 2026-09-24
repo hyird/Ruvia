@@ -9,19 +9,19 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/NumberFormat.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
 namespace ruvia::detail {
 
 inline void appendDbNumber(std::pmr::string& output, std::int64_t value) {
-    appendHttpFormattedNumber(output, value, "failed to format signed database value");
+    appendFormattedNumber(output, value, "failed to format signed database value");
 }
 
 inline void appendDbNumber(std::pmr::string& output, std::uint64_t value) {
-    appendHttpFormattedNumber(output, value, "failed to format unsigned database value");
+    appendFormattedNumber(output, value, "failed to format unsigned database value");
 }
 
 inline void appendDbNumber(std::pmr::string& output, double value) {
@@ -29,7 +29,7 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
     // not valid SQL numeric literals and would be spliced unquoted into the
     // statement. Reject them up front with a clear error instead of letting the
     // server fail on malformed SQL.
-    appendHttpFormattedFiniteNumber(output, value, "database double value must be finite",
+    appendFormattedFiniteNumber(output, value, "database double value must be finite",
         "database double value cannot be formatted");
 }
 
