@@ -383,7 +383,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         detachedContextRejected = true;
     }
     RUVIA_CHECK(detachedContextRejected);
-    bound.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+    bound.markCommitted(ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
         ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
     bool committedContextReleased = false;
@@ -397,7 +397,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
 
     // A committed stream that allows a body accepts a chunk before end()...
     ResponseStreamState open;
-    open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+    open.markCommitted(ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
         ruvia::http_status::kMultiStatus, ruvia::detail::ResponseTrailerIntent::kNone));
     RUVIA_CHECK(open.commitPlan() != nullptr);
@@ -406,7 +406,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
         open.commitPlan()->framing() == ruvia::detail::ResponseStreamFraming::kHttp1Chunked);
     bool recommitRejected = false;
     try {
-        open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        open.markCommitted(ruvia::planHttpResponseStreamCommit(
             ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kGet,
             ruvia::HttpStatusCode::fromValue(418), ruvia::detail::ResponseTrailerIntent::kNone));
     } catch (const std::logic_error&) {
@@ -441,7 +441,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // coexist with Ended. A post-commit abort retains the exact wire plan for
     // dispatch accounting, while an uncommitted abort cannot manufacture one.
     ResponseStreamState abortedOpen;
-    abortedOpen.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+    abortedOpen.markCommitted(ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
         ruvia::http_status::kPartialContent, ruvia::detail::ResponseTrailerIntent::kNone));
     abortedOpen.markAborted();
@@ -470,7 +470,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // would have produced is correct handler behavior there, so dispatch must
     // be able to tell it apart from a post-end() sequencing bug.
     ResponseStreamState suppressed;
-    suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+    suppressed.markCommitted(ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kHead,
         ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kNone));
     bool bodyRejected = false;
@@ -484,7 +484,7 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     // HTTP/2 can keep the same content-forbidden response open solely for a
     // terminal trailing-HEADERS block, without accidentally enabling DATA.
     ResponseStreamState trailersOnly;
-    trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+    trailersOnly.markCommitted(ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kHead,
         ruvia::http_status::kOk, ruvia::detail::ResponseTrailerIntent::kPresent));
     RUVIA_CHECK(trailersOnly.committed());
@@ -503,12 +503,12 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kCreated);
-    auto plan = ruvia::detail::httpResponseStreamCommitPlan(
+    auto plan = ruvia::planHttpResponseStreamCommit(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked, ruvia::HttpKnownMethod::kGet,
         ruvia::http_status::kAccepted, ruvia::detail::ResponseTrailerIntent::kNone);
     bool rejected = false;
     try {
-        (void)ruvia::detail::prepareResponseStreamHead(
+        (void)ruvia::prepareHttpResponseStreamHead(
             std::move(response), ruvia::detail::ResponseStreamKind::kGeneric, std::move(plan));
     } catch (const std::invalid_argument&) {
         rejected = true;

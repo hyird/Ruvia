@@ -905,7 +905,7 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
 RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
     using ruvia::detail::ContextAccess;
     using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::prepareResponseStreamHead;
+    using ruvia::prepareHttpResponseStreamHead;
     using ruvia::detail::ResponseStreamFraming;
     using ruvia::detail::ResponseStreamKind;
     using ruvia::detail::ResponseTrailerIntent;
@@ -922,8 +922,8 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
         }
         auto response = ContextAccess::streamingHead(context);
-        auto streamHead = prepareResponseStreamHead(std::move(response), ResponseStreamKind::kSse,
-            ruvia::detail::httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp1Chunked,
+        auto streamHead = prepareHttpResponseStreamHead(std::move(response), ResponseStreamKind::kSse,
+            ruvia::planHttpResponseStreamCommit(ResponseStreamFraming::kHttp1Chunked,
                 HttpKnownMethod::kGet, ruvia::http_status::kOk, ResponseTrailerIntent::kNone));
         return std::string(streamHead.response().header("Cache-Control").value_or(""));
     };

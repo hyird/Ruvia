@@ -708,7 +708,7 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     if (body.file().has_value()) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    const auto plan = detail::httpBufferedResponseWritePlan(stream->requestKnownMethod(), response);
+    const auto plan = planHttpServerBufferedResponseWrite(stream->requestKnownMethod(), response);
     const auto result = impl_->connection.submitResponseHead(streamId, response, plan);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {

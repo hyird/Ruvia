@@ -1,39 +1,15 @@
 #pragma once
 
 #include <chrono>
-#include <cmath>
 #include <optional>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/OperationTimeout.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
-
-// A positive remainder must never become zero merely because the caller's
-// cancellation primitive has millisecond resolution. Rounding up may wake a
-// waiter a fraction late, while rounding down turns a still-live deadline into
-// an immediate timeout.
-[[nodiscard]] inline std::chrono::milliseconds workerTimerCeilMilliseconds(
-    std::chrono::steady_clock::duration value) noexcept {
-    using Milliseconds = std::chrono::milliseconds;
-    if (value <= std::chrono::steady_clock::duration::zero()) {
-        return Milliseconds::zero();
-    }
-
-    using MillisecondFloat = std::chrono::duration<long double, Milliseconds::period>;
-    const auto count = std::chrono::duration_cast<MillisecondFloat>(value).count();
-    if (std::isnan(count)) {
-        return Milliseconds::zero();
-    }
-    const auto maximum = static_cast<long double>(Milliseconds::max().count());
-    const auto rounded = std::ceil(count);
-    if (rounded >= maximum) {
-        return Milliseconds::max();
-    }
-    return Milliseconds(static_cast<Milliseconds::rep>(rounded));
-}
 
 // One allocation-free deadline lifecycle. A deadline is either absent, armed
 // with its cancellation kind and exact time point, or expired with that same
@@ -110,49 +86,6 @@ private:
 // One absolute timeout shared by every asynchronous phase of a logical
 // operation. Callers re-arm their cancellation primitive with remaining()
 // instead of restarting the configured duration for every socket wait.
-class OperationTimeout final {
-public:
-    using Clock = std::chrono::steady_clock;
-
-    explicit OperationTimeout(std::optional<std::chrono::milliseconds> timeout) noexcept {
-        if (timeout.has_value()) {
-            deadline_ = workerTimerDeadlineAfter(*timeout);
-        }
-    }
-
-    [[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept {
-        if (!deadline_.has_value()) {
-            return std::nullopt;
-        }
-        const auto now = Clock::now();
-        if (now >= *deadline_) {
-            return std::chrono::milliseconds(0);
-        }
-        return workerTimerCeilMilliseconds(*deadline_ - now);
-    }
-
-    [[nodiscard]] bool expired() const noexcept {
-        const auto value = remaining();
-        return value.has_value() && value->count() == 0;
-    }
-
-    // Apply an additional relative limit without losing an existing absolute
-    // deadline. This lets a sub-operation honor both its own timeout and the
-    // total timeout of its parent operation.
-    [[nodiscard]] OperationTimeout constrainedBy(
-        std::optional<std::chrono::milliseconds> timeout) const noexcept {
-        OperationTimeout constrained(timeout);
-        if (!deadline_.has_value()) {
-            return constrained;
-        }
-        if (!constrained.deadline_.has_value() || *deadline_ < *constrained.deadline_) {
-            constrained.deadline_ = deadline_;
-        }
-        return constrained;
-    }
-
-private:
-    std::optional<Clock::time_point> deadline_;
-};
+using OperationTimeout = ::ruvia::OperationTimeout;
 
 }  // namespace ruvia::detail

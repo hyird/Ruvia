@@ -11,6 +11,7 @@ namespace {
 using namespace ruvia;
 
 static_assert(!std::is_same_v<WebSocketServerProtocol, detail::WsConnection>);
+static_assert(!std::is_same_v<WebSocketServerEvent, detail::WsEvent>);
 
 struct MaskSource {
     unsigned calls{0};
@@ -97,6 +98,38 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
         RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kBinary, std::string(16385, 'x')) == WebSocketFrameSubmitStatus::kMessageTooLarge);
     }
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+}
+
+RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
+    MaskSource mask;
+    auto sender = client(mask);
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input);
+
+    RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kText, "hey") ==
+                WebSocketFrameSubmitStatus::kAccepted);
+    const std::string messageWire(sender.outputPlan().bytes());
+    RUVIA_CHECK(sender.consumeOutput(messageWire.size()) == WebSocketOutputConsumeStatus::kDrained);
+    input.append(messageWire);
+    auto message = protocol.poll();
+    RUVIA_CHECK(message && message->kind() == WebSocketServerEventKind::kMessage);
+    RUVIA_CHECK(message && message->message());
+    if (message && message->message()) {
+        RUVIA_CHECK(message->message()->opcode() == WebSocketOpcode::kText);
+        RUVIA_CHECK_EQ(message->message()->payload(), "hey");
+    }
+
+    RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kPing, "p") ==
+                WebSocketFrameSubmitStatus::kAccepted);
+    const std::string pingWire(sender.outputPlan().bytes());
+    RUVIA_CHECK(sender.consumeOutput(pingWire.size()) == WebSocketOutputConsumeStatus::kDrained);
+    input.append(pingWire);
+    auto ping = protocol.poll();
+    RUVIA_CHECK(ping && ping->kind() == WebSocketServerEventKind::kPing);
+    RUVIA_CHECK(ping && ping->ping());
+    if (ping && ping->ping()) {
+        RUVIA_CHECK_EQ(ping->ping()->payload(), "p");
+    }
 }
 
 RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {

@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "ruvia/core/MoveOnlyFunction.h"
+#include "ruvia/core/WorkerTimer.h"
 
 namespace ruvia {
 
@@ -94,8 +95,6 @@ using PostResult = PostOutcome<void()>;
 namespace detail {
 class WorkerDispatcher;
 class WorkerShutdownListener;
-class WorkerTimerRegistration;
-enum class WorkerTimerOutcome : std::uint8_t;
 struct WorkerHandleAccess;
 }  // namespace detail
 
@@ -136,9 +135,9 @@ struct WorkerHandleAccess {
         const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
     static void registerShutdownListener(
         const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
-    static void scheduleTimer(const WorkerHandle& worker, WorkerTimerRegistration& registration,
+    static void scheduleTimer(const WorkerHandle& worker, ::ruvia::WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
-        MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
+        MoveOnlyFunction<void(::ruvia::WorkerTimerOutcome)> completion);
     [[nodiscard]] static PostStatus postFactory(
         const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
 };

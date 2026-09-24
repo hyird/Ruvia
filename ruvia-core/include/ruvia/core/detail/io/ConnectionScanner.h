@@ -10,23 +10,15 @@
 
 #include <asio/ip/tcp.hpp>
 
+#include "ruvia/core/ConnectionScannerOptions.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
 
-struct ConnectionScannerOptions final {
-    std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
-    // Inactivity timeouts measured from the connection's last successful I/O.
-    // Protocol runtimes map their own lifecycle states onto these generic phases.
-    // Absence disables the corresponding phase timeout.
-    std::optional<std::chrono::milliseconds> idleTimeout{};
-    std::optional<std::chrono::milliseconds> initialReadTimeout{};
-    std::optional<std::chrono::milliseconds> payloadReadTimeout{};
-    std::optional<std::chrono::milliseconds> writeTimeout{};
-};
+using ConnectionScannerOptions = ::ruvia::ConnectionScannerOptions;
 
-class ConnectionScanner final {
+class ConnectionScanner {
 public:
     // Product-owned long-lived checks receive the worker's coarse timestamp
     // and act on their own transport. They cannot command Core to close the

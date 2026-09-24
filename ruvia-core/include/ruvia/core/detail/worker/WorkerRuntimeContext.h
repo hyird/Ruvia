@@ -16,7 +16,7 @@ namespace ruvia::detail {
 // and stable handle. Runtime owners remain responsible for threads and domain
 // resources; this object guarantees that escaped handles are detached before
 // the io_context they identify can disappear.
-class WorkerRuntimeContext final {
+class WorkerRuntimeContext {
 public:
     WorkerRuntimeContext(asio::io_context& ioContext, std::size_t mailboxCapacity)
         : ioContext_(&ioContext),
