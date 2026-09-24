@@ -27,7 +27,7 @@ namespace ruvia {
 
 class Http1ResponseStreamPlan final {
 public:
-    [[nodiscard]] detail::ResponseStreamFraming framing() const noexcept {
+    [[nodiscard]] ResponseStreamFraming framing() const noexcept {
         return framing_;
     }
 
@@ -49,7 +49,7 @@ private:
     friend Http1ResponseStreamPlan http1PlanConsumedResponseStream(
         const Http1ServerRequestParseState&, Http1ClosePolicy) noexcept;
 
-    Http1ResponseStreamPlan(detail::ResponseStreamFraming framing,
+    Http1ResponseStreamPlan(ResponseStreamFraming framing,
         Http1ServerConnectionPlan requestConnectionPlan, Http1ClosePolicy closePolicy,
         HttpKnownMethod requestMethod) noexcept
         : framing_(framing),
@@ -57,7 +57,7 @@ private:
           closePolicy_(closePolicy),
           requestMethod_(requestMethod) {}
 
-    detail::ResponseStreamFraming framing_;
+    ResponseStreamFraming framing_;
     Http1ServerConnectionPlan requestConnectionPlan_;
     Http1ClosePolicy closePolicy_{Http1ClosePolicy::kCloseAfterResponse};
     HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
@@ -74,8 +74,8 @@ private:
         parsed.bodyPlan.requiresConsumption() ? Http1RequestBodyConsumption::kIncomplete
                                               : Http1RequestBodyConsumption::kComplete);
     const auto framing = parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11
-                             ? detail::ResponseStreamFraming::kHttp1Chunked
-                             : detail::ResponseStreamFraming::kHttp1CloseDelimited;
+                             ? ResponseStreamFraming::kHttp1Chunked
+                             : ResponseStreamFraming::kHttp1CloseDelimited;
     return Http1ResponseStreamPlan(
         framing, requestConnectionPlan, closePolicy, parsed.request.knownMethod());
 }
@@ -87,8 +87,8 @@ private:
 [[nodiscard]] inline Http1ResponseStreamPlan http1PlanConsumedResponseStream(
     const Http1ServerRequestParseState& parsed, Http1ClosePolicy closePolicy) noexcept {
     const auto framing = parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11
-                             ? detail::ResponseStreamFraming::kHttp1Chunked
-                             : detail::ResponseStreamFraming::kHttp1CloseDelimited;
+                             ? ResponseStreamFraming::kHttp1Chunked
+                             : ResponseStreamFraming::kHttp1CloseDelimited;
     return Http1ResponseStreamPlan(
         framing, parsed.connectionPlan, closePolicy, parsed.request.knownMethod());
 }
@@ -259,10 +259,10 @@ public:
     }
     [[nodiscard]] const Http1ResponseHeadPlan& responseHeadPlan() const&& = delete;
 
-    [[nodiscard]] const detail::ResponseStreamCommitPlan& commitPlan() const& noexcept {
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const& noexcept {
         return head_.commitPlan();
     }
-    [[nodiscard]] const detail::ResponseStreamCommitPlan& commitPlan() const&& = delete;
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const&& = delete;
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
@@ -271,17 +271,17 @@ public:
 private:
     friend class PreparedHttp1ResponseStreamResult;
     friend PreparedHttp1ResponseStreamResult prepareHttp1ResponseStreamHead(
-        HttpResponse, detail::ResponseStreamKind, const Http1ResponseStreamPlan&, detail::ResponseTrailerIntent);
+        HttpResponse, ResponseStreamKind, const Http1ResponseStreamPlan&, ResponseTrailerIntent);
     friend PreparedHttp1ResponseStreamResult prepareHttp1KnownLengthResponseStreamHead(
-        HttpResponse, std::uint64_t, detail::ResponseStreamKind, const Http1ResponseStreamPlan&);
+        HttpResponse, std::uint64_t, ResponseStreamKind, const Http1ResponseStreamPlan&);
 
-    PreparedHttp1ResponseStream(detail::ResponseStreamHead head, Http1ResponseHeadPlan responseHeadPlan,
+    PreparedHttp1ResponseStream(ResponseStreamHead head, Http1ResponseHeadPlan responseHeadPlan,
         Http1ServerConnectionPlan connectionPlan) noexcept
         : head_(std::move(head)),
           responseHeadPlan_(responseHeadPlan),
           connectionPlan_(connectionPlan) {}
 
-    detail::ResponseStreamHead head_;
+    ResponseStreamHead head_;
     Http1ResponseHeadPlan responseHeadPlan_;
     Http1ServerConnectionPlan connectionPlan_;
 };
@@ -305,9 +305,9 @@ public:
 
 private:
     friend PreparedHttp1ResponseStreamResult prepareHttp1ResponseStreamHead(
-        HttpResponse, detail::ResponseStreamKind, const Http1ResponseStreamPlan&, detail::ResponseTrailerIntent);
+        HttpResponse, ResponseStreamKind, const Http1ResponseStreamPlan&, ResponseTrailerIntent);
     friend PreparedHttp1ResponseStreamResult prepareHttp1KnownLengthResponseStreamHead(
-        HttpResponse, std::uint64_t, detail::ResponseStreamKind, const Http1ResponseStreamPlan&);
+        HttpResponse, std::uint64_t, ResponseStreamKind, const Http1ResponseStreamPlan&);
 
     using Value = std::expected<PreparedHttp1ResponseStream, Http1FinalResponseCommitFailure>;
 
@@ -321,8 +321,8 @@ private:
 };
 
 [[nodiscard]] inline PreparedHttp1ResponseStreamResult prepareHttp1ResponseStreamHead(
-    HttpResponse response, detail::ResponseStreamKind kind, const Http1ResponseStreamPlan& plan,
-    detail::ResponseTrailerIntent trailerIntent) {
+    HttpResponse response, ResponseStreamKind kind, const Http1ResponseStreamPlan& plan,
+    ResponseTrailerIntent trailerIntent) {
     auto commitPlan = httpResponseStreamCommitPlan(
         plan.framing(), plan.requestMethod(), response.status(), trailerIntent);
     const auto bodyPlan = commitPlan.bodyPlan();
@@ -333,7 +333,7 @@ private:
     const auto plannedConnection =
         plan.requestConnectionPlan().disposition() == Http1ClosePolicy::kAllowReuse &&
                 plan.closePolicy() == Http1ClosePolicy::kAllowReuse &&
-                (plan.framing() != detail::ResponseStreamFraming::kHttp1CloseDelimited ||
+                (plan.framing() != ResponseStreamFraming::kHttp1CloseDelimited ||
                     bodyPlan.bodySuppressed())
             ? plan.requestConnectionPlan()
             : plan.requestConnectionPlan().requireClose();
@@ -344,7 +344,7 @@ private:
     const auto connectionPlan = *commitResult.committed();
     auto head = prepareResponseStreamHead(std::move(response), kind, std::move(commitPlan));
     const auto responseHeadPlan =
-        plan.framing() == detail::ResponseStreamFraming::kHttp1Chunked
+        plan.framing() == ResponseStreamFraming::kHttp1Chunked
             ? http1ChunkedResponseStreamHeadPlan(head.commitPlan().bodyPlan(), connectionPlan)
             : http1CloseDelimitedResponseStreamHeadPlan(
                   head.commitPlan().bodyPlan(), connectionPlan);
@@ -357,10 +357,10 @@ private:
 // suppresses payload for HEAD/204/304, while the HTTP/1 head owns a canonical
 // length and the runtime may keep the connection reusable on either version.
 [[nodiscard]] inline PreparedHttp1ResponseStreamResult prepareHttp1KnownLengthResponseStreamHead(
-    HttpResponse response, std::uint64_t contentLength, detail::ResponseStreamKind kind,
+    HttpResponse response, std::uint64_t contentLength, ResponseStreamKind kind,
     const Http1ResponseStreamPlan& plan) {
-    auto commitPlan = httpResponseStreamCommitPlan(detail::ResponseStreamFraming::kHttp1KnownLength,
-        plan.requestMethod(), response.status(), detail::ResponseTrailerIntent::kNone);
+    auto commitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp1KnownLength,
+        plan.requestMethod(), response.status(), ResponseTrailerIntent::kNone);
     const auto plannedConnection =
         plan.requestConnectionPlan().disposition() == Http1ClosePolicy::kAllowReuse &&
                 plan.closePolicy() == Http1ClosePolicy::kAllowReuse

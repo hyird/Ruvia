@@ -35,21 +35,21 @@ std::optional<HttpResponseFileView> HttpResponse::fileBody() const& noexcept {
 
 bool HttpBufferedResponseWritePlan::matchesResponse(const HttpResponse& response) const noexcept {
     return response.status() == bodyPlan_.responseStatus() &&
-           contentLength_ == detail::httpBufferedResponseWritePlan(
+           contentLength_ == planHttpServerBufferedResponseWrite(
                                  bodyPlan_.requestMethod(), response)
                                  .contentLength();
 }
 
 HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
     HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
-    const auto plan = detail::httpBufferedResponseWritePlan(requestMethod, response);
+    const auto plan = planHttpServerBufferedResponseWrite(requestMethod, response);
     return HttpBufferedResponseWritePlan(
         planHttpResponseBody(requestMethod, response.status()), plan.contentLength());
 }
 
 HttpResponseBodyPlan planHttpResponseBody(
     HttpKnownMethod requestMethod, HttpStatusCode responseStatus) noexcept {
-    const auto plan = detail::httpResponseBodyPlan(requestMethod, responseStatus);
+    const auto plan = planHttpServerResponseBody(requestMethod, responseStatus);
     return HttpResponseBodyPlan(
         requestMethod, responseStatus, plan.statusAllowsBody(), plan.bodySuppressed());
 }

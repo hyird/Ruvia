@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // Intrusive, allocation-free wake primitive for one worker. Every operation
 // which touches its waiter list is worker-affine; the WorkerHandle is therefore
 // the dispatch target and the affinity capability, not an optional fast path.
-class WorkerSignal final {
+class WorkerSignal {
     struct Awaiter;
 
 public:

@@ -12,10 +12,10 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/PmrString.h"
-#include "ruvia/core/Task.h"
 #include "ruvia/core/Async.h"
 #include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/PmrString.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/WebSocketServerProtocol.h"
@@ -46,7 +46,7 @@ public:
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
-          protocol_(buffer_, messageLimit, compression, WsConnectionRole::kServer, nullptr, nullptr, compressionLevel),
+          protocol_(buffer_, messageLimit, WebSocketServerProtocolOptions{compression, compressionLevel}),
           backgroundWriteSignal_(worker),
           readerDoneSignal_(worker) {
         buffer_.append(initialBytes.data(), initialBytes.size());

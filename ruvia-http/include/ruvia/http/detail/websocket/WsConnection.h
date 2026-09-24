@@ -24,45 +24,18 @@
 #include <string_view>
 
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/WebSocketServerProtocolTypes.h"
 #include "ruvia/http/detail/websocket/WsEvent.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketInboundAssembler.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 namespace ruvia::detail {
 
-enum class WsTransportDisposition : std::uint8_t {
-    kKeepOpen,
-    kEndTransport,
-};
-
-enum class WsFrameSubmitStatus : std::uint8_t {
-    kAccepted,
-    kNotOpen,
-    kInvalidOpcode,
-    kMessageTooLarge,
-    kInvalidTextPayload,
-    kControlFrameTooLarge,
-};
-
-enum class WsCloseSubmitStatus : std::uint8_t {
-    kAccepted,
-    kAlreadyClosing,
-    kClosed,
-    kInvalidCode,
-    kInvalidReason,
-    kReasonTooLarge,
-};
-
-enum class WsAbortDisposition : std::uint8_t {
-    kAbortTransport,
-    kNoTransportAction,
-};
-
-enum class WsOutputConsumeStatus : std::uint8_t {
-    kPending,
-    kDrained,
-    kOutOfRange,
-};
+using WsTransportDisposition = ::ruvia::WebSocketServerTransportDisposition;
+using WsFrameSubmitStatus = ::ruvia::WebSocketServerFrameSubmitStatus;
+using WsCloseSubmitStatus = ::ruvia::WebSocketServerCloseSubmitStatus;
+using WsAbortDisposition = ::ruvia::WebSocketServerAbortDisposition;
+using WsOutputConsumeStatus = ::ruvia::WebSocketServerOutputConsumeStatus;
 
 enum class WsConnectionRole : std::uint8_t {
     kServer,
@@ -72,26 +45,7 @@ enum class WsConnectionRole : std::uint8_t {
 using WsMaskKey = std::array<char, 4>;
 using WsMaskKeyGenerator = bool (*)(void*, WsMaskKey&) noexcept;
 
-class WsOutputPlan final {
-public:
-    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
-        return bytes_;
-    }
-
-    [[nodiscard]] constexpr WsTransportDisposition disposition() const noexcept {
-        return disposition_;
-    }
-
-private:
-    friend class WsConnection;
-
-    constexpr WsOutputPlan(std::string_view bytes, WsTransportDisposition disposition) noexcept
-        : bytes_(bytes),
-          disposition_(disposition) {}
-
-    std::string_view bytes_;
-    WsTransportDisposition disposition_;
-};
+using WsOutputPlan = ::ruvia::WebSocketServerOutputPlan;
 
 class WsConnection final {
 public:
