@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
@@ -17,7 +17,7 @@ namespace ruvia::detail {
 class Http2SansIoSessionContext final {
 public:
     Http2SansIoSessionContext(ContextServices services, const HttpServerOptions& options,
-        ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState)
+        ruvia::ConnectionScanner::Entry& scannerEntry, const HttpServerWorkerState& workerState)
         : services_(std::move(services)),
           options_(options),
           scannerEntry_(scannerEntry),
@@ -27,7 +27,7 @@ public:
         return options_;
     }
 
-    [[nodiscard]] ConnectionScanner::Entry& scannerEntry() const noexcept {
+    [[nodiscard]] ruvia::ConnectionScanner::Entry& scannerEntry() const noexcept {
         return scannerEntry_;
     }
 
@@ -42,17 +42,17 @@ public:
 private:
     ContextServices services_;
     const HttpServerOptions& options_;
-    ConnectionScanner::Entry& scannerEntry_;
+    ruvia::ConnectionScanner::Entry& scannerEntry_;
     const HttpServerWorkerState& workerState_;
 };
 
-[[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
+[[nodiscard]] inline ruvia::ConnectionScanner::Phase http2SansIoInactivityPhase(
     bool headerBlockInProgress, std::size_t activeRuntimeCount) noexcept {
     if (headerBlockInProgress) {
-        return ConnectionScanner::Phase::kReadingInitial;
+        return ruvia::ConnectionScanner::Phase::kReadingInitial;
     }
-    return activeRuntimeCount == 0 ? ConnectionScanner::Phase::kIdle
-                                   : ConnectionScanner::Phase::kReadingPayload;
+    return activeRuntimeCount == 0 ? ruvia::ConnectionScanner::Phase::kIdle
+                                   : ruvia::ConnectionScanner::Phase::kReadingPayload;
 }
 
 }  // namespace ruvia::detail

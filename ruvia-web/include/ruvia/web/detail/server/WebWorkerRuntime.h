@@ -14,10 +14,10 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/RuntimeLifecycle.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/detail/worker/WorkerRuntimeContext.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/RuntimeLifecycle.h"
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/WorkerRuntimeContext.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/WebWorker.h"
@@ -112,7 +112,7 @@ private:
     DocumentRootPtr ownedDocumentRoot_;
     std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;
-    ConnectionScanner connectionScanner_;
+    ruvia::ConnectionScanner connectionScanner_;
     WorkerCapabilities capabilities_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     ConnectionWorkSetPool workSetPool_;

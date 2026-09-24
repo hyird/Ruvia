@@ -199,6 +199,12 @@ public:
     }
     [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;
 
+    // Transfers the owned parsed fields to a consumer that retains the head's
+    // metadata but needs to extend the fields' lifetime independently.
+    [[nodiscard]] std::pmr::vector<HttpHeader> takeHeaders() && noexcept {
+        return std::move(headers_);
+    }
+
 private:
     friend struct detail::HttpClientResponseHeadAccess;
 

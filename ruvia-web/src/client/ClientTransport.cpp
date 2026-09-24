@@ -11,11 +11,11 @@
 #include <asio/ssl/host_name_verification.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
-#include "ruvia/core/detail/io/TcpSocketOptions.h"
-#include "ruvia/core/detail/util/DnsHost.h"
+#include "ruvia/core/ConfigValidation.h"
+#include "ruvia/core/TcpSocketOptions.h"
+#include "ruvia/core/DnsHost.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "ruvia/http/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 namespace {
@@ -40,7 +40,7 @@ constexpr std::array<unsigned char, 12> kNegotiatedHttpAlpn = {
 }  // namespace
 
 bool isClientIpAddress(std::string_view host) noexcept {
-    return parseIpv4Address(host) || isValidIpv6Literal(host);
+    return ::ruvia::isValidHttpIpv4Literal(host) || ::ruvia::isValidHttpIpv6Literal(host);
 }
 
 std::string_view formatClientPort(std::uint16_t port, ClientPortTextBuffer& buffer) noexcept {
@@ -91,11 +91,11 @@ ClientTransportConfigView ClientTransportConfigStorage::view() const noexcept {
 
 void validateClientOriginHost(
     std::string_view host, const char* emptyMessage, const char* invalidMessage) {
-    ensureConfigHost(host, emptyMessage, invalidMessage, kSeparatedPortHostRules);
+    ruvia::ensureConfigHost(host, emptyMessage, invalidMessage, ruvia::kSeparatedPortHostRules);
     if (isClientIpAddress(host)) {
         return;
     }
-    if (!isValidDnsHost(host)) {
+    if (!ruvia::isValidDnsHost(host)) {
         throw std::invalid_argument(invalidMessage);
     }
 }
@@ -118,8 +118,7 @@ void validateClientTransportConfig(ClientTransportConfigView config) {
         config.tlsPeerVerification != TlsPeerVerificationPolicy::kSkipVerification) {
         throw std::invalid_argument("client TLS peer verification policy is invalid");
     }
-    validateTcpNoDelayPolicy(config.tcpNoDelay);
-    validateTcpKeepAlivePolicy(config.tcpKeepAlive);
+    ruvia::validateTcpSocketPolicies(config.tcpNoDelay, config.tcpKeepAlive);
     if (config.certificateChainFile.empty() != config.privateKeyFile.empty()) {
         throw std::invalid_argument(
             "client certificate chain and private key must be configured together");

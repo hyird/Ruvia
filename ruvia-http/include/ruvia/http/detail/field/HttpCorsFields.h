@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "ruvia/http/HttpCorsFields.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
@@ -38,29 +39,13 @@ namespace ruvia::detail {
 template <typename Visitor>
 [[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(
     std::string_view value, Visitor&& visitor) {
-    bool sawName = false;
-    std::size_t offset = 0;
-    for (;;) {
-        const auto separator = value.find(',', offset);
-        const auto end = separator == std::string_view::npos ? value.size() : separator;
-        auto name = value.substr(offset, end - offset);
-        while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) {
-            name.remove_prefix(1);
+    HttpCorsRequestHeaderNames names(value);
+    while (const auto name = names.next()) {
+        if (!visitor(*name)) {
+            return false;
         }
-        while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) {
-            name.remove_suffix(1);
-        }
-        if (!name.empty()) {
-            if (!isValidHttpHeaderName(name) || !visitor(name)) {
-                return false;
-            }
-            sawName = true;
-        }
-        if (separator == std::string_view::npos) {
-            return sawName;
-        }
-        offset = separator + 1;
     }
+    return names.valid();
 }
 
 [[nodiscard]] inline bool isValidHttpCorsRequestHeaderNames(std::string_view value) noexcept {

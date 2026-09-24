@@ -6,13 +6,11 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -82,7 +80,7 @@ private:
 // a policy miss remains 406 while an encoder failure becomes a server error.
 class HttpBufferedResponsePreparation final {
 public:
-    [[nodiscard]] HttpBufferedResponseWritePlan writePlan() const noexcept {
+    [[nodiscard]] HttpServerBufferedResponseWritePlan writePlan() const noexcept {
         return writePlan_;
     }
 
@@ -98,7 +96,7 @@ private:
         const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&,
         const HttpServerOptions&, const WorkerHandle&);
 
-    HttpBufferedResponsePreparation(HttpBufferedResponseWritePlan writePlan,
+    HttpBufferedResponsePreparation(HttpServerBufferedResponseWritePlan writePlan,
         HttpResponseCompressionResult compressionResult) noexcept
         : writePlan_(writePlan),
           compressionResult_(compressionResult) {}
@@ -110,14 +108,9 @@ private:
 [[nodiscard]] inline HttpResponseCodingQualities httpResponseCodingQualitiesFor(
     const HttpRequest& request) noexcept {
     HttpResponseCodingQualities qualities;
-    if (!requestHasKnownHeader(request, RequestKnownHeader::kAcceptEncoding)) {
-        return qualities;
-    }
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (HttpRequestAccess::headerKind(request, i) ==
-            std::to_underlying(RequestHeaderKind::kAcceptEncoding)) {
-            qualities.update(headers[i].value());
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
         }
     }
     return qualities;
@@ -144,7 +137,7 @@ private:
         // response status that permits content can violate it; 204/205/304
         // are representation-free and must not be rejected before the
         // handler's final status is known.
-        return httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody();
+        return planHttpServerResponseBody(request.knownMethod(), response.status()).statusAllowsBody();
     }
     return httpResponseCodingFallbackForbidden(*selection, request.knownMethod(), response);
 }
@@ -155,7 +148,7 @@ private:
     const auto* selection = policy.selection();
     if (selection != nullptr && compressionResult.failed() &&
         selection->coding() != HttpContentCoding::kIdentity && !selection->identityAccepted() &&
-        httpResponseBodyPlan(request.knownMethod(), response.status()).statusAllowsBody()) {
+        planHttpServerResponseBody(request.knownMethod(), response.status()).statusAllowsBody()) {
         return HttpErrorInfo({.status = http_status::kInternalServerError,
             .code = "response_compression_failed",
             .message = "response compression failed"});
@@ -175,7 +168,7 @@ private:
 [[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
     const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response,
     const HttpServerOptions& options) {
-    materializeResponseBody(response);
+    response.materializeBody();
     if (options.cors.has_value()) {
         applyCorsHeaders(request, response, *options.cors);
     }
@@ -187,7 +180,7 @@ private:
         }
     }
     return HttpBufferedResponsePreparation(
-        httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
+        planHttpServerBufferedResponseWrite(request.knownMethod(), response), compressionResult);
 }
 
 // Runtime preparation preserves the synchronous fast path for small in-memory
@@ -197,7 +190,7 @@ private:
 [[nodiscard]] inline Task<HttpBufferedResponsePreparation> prepareBufferedHttpResponseAsync(
     const HttpRequest& request, const HttpResponseCodingPolicy& policy, HttpResponse& response,
     const HttpServerOptions& options, const WorkerHandle& worker) {
-    materializeResponseBody(response);
+    response.materializeBody();
     if (options.cors.has_value()) {
         applyCorsHeaders(request, response, *options.cors);
     }
@@ -210,7 +203,7 @@ private:
         }
     }
     co_return HttpBufferedResponsePreparation(
-        httpBufferedResponseWritePlan(request.knownMethod(), response), compressionResult);
+        planHttpServerBufferedResponseWrite(request.knownMethod(), response), compressionResult);
 }
 
 }  // namespace ruvia::detail

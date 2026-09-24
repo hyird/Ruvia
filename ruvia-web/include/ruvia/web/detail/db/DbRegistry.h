@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
@@ -52,8 +52,8 @@ public:
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/OperationDeadline.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/db/DbHostResolution.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
@@ -97,7 +97,7 @@ public:
         std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, OperationTimeout, std::string_view);
+        Pool&, Slot&, ruvia::OperationTimeout, std::string_view);
     template <typename Pool>
     friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
@@ -105,7 +105,7 @@ public:
     friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<std::size_t> acquireDbSlot(Pool&, OperationTimeout, StopToken);
+    friend Task<std::size_t> acquireDbSlot(Pool&, ruvia::OperationTimeout, StopToken);
     template <typename Pool>
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
@@ -155,21 +155,21 @@ public:
     void setSlotDeadline(
         ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
-    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
-    Task<int> waitForMysql(ConnectionSlot& slot, int status, const OperationTimeout& deadline);
-    Task<OperationTimeout> runMysqlStatement(ConnectionSlot& slot, std::string_view sql,
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
+    Task<int> waitForMysql(ConnectionSlot& slot, int status, const ruvia::OperationTimeout& deadline);
+    Task<ruvia::OperationTimeout> runMysqlStatement(ConnectionSlot& slot, std::string_view sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
-        const OperationTimeout& operationTimeout);
-    Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const OperationTimeout& deadline);
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
     Task<DbRows> queryOnSlot(ConnectionSlot& slot, std::string_view sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
-        const OperationTimeout& operationTimeout);
+        const ruvia::OperationTimeout& operationTimeout);
     Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
-        const OperationTimeout& operationTimeout);
+        const ruvia::OperationTimeout& operationTimeout);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
-        std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
+        std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout);
     Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
         std::pmr::memory_resource* resource, OperationOptions options);
     Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
@@ -237,7 +237,7 @@ private:
         std::pmr::memory_resource*, OperationOptions);
     template <typename Pool, typename Slot>
     friend Task<DbResolvedAddresses> resolveDbHost(
-        Pool&, Slot&, OperationTimeout, std::string_view);
+        Pool&, Slot&, ruvia::OperationTimeout, std::string_view);
     template <typename Pool>
     friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
@@ -245,7 +245,7 @@ private:
     friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
         std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
     template <typename Pool>
-    friend Task<std::size_t> acquireDbSlot(Pool&, OperationTimeout, StopToken);
+    friend Task<std::size_t> acquireDbSlot(Pool&, ruvia::OperationTimeout, StopToken);
     template <typename Pool>
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
@@ -289,21 +289,21 @@ public:
     void setSlotDeadline(
         ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
-    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<void> connectUnlocked(ConnectionSlot& slot, const OperationTimeout& operationTimeout);
-    Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const OperationTimeout& deadline);
-    Task<void> flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline);
-    Task<void> waitUntilResultReady(ConnectionSlot& slot, const OperationTimeout& deadline);
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
+    Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const ruvia::OperationTimeout& deadline);
+    Task<void> flushOutput(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> waitUntilResultReady(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
     Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql,
-        std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow);
+        std::span<const DbValue> params, const ruvia::OperationTimeout& deadline, bool singleRow);
     Task<DbRows> queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
-        const OperationTimeout& operationTimeout);
+        const ruvia::OperationTimeout& operationTimeout);
     Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
         std::span<const DbValue> params, std::pmr::memory_resource* resource,
-        const OperationTimeout& operationTimeout);
+        const ruvia::OperationTimeout& operationTimeout);
     Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
-        std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout);
+        std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout);
     Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
         std::pmr::memory_resource* resource, OperationOptions options);
     Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,

@@ -12,9 +12,6 @@
 
 namespace ruvia::detail {
 
-// RFC 6265bis: cookie lifetimes SHOULD NOT exceed 400 days.
-inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
-
 [[nodiscard]] inline bool isValidCookieValue(std::string_view value) noexcept {
     for (const auto c : value) {
         const auto byte = static_cast<unsigned char>(c);
@@ -112,19 +109,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
             return "__Host-";
     }
     return {};
-}
-
-// Cookie request header pairs are `name=value` even when name is empty.
-// Dropping the '=' would turn a nameless Set-Cookie value into a new pair:
-// `=session=forged` would be sent as `session=forged`.
-template <typename String>
-inline void appendCookieRequestPair(String& header, std::string_view name, std::string_view value) {
-    if (!header.empty()) {
-        header.append("; ", 2);
-    }
-    header.append(name.data(), name.size());
-    header.push_back('=');
-    header.append(value.data(), value.size());
 }
 
 [[nodiscard]] inline bool cookieAttributeEmitted(CookieAttributePolicy policy) {

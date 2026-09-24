@@ -9,30 +9,16 @@
 #include <variant>
 
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
-[[nodiscard]] inline HttpContentCodingFieldResult requestContentCoding(
-    const HttpRequest& request) noexcept {
-    HttpContentCodingFieldParser parser;
-    if (!requestHasKnownHeader(request, RequestKnownHeader::kContentEncoding)) {
-        return parser.finish();
-    }
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (HttpRequestAccess::headerKind(request, i) ==
-            std::to_underlying(RequestHeaderKind::kContentEncoding)) {
-            parser.update(headers[i].value());
-        }
-    }
-    return parser.finish();
-}
+// Uses the parser's classified header descriptors without rescanning wire names.
+[[nodiscard]] HttpContentCodingFieldResult requestContentCoding(
+    const HttpRequest& request) noexcept;
 
 class HttpRequestContentDecodeProtocolFailure final {
 public:
@@ -136,4 +122,4 @@ private:
     throw std::logic_error("unexpected HTTP content decode result");
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

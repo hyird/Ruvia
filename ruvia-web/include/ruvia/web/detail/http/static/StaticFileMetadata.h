@@ -10,8 +10,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
-#include "ruvia/http/detail/util/NativePath.h"
+#include "ruvia/http/HttpResponseFile.h"
 
 namespace ruvia::detail {
 
@@ -115,7 +114,8 @@ template <typename Char>
 
 [[nodiscard]] inline std::string_view guessStaticFileContentType(
     const std::filesystem::path& path) noexcept {
-    return guessStaticFileContentTypeFromPathView(httpNativePathView(path));
+    return guessStaticFileContentTypeFromPathView(
+        std::basic_string_view<std::filesystem::path::value_type>(path.native()));
 }
 
 inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t value) {
@@ -128,7 +128,7 @@ inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t val
 
 [[nodiscard]] inline std::pmr::string makeStaticFileSnapshotEtag(
     std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modifiedToken,
-    ResponseFileIdentity identity) {
+    HttpResponseFileIdentity identity) {
     std::pmr::string output(resource);
     output.reserve(128);
     output.push_back('"');

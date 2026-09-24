@@ -12,7 +12,6 @@
 
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/ValidationIssue.h"
 
 namespace ruvia {

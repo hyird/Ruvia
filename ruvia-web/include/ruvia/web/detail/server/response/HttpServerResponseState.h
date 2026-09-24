@@ -1,8 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
 
 namespace ruvia::detail {
@@ -28,7 +27,7 @@ namespace ruvia::detail {
     connectionPlan = http1ApplyRequestBodyConsumption(connectionPlan, bodyConsumption);
     connectionPlan = requestSequence.completeUncommittedResponse(connectionPlan);
     // Fix borrowed response views before callers restore pipeline bytes.
-    materializeResponseBody(response);
+    response.materializeBody();
     return requireHttp1FinalResponseCommit(response, connectionPlan);
 }
 

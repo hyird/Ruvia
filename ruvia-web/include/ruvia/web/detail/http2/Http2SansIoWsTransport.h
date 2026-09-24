@@ -12,6 +12,7 @@
 // while nothing is waiting is a no-op, and every consumer re-checks its condition
 // before suspending, so no wakeup is lost.
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -19,11 +20,12 @@
 #include <system_error>
 
 #include "ruvia/core/Bytes.h"
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/util/PmrString.h"
-#include "ruvia/http/detail/websocket/WsConnection.h"
+#include "ruvia/core/WorkerSignal.h"
+#include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/WebSocketServerProtocol.h"
+#include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/websocket/WsTransportReadResult.h"
@@ -37,15 +39,22 @@ namespace ruvia::detail {
 template <typename Executor>
 class Http2SansIoWsTransport final {
 public:
-    Http2SansIoWsTransport(Http2Connection& connection, std::uint32_t streamId,
+    Http2SansIoWsTransport(ruvia::Http2Connection& connection, std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal,
-        Executor executor) noexcept
+        Http2DataOutputBudget& outputBudget, Executor executor) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),
           signal_(signal),
           writeSignal_(writeSignal),
+          outputBudget_(&outputBudget),
           executor_(executor) {}
+
+    Http2SansIoWsTransport(ruvia::Http2Connection& connection, std::uint32_t streamId,
+        Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal,
+        Executor executor) noexcept
+        : connection_(connection), streamId_(streamId), bodyQueue_(bodyQueue), signal_(signal),
+          writeSignal_(writeSignal), executor_(executor) {}
 
     [[nodiscard]] Executor executor() const noexcept {
         return executor_;
@@ -56,20 +65,19 @@ public:
             if (signal_.terminated()) {
                 co_return WsTransportReadResult::makeFailure(signal_.terminalError());
             }
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted()) {
+            const auto receiveStatus = connection_.streamReceiveStatus(streamId_);
+            if (receiveStatus == Http2StreamReceiveStatus::kClosed) {
                 co_return WsTransportReadResult::makeFailure(
                     std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
-                releaseCreditIfDrained();
                 buffer.append(chunk.data(), chunk.size());
                 co_return WsTransportReadResult::makeData();
             }
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr) {
+            if (receiveStatus == Http2StreamReceiveStatus::kEnded) {
                 co_return WsTransportReadResult::makeEnd();
             }
             if (signal_.terminated()) {
@@ -80,47 +88,102 @@ public:
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(
-        std::string_view bytes, WsTransportDisposition disposition) {
-        const auto terminal = disposition == WsTransportDisposition::kEndTransport
+        std::string_view bytes, WebSocketServerTransportDisposition disposition) {
+        const auto terminal = disposition == WebSocketServerTransportDisposition::kEndTransport
                                   ? Http2EndStream::kEndStream
                                   : Http2EndStream::kKeepOpen;
-        for (;;) {
-            if (signal_.terminated()) {
-                co_return signal_.terminalError();
+        constexpr std::size_t kSubmitChunkBytes = kHttp2DataOutputCreditBytes;
+        std::size_t offset = 0;
+        bool submittedEmptyTerminal = false;
+        do {
+            const auto count = bytes.empty() ? 0 : std::min(kSubmitChunkBytes, bytes.size() - offset);
+            const auto chunk = bytes.substr(offset, count);
+            const bool last = offset + count == bytes.size();
+            const auto end = last ? terminal : Http2EndStream::kKeepOpen;
+            for (;;) {
+                if (signal_.terminated()) {
+                    co_return signal_.terminalError();
+                }
+                if (chunk.empty() && end == Http2EndStream::kEndStream &&
+                    connection_.hasQueuedData(streamId_)) {
+                    const auto waitResult =
+                        co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                    if (waitResult.aborted() != nullptr) {
+                        co_return signal_.terminated() ? signal_.terminalError()
+                                                       : std::make_error_code(std::errc::connection_reset);
+                    }
+                    continue;
+                }
+                if (outputBudget_ != nullptr && !chunk.empty()) {
+                    for (;;) {
+                        const auto window = connection_.sendWindowState(streamId_);
+                        if (!window) {
+                            co_return std::make_error_code(std::errc::connection_reset);
+                        }
+                        if (window->available != 0) {
+                            break;
+                        }
+                        co_await outputBudget_->waitForChange();
+                        if (signal_.terminated()) {
+                            co_return signal_.terminalError();
+                        }
+                    }
+                    if (!(co_await outputBudget_->acquire(streamId_, signal_))) {
+                        co_return signal_.terminalError();
+                    }
+                }
+                const auto result = connection_.submitData(streamId_, chunk, end);
+                if (outputBudget_ != nullptr &&
+                    (result == Http2DataSubmitStatus::kAccepted ||
+                        result == Http2DataSubmitStatus::kQueued)) {
+                    outputBudget_->noteDataSubmitted(streamId_, chunk.size());
+                }
+                wakeWriter();
+                if (result != Http2DataSubmitStatus::kAccepted &&
+                    result != Http2DataSubmitStatus::kQueued) {
+                    if (outputBudget_ != nullptr && !chunk.empty()) {
+                        outputBudget_->release(streamId_);
+                    }
+                }
+                if (result == Http2DataSubmitStatus::kAccepted) {
+                    break;
+                }
+                if (result == Http2DataSubmitStatus::kClosed) {
+                    co_return std::make_error_code(std::errc::connection_reset);
+                }
+                if (result == Http2DataSubmitStatus::kInvalidState ||
+                    result == Http2DataSubmitStatus::kContentLengthExceeded ||
+                    result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+                    co_return std::make_error_code(std::errc::protocol_error);
+                }
+                const auto waitResult =
+                    co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                if (waitResult.aborted() != nullptr) {
+                    co_return signal_.terminated() ? signal_.terminalError()
+                                                   : std::make_error_code(std::errc::connection_reset);
+                }
+                if (result == Http2DataSubmitStatus::kQueued) {
+                    break;  // core owns this bounded chunk; wait before next submit
+                }
             }
-            const auto result = connection_.submitData(streamId_, bytes, terminal);
-            wakeWriter();
-            if (result == Http2DataSubmitStatus::kAccepted) {
-                co_return std::error_code{};
+            offset += count;
+            submittedEmptyTerminal = bytes.empty();
+            if (!bytes.empty() && offset < bytes.size()) {
+                const auto waitResult =
+                    co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                if (waitResult.aborted() != nullptr) {
+                    co_return signal_.terminated() ? signal_.terminalError()
+                                                   : std::make_error_code(std::errc::connection_reset);
+                }
             }
-            if (result == Http2DataSubmitStatus::kClosed) {
-                co_return std::make_error_code(std::errc::connection_reset);
-            }
-            if (result == Http2DataSubmitStatus::kInvalidState) {
-                co_return std::make_error_code(std::errc::protocol_error);
-            }
-            if (result == Http2DataSubmitStatus::kContentLengthExceeded ||
-                result == Http2DataSubmitStatus::kContentLengthIncomplete) {
-                // Tunnel DATA is unbounded; observing a response-length verdict here
-                // means the stream was configured with the wrong local message mode.
-                co_return std::make_error_code(std::errc::protocol_error);
-            }
-
-            // kQueued means this input is already core-owned; wait for it to drain,
-            // then return without resubmitting. kBackpressured accepted no bytes, so
-            // wait for the older queued input and retry this exact view.
-            const auto waitResult = co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
-            if (waitResult.aborted() != nullptr) {
-                co_return signal_.terminated() ? signal_.terminalError()
-                                               : std::make_error_code(std::errc::connection_reset);
-            }
-            if (result == Http2DataSubmitStatus::kQueued) {
-                co_return std::error_code{};
-            }
-        }
+        } while (offset < bytes.size() || (!submittedEmptyTerminal && bytes.empty()));
+        co_return std::error_code{};
     }
 
     void abort() noexcept {
+        if (outputBudget_ != nullptr) {
+            outputBudget_->release(streamId_);
+        }
         try {
             (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
         } catch (...) {
@@ -136,19 +199,12 @@ private:
         writeSignal_.notify();
     }
 
-    void releaseCreditIfDrained() {
-        if (!bodyQueue_.empty()) {
-            return;
-        }
-        connection_.releaseAllReceivedData(streamId_);
-        wakeWriter();
-    }
-
-    Http2Connection& connection_;
+    ruvia::Http2Connection& connection_;
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
     WorkerSignal& writeSignal_;
+    Http2DataOutputBudget* outputBudget_{nullptr};
     Executor executor_;
 };
 
@@ -157,35 +213,29 @@ private:
 // Admission always binds the runtime-owned signal before this facade can exist.
 class Http2SansIoRequestBodyReader final {
 public:
-    Http2SansIoRequestBodyReader(Http2Connection& connection, std::uint32_t streamId,
-        Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal,
-        WorkerSignal& writeSignal) noexcept
+    Http2SansIoRequestBodyReader(ruvia::Http2Connection& connection, std::uint32_t streamId,
+        Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal) noexcept
         : connection_(connection),
           streamId_(streamId),
           bodyQueue_(bodyQueue),
-          signal_(signal),
-          writeSignal_(writeSignal) {}
+          signal_(signal) {}
 
     [[nodiscard]] Task<std::optional<std::span<const std::byte>>> read() {
         for (;;) {
             if (signal_.terminated()) {
                 throw std::system_error(signal_.terminalError());
             }
-            auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted()) {
+            const auto receiveStatus = connection_.streamReceiveStatus(streamId_);
+            if (receiveStatus == Http2StreamReceiveStatus::kClosed) {
                 throw std::system_error(std::make_error_code(std::errc::connection_reset));
             }
             if (const auto chunk = bodyQueue_.pop(); !chunk.empty()) {
-                if (bodyQueue_.empty()) {
-                    connection_.releaseAllReceivedData(streamId_);
-                    writeSignal_.notify();
-                }
                 co_return ::ruvia::asBytes(chunk);
             }
             if (!bodyQueue_.empty()) {
                 continue;
             }
-            if (stream->remoteReceive().endStream() != nullptr) {
+            if (receiveStatus == Http2StreamReceiveStatus::kEnded) {
                 co_return std::nullopt;
             }
             if (signal_.terminated()) {
@@ -196,11 +246,10 @@ public:
     }
 
 private:
-    Http2Connection& connection_;
+    ruvia::Http2Connection& connection_;
     std::uint32_t streamId_;
     Http2SansIoBodyQueue& bodyQueue_;
     Http2SansIoStreamSignal& signal_;
-    WorkerSignal& writeSignal_;
 };
 
 }  // namespace ruvia::detail

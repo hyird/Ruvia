@@ -4,9 +4,9 @@
 #include <string_view>
 
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpCorsFields.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 
 #include "test_harness.h"
 
@@ -51,7 +51,7 @@ RUVIA_TEST(http_origin_factory_makes_an_invalid_host_unrepresentable) {
 }
 
 RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
-    using ruvia::detail::isValidHttpSerializedOrigin;
+    using ruvia::isValidHttpSerializedOrigin;
 
     RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com"));
     RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com."));

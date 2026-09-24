@@ -12,7 +12,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
@@ -36,12 +36,12 @@ namespace {
 }  // namespace
 
 Task<detail::DbResolvedAddresses> detail::MariaDbPool::resolveHost(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& deadline) {
     return resolveDbHost(*this, slot, deadline, "MariaDB");
 }
 
 Task<void> detail::MariaDbPool::connectUnlocked(
-    ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout) {
     if (scheduler_.closing()) {
         throw DbError(DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");
     }
@@ -49,7 +49,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(
         co_return;
     }
     throwIfCancelled(slot);
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
+    const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
     try {
         auto addresses = co_await resolveHost(slot, deadline);
         auto resolvedHosts = detail::makeMariaDbResolvedHostList(addresses, resource_);
@@ -139,14 +139,14 @@ Task<void> detail::MariaDbPool::connectUnlocked(
     }
 }
 
-Task<detail::OperationTimeout> detail::MariaDbPool::runMysqlStatement(ConnectionSlot& slot,
+Task<ruvia::OperationTimeout> detail::MariaDbPool::runMysqlStatement(ConnectionSlot& slot,
     std::string_view sql, std::span<const DbValue> params, std::pmr::memory_resource* resource,
-    const OperationTimeout& operationTimeout) {
+    const ruvia::OperationTimeout& operationTimeout) {
     throwIfCancelled(slot);
     if (!slot.connected) {
         co_await connectUnlocked(slot, operationTimeout);
     }
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
+    const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
     std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
     if (!params.empty()) {
         interpolatedSql = interpolateSql(*slot.connection, sql, params, resource);
@@ -169,7 +169,7 @@ Task<detail::OperationTimeout> detail::MariaDbPool::runMysqlStatement(Connection
 }
 
 Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& deadline) {
     auto& connection = *slot.connection;
     MYSQL_RES* result = nullptr;
     int status = mysql_store_result_start(&result, &connection);
@@ -181,7 +181,7 @@ Task<st_mysql_res*> detail::MariaDbPool::storeMysqlResult(
 }
 
 Task<int> detail::MariaDbPool::waitForMysql(
-    ConnectionSlot& slot, int status, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, int status, const ruvia::OperationTimeout& deadline) {
     throwIfCancelled(slot);
     auto& connection = *slot.connection;
     const auto timeout = deadline.remaining();

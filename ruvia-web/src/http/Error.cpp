@@ -4,8 +4,6 @@
 
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/web/Validation.h"
@@ -131,12 +129,11 @@ HttpResponse detail::makeDefaultErrorResponse(
     error = normalizeHttpErrorInfo(error);
 
     HttpResponse response({.resource = resource});
-    reserveResponseHeaders(response, 1);
     response.status(error.status());
-    setResponseHeaderStableView(response, "Content-Type", "application/problem+json");
+    response.header("Content-Type", "application/problem+json");
 
     auto body = serializeErrorResponse(error, resource);
-    setResponseBodyOwned(response, std::move(body));
+    response.ownedBody(std::move(body));
     return response;
 }
 

@@ -1,6 +1,31 @@
 #include "field_parsing_fixture.h"
 
+#include "ruvia/http/HttpFieldValues.h"
+
 // A quoted-string in a field value is opaque: a delimiter inside it never splits the field.
+
+RUVIA_TEST(public_quoted_field_visitors_preserve_quoted_delimiters) {
+    std::string_view parameterName;
+    std::string_view parameterValue;
+    ruvia::httpVisitSemicolonParametersQuotedField(
+        R"(for="[2001:db8::1];zone"; proto=https)",
+        [&](std::string_view name, std::string_view value) {
+            parameterName = name;
+            parameterValue = ruvia::httpTrimQuotedFieldValue(value);
+            return true;
+        });
+    RUVIA_CHECK_EQ(parameterName, std::string_view("proto"));
+    RUVIA_CHECK_EQ(parameterValue, std::string_view("https"));
+
+    std::size_t itemCount = 0;
+    ruvia::httpVisitCommaSeparatedQuotedFieldItems(
+        R"(for="192.0.2.1,192.0.2.2", proto=https)",
+        [&](std::string_view) {
+            ++itemCount;
+            return true;
+        });
+    RUVIA_CHECK_EQ(itemCount, std::size_t{2});
+}
 
 RUVIA_TEST(semicolon_params_quoted_semicolon_in_value) {
     using ruvia::detail::httpFindSemicolonParameterQuoted;
@@ -42,7 +67,7 @@ RUVIA_TEST(accept_quality_quoted_semicolon_param) {
 }
 
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
-    using ruvia::detail::httpAcceptsEncoding;
+    using ruvia::httpAcceptsEncoding;
     RUVIA_CHECK(httpAcceptsEncoding("", "identity"));
     RUVIA_CHECK(!httpAcceptsEncoding("", "gzip"));
     RUVIA_CHECK(httpAcceptsEncoding("gzip;q=0.5, br", "br"));
@@ -51,7 +76,7 @@ RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
 }
 
 RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
-    using ruvia::detail::httpAcceptsEncoding;
+    using ruvia::httpAcceptsEncoding;
     using ruvia::detail::httpAcceptsMediaType;
 
     RUVIA_CHECK(!httpAcceptsMediaType(R"(application/json;version="a,b";q=0)", "application/json"));

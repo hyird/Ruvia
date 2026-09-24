@@ -1,12 +1,16 @@
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 #include "ruvia/http/WebSocketConnection.h"
+#include "ruvia/http/WebSocketServerProtocol.h"
 
 #include "test_harness.h"
 
 namespace {
 using namespace ruvia;
+
+static_assert(!std::is_same_v<WebSocketServerProtocol, detail::WsConnection>);
 
 struct MaskSource {
     unsigned calls{0};
@@ -93,6 +97,25 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
         RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kBinary, std::string(16385, 'x')) == WebSocketFrameSubmitStatus::kMessageTooLarge);
     }
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+}
+
+RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input);
+    RUVIA_CHECK(protocol.submitClose(1000, "done") == WebSocketServerCloseSubmitStatus::kAccepted);
+    RUVIA_CHECK(protocol.outputPlan().disposition() ==
+                WebSocketServerTransportDisposition::kKeepOpen);
+    const auto output = protocol.outputPlan().bytes();
+    RUVIA_CHECK(!output.empty());
+    RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
+                WebSocketServerOutputConsumeStatus::kDrained);
+    // After our Close frame is sent, the protocol still awaits the peer's
+    // Close; transport EOF terminates that wait without fabricating a reply.
+    RUVIA_CHECK(protocol.outputPlan().disposition() ==
+                WebSocketServerTransportDisposition::kKeepOpen);
+    protocol.notifyTransportEof();
+    RUVIA_CHECK(protocol.outputPlan().disposition() ==
+                WebSocketServerTransportDisposition::kEndTransport);
 }
 
 RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {

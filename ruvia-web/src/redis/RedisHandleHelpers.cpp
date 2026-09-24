@@ -4,7 +4,7 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 namespace ruvia::detail {

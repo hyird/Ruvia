@@ -49,7 +49,7 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
     }
 
     if (transferOutput_.empty()) {
-        resizePmrStringForOverwrite(transferOutput_, kBodyReadChunkBytes);
+        ::ruvia::resizePmrStringForOverwrite(transferOutput_, kBodyReadChunkBytes);
     }
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed

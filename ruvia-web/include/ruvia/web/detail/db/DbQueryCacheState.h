@@ -28,7 +28,7 @@ public:
     std::optional<std::pmr::string> key(const DbQuery& query, const DbStatement& statement, DbDriver driver);
     Task<DbRows> wrap(std::optional<std::chrono::milliseconds> duration, std::optional<std::pmr::string> key,
         DbCacheQuery database, ScopedOperationScope& scope, OperationOptions options,
-        std::optional<OperationTimeout> deadline = std::nullopt);
+        std::optional<ruvia::OperationTimeout> deadline = std::nullopt);
     Task<void> remove(std::span<const std::string_view> ids, ScopedOperationScope& scope, OperationOptions options);
     Task<void> clear(ScopedOperationScope& scope, OperationOptions options);
 

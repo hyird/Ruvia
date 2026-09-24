@@ -2,7 +2,7 @@
 
 #include <utility>
 
-#include "ruvia/http/HttpClientRequestTarget.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -149,7 +149,7 @@ void removeHttpClientLastPathSegment(std::pmr::string& path) noexcept {
         resolved.push_back('?');
         resolved.append(selectedQuery.data(), selectedQuery.size());
     }
-    return isValidHttpClientOriginTarget(resolved);
+    return isValidHttpOriginFormTarget(resolved);
 }
 
 }  // namespace
@@ -225,7 +225,7 @@ HttpClientRedirectResolutionResult resolveHttpClientRedirectTarget(
     const auto currentTarget = options.currentTarget;
     auto location = options.location;
     if (currentTarget.empty() || currentTarget.front() != '/' ||
-        !isValidHttpClientOriginTarget(currentTarget)) {
+        !isValidHttpOriginFormTarget(currentTarget)) {
         return HttpClientRedirectResolutionResult::makeFailure(
             HttpClientRedirectResolutionError::kInvalidCurrentTarget);
     }

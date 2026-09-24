@@ -23,16 +23,16 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
 
     co_await ensureContinue();
 
-    resizePmrStringForOverwrite(body, contentLength);
+    ::ruvia::resizePmrStringForOverwrite(body, contentLength);
     if (initialBodyBytes > 0) {
         std::memcpy(body.data(), initialBodyAndPipeline_.data(), initialBodyBytes);
     }
 
     std::size_t offset = initialBodyBytes;
     while (offset < contentLength) {
-        scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
+        scannerEntry_.setPhase(ruvia::ConnectionScanner::Phase::kReadingPayload);
         auto readCompletion =
-            co_await asyncAsio<std::size_t>([this, &body, offset](auto handler) mutable {
+            co_await ruvia::asyncAsio<std::size_t>([this, &body, offset](auto handler) mutable {
                 stream_.async_read_some(
                     asio::buffer(body.data() + offset, body.size() - offset), std::move(handler));
             });

@@ -1,5 +1,6 @@
 #include <string_view>
 
+#include "ruvia/http/HttpAcceptMatch.h"
 #include "ruvia/http/detail/field/HttpAcceptMediaType.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 
@@ -14,6 +15,21 @@ using ruvia::detail::httpParseQualityValue;
 using ruvia::detail::httpQualityParameter;
 
 }  // namespace
+
+RUVIA_TEST(http_accept_match_accumulates_fields_and_respects_specific_exclusion) {
+    ruvia::HttpAcceptMatch media;
+    media.updateMediaType("text/*;q=0.8", "text/html");
+    RUVIA_CHECK(media.matched());
+    RUVIA_CHECK_EQ(media.quality(), 800);
+    media.updateMediaType("text/html;q=0", "text/html");
+    RUVIA_CHECK(!media.matched());
+    RUVIA_CHECK_EQ(media.quality(), 0);
+
+    ruvia::HttpAcceptMatch language;
+    language.updateToken("en;q=0.5", "en-US", ruvia::HttpAcceptTokenMatchMode::kLanguagePrefix);
+    RUVIA_CHECK(language.matched());
+    RUVIA_CHECK_EQ(language.quality(), 500);
+}
 
 RUVIA_TEST(parse_quality_value_rfc7231_grammar) {
     // qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] ), mapped to

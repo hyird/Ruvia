@@ -1,11 +1,11 @@
 #include <cstdint>
 
-#include "ruvia/http/detail/coding/HttpContentEncoder.h"
+#include "ruvia/http/HttpContentEncoder.h"
 
 #include "content_decoding_fixture.h"
 
-using ruvia::detail::HttpContentEncoder;
-using ruvia::detail::HttpContentEncodeStep;
+using ruvia::HttpContentEncoder;
+using ruvia::HttpContentEncodeStep;
 
 namespace {
 

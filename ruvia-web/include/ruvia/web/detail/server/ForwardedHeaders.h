@@ -4,12 +4,9 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpFieldValues.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/util/HttpOws.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
 
 // Reading the client's address and scheme out of forwarding headers, for a
@@ -42,7 +39,7 @@ struct ForwardedClient final {
 // A bare IPv6 literal has colons of its own, so only a bracketed form or a
 // single trailing colon can carry a port.
 [[nodiscard]] inline std::string_view forwardedNodeAddress(std::string_view node) noexcept {
-    node = httpTrimOws(node);
+    node = ::ruvia::httpTrimOws(node);
     if (node.size() >= 2 && node.front() == '"' && node.back() == '"') {
         node = node.substr(1, node.size() - 2);
     }
@@ -58,7 +55,7 @@ struct ForwardedClient final {
 }
 
 [[nodiscard]] inline std::string_view forwardedHttpSchemeToken(std::string_view token) noexcept {
-    token = httpTrimOws(token);
+    token = ::ruvia::httpTrimOws(token);
     if (httpAsciiEqualsIgnoreCase(token, "http")) {
         return "http";
     }
@@ -72,7 +69,7 @@ template <typename Fn>
 inline void visitCommaSeparated(std::string_view value, Fn&& fn) {
     // RFC 7239 quoted-string values may contain commas; a quote-blind split
     // would invent hops from inside a single `for="..."` element.
-    httpVisitCommaSeparatedQuotedItems(value, [&](std::string_view item) {
+    httpVisitCommaSeparatedQuotedFieldItems(value, [&](std::string_view item) {
         fn(item);
         return true;
     });
@@ -81,9 +78,9 @@ inline void visitCommaSeparated(std::string_view value, Fn&& fn) {
 inline void parseForwardedElement(std::string_view element, ForwardedClient& hop) noexcept {
     hop = {};
     // RFC 7239 values are token / quoted-string; a ';' inside quotes is data.
-    httpVisitSemicolonParametersQuoted(
+    httpVisitSemicolonParametersQuotedField(
         element, [&](std::string_view name, std::string_view value) {
-            value = httpTrimQuotes(value);
+            value = httpTrimQuotedFieldValue(value);
             if (httpAsciiEqualsIgnoreCase(name, "for") && hop.address.empty()) {
                 hop.address = forwardedNodeAddress(value);
             } else if (httpAsciiEqualsIgnoreCase(name, "proto") && hop.scheme.empty()) {
@@ -151,15 +148,14 @@ inline void accumulateForwardedChain(std::string_view value, const TrustedProxyS
     std::string_view xProto{};
 
     const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto kind = HttpRequestAccess::headerKind(request, i);
-        if (kind == std::to_underlying(RequestHeaderKind::kForwarded)) {
+    for (const auto& header : headers) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Forwarded")) {
             accumulateForwardedChain(
-                headers[i].value(), trusted, forwardedLeftmost, forwardedClient);
-        } else if (kind == std::to_underlying(RequestHeaderKind::kXForwardedFor)) {
-            accumulateForwardedForAddresses(headers[i].value(), trusted, xForLeftmost, xForClient);
-        } else if (kind == std::to_underlying(RequestHeaderKind::kXForwardedProto)) {
-            accumulateForwardedScheme(headers[i].value(), xProto);
+                header.value(), trusted, forwardedLeftmost, forwardedClient);
+        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
+            accumulateForwardedForAddresses(header.value(), trusted, xForLeftmost, xForClient);
+        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
+            accumulateForwardedScheme(header.value(), xProto);
         }
     }
 

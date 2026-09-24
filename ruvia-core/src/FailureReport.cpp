@@ -7,7 +7,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace ruvia::detail {
+namespace ruvia {
 
 namespace {
 
@@ -102,4 +102,4 @@ void reportUnhandledFailure(std::string_view context, std::exception_ptr excepti
     }
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

@@ -3,7 +3,7 @@
 // Native file-open primitive for the web-layer server drivers. This performs real
 // OS file I/O (::open / ::CreateFileW with an owning fd/HANDLE), so it belongs in
 // ruvia-web, NOT in the pure sans-I/O ruvia-http protocol library. ruvia-http only
-// owns the ResponseFileBody DESCRIPTOR (path + size/offset) used to frame
+// owns the HttpResponseFileView DESCRIPTOR (path + size/offset) used to frame
 // Content-Length/Range; opening the file is a runtime driver concern.
 
 #include <array>
@@ -15,7 +15,8 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/core/NativePath.h"
+#include "ruvia/http/HttpResponseFile.h"
 
 #if defined(__unix__)
 #include <fcntl.h>
@@ -38,7 +39,7 @@ struct NativeFileOpenOptions final {
 };
 
 struct ResponseFileSnapshot final {
-    ResponseFileIdentity identity{ResponseFileIdentity::unchecked()};
+    HttpResponseFileIdentity identity{HttpResponseFileIdentity::unchecked()};
     std::uint64_t size{0};
     std::uint64_t modifiedToken{0};
     std::time_t modifiedSeconds{0};
@@ -121,7 +122,7 @@ private:
         static_cast<std::uint64_t>(status.st_ino), static_cast<std::uint64_t>(changedSeconds),
         static_cast<std::uint64_t>(changedNanoseconds)};
     ec = {};
-    return ResponseFileSnapshot{ResponseFileIdentity::checked(words),
+    return ResponseFileSnapshot{HttpResponseFileIdentity::checked(words),
         static_cast<std::uint64_t>(status.st_size),
         static_cast<std::uint64_t>(modifiedSeconds) * UINT64_C(1000000000) +
             static_cast<std::uint64_t>(modifiedNanoseconds),
@@ -129,7 +130,7 @@ private:
 }
 
 [[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
+    const ruvia::NativePathChar* path, std::error_code& ec) noexcept {
     NativeFileHandle input(::open(path, O_RDONLY | O_CLOEXEC));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -139,7 +140,7 @@ private:
 }
 
 [[nodiscard]] inline NativeFileHandle openNativeFileForRead(
-    ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions = {}) noexcept {
+    HttpResponseFileView file, std::error_code& ec, NativeFileOpenOptions = {}) noexcept {
     NativeFileHandle input(::open(file.nativePathCStr(), O_RDONLY | O_CLOEXEC));
     if (input.get() < 0) {
         ec = std::error_code(errno, std::system_category());
@@ -233,13 +234,13 @@ private:
     const std::array<std::uint64_t, 4> words{static_cast<std::uint64_t>(id.VolumeSerialNumber),
         fileIdLow, fileIdHigh, windowsFileTimeToken(basic.ChangeTime)};
     ec = {};
-    return ResponseFileSnapshot{ResponseFileIdentity::checked(words),
+    return ResponseFileSnapshot{HttpResponseFileIdentity::checked(words),
         static_cast<std::uint64_t>(standard.EndOfFile.QuadPart),
         windowsFileTimeToken(basic.LastWriteTime), windowsFileTimeSeconds(basic.LastWriteTime)};
 }
 
 [[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
+    const ruvia::NativePathChar* path, std::error_code& ec) noexcept {
     NativeFileHandle input(
         ::CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
@@ -251,7 +252,7 @@ private:
 }
 
 [[nodiscard]] inline NativeFileHandle openNativeFileForRead(
-    ResponseFileBody file, std::error_code& ec, NativeFileOpenOptions options = {}) noexcept {
+    HttpResponseFileView file, std::error_code& ec, NativeFileOpenOptions options = {}) noexcept {
     DWORD flags = FILE_ATTRIBUTE_NORMAL;
     if (options.overlapped) {
         flags |= FILE_FLAG_OVERLAPPED;
@@ -282,7 +283,7 @@ private:
 }
 #else
 [[nodiscard]] inline ResponseFileSnapshot snapshotResponseFile(
-    const HttpNativePathChar* path, std::error_code& ec) noexcept {
+    const ruvia::NativePathChar* path, std::error_code& ec) noexcept {
     static_cast<void>(path);
     ec = std::make_error_code(std::errc::not_supported);
     return {};

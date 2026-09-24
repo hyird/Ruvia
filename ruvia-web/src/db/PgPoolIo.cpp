@@ -8,7 +8,7 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
 #include "ruvia/web/detail/db/DbPostgreSql.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
@@ -18,12 +18,12 @@
 namespace ruvia::detail {
 
 Task<DbResolvedAddresses> PostgreSqlPool::resolveHost(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& deadline) {
     return resolveDbHost(*this, slot, deadline, "PostgreSQL");
 }
 
 Task<void> PostgreSqlPool::connectUnlocked(
-    ConnectionSlot& slot, const OperationTimeout& operationTimeout) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout) {
     if (scheduler_.closing()) {
         throw DbError(DbError::Code::kClosing, DbDriver::kPostgreSql, "database client is closing");
     }
@@ -31,7 +31,7 @@ Task<void> PostgreSqlPool::connectUnlocked(
         co_return;
     }
     throwIfCancelled(slot);
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
+    const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
     try {
         auto addresses = co_await resolveHost(slot, deadline);
         auto resolvedHosts = makePostgreSqlResolvedHostList(config_.host, addresses, resource_);
@@ -83,7 +83,7 @@ Task<void> PostgreSqlPool::connectUnlocked(
 }
 
 Task<void> PostgreSqlPool::waitForPostgreSql(
-    ConnectionSlot& slot, bool read, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, bool read, const ruvia::OperationTimeout& deadline) {
     throwIfCancelled(slot);
     const auto remaining = deadline.remaining();
     if (remaining.has_value() && remaining->count() <= 0) {
@@ -202,7 +202,7 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
     }
 }
 
-Task<void> PostgreSqlPool::flushOutput(ConnectionSlot& slot, const OperationTimeout& deadline) {
+Task<void> PostgreSqlPool::flushOutput(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline) {
     while (true) {
         const auto status = PQflush(slot.connection);
         if (status == 0) {
@@ -216,7 +216,7 @@ Task<void> PostgreSqlPool::flushOutput(ConnectionSlot& slot, const OperationTime
 }
 
 Task<void> PostgreSqlPool::waitUntilResultReady(
-    ConnectionSlot& slot, const OperationTimeout& deadline) {
+    ConnectionSlot& slot, const ruvia::OperationTimeout& deadline) {
     while (PQisBusy(slot.connection) != 0) {
         co_await waitForPostgreSql(slot, true, deadline);
         if (PQconsumeInput(slot.connection) == 0) {
@@ -226,7 +226,7 @@ Task<void> PostgreSqlPool::waitUntilResultReady(
 }
 
 Task<void> PostgreSqlPool::sendQuery(ConnectionSlot& slot, const std::pmr::string& sql,
-    std::span<const DbValue> params, const OperationTimeout& deadline, bool singleRow) {
+    std::span<const DbValue> params, const ruvia::OperationTimeout& deadline, bool singleRow) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
