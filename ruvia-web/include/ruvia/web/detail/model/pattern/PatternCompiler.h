@@ -8,6 +8,8 @@
 
 namespace ruvia::detail::model {
 
+inline constexpr std::size_t kMaxPatternBytes = 256;
+
 template <std::size_t Capacity>
 [[nodiscard]] constexpr bool appendPatternAtom(std::string_view pattern, std::size_t end,
     std::size_t& cursor, PatternPlan<Capacity>& plan) noexcept {
@@ -82,7 +84,8 @@ template <std::size_t Capacity>
 [[nodiscard]] constexpr PatternPlan<Capacity> compilePatternPlan(
     std::string_view pattern) noexcept {
     PatternPlan<Capacity> plan{};
-    if (pattern.size() < 2 || pattern.front() != '^' || pattern.back() != '$') {
+    if (pattern.size() > kMaxPatternBytes || pattern.size() < 2 ||
+        pattern.front() != '^' || pattern.back() != '$') {
         return plan;
     }
 
@@ -118,7 +121,9 @@ template <std::size_t Capacity>
 
 template <FixedString Pattern>
 struct CompiledPatternPlan final {
-    static constexpr auto value = compilePatternPlan<Pattern.view().size()>(Pattern.view());
+    static constexpr std::size_t capacity =
+        Pattern.view().size() < kMaxPatternBytes ? Pattern.view().size() : kMaxPatternBytes;
+    static constexpr auto value = compilePatternPlan<capacity>(Pattern.view());
     static_assert(value.valid,
         "RUVIA_PATTERN supports only anchored lightweight full-match patterns. "
         "Use RUVIA_REGEX for full std::regex syntax or RUVIA_CUSTOM for a custom hot-path "

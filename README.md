@@ -2064,7 +2064,14 @@ streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
 
 Models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
-Routes select the source with `ruvia::JsonBody<T>`, `FormBody<T>`,
+`RUVIA_REGEX` does not accept general `std::regex`: for safe request validation it
+supports the same anchored, bounded dialect as `RUVIA_PATTERN` (literals, `.`,
+character classes, `\d` / `\w` / `\s`, and `*` / `+` / `?`). Patterns over 256
+bytes are rejected at compile time, and inputs over 4096 bytes fail validation.
+Matching charges recursive states and bytes inspected (including class members)
+to a fixed work budget; exhaustion fails validation closed. Use `RUVIA_CUSTOM`
+for other matching logic. Routes select the source with
+`ruvia::JsonBody<T>`, `FormBody<T>`,
 `QueryModel<T>`, `PathModel<T>`, `HeaderModel<T>`, or `CookieModel<T>`; these
 bindings perform the explicit validation step. A handler returns
 `Task<HttpResponse>` and serializes the same model with `c.json(model)`.

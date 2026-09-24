@@ -7,12 +7,9 @@
 
 namespace ruvia::detail::model {
 
-// Upper bound on backtracking steps for a single pattern match. The matcher is a
-// greedy backtracking engine, so a pattern with adjacent unanchored quantifiers
-// (e.g. "[0-9]*[0-9]*...") could backtrack combinatorially over hostile input.
-// Patterns are compile-time constants and the input is validated per request, so
-// this caps the worst case as a ReDoS defence-in-depth: exceeding it fails the
-// match (the field is rejected). A generous bound no real match approaches.
+// Upper bound on matcher work for one pattern match. It charges recursive states,
+// each input byte inspected by a quantifier scan, and each pattern byte inspected
+// while matching a character class. Exhaustion fails the match closed.
 inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
 
 [[nodiscard]] constexpr bool matchPatternEscape(char escape, char value) noexcept {
@@ -33,15 +30,20 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
 // negateClass flag (applied once in matchPatternAtom). Treating a leading '^' as
 // negation here as well would double-negate a class whose first literal member is
 // itself a caret (e.g. "[^^]"), so any '^' in the body is an ordinary member.
-[[nodiscard]] constexpr bool matchPatternClass(
-    std::string_view pattern, std::size_t begin, std::size_t end, char value) noexcept {
+[[nodiscard]] constexpr bool matchPatternClass(std::string_view pattern, std::size_t begin,
+    std::size_t end, char value, std::size_t& budget) noexcept {
     bool matched = false;
     for (std::size_t i = begin; i < end;) {
+        if (budget == 0) {
+            return false;
+        }
+        --budget;
         char first = pattern[i++];
         if (first == '\\') {
-            if (i >= end) {
+            if (i >= end || budget == 0) {
                 return false;
             }
+            --budget;
             // The class-member escape shares the atom escape semantics
             // (\d, \w, \s, or a literal) -- one owner, matchPatternEscape.
             matched = matched || matchPatternEscape(pattern[i++], value);
@@ -49,6 +51,10 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
         }
 
         if (i + 1 < end && pattern[i] == '-') {
+            if (budget < 2) {
+                return false;
+            }
+            budget -= 2;
             char last = pattern[i + 1];
             if (last == '\\' || first > last) {
                 return false;
@@ -64,8 +70,16 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
     return matched;
 }
 
-[[nodiscard]] constexpr bool matchPatternAtom(
-    std::string_view pattern, const PatternAtom& atom, char value) noexcept {
+// Keep the helper's direct test/use form; the matcher itself always supplies its
+// shared budget through the overload above.
+[[nodiscard]] constexpr bool matchPatternClass(
+    std::string_view pattern, std::size_t begin, std::size_t end, char value) noexcept {
+    std::size_t budget = kMaxPatternMatchSteps;
+    return matchPatternClass(pattern, begin, end, value, budget);
+}
+
+[[nodiscard]] constexpr bool matchPatternAtom(std::string_view pattern,
+    const PatternAtom& atom, char value, std::size_t& budget) noexcept {
     switch (atom.kind) {
         case PatternAtomKind::kLiteral:
             return value == atom.literal;
@@ -78,7 +92,8 @@ inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
         case PatternAtomKind::kSpace:
             return isPatternSpace(value);
         case PatternAtomKind::kClass: {
-            const bool matched = matchPatternClass(pattern, atom.classBegin, atom.classEnd, value);
+            const bool matched = matchPatternClass(
+                pattern, atom.classBegin, atom.classEnd, value, budget);
             return atom.negateClass ? !matched : matched;
         }
     }
@@ -115,8 +130,17 @@ template <std::size_t Capacity>
                                       ? std::size_t{1}
                                       : value.size();
     std::size_t maxCount = 0;
-    while (maxCount < scanLimit && valueIndex + maxCount < value.size() &&
-           matchPatternAtom(pattern, atom, value[valueIndex + maxCount])) {
+    while (maxCount < scanLimit && valueIndex + maxCount < value.size()) {
+        if (budget == 0) {
+            return false;
+        }
+        --budget;
+        if (!matchPatternAtom(pattern, atom, value[valueIndex + maxCount], budget)) {
+            if (budget == 0) {
+                return false;
+            }
+            break;
+        }
         ++maxCount;
     }
 

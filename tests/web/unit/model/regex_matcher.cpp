@@ -12,19 +12,33 @@ using ruvia::detail::model::matchRegexPattern;
 
 }  // namespace
 
-RUVIA_TEST(regex_matcher_matches_values_within_the_input_cap) {
+RUVIA_TEST(regex_matcher_matches_the_bounded_pattern_dialect) {
     RUVIA_CHECK(matchRegexPattern<ruvia::FixedString{"^\\w+$"}>("abc123"));
     RUVIA_CHECK(!matchRegexPattern<ruvia::FixedString{"^\\w+$"}>("has space"));
+    RUVIA_CHECK(matchRegexPattern<ruvia::FixedString{"^[a-z]+\\d?$"}>("letters7"));
+    RUVIA_CHECK(!matchRegexPattern<ruvia::FixedString{"^[a-z]+\\d?$"}>("Letters77"));
+}
 
-    // A value exactly at the cap is still matched normally.
+RUVIA_TEST(regex_matcher_accepts_input_at_the_cap) {
     const std::string atCap(kMaxRegexInputBytes, 'a');
     RUVIA_CHECK(matchRegexPattern<ruvia::FixedString{"^\\w+$"}>(atCap));
 }
 
-RUVIA_TEST(regex_matcher_rejects_input_past_the_cap_without_matching) {
-    // One byte over the cap. This all-word-char value WOULD match "^\\w+$", but
-    // the length guard rejects it before std::regex_match so an adversarial long
-    // input cannot drive libstdc++'s recursive backtracking into a stack overflow.
+RUVIA_TEST(regex_matcher_rejects_oversized_patterns) {
+    std::string largePattern(257, 'a');
+    largePattern.front() = '^';
+    largePattern.back() = '$';
+    RUVIA_CHECK(!ruvia::detail::model::compilePatternPlan<257>(largePattern).valid);
+}
+
+RUVIA_TEST(regex_matcher_rejects_input_past_the_cap) {
     const std::string overCap(kMaxRegexInputBytes + 1, 'a');
     RUVIA_CHECK(!matchRegexPattern<ruvia::FixedString{"^\\w+$"}>(overCap));
+}
+
+RUVIA_TEST(regex_matcher_fails_closed_when_the_step_budget_is_exhausted) {
+    // This short pattern has overlapping greedy quantifiers; a modest input is
+    // enough to force combinatorial backtracking beyond the shared work budget.
+    const std::string adversarial(64, 'a');
+    RUVIA_CHECK(!matchRegexPattern<ruvia::FixedString{"^a*a*a*a*a*a*a*a*b$"}>(adversarial));
 }
