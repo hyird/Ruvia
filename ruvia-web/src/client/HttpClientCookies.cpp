@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpSetCookie.h"
-#include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -50,7 +50,7 @@ bool isValidReceivedCookieRequestValue(std::string_view value) noexcept {
         value.remove_prefix(1);
         value.remove_suffix(1);
     }
-    return isValidCookieValue(value);
+    return ::ruvia::isValidCookieValue(value);
 }
 
 bool canSerializeReceivedCookie(std::string_view name, std::string_view value) noexcept {
@@ -86,7 +86,7 @@ std::chrono::system_clock::time_point cookieExpiration(
 }  // namespace
 
 void HttpClientPool::addCookie(std::string_view name, std::string_view value) {
-    if (!isValidHttpHeaderName(name) || !isValidCookieValue(value)) {
+    if (!isValidHttpHeaderName(name) || !::ruvia::isValidCookieValue(value)) {
         throw std::invalid_argument("invalid HTTP client cookie");
     }
     const auto match = std::ranges::find_if(cookies_, [name](const StoredCookie& cookie) {
@@ -216,11 +216,11 @@ void HttpClientPool::retainResponseCookies(
         const auto path = parsedPath.empty() || parsedPath.front() != '/'
                               ? defaultCookiePath(request.target())
                               : parsedPath;
-        const bool securePrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Secure-");
-        const bool hostPrefixed = cookieNameStartsWithIgnoreCase(parsedName, "__Host-");
+        const bool securePrefixed = ::ruvia::cookieNameStartsWithIgnoreCase(parsedName, "__Secure-");
+        const bool hostPrefixed = ::ruvia::cookieNameStartsWithIgnoreCase(parsedName, "__Host-");
         const bool namelessPrefix =
-            parsedName.empty() && (cookieNameStartsWithIgnoreCase(parsedValue, "__Secure-") ||
-                                      cookieNameStartsWithIgnoreCase(parsedValue, "__Host-"));
+            parsedName.empty() && (::ruvia::cookieNameStartsWithIgnoreCase(parsedValue, "__Secure-") ||
+                                      ::ruvia::cookieNameStartsWithIgnoreCase(parsedValue, "__Host-"));
         if (namelessPrefix || (parsedSameSiteNone && !parsedSecure) ||
             (securePrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps)) ||
             (hostPrefixed && (!parsedSecure || config_.scheme != HttpScheme::kHttps ||
@@ -240,7 +240,7 @@ void HttpClientPool::retainResponseCookies(
             remove = *expiresAt <= std::chrono::system_clock::to_time_t(now);
             if (!remove) {
                 const auto expirationLimit = std::chrono::system_clock::to_time_t(
-                    cookieExpiration(now, detail::kMaxCookieAgeSeconds));
+                    cookieExpiration(now, kMaxCookieAgeSeconds));
                 expires =
                     std::chrono::system_clock::from_time_t(std::min(*expiresAt, expirationLimit));
             }

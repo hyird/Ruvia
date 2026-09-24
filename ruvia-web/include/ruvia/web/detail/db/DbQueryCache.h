@@ -11,7 +11,7 @@
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/core/OperationTimeout.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTypes.h"
@@ -64,7 +64,7 @@ private:
 };
 
 [[nodiscard]] inline OperationOptions dbCacheRemainingOptions(
-    const OperationOptions& base, const OperationTimeout& timeout) {
+    const OperationOptions& base, const ruvia::OperationTimeout& timeout) {
     auto result = base;
     result.timeout = timeout.remaining();
     return result;
@@ -76,7 +76,7 @@ private:
 }
 
 [[nodiscard]] inline OperationOptions dbCacheRequiredOptions(
-    const OperationOptions& base, const OperationTimeout& timeout) {
+    const OperationOptions& base, const ruvia::OperationTimeout& timeout) {
     auto result = dbCacheRemainingOptions(base, timeout);
     if (result.timeout.has_value() && result.timeout->count() == 0) {
         throwDbCacheTimeout();
@@ -90,11 +90,11 @@ private:
 template <typename Store, typename Database>
 Task<DbRows> queryDbCache(Store store, std::pmr::string key, std::chrono::milliseconds duration,
     bool ignoreErrors, Database database, std::pmr::memory_resource* resource,
-    OperationOptions options, std::optional<OperationTimeout> deadline = std::nullopt) {
+    OperationOptions options, std::optional<ruvia::OperationTimeout> deadline = std::nullopt) {
     const auto started = std::chrono::steady_clock::now();
     const auto operationTimeout = deadline.has_value()
                                       ? *deadline
-                                      : OperationTimeout(options.timeout);
+                                      : ruvia::OperationTimeout(options.timeout);
     try {
         auto cached = co_await store.get(key, dbCacheRequiredOptions(options, operationTimeout));
         if (cached) {

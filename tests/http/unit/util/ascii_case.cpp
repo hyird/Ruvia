@@ -1,12 +1,12 @@
 #include <string_view>
 
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 
 #include "test_harness.h"
 
 namespace {
 
-using ruvia::detail::httpAsciiEqualsIgnoreCase;
+using ruvia::httpAsciiEqualsIgnoreCase;
 
 }  // namespace
 

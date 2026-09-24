@@ -9,8 +9,8 @@
 #include <utility>
 
 #include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
 
 #include "test_harness.h"
 
@@ -28,6 +28,15 @@ bool rejects(const ruvia::CookieOptions& options) {
 
 }  // namespace
 
+RUVIA_TEST(cookie_public_validation_and_prefix_parsing) {
+    RUVIA_CHECK(ruvia::isValidCookieValue("session-token"));
+    RUVIA_CHECK(!ruvia::isValidCookieValue("invalid;value"));
+    RUVIA_CHECK(ruvia::cookieNameStartsWithIgnoreCase("__secure-id", "__Secure-"));
+    RUVIA_CHECK(!ruvia::cookieNameStartsWithIgnoreCase("id", "__Host-"));
+    RUVIA_CHECK_EQ(ruvia::httpCookiePrefixText(ruvia::CookiePrefix::kHost),
+        std::string_view("__Host-"));
+}
+
 RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const std::string path = "/account";
     const std::string domain = "example.com";
@@ -39,7 +48,7 @@ RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     options.domain = domain;
     RUVIA_CHECK(!rejects(options));
 
-    const ruvia::detail::SetCookiePlan plan(name, value, options);
+    const ruvia::SetCookiePlan plan(name, value, options);
     std::string wire(plan.size(), '\0');
     plan.write(wire.data());
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
@@ -50,13 +59,13 @@ RUVIA_TEST(cookie_expires_formats_historical_dates_at_second_resolution) {
     ruvia::CookieOptions options;
     options.expires = system_clock::time_point{seconds{-315619200}};
     RUVIA_CHECK(!rejects(options));
-    const ruvia::detail::SetCookiePlan historical("sid", "value", options);
+    const ruvia::SetCookiePlan historical("sid", "value", options);
     std::string wire(historical.size(), '\0');
     historical.write(wire.data());
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/; Expires=Fri, 01 Jan 1960 00:00:00 GMT"));
 
     options.expires = system_clock::time_point{} - system_clock::duration{1};
-    const ruvia::detail::SetCookiePlan fractional("sid", "value", options);
+    const ruvia::SetCookiePlan fractional("sid", "value", options);
     wire.resize(fractional.size());
     fractional.write(wire.data());
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/; Expires=Wed, 31 Dec 1969 23:59:59 GMT"));
@@ -71,7 +80,7 @@ RUVIA_TEST(cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
         ruvia::CookieOptions options;
         options.expires = system_clock::time_point{duration_cast<system_clock::duration>(cutoff)};
         RUVIA_CHECK(!rejects(options));
-        const ruvia::detail::SetCookiePlan first("sid", "value", options);
+        const ruvia::SetCookiePlan first("sid", "value", options);
         std::string wire(first.size(), '\0');
         first.write(wire.data());
         RUVIA_CHECK(wire.find("01 Jan 1601") != std::string::npos);
@@ -79,7 +88,7 @@ RUVIA_TEST(cookie_expires_rejects_dates_before_the_cookie_calendar_range) {
         RUVIA_CHECK(rejects(options));
         bool rejected = false;
         try {
-            (void)ruvia::detail::SetCookiePlan("sid", "value", options);
+            (void)ruvia::SetCookiePlan("sid", "value", options);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }
@@ -92,7 +101,7 @@ RUVIA_TEST(cookie_plan_rejects_wrapped_wire_length_before_scanning) {
     bool lengthError = false;
     try {
         ruvia::CookieOptions options;
-        (void)ruvia::detail::SetCookiePlan(oversizedName, "value", options);
+        (void)ruvia::SetCookiePlan(oversizedName, "value", options);
     } catch (const std::length_error&) {
         lengthError = true;
     } catch (...) {
@@ -351,12 +360,12 @@ RUVIA_TEST(cookie_max_age_capped_at_400_days) {
 
 RUVIA_TEST(cookie_request_pair_keeps_equals_for_empty_names) {
     std::string header;
-    ruvia::detail::appendCookieRequestPair(header, "sid", "abc");
+    ruvia::appendCookieRequestPair(header, "sid", "abc");
     RUVIA_CHECK_EQ(header, std::string("sid=abc"));
-    ruvia::detail::appendCookieRequestPair(header, "", "session=forged");
+    ruvia::appendCookieRequestPair(header, "", "session=forged");
     // A nameless value that looks like a cookie-pair must stay behind '='.
     RUVIA_CHECK_EQ(header, std::string("sid=abc; =session=forged"));
     std::string nameless;
-    ruvia::detail::appendCookieRequestPair(nameless, "", "sid");
+    ruvia::appendCookieRequestPair(nameless, "", "sid");
     RUVIA_CHECK_EQ(nameless, std::string("=sid"));
 }

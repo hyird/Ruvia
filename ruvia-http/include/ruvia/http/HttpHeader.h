@@ -21,6 +21,12 @@ inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 // represents initial fields and trailers for requests and responses.
 class HttpHeader final {
 public:
+    [[nodiscard]] static HttpHeader copyOf(std::string_view name, std::string_view value,
+        std::pmr::memory_resource* resource) {
+        return HttpHeader(name, value,
+            resource != nullptr ? resource : std::pmr::get_default_resource());
+    }
+
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_;
     }

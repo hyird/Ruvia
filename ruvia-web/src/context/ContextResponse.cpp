@@ -5,11 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
@@ -25,132 +21,13 @@ namespace {
                         : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
 }
 
-[[nodiscard]] bool responseHasHeaderName(
-    const HttpResponse& response, std::string_view name, std::uint32_t knownBit) noexcept {
-    if (knownBit != 0) {
-        return detail::responseHasKnownHeader(response, knownBit);
-    }
-    return std::ranges::any_of(response.headers(), [name](const auto& header) noexcept {
-        return detail::httpAsciiEqualsIgnoreCase(header.name(), name);
-    });
-}
-
-[[nodiscard]] std::size_t responseHeaderValueCount(
-    const HttpResponse& response, std::string_view name, std::string_view value) noexcept {
-    std::size_t count = 0;
-    for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) && header.value() == value) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-[[nodiscard]] std::size_t headerOccurrenceThrough(
-    const HttpResponse& source, const HttpResponseHeader& target) noexcept {
-    std::size_t count = 0;
-    for (const auto& candidate : source.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(candidate.name(), target.name()) &&
-            candidate.value() == target.value()) {
-            ++count;
-        }
-        if (&candidate == &target) {
-            break;
-        }
-    }
-    return count;
-}
-
-// Keep the body in its original owner, and clone headers only on first mutation.
-class ResponseHeaderTransaction final {
-public:
-    ResponseHeaderTransaction(HttpResponse& response, std::size_t additionalHeaders)
-        : response_(response),
-          additionalHeaders_(additionalHeaders) {}
-
-    [[nodiscard]] const HttpResponse& current() const noexcept {
-        return staged_ ? *staged_ : response_;
-    }
-
-    HttpResponse& writable() {
-        if (!staged_) {
-            staged_.emplace(detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response_, additionalHeaders_));
-        }
-        return *staged_;
-    }
-
-    void commit() noexcept {
-        if (staged_) {
-            detail::HttpResponseHeaderStateAccess::commitHeaders(response_, std::move(*staged_));
-        }
-    }
-
-private:
-    HttpResponse& response_;
-    std::size_t additionalHeaders_;
-    std::optional<HttpResponse> staged_;
-};
-
-// A Context-built response already contains the active state. A raw response
-// does not. Merge by occurrence count so both paths converge without treating
-// repeated equal append fields as a set.
-void mergeActiveResponseHeaders(ResponseHeaderTransaction& transaction, const HttpResponse& active) {
-    for (const auto& header : active.headers()) {
-        const auto knownBit = detail::responseHeaderKnownBit(header);
-        const auto name = header.name();
-        const auto value = header.value();
-        if (knownBit == detail::kResponseHeaderSetCookie) {
-            detail::upsertResponseSetCookieValidated(transaction.writable(), value);
-        } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(transaction.current(), name, value) <
-                headerOccurrenceThrough(active, header)) {
-                detail::appendResponseHeaderValidated(transaction.writable(), name, value, knownBit);
-            }
-        } else if (!responseHasHeaderName(transaction.current(), name, knownBit)) {
-            detail::setResponseHeaderValidated(transaction.writable(), name, value, knownBit);
-        }
-    }
-}
-
-void assignActiveResponseHeaders(ResponseHeaderTransaction& transaction, const HttpResponse& active) {
-    bool replacedSetCookie = false;
-    for (const auto& header : active.headers()) {
-        const auto knownBit = detail::responseHeaderKnownBit(header);
-        if (knownBit == detail::kResponseHeaderContentType) {
-            continue;
-        }
-        const auto name = header.name();
-        const auto value = header.value();
-        if (knownBit == detail::kResponseHeaderSetCookie) {
-            if (!replacedSetCookie) {
-                transaction.writable().removeHeader("Set-Cookie");
-                replacedSetCookie = true;
-            }
-            detail::upsertResponseSetCookieValidated(transaction.writable(), value);
-        } else if (detail::responseHeaderAppend(header)) {
-            if (responseHeaderValueCount(transaction.current(), name, value) <
-                headerOccurrenceThrough(active, header)) {
-                detail::appendResponseHeaderValidated(transaction.writable(), name, value, knownBit);
-            }
-        } else {
-            detail::setResponseHeaderValidated(transaction.writable(), name, value, knownBit);
-        }
-    }
-}
-
-template <auto ApplyActiveHeaders>
-void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&& response) {
+void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&& response,
+    HttpResponseHeaderTransfer transfer) {
     if (&response == &state.activeResponse()) {
         state.finalizeActive();
         return;
     }
-    if (state.activeResponse().headers().empty()) {
-        state.finalize(std::move(response));
-        return;
-    }
-    ResponseHeaderTransaction transaction(response, state.activeResponse().headers().size());
-    ApplyActiveHeaders(transaction, state.activeResponse());
-    transaction.commit();
+    response.transferHeadersFrom(state.activeResponse(), transfer);
     state.finalize(std::move(response));
 }
 
@@ -200,11 +77,11 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
 }
 
 void Context::storeResponse(HttpResponse&& response) {
-    finalizeContextResponse<mergeActiveResponseHeaders>(responseState(), std::move(response));
+    finalizeContextResponse(responseState(), std::move(response), HttpResponseHeaderTransfer::kMerge);
 }
 
 void Context::storeAssignedResponse(HttpResponse&& response) {
-    finalizeContextResponse<assignActiveResponseHeaders>(responseState(), std::move(response));
+    finalizeContextResponse(responseState(), std::move(response), HttpResponseHeaderTransfer::kAssign);
 }
 
 HttpResponse Context::body(std::string_view body) const {
@@ -222,7 +99,7 @@ HttpResponse Context::body(std::nullptr_t) const {
 
 HttpResponse Context::body(std::pmr::string&& body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseBodyOwned(response, std::move(body));
+    response.ownedBody(std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
@@ -236,14 +113,14 @@ HttpResponse Context::body(std::span<const std::byte> body) const {
 
 HttpResponse Context::bodyStaticView(std::string_view body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseBodyStaticView(response, body);
+    response.staticBody(body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::text(std::string_view body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
+    response.header("Content-Type", "text/plain; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
     return response;
@@ -251,31 +128,31 @@ HttpResponse Context::text(std::string_view body) const {
 
 HttpResponse Context::text(std::pmr::string&& body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
-    detail::setResponseBodyOwned(response, std::move(body));
+    response.header("Content-Type", "text/plain; charset=UTF-8");
+    response.ownedBody(std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::textStaticView(std::string_view body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
-    detail::setResponseBodyStaticView(response, body);
+    response.header("Content-Type", "text/plain; charset=UTF-8");
+    response.staticBody(body);
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::jsonSerialized(std::pmr::string& body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
-    detail::setResponseBodyOwned(response, std::move(body));
+    response.header("Content-Type", "application/json");
+    response.ownedBody(std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::html(std::string_view body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
+    response.header("Content-Type", "text/html; charset=UTF-8");
     response.body(body);
     applyResponseState(response, std::nullopt);
     return response;
@@ -283,16 +160,16 @@ HttpResponse Context::html(std::string_view body) const {
 
 HttpResponse Context::html(std::pmr::string&& body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
-    detail::setResponseBodyOwned(response, std::move(body));
+    response.header("Content-Type", "text/html; charset=UTF-8");
+    response.ownedBody(std::move(body));
     applyResponseState(response, std::nullopt);
     return response;
 }
 
 HttpResponse Context::htmlStaticView(std::string_view body) const {
     HttpResponse response({.resource = arena()});
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
-    detail::setResponseBodyStaticView(response, body);
+    response.header("Content-Type", "text/html; charset=UTF-8");
+    response.staticBody(body);
     applyResponseState(response, std::nullopt);
     return response;
 }
@@ -337,20 +214,7 @@ void Context::applyResponseState(
     const auto& activeResponse = responseState().activeResponse();
     const auto finalStatusCode = statusCode.value_or(activeResponse.status());
     response.status(finalStatusCode);
-    const auto contextHeaderCount = activeResponse.headers().size();
-    if (contextHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
-    }
-    for (const auto& header : activeResponse.headers()) {
-        const auto knownBit = detail::responseHeaderKnownBit(header);
-        const auto name = header.name();
-        const auto value = header.value();
-        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-            detail::appendResponseHeaderValidated(response, name, value, knownBit);
-        } else {
-            detail::setResponseHeaderValidated(response, name, value, knownBit);
-        }
-    }
+    response.transferHeadersFrom(activeResponse, HttpResponseHeaderTransfer::kApply);
 }
 
 namespace detail {

@@ -8,9 +8,9 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"
 #include "ruvia/http/detail/client/HttpOriginView.h"
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -166,12 +166,12 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
     if (explicitContent) {
-        const auto contentSemantics = detail::httpRequestContentSemantics(method);
-        if (contentSemantics == detail::HttpRequestContentSemantics::kForbidden) {
+        const auto contentSemantics = httpRequestContentSemantics(method);
+        if (contentSemantics == HttpRequestContentSemantics::kForbidden) {
             return detail::Http1ClientRequestPrepareResultAccess::failure(
                 Http1ClientRequestPrepareError::kContentForbiddenForMethod);
         }
-        if (contentSemantics == detail::HttpRequestContentSemantics::kContentTypeRequired &&
+        if (contentSemantics == HttpRequestContentSemantics::kContentTypeRequired &&
             !headerFacts.hasContentType) {
             return detail::Http1ClientRequestPrepareResultAccess::failure(
                 Http1ClientRequestPrepareError::kOptionsContentTypeRequired);

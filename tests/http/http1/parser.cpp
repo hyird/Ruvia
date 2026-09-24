@@ -6,11 +6,12 @@
 #include <utility>
 
 #include "ruvia/http/Http1RequestParser.h"
+#include "ruvia/http/Http1RequestConnectionPlan.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 
 #include "test_harness.h"
 
@@ -22,9 +23,9 @@ using ruvia::HttpParseError;
 using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequestTargetForm;
 using ruvia::HttpUnsupportedExpectationPolicy;
-using ruvia::detail::Http1ServerRequestParseFailureSource;
-using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::Http1ServerRequestParseState;
+using ruvia::Http1ServerRequestParseFailureSource;
+using ruvia::Http1ServerRequestParser;
+using ruvia::Http1ServerRequestParseState;
 
 const ruvia::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::Http1RequestBodyPlan& plan) {
@@ -56,6 +57,23 @@ const ruvia::Http1ChunkedRequestBody& requireChunked(const ruvia::Http1RequestBo
 }
 
 }  // namespace
+
+RUVIA_TEST(http1_public_request_connection_plan_only_tightens_reuse) {
+    const auto http10 = ruvia::planHttp10RequestConnection(false, true);
+    RUVIA_CHECK_EQ(http10.protocolVersion(), HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK_EQ(http10.disposition(), Http1ClosePolicy::kAllowReuse);
+    RUVIA_CHECK_EQ(http10.requireClose().disposition(), Http1ClosePolicy::kCloseAfterResponse);
+
+    const auto http11 = ruvia::planHttp11RequestConnection(false);
+    RUVIA_CHECK_EQ(http11.protocolVersion(), HttpProtocolVersion::kHttp11);
+    RUVIA_CHECK_EQ(http11.disposition(), Http1ClosePolicy::kAllowReuse);
+    RUVIA_CHECK_EQ(ruvia::applyRequestBodyConsumption(
+                       http11, ruvia::Http1RequestBodyConsumption::kIncomplete).disposition(),
+        Http1ClosePolicy::kCloseAfterResponse);
+    RUVIA_CHECK_EQ(ruvia::applyRequestBodyConsumption(
+                       http11, ruvia::Http1RequestBodyConsumption::kComplete).disposition(),
+        Http1ClosePolicy::kAllowReuse);
+}
 
 RUVIA_TEST(http1_public_parse_outcome_exposes_only_its_active_alternative) {
     const ruvia::Http1RequestParser publicParser;

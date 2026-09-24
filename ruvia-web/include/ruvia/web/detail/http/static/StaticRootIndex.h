@@ -11,10 +11,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/NativePath.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
 
@@ -56,10 +56,10 @@ struct StaticRootEntry final {
           memoryVariants(resource) {}
 
     std::pmr::string relativePath;
-    NativePathString filePath;
+    ruvia::NativePathString filePath;
     std::pmr::string contentType;
     std::uint64_t size{0};
-    ResponseFileIdentity identity{ResponseFileIdentity::unchecked()};
+    HttpResponseFileIdentity identity{HttpResponseFileIdentity::unchecked()};
     std::uint64_t modifiedToken{0};
     std::time_t modifiedSeconds{0};
     std::pmr::string etag;
@@ -69,7 +69,7 @@ struct StaticRootEntry final {
 };
 
 struct StaticRootState final {
-    NativePathString root;
+    ruvia::NativePathString root;
     StaticRootConfigStorage config;
     std::pmr::vector<StaticRootEntry> entries;
     std::pmr::vector<std::pmr::string> directories;
@@ -141,7 +141,7 @@ private:
 
 class StaticRootEntryView final {
 public:
-    [[nodiscard]] const NativePathChar* filePath() const noexcept {
+    [[nodiscard]] const ruvia::NativePathChar* filePath() const noexcept {
         return filePath_;
     }
 
@@ -165,7 +165,7 @@ public:
         return size_;
     }
 
-    [[nodiscard]] ResponseFileIdentity identity() const noexcept {
+    [[nodiscard]] HttpResponseFileIdentity identity() const noexcept {
         return identity_;
     }
 
@@ -203,9 +203,9 @@ public:
 private:
     friend class StaticRootAccess;
 
-    StaticRootEntryView(const NativePathChar* filePath, std::string_view contentType,
+    StaticRootEntryView(const ruvia::NativePathChar* filePath, std::string_view contentType,
         std::string_view cacheControl, std::string_view etag, std::string_view lastModified,
-        std::uint64_t size, ResponseFileIdentity identity, std::uint64_t modifiedToken,
+        std::uint64_t size, HttpResponseFileIdentity identity, std::uint64_t modifiedToken,
         std::time_t modifiedSeconds, StaticRangeRequestPolicy rangeRequests,
         StaticResponseValidatorPolicy responseValidators, bool directlyServable,
         const std::pmr::vector<StaticRootMemoryVariant>* memoryVariants) noexcept
@@ -223,13 +223,13 @@ private:
           directlyServable_(directlyServable),
           memoryVariants_(memoryVariants) {}
 
-    const NativePathChar* filePath_;
+    const ruvia::NativePathChar* filePath_;
     std::string_view contentType_;
     std::string_view cacheControl_;
     std::string_view etag_;
     std::string_view lastModified_;
     std::uint64_t size_;
-    ResponseFileIdentity identity_;
+    HttpResponseFileIdentity identity_;
     std::uint64_t modifiedToken_;
     std::time_t modifiedSeconds_;
     StaticRangeRequestPolicy rangeRequests_;

@@ -26,7 +26,7 @@ struct RedisCacheStore {
 };
 Task<void> removeKeys(RedisHandle redis, std::pmr::vector<std::pmr::string> keys,
     OperationOptions options) {
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     for (const auto& key : keys) {
         try {
             co_await redis.withOptions(dbCacheRequiredOptions(options, operationTimeout)).del(key);
@@ -46,7 +46,7 @@ Task<void> removeKeys(RedisHandle redis, std::pmr::vector<std::pmr::string> keys
     }
 }
 Task<void> clearKeys(RedisHandle redis, std::pmr::string pattern, OperationOptions options) {
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     std::optional<RedisScanCursor> cursor;
     do {
         std::optional<RedisScanResult> result;
@@ -123,7 +123,7 @@ std::optional<std::pmr::string> DbQueryCacheState::key(const DbQuery& query, con
 }
 Task<DbRows> DbQueryCacheState::wrap(std::optional<std::chrono::milliseconds> duration, std::optional<std::pmr::string> key,
     DbCacheQuery database, ScopedOperationScope& scope, OperationOptions options,
-    std::optional<OperationTimeout> deadline) {
+    std::optional<ruvia::OperationTimeout> deadline) {
 #ifdef RUVIA_ENABLE_REDIS
     if (key) {
         return queryDbCache(RedisCacheStore{redis_->get(scope)}, std::move(*key),

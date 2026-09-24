@@ -1,12 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia {
+
+class HttpResponseHeaders;
 
 namespace detail {
 struct HttpContentCodingFieldResultAccess;
@@ -23,6 +27,11 @@ enum class HttpContentCoding : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept;
+
+// Codings supported for incoming request bodies, as an Accept-Encoding field value.
+[[nodiscard]] inline constexpr std::string_view httpSupportedRequestContentCodings() noexcept {
+    return "gzip, br, zstd";
+}
 
 class HttpUnsupportedContentCoding final {
 public:
@@ -78,5 +87,11 @@ private:
 // Parses one logical Content-Encoding field value using recipient list rules.
 // Empty list members are ignored; an empty value therefore means identity.
 [[nodiscard]] HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noexcept;
+
+// Folds every Content-Encoding header line into one recipient-side decision.
+[[nodiscard]] HttpContentCodingFieldResult parseHttpContentCodingHeaders(
+    std::span<const HttpHeader> headers) noexcept;
+[[nodiscard]] HttpContentCodingFieldResult parseHttpContentCodingHeaders(
+    const HttpResponseHeaders& headers) noexcept;
 
 }  // namespace ruvia

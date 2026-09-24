@@ -11,10 +11,10 @@
 #include <system_error>
 #include <variant>
 
-#include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/util/HttpOws.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpFieldWhitespace.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 class HttpByteRangeResolution;
 
@@ -147,8 +147,8 @@ private:
     auto spec = httpTrimOws(fieldValue.substr(separatorOffset + 1));
     // RFC 9110 erratum 7306 restores the OWS that is shown by the normative
     // examples after '=' but was accidentally omitted from the published ABNF.
-    // Trim both ends here so direct detail/helper callers and HTTP parser
-    // callers apply the same field-value OWS policy.
+    // Trim both ends here so direct callers and HTTP parsers apply the same
+    // field-value OWS policy.
     // This helper deliberately resolves one range. A valid range set requiring
     // multipart/byteranges is ignored as an unsupported server capability.
     if (spec.contains(',')) {
@@ -204,4 +204,4 @@ private:
     return HttpByteRangeResolution::makeResolved(*start, clampedEnd - *start + 1);
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

@@ -3,6 +3,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
+#include "ruvia/http/HttpRequestContentSemantics.h"
 
 #include "test_harness.h"
 
@@ -22,6 +23,18 @@ using ruvia::knownHttpMethodToken;
 
 // The method vocabulary: recognising tokens, spelling them back, and the
 // safe and idempotent properties a recipient acts on.
+
+RUVIA_TEST(http_request_method_content_semantics_are_shared_by_client_and_server) {
+    using ruvia::HttpRequestContentSemantics;
+    RUVIA_CHECK(ruvia::httpRequestContentSemantics("CONNECT") ==
+                HttpRequestContentSemantics::kForbidden);
+    RUVIA_CHECK(ruvia::httpRequestContentSemantics("TRACE") ==
+                HttpRequestContentSemantics::kForbidden);
+    RUVIA_CHECK(ruvia::httpRequestContentSemantics("OPTIONS") ==
+                HttpRequestContentSemantics::kContentTypeRequired);
+    RUVIA_CHECK(ruvia::httpRequestContentSemantics("POST") ==
+                HttpRequestContentSemantics::kNoAdditionalRequirements);
+}
 
 RUVIA_TEST(http_method_parsing_is_exact_and_case_sensitive) {
     RUVIA_CHECK(classifyHttpMethod("GET") == HttpKnownMethod::kGet);

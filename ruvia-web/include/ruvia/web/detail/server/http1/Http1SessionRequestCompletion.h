@@ -7,9 +7,9 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/http/Http1ServerConnectionPlan.h"
 
 namespace ruvia::detail {
 
@@ -139,17 +139,13 @@ public:
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedPipelineRestore(
-        Http1ServerConnectionPlan connectionPlan, std::string_view pipeline) noexcept {
+        Http1ServerConnectionPlan connectionPlan, BorrowedText pipeline) noexcept {
         if (connectionPlan.disposition() != Http1ClosePolicy::kAllowReuse) {
             std::terminate();
         }
         return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan,
-            Http1RequestBufferCompletion(Http1RequestBufferPipelineRestore(pipeline)));
+            Http1RequestBufferCompletion(Http1RequestBufferPipelineRestore(pipeline.view())));
     }
-
-    template <HttpTemporaryOwningCharString Pipeline>
-    static Http1SessionRequestCompletion makeBufferedPipelineRestore(
-        Http1ServerConnectionPlan, Pipeline&&) = delete;
 
     [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(
         Http1ServerConnectionPlan connectionPlan, HttpStatusCode status,

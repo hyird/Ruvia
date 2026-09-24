@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/Http2Types.h"
 
 // HTTP/2 sans-I/O connection core.
 //
@@ -42,8 +43,10 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/detail/http2/flow/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
@@ -394,6 +397,12 @@ public:
     // Access an assembled request head / stream for the owner to build an HttpRequest.
     [[nodiscard]] Http2StreamState* stream(std::uint32_t streamId) & noexcept;
     [[nodiscard]] Http2StreamState* stream(std::uint32_t) && = delete;
+    // Read the peer's receive half-state without exposing stream storage.
+    [[nodiscard]] Http2StreamReceiveStatus streamReceiveStatus(
+        std::uint32_t streamId) const noexcept;
+    // Borrowed server request route snapshot; never exposes stream storage.
+    [[nodiscard]] std::optional<Http2ServerRequestRouteView> serverRequestRoute(
+        std::uint32_t streamId) const noexcept;
 
     // --- outbound --------------------------------------------------------------
     // Bytes the core wants written to the peer (frame headers + payloads, batched).
@@ -447,6 +456,12 @@ public:
     // rejected submission leaves the caller's negotiation unchanged.
     [[nodiscard]] Http2WebSocketHandshakeSubmitResult submitWebSocketHandshake(
         std::uint32_t streamId, WebSocketServerNegotiation&& negotiation);
+    [[nodiscard]] Http2WebSocketHandshakeSubmitResult submitWebSocketHandshake(
+        std::uint32_t streamId, const WebSocketHandshakeValidationResult& validation,
+        WebSocketServerNegotiation&& negotiation);
+    [[nodiscard]] Http2WebSocketHandshakeSubmitResult submitWebSocketHandshake(
+        std::uint32_t streamId, const HttpRequest& request,
+        const WebSocketHandshakeValidationResult& validation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
@@ -585,6 +600,11 @@ public:
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;
+    [[nodiscard]] Http2DataQueueState dataQueueState(std::uint32_t streamId) const noexcept;
+    [[nodiscard]] std::size_t pendingDataOutputBytes(std::uint32_t streamId) const noexcept;
+    [[nodiscard]] std::optional<Http2SendWindowState> sendWindowState(
+        std::uint32_t streamId) const noexcept;
+    [[nodiscard]] bool streamAborted(std::uint32_t streamId) const noexcept;
     // RFC 8441 capability only. A dedicated CONNECT/tunnel submission API must still
     // own pseudo-header shape and tunnel lifecycle; regular requests never infer it.
     [[nodiscard]] bool peerExtendedConnectEnabled() const noexcept {

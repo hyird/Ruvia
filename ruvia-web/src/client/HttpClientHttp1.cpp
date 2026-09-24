@@ -3,11 +3,9 @@
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
-#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/HttpResponseBodyDecoding.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -15,7 +13,7 @@
 
 namespace ruvia::detail {
 Task<void> HttpClientPool::executeHttp1(Connection& connection,
-    const HttpClientRequestStorage& request, const OperationTimeout& timeout,
+    const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
     HttpClientResponse& response) {
     auto* responseResource = response.state_->resource;
     std::pmr::vector<HttpHeaderView> headers(resource_);
@@ -92,8 +90,8 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         response.state_->protocolVersion = parsed->head().protocolVersion();
         response.state_->headers.reserve(parsed->head().headers().size());
         for (const auto& header : parsed->head().headers()) {
-            response.state_->headers.push_back(HttpHeaderAccess::make(
-                header.name(), header.value(), responseResource));
+            response.state_->headers.push_back(
+                HttpHeader::copyOf(header.name(), header.value(), responseResource));
         }
         connection.readBuffer.erase(0, consumedHead);
         if (parsed->plan().connectTunnel() != nullptr ||
@@ -121,7 +119,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             response.state_->pending.append(bytes);
             response.state_->dataSignal.notify();
         };
-        std::optional<TransferCodingDecoder> transferDecoder;
+        std::optional<HttpTransferCodingDecoder> transferDecoder;
         std::array<char, kBodyReadChunkBytes> transferOutput{};
         const auto configureTransferDecoder = [&](HttpTransferCodings codings) {
             if (codings.count != 0) {
@@ -132,16 +130,17 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                     codings.values[0], responseResource, ProtocolByteLimit::unlimited());
             }
         };
-        const auto throwTransferFailure = [](const TransferCodingDecodeResult& result) -> void {
-            if (const auto* failure = result.protocolFailure()) {
-                if (failure->protocolError().status() == http_status::kContentTooLarge) {
+        const auto throwTransferFailure = [](const HttpTransferCodingDecoder::Result& result) -> void {
+            if (result.state() == HttpTransferCodingDecoder::State::kProtocolError) {
+                if (const auto* error = result.protocolError();
+                    error != nullptr && error->status() == http_status::kContentTooLarge) {
                     throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
                         "HTTP response exceeds configured byte limit");
                 }
                 throw HttpClientError(
                     HttpClientError::Code::kProtocolError, "invalid HTTP response transfer coding");
             }
-            if (result.decoderFailure()) {
+            if (result.state() == HttpTransferCodingDecoder::State::kDecoderError) {
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
                     "HTTP response transfer-coding decoder failed");
             }
@@ -154,12 +153,13 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             for (;;) {
                 const auto decoded = transferDecoder->decode(encodedBytes, transferOutput);
                 encodedBytes.remove_prefix(std::min(encodedBytes.size(), decoded.consumedBytes()));
-                if (const auto* output = decoded.output()) {
-                    appendChecked(output->bytes());
+                if (decoded.state() == HttpTransferCodingDecoder::State::kOutput) {
+                    appendChecked(decoded.output());
                     continue;
                 }
                 throwTransferFailure(decoded);
-                if (decoded.needInput() || decoded.complete()) {
+                if (decoded.state() == HttpTransferCodingDecoder::State::kNeedInput ||
+                    decoded.state() == HttpTransferCodingDecoder::State::kComplete) {
                     return;
                 }
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
@@ -171,7 +171,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 return;
             }
             const auto finished = transferDecoder->finishInput();
-            if (finished.complete()) {
+            if (finished.state() == HttpTransferCodingDecoder::State::kComplete) {
                 return;
             }
             throwTransferFailure(finished);
@@ -179,10 +179,10 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 HttpClientError::Code::kProtocolError, "incomplete HTTP response transfer coding");
         };
         const auto retainTrailers = [&](std::string_view trailerBlock) {
-            const auto ok = visitHttpResponseTrailerFields(
+            const auto ok = visitHttpResponseTrailers(
                 trailerBlock, [&](std::string_view name, std::string_view value) {
-                    response.state_->trailers.push_back(HttpHeaderAccess::make(
-                        name, value, responseResource));
+                    response.state_->trailers.push_back(
+                        HttpHeader::copyOf(name, value, responseResource));
                     return true;
                 });
             if (!ok) {
@@ -258,25 +258,25 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             // Chunked framing is a streaming delimiter. Size policy is enforced by
             // queued-body backpressure and by readAll/content-coding collection, not by
             // the cumulative number of bytes an incremental read() consumer drains.
-            Http1ChunkedBodyDecoder decoder(
-                ProtocolByteLimit::unlimited(), Http1ChunkTrailerRole::kResponse);
+            HttpResponseChunkedBodyDecoder decoder(ProtocolByteLimit::unlimited());
             for (;;) {
                 auto decoded = decoder.decode(connection.readBuffer);
-                if (const auto* body = decoded.bodyChunk()) {
-                    appendTransferDecoded(body->bytes());
+                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kBody) {
+                    appendTransferDecoded(decoded.body());
                 }
-                if (const auto* complete = decoded.complete()) {
-                    retainTrailers(complete->trailers());
+                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kComplete) {
+                    retainTrailers(decoded.trailers());
                 }
                 connection.readBuffer.erase(0, decoded.consumedBytes());
-                if (decoded.failure()) {
+                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kInvalid) {
                     throw HttpClientError(
                         HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
                 }
-                if (decoded.complete()) {
+                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kComplete) {
                     break;
                 }
-                if (decoded.needMore() || connection.readBuffer.empty()) {
+                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kNeedMore ||
+                    connection.readBuffer.empty()) {
                     co_await readMore();
                 }
             }

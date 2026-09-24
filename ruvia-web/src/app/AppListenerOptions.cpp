@@ -7,8 +7,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/io/IpAddress.h"
-#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/IpAddress.h"
+#include "ruvia/core/NativePath.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
@@ -28,7 +28,7 @@ void assignTlsFileNameFromNative(
 }
 
 void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& path) {
-    assignTlsFileNameFromNative(output, nativePathView(path));
+    assignTlsFileNameFromNative(output, ruvia::nativePathView(path));
 }
 
 }  // namespace
@@ -37,7 +37,7 @@ asio::ip::address normalizeListenAddress(std::string_view address) {
     if (address.empty()) {
         throw std::invalid_argument("listen address must not be empty");
     }
-    const auto normalized = parseIpAddress(address);
+    const auto normalized = ruvia::parseIpAddress(address);
     if (!normalized) {
         throw std::invalid_argument("listen address must be a numeric IP address");
     }

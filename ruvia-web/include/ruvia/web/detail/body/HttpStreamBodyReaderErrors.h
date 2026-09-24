@@ -2,8 +2,8 @@
 
 #include <stdexcept>
 
-#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/HttpRequestBodyDecoders.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 
 namespace ruvia::detail {
 

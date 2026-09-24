@@ -163,8 +163,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     response.body("hello");
     const auto bodyPlan =
         ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
-    const auto connectionPlan =
-        ruvia::detail::http1PlanHttp11RequestConnection(ruvia::detail::HttpConnectionOptions{});
+    const auto connectionPlan = ruvia::http1PlanHttp11RequestConnection(false);
     const auto writePlan =
         ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
     const auto combined = ruvia::detail::http1BufferedResponsePlan(writePlan, connectionPlan);

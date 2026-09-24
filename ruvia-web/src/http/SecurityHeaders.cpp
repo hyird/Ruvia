@@ -2,8 +2,8 @@
 
 #include <stdexcept>
 
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
@@ -116,7 +116,7 @@ void applySecurityHeadersTo(Target& target, const SecurityHeadersPolicy& policy,
     const auto setSecureTransportHeader = [&setHeader, secureTransport](std::string_view name,
                                               std::string_view value, bool skipEmpty) {
         if (!secureTransport &&
-            detail::httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
+            httpAsciiEqualsIgnoreCase(name, "Strict-Transport-Security")) {
             return;
         }
         setHeader(name, value, skipEmpty);

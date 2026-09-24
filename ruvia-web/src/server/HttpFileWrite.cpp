@@ -6,7 +6,7 @@
 #include <limits>
 #include <utility>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 
 #if defined(__linux__)
@@ -20,7 +20,7 @@
 namespace ruvia::detail {
 
 Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, WorkerMemory& memory,
-    std::pmr::string* reusableChunk, ResponseFileBody file) {
+    std::pmr::string* reusableChunk, HttpResponseFileView file) {
 #if defined(__linux__)
     static_cast<void>(memory);
     static_cast<void>(reusableChunk);
@@ -46,7 +46,7 @@ Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, Worke
             continue;
         }
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable {
+            const auto waitCompletion = co_await ruvia::asyncAsio([&socket](auto handler) mutable {
                 socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler));
             });
             error = waitCompletion.errorCode();
@@ -82,7 +82,7 @@ Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, Worke
         }
         const auto socketError = ::WSAGetLastError();
         if (socketError == WSAEWOULDBLOCK) {
-            const auto waitCompletion = co_await asyncAsio([&socket](auto handler) mutable {
+            const auto waitCompletion = co_await ruvia::asyncAsio([&socket](auto handler) mutable {
                 socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler));
             });
             const auto waitError = waitCompletion.errorCode();

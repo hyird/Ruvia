@@ -5,8 +5,8 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/number/DecimalNumber.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
+#include "ruvia/core/NumberFormat.h"
+#include "ruvia/core/DecimalNumber.h"
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 #include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
@@ -56,7 +56,7 @@ template <typename Visitor>
                fractionalText.back() == '\r' || fractionalText.back() == '\n')) {
         fractionalText.remove_suffix(1);
     }
-    const auto parsedFractional = parseDecimalNumber(fractionalText);
+    const auto parsedFractional = ruvia::parseDecimalNumber(fractionalText);
     if (!parsedFractional || !std::isfinite(*parsedFractional)) {
         return std::nullopt;
     }
@@ -115,7 +115,7 @@ void jwtAppendJsonMember(
     first = false;
     jwtAppendJsonEscaped(out, name);
     out.push_back(':');
-    appendHttpFormattedNumber(out, value, "failed to format JWT numeric claim");
+    appendFormattedNumber(out, value, "failed to format JWT numeric claim");
 }
 
 std::pmr::string jwtParseJoseAlgorithm(std::string_view json, std::pmr::memory_resource* resource) {

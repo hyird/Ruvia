@@ -7,8 +7,9 @@
 #include <type_traits>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/core/WorkerSignal.h"
+#include "ruvia/http/Http2Connection.h"
+#include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 
 namespace ruvia {
 class HttpResponse;
@@ -217,7 +218,10 @@ static_assert(sizeof(Http2BufferedResponseWriteResult) <= 4);
 // non-template compiles that policy once for plain and TLS sessions.
 class Http2BufferedResponseWriter final {
 public:
-    Http2BufferedResponseWriter(Http2Connection& connection,
+    Http2BufferedResponseWriter(ruvia::Http2Connection& connection,
+        Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker,
+        WorkerSignal& writeSignal, Http2DataOutputBudget& outputBudget) noexcept;
+    Http2BufferedResponseWriter(ruvia::Http2Connection& connection,
         Http2SansIoStreamRuntimeTable& streamRuntimes, WorkerMemory& worker,
         WorkerSignal& writeSignal) noexcept;
 
@@ -238,10 +242,11 @@ private:
         std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);
     void wakeWriter() noexcept;
 
-    Http2Connection& connection_;
+    ruvia::Http2Connection& connection_;
     Http2SansIoStreamRuntimeTable& streamRuntimes_;
     WorkerMemory& worker_;
     WorkerSignal& writeSignal_;
+    Http2DataOutputBudget* outputBudget_{nullptr};
 };
 
 }  // namespace ruvia::detail

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 
@@ -61,10 +61,10 @@ inline void validateDbConfig(const DbConfig& config) {
     }
 #endif
 
-    ensureConfigHost(config.host, "database host must not be empty", "database host is invalid",
-        kSeparatedPortHostRules);
-    ensureNonZeroPort(configuredDbPort(config), "database port must not be zero");
-    ensurePositiveOptionalDurations("configured database timeouts must be greater than zero",
+    ruvia::ensureConfigHost(config.host, "database host must not be empty", "database host is invalid",
+        ruvia::kSeparatedPortHostRules);
+    ruvia::ensureNonZeroPort(configuredDbPort(config), "database port must not be zero");
+    ruvia::ensurePositiveOptionalDurations("configured database timeouts must be greater than zero",
         config.connectTimeout, config.readTimeout, config.writeTimeout, config.queryTimeout,
         config.acquireTimeout);
 }

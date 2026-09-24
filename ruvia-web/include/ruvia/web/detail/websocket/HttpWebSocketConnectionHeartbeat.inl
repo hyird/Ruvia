@@ -29,7 +29,7 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     livenessState_ = WebSocketSendingPing{};
     writePhase_ = WritePhase::kHeartbeat;
     try {
-        asio::co_spawn(transport_.executor(), taskAsAwaitable(writeHeartbeatPing()),
+        asio::co_spawn(transport_.executor(), ruvia::asAwaitable(writeHeartbeatPing()),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finishWrite(WritePhase::kHeartbeat);

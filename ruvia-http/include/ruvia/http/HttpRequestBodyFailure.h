@@ -8,7 +8,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // A request-body failure detected by a server driver while enforcing the
 // HTTP-owned content contract. The driver supplies runtime byte limits and I/O
@@ -61,4 +61,4 @@ private:
 static_assert(std::is_trivially_copyable_v<HttpRequestBodyFailure>);
 static_assert(sizeof(HttpRequestBodyFailure) <= 1);
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

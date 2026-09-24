@@ -19,7 +19,7 @@ template <typename Args>
         if (value > std::numeric_limits<std::uint64_t>::max()) {
             throw std::length_error("redis RESP length is too large");
         }
-        return httpUnsignedDecimalSize(static_cast<std::uint64_t>(value));
+        return unsignedDecimalSize(static_cast<std::uint64_t>(value));
     };
     const auto addSize = [](std::size_t& current, std::size_t amount) {
         if (amount > std::numeric_limits<std::size_t>::max() - current) {

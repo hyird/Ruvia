@@ -52,7 +52,7 @@ void RedisPool::ConnectionGuard::discard() noexcept {
     discard_ = true;
 }
 
-Task<std::size_t> RedisPool::acquire(const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> RedisPool::acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     const auto result = co_await scheduler_.acquire(
         timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), worker_);
     if (result.timedOut() != nullptr) {

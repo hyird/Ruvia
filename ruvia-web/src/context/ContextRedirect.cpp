@@ -1,8 +1,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/util/Hex.h"
+#include "ruvia/core/Hex.h"
 #include "ruvia/web/Context.h"
 
 // A redirect target the application supplies may contain bytes that are not
@@ -20,8 +19,8 @@ struct RedirectAuthoritySpan {
 };
 
 [[nodiscard]] bool isValidPercentEscape(std::string_view value, std::size_t index) noexcept {
-    return index + 2 < value.size() && detail::decodeHexNibble(value[index + 1]) >= 0 &&
-           detail::decodeHexNibble(value[index + 2]) >= 0;
+    return index + 2 < value.size() && decodeHexNibble(value[index + 1]) >= 0 &&
+           decodeHexNibble(value[index + 2]) >= 0;
 }
 
 [[nodiscard]] bool isUriSchemeFirst(unsigned char ch) noexcept {
@@ -164,8 +163,8 @@ struct RedirectAuthoritySpan {
 
 void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
     output.push_back('%');
-    output.push_back(detail::upperHexDigit(ch >> 4));
-    output.push_back(detail::upperHexDigit(ch & 0x0F));
+    output.push_back(upperHexDigit(ch >> 4));
+    output.push_back(upperHexDigit(ch & 0x0F));
 }
 
 [[nodiscard]] std::pmr::string encodeRedirectLocation(

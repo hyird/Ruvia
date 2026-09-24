@@ -7,10 +7,12 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/Attributes.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/request/HttpRequestHeaderBlock.h"
 
@@ -49,6 +51,24 @@ public:
 
     [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
         return knownMethod_;
+    }
+
+    // Releases owned header descriptors and clears all borrowed message views.
+    // Useful when a runtime reuses a request object before its input storage or
+    // PMR resource is retired.
+    void reset() noexcept {
+        headers_ = {};
+        method_ = {};
+        knownMethod_ = HttpKnownMethod::kUnknown;
+        target_ = {};
+        scheme_ = {};
+        authority_ = {};
+        path_ = {};
+        queryString_ = {};
+        protocolVersion_ = HttpProtocolVersion::kHttp11;
+        targetForm_ = HttpRequestTargetForm::kOrigin;
+        cachedHeaders_.fill(0);
+        body_ = {};
     }
 
     [[nodiscard]] std::string_view target() const noexcept {
@@ -91,6 +111,11 @@ public:
     }
     [[nodiscard]] std::span<const HttpHeaderView> headers() const&& = delete;
 
+    [[nodiscard]] std::span<const std::byte> bodyBytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_;
+    }
+    [[nodiscard]] std::span<const std::byte> bodyBytes() const&& = delete;
+
     // Case-insensitive semantic lookup; the last repeated field wins.
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const noexcept;
     // Exact raw lookup over the encoded query string. Both `rawName` and the
@@ -128,5 +153,16 @@ private:
 // Header descriptors live in the caller-selected PMR resource rather than the
 // request's coroutine frame. The protocol field-count limit is independent of
 // this object's layout.
+
+// Constructs a semantic request directly, without parsing a wire-format head.
+// Header names/values and body bytes are borrowed from the caller; the exact
+// header span count is used to allocate descriptors from `resource`. The caller
+// must keep all supplied text/body storage and the resource alive while the
+// returned request is in use. Invalid method, target, or header fields are
+// reported as HttpParseError; body framing fields are intentionally not
+// interpreted because this API represents an already-parsed request.
+[[nodiscard]] std::pair<HttpRequest, std::optional<HttpParseError>> makeParsedHttpRequest(
+    std::string_view method, std::string_view target, std::span<const HttpHeaderView> headers,
+    std::span<const std::byte> body, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia

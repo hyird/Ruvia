@@ -3,6 +3,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpSetCookie.h"
+#include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
@@ -57,6 +58,12 @@ HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
     detail::setResponseHeaderAppend(*retained, true);
     eraseLaterSetCookieHeaders(*retained, wirePrefix, cookieName, hasPath, path, domain);
     return *retained;
+}
+
+void HttpResponse::setCookie(const SetCookiePlan& plan) {
+    auto& header = upsertSetCookieHeaderUninitializedValue(
+        plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
+    plan.write(detail::responseHeaderValueBegin(header));
 }
 
 void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {

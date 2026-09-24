@@ -32,6 +32,27 @@ enum class CookieAttributePolicy : std::uint8_t {
     kEmit,
 };
 
+// RFC 6265bis: cookie lifetimes SHOULD NOT exceed 400 days.
+inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
+
+// Cookie request pairs always include '=', including for an empty name.
+template <typename String>
+void appendCookieRequestPair(String& header, std::string_view name, std::string_view value) {
+    if (!header.empty()) {
+        header.append("; ", 2);
+    }
+    header.append(name.data(), name.size());
+    header.push_back('=');
+    header.append(value.data(), value.size());
+}
+
+// Cookie octet validation and name-prefix parsing are protocol rules shared by
+// the Set-Cookie writer and outbound cookie jar.
+[[nodiscard]] bool isValidCookieValue(std::string_view value) noexcept;
+[[nodiscard]] bool cookieNameStartsWithIgnoreCase(
+    std::string_view name, std::string_view prefix) noexcept;
+[[nodiscard]] std::string_view httpCookiePrefixText(CookiePrefix prefix) noexcept;
+
 struct CookieOptions final {
     // Cookie attributes are retained by SetCookiePlan until serialization.
     // Keep their zero-copy representation, but reject owning-string rvalues so

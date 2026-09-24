@@ -4,7 +4,7 @@
 #include <memory_resource>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -48,12 +48,12 @@ template <typename Connection>
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename Transport>
 Task<void> invokeWebSocketHandler(WebSocketConnection<Transport>& connection,
-    ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler,
+    ruvia::ConnectionScanner::Entry& scannerEntry, const CallableRef<void, Context&>& handler,
     Context& context) {
     auto webSocket = makeWebSocketFacade(connection, *context.pool());
     ContextWebSocketBinding webSocketBinding(context, webSocket);
 
-    scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
+    scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kLongLived);
     co_await handler(context);
 }
 

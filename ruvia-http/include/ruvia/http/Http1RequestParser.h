@@ -91,20 +91,33 @@ private:
     std::size_t consumedBytes_{0};
 };
 
+enum class Http1RequestParseFailureSource : std::uint8_t { kRequestLine, kMessage };
+
 class Http1RequestParseFailure final {
 public:
     [[nodiscard]] HttpProtocolError protocolError() const noexcept {
         return httpParseProtocolError(error_);
     }
 
+    [[nodiscard]] constexpr Http1RequestParseFailureSource source() const noexcept {
+        return source_;
+    }
+
 private:
     friend struct detail::Http1RequestParseResultAccess;
 
-    explicit constexpr Http1RequestParseFailure(HttpParseError error) noexcept
-        : error_(error) {}
+    explicit constexpr Http1RequestParseFailure(
+        HttpParseError error, Http1RequestParseFailureSource source) noexcept
+        : error_(error), source_(source) {}
 
     HttpParseError error_;
+    Http1RequestParseFailureSource source_;
 };
+
+// Cleartext listeners can silently discard inputs that failed before a valid
+// HTTP-version token was recognized (for example, TLS bytes on an HTTP port).
+[[nodiscard]] bool shouldDropInvalidCleartextHttp1Input(
+    std::string_view buffer, Http1RequestParseFailureSource source) noexcept;
 
 // A discriminated parse outcome. Request data exists only in Http1ParsedRequest,
 // an error exists only in Http1RequestParseFailure, and input sizing exists only

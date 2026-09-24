@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/detail/util/Base64.h"
+#include "ruvia/core/Base64.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/json/JsonString.h"
@@ -18,11 +18,11 @@
 namespace ruvia::detail {
 
 inline void appendModelBinary(std::pmr::string& output, const Bytes& value) {
-    const auto encodedSize = base64EncodedSize(value.size());
+    const auto encodedSize = ruvia::base64EncodedSize(value.size());
     const auto start = output.size();
     output.resize(start + encodedSize + 2);
     output[start] = '"';
-    encodeBase64(output.data() + start + 1, value.view());
+    ruvia::encodeBase64(output.data() + start + 1, value.view());
     output[start + encodedSize + 1] = '"';
 }
 

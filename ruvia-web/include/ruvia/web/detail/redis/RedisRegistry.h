@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #include "ruvia/web/redis/RedisHandle.h"
@@ -58,8 +58,8 @@ public:
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/detail/io/OperationDeadline.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/PoolLeaseScheduler.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/redis/RedisClientRuntime.h"
 
@@ -166,17 +166,17 @@ private:
         bool discard_{false};
     };
 
-    Task<std::size_t> acquire(const OperationTimeout& timeout, StopToken stopToken);
+    Task<std::size_t> acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken);
     void release(std::size_t index) noexcept;
     void close(Connection& connection) noexcept;
     void configureSocket(Connection& connection) noexcept;
     void ensureReader(Connection& connection);
     [[nodiscard]] bool armDeadline(
-        Connection& connection, const OperationTimeout& timeout, Connection::DeadlineKind kind);
+        Connection& connection, const ruvia::OperationTimeout& timeout, Connection::DeadlineKind kind);
     [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
-    Task<void> connect(Connection& connection, const OperationTimeout* operationTimeout = nullptr);
-    Task<void> authenticate(Connection& connection, const OperationTimeout& connectTimeout);
-    Task<RedisValue> readReply(Connection& connection, const OperationTimeout& timeout,
+    Task<void> connect(Connection& connection, const ruvia::OperationTimeout* operationTimeout = nullptr);
+    Task<void> authenticate(Connection& connection, const ruvia::OperationTimeout& connectTimeout);
+    Task<RedisValue> readReply(Connection& connection, const ruvia::OperationTimeout& timeout,
         std::pmr::memory_resource* resource);
     template <typename ArgSource>
     Task<RedisValue> executeWithTimeoutImpl(
@@ -184,9 +184,9 @@ private:
     template <typename CommandSource>
     Task<std::pmr::vector<RedisValue>> executePipelineImpl(
         CommandSource commands, OperationOptions options, std::pmr::memory_resource* resource);
-    Task<void> asyncSocketWrite(Connection& connection, const OperationTimeout& timeout);
+    Task<void> asyncSocketWrite(Connection& connection, const ruvia::OperationTimeout& timeout);
     Task<AsioCompletion<std::size_t>> asyncSocketReadSome(
-        Connection& connection, std::span<char> buffer, const OperationTimeout& timeout);
+        Connection& connection, std::span<char> buffer, const ruvia::OperationTimeout& timeout);
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void throwIfAborted(const Connection& connection) const;
     asio::io_context& ioContext_;

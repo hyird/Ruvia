@@ -152,7 +152,7 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
     detail::ScopedOperationScope& scope, OperationGuard operation) {
     operation.start();
     auto& lease = operation.lease();
-    const detail::OperationTimeout operationTimeout(lease.options.timeout);
+    const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
     bool backendFailed = false;
     try {
         auto firstOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);
@@ -191,7 +191,7 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
 Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(DbStatement query, DbStatement count, OperationGuard operation) {
     operation.start();
     auto& lease = operation.lease();
-    const detail::OperationTimeout operationTimeout(lease.options.timeout);
+    const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
     bool backendFailed = false;
     try {
         auto firstOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);

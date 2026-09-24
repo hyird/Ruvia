@@ -6,8 +6,6 @@
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -121,7 +119,7 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, const std::exception_pt
 
 void applyExceptionResponseMetadata(HttpResponse& response, const std::exception_ptr& exception) {
     if (isUnsupportedRequestContentCoding(exception)) {
-        response.header("Accept-Encoding", detail::httpSupportedRequestContentCodings());
+        response.header("Accept-Encoding", httpSupportedRequestContentCodings());
     }
 }
 

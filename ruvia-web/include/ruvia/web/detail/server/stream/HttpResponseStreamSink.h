@@ -13,16 +13,16 @@
 
 #include <asio.hpp>
 
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/http/detail/server/HttpResponseHead.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/detail/util/PmrString.h"
+#include "ruvia/http/Http1ChunkedFraming.h"
+#include "ruvia/http/Http1ServerSemantics.h"
+#include "ruvia/http/HttpResponseHeadBuffer.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
@@ -33,7 +33,7 @@ namespace ruvia::detail {
 template <typename Stream, typename ScannerEntry>
 class ResponseStreamSink final {
 public:
-    ResponseStreamSink(Stream& stream, WorkerMemory& memory, ResponseHeadBuffer& head,
+    ResponseStreamSink(Stream& stream, WorkerMemory& memory, HttpResponseHeadBuffer& head,
         ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind,
         Http1ResponseStreamPlan plan, HttpResponseCodingSelection responseCoding,
         HttpResponseCodingAvailability responseCodingAvailability) noexcept
@@ -47,7 +47,7 @@ public:
           connectionPlan_(plan.requestConnectionPlan().requireClose()),
           compression_(memory.resource(), responseCoding, responseCodingAvailability) {}
 
-    ResponseStreamSink(Stream&, WorkerMemory&, ResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&,
+    ResponseStreamSink(Stream&, WorkerMemory&, HttpResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&,
         ResponseStreamKind, Http1ResponseStreamPlan, HttpResponseCodingSelection,
         HttpResponseCodingAvailability) = delete;
 
@@ -120,7 +120,7 @@ private:
             compression_.activate(streamHead.commitPlan().bodyPlan());
 
             head_.reset();
-            appendResponseHead(streamHead.response(), head_, streamHead.responseHeadPlan());
+            appendHttp1ResponseHead(streamHead.response(), head_, streamHead.responseHeadPlan());
             connectionPlan_ = streamHead.connectionPlan();
             // Mark committed before the write; a partial header flush must never be
             // followed by the normal error-response path on the same socket.
@@ -136,7 +136,7 @@ private:
             throw;
         }
         const auto writeCompletion =
-            co_await asyncAsio([this, headView = head_.view()](auto handler) mutable {
+            co_await ruvia::asyncAsio([this, headView = head_.view()](auto handler) mutable {
                 asio::async_write(stream_, asio::buffer(headView), std::move(handler));
             });
         const auto ec = writeCompletion.errorCode();
@@ -195,7 +195,7 @@ private:
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto writeCompletion = co_await asyncAsio([this, chunk](auto handler) mutable {
+            const auto writeCompletion = co_await ruvia::asyncAsio([this, chunk](auto handler) mutable {
                 asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
             });
             const auto rawEc = writeCompletion.errorCode();
@@ -210,7 +210,7 @@ private:
         const Http1ChunkHeader chunkHeader(chunk.size());
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunkHeader.view()),
             asio::buffer(chunk), asio::buffer(kHttp1ChunkDataTerminator)};
-        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable {
+        const auto writeCompletion = co_await ruvia::asyncAsio([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
         });
         const auto writeEc = writeCompletion.errorCode();
@@ -231,12 +231,12 @@ private:
 
         const auto trailerResult = validatedResponseTrailerSection(trailers);
         const auto& trailerSection = *trailerResult.section();
-        const auto trailerIntent = responseTrailerIntent(trailerSection);
+        const auto trailerIntent = httpResponseTrailerIntent(trailerSection);
         if (!trailerSection.empty()) {
-            clearPmrStringRetainingSmall(trailers_);
-            appendHttp1TrailerSection(trailers_, trailerSection);
+            ::ruvia::clearPmrStringRetainingSmall(trailers_);
+            appendHttp1ResponseTrailers(trailers_, trailerSection);
         } else {
-            clearPmrStringRetainingSmall(trailers_);
+            ::ruvia::clearPmrStringRetainingSmall(trailers_);
         }
 
         co_await commit(trailerIntent);
@@ -261,7 +261,7 @@ private:
         // this runtime layer only submits their byte views to the socket.
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(kHttp1LastChunkPrefix),
             asio::buffer(trailers_), asio::buffer(kHttp1TrailerSectionTerminator)};
-        const auto writeCompletion = co_await asyncAsio([this, &buffers](auto handler) mutable {
+        const auto writeCompletion = co_await ruvia::asyncAsio([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
         });
         const auto ec = writeCompletion.errorCode();
@@ -274,7 +274,7 @@ private:
     }
 
     Stream& stream_;
-    ResponseHeadBuffer& head_;
+    HttpResponseHeadBuffer& head_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
     // The connection/server owns an address-stable handle for the complete

@@ -8,7 +8,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/http/WebSocketHandshake.h"
 
 namespace ruvia::detail {
@@ -24,7 +24,7 @@ Task<std::error_code> writeWebSocketHandshake(
         [&buffers, &count](std::string_view part) { buffers[count++] = asio::buffer(part); });
     const auto activeBuffers = std::span<const asio::const_buffer>(buffers.data(), count);
 
-    const auto writeCompletion = co_await asyncAsio([&stream, activeBuffers](auto handler) mutable {
+    const auto writeCompletion = co_await ruvia::asyncAsio([&stream, activeBuffers](auto handler) mutable {
         asio::async_write(stream, activeBuffers, std::move(handler));
     });
     co_return writeCompletion.errorCode();

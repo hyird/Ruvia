@@ -51,12 +51,12 @@ std::optional<std::int64_t> parseMaxAgeSeconds(std::string_view value) noexcept 
     const auto [parsed, error] =
         std::from_chars(value.data(), value.data() + value.size(), seconds);
     if (error == std::errc::result_out_of_range) {
-        return negative ? std::numeric_limits<std::int64_t>::min() : detail::kMaxCookieAgeSeconds;
+        return negative ? std::numeric_limits<std::int64_t>::min() : kMaxCookieAgeSeconds;
     }
     if (error != std::errc{} || parsed != value.data() + value.size()) {
         return std::nullopt;
     }
-    return seconds > detail::kMaxCookieAgeSeconds ? detail::kMaxCookieAgeSeconds : seconds;
+    return seconds > kMaxCookieAgeSeconds ? kMaxCookieAgeSeconds : seconds;
 }
 
 bool containsRejectedReceivedCookieControl(std::string_view value) noexcept {

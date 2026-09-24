@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/http/Attributes.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/util/PmrResource.h"
@@ -22,11 +23,64 @@ namespace ruvia {
 
 class HttpResponse;
 class HttpResponseHeaders;
+
+class HttpResponseBodyPlan final {
+public:
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept { return requestMethod_; }
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept { return responseStatus_; }
+    [[nodiscard]] bool statusAllowsBody() const noexcept { return statusAllowsBody_; }
+    [[nodiscard]] bool bodySuppressed() const noexcept { return bodySuppressed_; }
+
+private:
+    friend HttpResponseBodyPlan planHttpResponseBody(HttpKnownMethod, HttpStatusCode) noexcept;
+    HttpResponseBodyPlan(HttpKnownMethod method, HttpStatusCode status, bool statusAllowsBody,
+        bool suppressed) noexcept
+        : requestMethod_(method), responseStatus_(status), statusAllowsBody_(statusAllowsBody),
+          bodySuppressed_(suppressed) {}
+
+    HttpKnownMethod requestMethod_;
+    HttpStatusCode responseStatus_;
+    bool statusAllowsBody_;
+    bool bodySuppressed_;
+};
+
+[[nodiscard]] HttpResponseBodyPlan planHttpResponseBody(
+    HttpKnownMethod requestMethod, HttpStatusCode responseStatus) noexcept;
+
+class HttpBufferedResponseWritePlan final {
+public:
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept { return bodyPlan_; }
+    [[nodiscard]] std::uint64_t contentLength() const noexcept { return contentLength_; }
+    [[nodiscard]] bool bodySuppressed() const noexcept { return bodyPlan_.bodySuppressed(); }
+    [[nodiscard]] bool sendBody() const noexcept { return !bodySuppressed() && contentLength_ != 0; }
+    [[nodiscard]] bool matchesResponse(const HttpResponse& response) const noexcept;
+
+private:
+    friend HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
+        HttpKnownMethod, const HttpResponse&) noexcept;
+    HttpBufferedResponseWritePlan(HttpResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
+        : bodyPlan_(bodyPlan), contentLength_(contentLength) {}
+
+    HttpResponseBodyPlan bodyPlan_;
+    std::uint64_t contentLength_;
+};
+
+[[nodiscard]] HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
+    HttpKnownMethod requestMethod, const HttpResponse& response) noexcept;
+
+class HttpResponseHeaders;
+class SetCookiePlan;
 struct HttpResponseHeader;
 
 enum class HttpResponseHeaderMode : std::uint8_t {
     kReplace,
     kAppend,
+};
+
+enum class HttpResponseHeaderTransfer : std::uint8_t {
+    kMerge,
+    kAssign,
+    kApply,
 };
 
 namespace detail {
@@ -199,7 +253,36 @@ public:
     // Remove a header set by an earlier step. header(key, std::nullopt) meant
     // deletion; removal now has its own named entry point.
     void removeHeader(std::string_view key);
+    void setCookie(const SetCookiePlan& plan);
+    // Copy the source's application headers with RFC-aware append and cookie semantics.
+    // Assignment preserves the destination Content-Type.
+    void transferHeadersFrom(const HttpResponse& source, HttpResponseHeaderTransfer mode);
+    // Header-only staging supports multi-step publication around external operations.
+    [[nodiscard]] HttpResponse cloneHeadersForTransaction(std::size_t additionalHeaders = 0) const;
+    void commitHeadersFrom(HttpResponse&& staged) noexcept;
+    // Borrowed byte representation; file and empty bodies return an empty view.
+    [[nodiscard]] std::string_view bodyBytes() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view bodyBytes() const&& = delete;
+    [[nodiscard]] std::optional<HttpResponseFileView> fileBody() const& noexcept;
+    [[nodiscard]] std::optional<HttpResponseFileView> fileBody() const&& = delete;
     void body(std::string_view value);
+    void ownedBody(std::pmr::string&& value);
+    void staticBody(std::string_view value) noexcept;
+    void materializeBody();
+    // File and protocol metadata capabilities used by higher-level response builders.
+    void fileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
+        std::uint64_t length, std::array<std::uint64_t, 4> identity, bool checked);
+    void contentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
+    void contentRangeUnsatisfied(std::uint64_t size);
+    void addVaryToken(std::string_view token);
+    void reserveHeaders(std::size_t count);
+    [[nodiscard]] std::pmr::memory_resource* memoryResource() const noexcept;
+    // Apply a streaming coding, or atomically replace a buffered representation
+    // and its coding-dependent metadata. A failed replacement leaves this
+    // response unchanged.
+    void applyContentEncoding(std::string_view contentEncoding);
+    void replaceBodyWithContentEncoding(
+        std::pmr::string&& value, std::string_view contentEncoding);
 
 private:
     friend struct detail::HttpResponseBodyAccess;
@@ -211,9 +294,6 @@ private:
     void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
-    void applyContentEncoding(std::string_view contentEncoding);
-    void replaceBodyWithContentEncoding(std::pmr::string&& value, std::string_view contentEncoding);
-    void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
     void setAllowHeader(
@@ -239,7 +319,6 @@ private:
         HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept;
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
-    void reserveHeaders(std::size_t count);
     HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
     void setFileBody(
@@ -262,9 +341,6 @@ private:
         std::string_view key, std::size_t valueSize, std::uint32_t knownBit);
     void recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
     [[nodiscard]] HttpResponse cloneForTransaction() const;
-    [[nodiscard]] HttpResponse cloneHeadersForTransaction(std::size_t additionalHeaders = 0) const;
-    void commitHeadersFrom(HttpResponse&& staged) noexcept;
-
     HttpStatusCode statusCode_{http_status::kOk};
     std::uint32_t knownHeaderBits_{0};
     std::array<std::int16_t, kKnownHeaderCount> knownHeaderIndexes_{};

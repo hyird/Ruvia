@@ -6,6 +6,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/coding/HttpContentCodec.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/PmrResource.h"
@@ -100,6 +101,16 @@ HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noex
     detail::HttpContentCodingFieldParser parser;
     parser.update(value);
     return parser.finish();
+}
+
+HttpContentCodingFieldResult parseHttpContentCodingHeaders(
+    std::span<const HttpHeader> headers) noexcept {
+    return detail::httpContentCodingFromHeaders(headers);
+}
+
+HttpContentCodingFieldResult parseHttpContentCodingHeaders(
+    const HttpResponseHeaders& headers) noexcept {
+    return detail::httpContentCodingFromHeaders(headers);
 }
 
 HttpContentDecodeResult decodeHttpContent(

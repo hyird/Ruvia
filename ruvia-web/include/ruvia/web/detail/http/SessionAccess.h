@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/cookie/SetCookiePlan.h"
+#include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextSessionState.h"
 

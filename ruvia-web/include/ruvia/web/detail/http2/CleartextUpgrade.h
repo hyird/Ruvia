@@ -11,8 +11,8 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/http2/Http2CleartextPreface.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/http/Http2CleartextPreface.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -60,8 +60,8 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             co_await runHttp2ServerSession(setup, current);
             co_return CleartextHttp2DispatchResult::kSessionFinished;
         case Http2CleartextPrefaceProbe::kNeedMorePreface: {
-            setup.scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-            auto readCompletion = co_await asyncAsio<std::size_t>(
+            setup.scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kReadingInitial);
+            auto readCompletion = co_await ruvia::asyncAsio<std::size_t>(
                 [&setup, &readBuffer, usedBytes](auto handler) mutable {
                     setup.stream.async_read_some(
                         asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),

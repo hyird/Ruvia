@@ -8,8 +8,8 @@
 #include <asio/connect.hpp>
 #include <openssl/rand.h>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/TcpSocketOptions.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/Http1ClosePolicy.h"
@@ -32,7 +32,7 @@ Task<void> WebSocketClientState::establishTransport() {
     ClientPortTextBuffer portBuffer{};
     const auto portText = formatClientPort(port(), portBuffer);
     auto resolved =
-        co_await asyncAsio<asio::ip::tcp::resolver::results_type>([&](auto handler) mutable {
+        co_await ruvia::asyncAsio<asio::ip::tcp::resolver::results_type>([&](auto handler) mutable {
             resolver_.async_resolve(config_.host, portText, std::move(handler));
         });
     throwAbort();
@@ -42,7 +42,7 @@ Task<void> WebSocketClientState::establishTransport() {
     }
 
     auto endpoints = std::move(resolved).takeResult();
-    auto connected = co_await asyncAsio([&](auto handler) mutable {
+    auto connected = co_await ruvia::asyncAsio([&](auto handler) mutable {
         asio::async_connect(stream_.lowest_layer(), endpoints, std::move(handler));
     });
     throwAbort();
@@ -52,7 +52,8 @@ Task<void> WebSocketClientState::establishTransport() {
     }
 
     const auto transport = config_.transport.view();
-    configureTcpSocketOptions(stream_.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
+    ruvia::applyTcpSocketPolicies(
+        stream_.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
 
     if (config_.scheme == WebSocketScheme::kWss) {
         co_await performTlsHandshake();
@@ -67,7 +68,7 @@ Task<void> WebSocketClientState::performTlsHandshake() {
             WebSocketClientError::Code::kTlsFailed, clientTlsSetupErrorMessage(tlsSetup));
     }
 
-    auto handshake = co_await asyncAsio([&](auto handler) mutable {
+    auto handshake = co_await ruvia::asyncAsio([&](auto handler) mutable {
         stream_.async_handshake(asio::ssl::stream_base::client, std::move(handler));
     });
     throwAbort();

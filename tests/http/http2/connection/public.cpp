@@ -185,20 +185,26 @@ std::pmr::string clientWindowThresholdResponseWire(
     return wire;
 }
 
-std::pmr::string serverRequestWire(std::pmr::memory_resource* resource, std::string_view body) {
+std::pmr::string serverRequestWire(std::pmr::memory_resource* resource, std::string_view body,
+    std::string_view method = "POST", std::string_view expectation = {},
+    bool endStream = true) {
     std::pmr::string block(resource);
-    ruvia::HpackEncoder::encodeHeader(block, ":method", "POST");
+    ruvia::HpackEncoder::encodeHeader(block, ":method", method);
     ruvia::HpackEncoder::encodeHeader(block, ":scheme", "https");
     ruvia::HpackEncoder::encodeHeader(block, ":authority", "example.test");
     ruvia::HpackEncoder::encodeHeader(block, ":path", "/upload");
     ruvia::HpackEncoder::encodeHeader(block, "content-length", body.empty() ? "0" : "1");
+    if (!expectation.empty()) {
+        ruvia::HpackEncoder::encodeHeader(block, "expect", expectation);
+    }
 
     std::pmr::string wire(ruvia::kHttp2ClientPreface, resource);
     appendPeerSettings(wire);
-    const auto headFlags = static_cast<std::uint8_t>(0x4 | (body.empty() ? 0x1 : 0));
+    const auto headFlags = static_cast<std::uint8_t>(0x4 | (endStream && body.empty() ? 0x1 : 0));
     appendFrame(wire, ruvia::Http2FrameType::kHeaders, headFlags, 1, block);
     if (!body.empty()) {
-        appendFrame(wire, ruvia::Http2FrameType::kData, 0x1, 1, body);
+        appendFrame(wire, ruvia::Http2FrameType::kData,
+            endStream ? 0x1 : 0, 1, body);
     }
     return wire;
 }
@@ -480,6 +486,35 @@ RUVIA_TEST(http2_public_dropped_credit_retries_failed_window_update_once) {
                 ruvia::Http2SubmitStatus::kAccepted);
 }
 
+RUVIA_TEST(http2_public_server_route_view_hides_stream_storage) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    RUVIA_CHECK(!server.headerBlockInProgress());
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+
+    const auto route = server.serverRequestRoute(1);
+    RUVIA_CHECK(route.has_value());
+    RUVIA_CHECK(route->method == ruvia::HttpKnownMethod::kPost);
+    RUVIA_CHECK(route->requestMethod == "POST");
+    RUVIA_CHECK(route->path == "/upload");
+    RUVIA_CHECK(!route->webSocketConnect);
+    RUVIA_CHECK(!server.serverRequestRoute(3).has_value());
+    const auto window = server.sendWindowState(1);
+    RUVIA_CHECK(window.has_value());
+    RUVIA_CHECK(window->available == 65535);
+    RUVIA_CHECK(!window->queuedData);
+    RUVIA_CHECK(!server.streamAborted(1));
+    RUVIA_CHECK(server.streamAborted(3));
+
+    auto request = ruvia::makeHttp2ServerRequest(server, 1, &resource, {});
+    RUVIA_CHECK(request.has_value());
+    RUVIA_CHECK(request->method() == "POST");
+    const auto handshake = ruvia::validateHttp2WebSocketHandshake(server, 1, *request);
+    RUVIA_CHECK(handshake.accepted() == nullptr);
+}
+
 RUVIA_TEST(http2_public_server_release_preserves_outstanding_data_credit) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::Http2Connection::server({.resource = &resource});
@@ -542,6 +577,129 @@ RUVIA_TEST(http2_public_server_submits_streaming_response_head_and_data) {
     RUVIA_CHECK(data.has_value());
     RUVIA_CHECK(data && data->type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kData));
     RUVIA_CHECK(data && (data->flags & 0x1U) != 0);
+
+    RUVIA_CHECK(server.release(std::move(*requestHead)) ==
+                ruvia::Http2ServerRequestReleaseStatus::kReleased);
+}
+
+RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_public) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    auto request = server.nextEvent();
+    const auto end = server.nextEvent();
+    auto* requestHead = request ? request->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    RUVIA_CHECK(end && end->messageEnd() != nullptr);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    ruvia::HttpResponse response({.resource = &resource});
+    const auto committed = server.submitStreamingResponseHead(1, std::move(response),
+        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kPresent);
+    RUVIA_CHECK(committed.failure() == nullptr);
+    RUVIA_CHECK(committed.submitted() != nullptr);
+    if (const auto* plan = committed.submitted()) {
+        RUVIA_CHECK(plan->framing() == ruvia::ResponseStreamFraming::kHttp2Frames);
+        RUVIA_CHECK(plan->headDisposition() ==
+                    ruvia::ResponseStreamHeadDisposition::kBodyOpen);
+        RUVIA_CHECK(plan->trailerFraming() ==
+                    ruvia::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+    }
+    ruvia::HttpResponse duplicate({.resource = &resource});
+    const auto rejected = server.submitStreamingResponseHead(1, std::move(duplicate),
+        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(rejected.failure() != nullptr);
+    RUVIA_CHECK(rejected.failure() && rejected.failure()->error() ==
+                ruvia::Http2ResponseHeadSubmitError::kInvalidState);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    const std::array<ruvia::HttpHeaderView, 1> fields{{{"x-final", "done"}}};
+    const auto trailers = ruvia::validateHttpResponseTrailers(fields);
+    RUVIA_CHECK(server.submitData(1, "body", ruvia::Http2EndStream::kKeepOpen) ==
+                ruvia::Http2DataSubmitStatus::kAccepted);
+    RUVIA_CHECK(server.finishResponse(1, trailers) ==
+                ruvia::Http2FinishResponseStatus::kAccepted);
+    const auto trailerFrame = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(server.pendingOutput().data(), server.pendingOutput().size()));
+    RUVIA_CHECK(trailerFrame && trailerFrame->type ==
+                    static_cast<std::uint8_t>(ruvia::Http2FrameType::kData));
+    (void)server.consumeOutput(ruvia::kHttp2FrameHeaderBytes + trailerFrame->length);
+    const auto terminal = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(server.pendingOutput().data(), server.pendingOutput().size()));
+    RUVIA_CHECK(terminal && terminal->type ==
+                    static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
+    RUVIA_CHECK(terminal && (terminal->flags & 0x1U) != 0);
+    RUVIA_CHECK(server.finishResponse(1, trailers) ==
+                ruvia::Http2FinishResponseStatus::kInvalidState);
+    RUVIA_CHECK(server.release(std::move(*requestHead)) ==
+                ruvia::Http2ServerRequestReleaseStatus::kReleased);
+}
+
+RUVIA_TEST(http2_public_streaming_head_response_ends_at_headers) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {}, "HEAD");
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    auto request = server.nextEvent();
+    const auto end = server.nextEvent();
+    auto* requestHead = request ? request->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    RUVIA_CHECK(end && end->messageEnd() != nullptr);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    ruvia::HttpResponse response({.resource = &resource});
+    const auto committed = server.submitStreamingResponseHead(1, std::move(response),
+        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(committed.submitted() != nullptr);
+    RUVIA_CHECK(committed.submitted() && committed.submitted()->headDisposition() ==
+                    ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+    const auto output = server.pendingOutput();
+    const auto frame = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(output.data(), output.size()));
+    RUVIA_CHECK(frame && frame->type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
+    RUVIA_CHECK(frame && (frame->flags & 0x1U) != 0);
+    RUVIA_CHECK(server.submitData(1, "", ruvia::Http2EndStream::kEndStream) ==
+                ruvia::Http2DataSubmitStatus::kInvalidState);
+    RUVIA_CHECK(server.release(std::move(*requestHead)) ==
+                ruvia::Http2ServerRequestReleaseStatus::kReleased);
+}
+
+RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_plan) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    const auto wire = serverRequestWire(&resource, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    auto request = server.nextEvent();
+    const auto end = server.nextEvent();
+    auto* requestHead = request ? request->requestHead() : nullptr;
+    RUVIA_CHECK(requestHead != nullptr);
+    RUVIA_CHECK(end && end->messageEnd() != nullptr);
+    (void)server.consumeOutput(server.pendingOutput().size());
+
+    ruvia::HttpResponse response({.resource = &resource});
+    response.body("payload");
+    const auto writePlan = ruvia::planHttpServerBufferedResponseWrite(
+        ruvia::HttpKnownMethod::kPost, response);
+    const auto submitted = server.submitResponseHead(1, response, writePlan);
+    RUVIA_CHECK(submitted.failure() == nullptr);
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    if (const auto* plan = submitted.submitted()) {
+        RUVIA_CHECK(plan->responseStatus() == ruvia::http_status::kOk);
+        RUVIA_CHECK(plan->sendBody());
+        RUVIA_CHECK(plan->contentLength() == 7);
+    }
+    const auto headOutput = server.pendingOutput();
+    const auto head = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(headOutput.data(), headOutput.size()));
+    RUVIA_CHECK(head && head->type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
+    RUVIA_CHECK(head && (head->flags & 0x1U) == 0);
+    (void)server.consumeOutput(headOutput.size());
+    RUVIA_CHECK(server.submitData(1, "payload", ruvia::Http2EndStream::kEndStream) ==
+                ruvia::Http2DataSubmitStatus::kAccepted);
 
     RUVIA_CHECK(server.release(std::move(*requestHead)) ==
                 ruvia::Http2ServerRequestReleaseStatus::kReleased);
@@ -767,6 +925,24 @@ RUVIA_TEST(http2_public_request_materialization_failure_keeps_event_retryable) {
     RUVIA_CHECK(retried && retried->requestHead()->request().method() == "POST");
 }
 #endif
+
+RUVIA_TEST(http2_public_stream_receive_status_is_a_read_only_snapshot) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = preparedClient(&resource);
+    RUVIA_CHECK(client.streamReceiveStatus(1) == ruvia::Http2StreamReceiveStatus::kOpen);
+    RUVIA_CHECK(client.streamReceiveStatus(3) == ruvia::Http2StreamReceiveStatus::kClosed);
+
+    auto wire = clientResponseWire(&resource, {}, false, false);
+    RUVIA_CHECK(client.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.streamReceiveStatus(1) == ruvia::Http2StreamReceiveStatus::kOpen);
+    while (client.nextEvent()) {
+    }
+
+    std::pmr::string endFrame(&resource);
+    appendFrame(endFrame, ruvia::Http2FrameType::kData, 0x1, 1, {});
+    RUVIA_CHECK(client.feed(endFrame) == ruvia::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.streamReceiveStatus(1) == ruvia::Http2StreamReceiveStatus::kEnded);
+}
 
 RUVIA_TEST(http2_public_received_peer_settings_reports_handshake_readiness) {
     std::pmr::monotonic_buffer_resource resource;
@@ -1060,6 +1236,36 @@ RUVIA_TEST(http2_public_server_release_before_message_end_keeps_terminal_event) 
     RUVIA_CHECK(end && end->messageEnd() != nullptr);
     RUVIA_CHECK(end->messageEnd()->streamId() == 1);
     RUVIA_CHECK(end->messageEnd()->trailers().empty());
+}
+
+RUVIA_TEST(http2_public_server_request_snapshot_exposes_http_decisions) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string block(&resource);
+    ruvia::HpackEncoder::encodeHeader(block, ":method", "POST");
+    ruvia::HpackEncoder::encodeHeader(block, ":scheme", "https");
+    ruvia::HpackEncoder::encodeHeader(block, ":authority", "example.test");
+    ruvia::HpackEncoder::encodeHeader(block, ":path", "/upload");
+    ruvia::HpackEncoder::encodeHeader(block, "content-length", "1");
+    ruvia::HpackEncoder::encodeHeader(block, "expect", "100-continue");
+    std::pmr::string wire(ruvia::kHttp2ClientPreface, &resource);
+    appendPeerSettings(wire);
+    appendFrame(wire, ruvia::Http2FrameType::kHeaders, 0x4, 1, block);
+
+    auto server = ruvia::Http2Connection::server({.resource = &resource});
+    (void)server.consumeOutput(server.pendingOutput().size());
+    RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+    auto event = server.nextEvent();
+    auto* request = event ? event->requestHead() : nullptr;
+    RUVIA_CHECK(request != nullptr);
+    if (request == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(request->snapshot().content == ruvia::HttpRequestContentIndication::kWillFollow);
+    RUVIA_CHECK(request->snapshot().bodyOpen);
+    RUVIA_CHECK(!request->snapshot().connectPending);
+    const auto plan = request->expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(plan.sendContinue() != nullptr);
+    RUVIA_CHECK(plan.rejection() == nullptr);
 }
 
 RUVIA_TEST(http2_public_dropped_request_before_message_end_keeps_terminal_event) {

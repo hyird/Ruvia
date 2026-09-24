@@ -57,7 +57,7 @@ Task<std::pair<DbRows, DbRows>> queryPairPrepared(detail::DbCacheQuery first,
     std::optional<std::chrono::milliseconds> secondDuration,
     detail::DbQueryCacheState* cache, detail::ScopedOperationScope& scope,
     OperationOptions options) {
-    const detail::OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
 
     auto firstOptions = detail::dbCacheRemainingOptions(options, operationTimeout);
     DbRows rows = cache

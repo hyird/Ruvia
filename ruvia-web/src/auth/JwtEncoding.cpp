@@ -3,7 +3,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/core/detail/util/Base64Url.h"
+#include "ruvia/core/Base64Url.h"
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
@@ -53,11 +53,11 @@ std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_res
             bits += 8;
             while (bits >= 6) {
                 bits -= 6;
-                bytes[written++] = kBase64UrlAlphabet[(buffer >> bits) & 0x3F];
+                bytes[written++] = ruvia::kBase64UrlAlphabet[(buffer >> bits) & 0x3F];
             }
         }
         if (bits > 0) {
-            bytes[written++] = kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F];
+            bytes[written++] = ruvia::kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F];
         }
         return written;
     });
@@ -72,7 +72,7 @@ std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_res
         std::uint32_t buffer = 0;
         int bits = 0;
         for (const auto ch : input) {
-            const auto value = decodeBase64UrlChar(ch);
+            const auto value = ruvia::decodeBase64UrlChar(ch);
             if (value < 0) {
                 result = std::unexpected(Base64UrlDecodeError::kInvalidValue);
                 return std::size_t{0};

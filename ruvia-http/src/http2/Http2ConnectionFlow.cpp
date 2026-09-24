@@ -297,6 +297,58 @@ bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
     return std::ranges::contains(pendingSends_, streamId, &Http2PendingSend::streamId);
 }
 
+Http2DataQueueState Http2Connection::dataQueueState(std::uint32_t streamId) const noexcept {
+    if (streamAborted(streamId)) {
+        return Http2DataQueueState::kAborted;
+    }
+    return hasQueuedData(streamId) ? Http2DataQueueState::kQueued
+                                   : Http2DataQueueState::kDrained;
+}
+
+std::size_t Http2Connection::pendingDataOutputBytes(std::uint32_t streamId) const noexcept {
+    const auto bytes = output_.pending();
+    std::size_t total = 0;
+    for (std::size_t offset = 0; offset + kHttp2FrameHeaderBytes <= bytes.size();) {
+        const auto* frame = reinterpret_cast<const unsigned char*>(bytes.data() + offset);
+        const auto payload = (static_cast<std::size_t>(frame[0]) << 16) |
+                             (static_cast<std::size_t>(frame[1]) << 8) |
+                             static_cast<std::size_t>(frame[2]);
+        const auto frameBytes = kHttp2FrameHeaderBytes + payload;
+        if (frameBytes > bytes.size() - offset) {
+            break;
+        }
+        const auto id = (static_cast<std::uint32_t>(frame[5] & 0x7f) << 24) |
+                        (static_cast<std::uint32_t>(frame[6]) << 16) |
+                        (static_cast<std::uint32_t>(frame[7]) << 8) |
+                        static_cast<std::uint32_t>(frame[8]);
+        if (frame[3] == static_cast<std::uint8_t>(Http2FrameType::kData) && id == streamId) {
+            total += payload;
+        }
+        offset += frameBytes;
+    }
+    return total;
+}
+
+std::optional<Http2SendWindowState> Http2Connection::sendWindowState(
+    std::uint32_t streamId) const noexcept {
+    const auto* stream = streams_.find(streamId);
+    if (stream == nullptr) {
+        return std::nullopt;
+    }
+    const auto available = http2AvailableSendWindow(connectionSendWindow_, *stream);
+    return Http2SendWindowState{
+        .connectionWindow = connectionSendWindow_,
+        .streamWindow = stream->sendWindow(),
+        .available = static_cast<std::uint32_t>(available),
+        .queuedData = hasQueuedData(streamId),
+    };
+}
+
+bool Http2Connection::streamAborted(std::uint32_t streamId) const noexcept {
+    const auto* stream = streams_.find(streamId);
+    return stream == nullptr || stream->isAborted();
+}
+
 void Http2Connection::queueConsumedDataCredit(Http2StreamState* stream, std::uint32_t bytes) {
     if (bytes == 0) {
         return;

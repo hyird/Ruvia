@@ -8,7 +8,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/web/detail/server/file/HttpFileFallback.h"
 
 namespace ruvia::detail {
@@ -17,11 +17,11 @@ namespace ruvia::detail {
 // callers never interpret native capability. Other stream types use the same
 // operation name and select the portable writer at compile time.
 Task<std::error_code> writeHttpResponseFile(asio::ip::tcp::socket& socket, WorkerMemory& memory,
-    std::pmr::string* reusableChunk, ResponseFileBody file);
+    std::pmr::string* reusableChunk, HttpResponseFileView file);
 
 template <typename Stream>
 Task<std::error_code> writeHttpResponseFile(
-    Stream& stream, WorkerMemory& memory, std::pmr::string* reusableChunk, ResponseFileBody file) {
+    Stream& stream, WorkerMemory& memory, std::pmr::string* reusableChunk, HttpResponseFileView file) {
     return writeFileFallback(stream, memory, reusableChunk, file);
 }
 

@@ -2,8 +2,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/redis/Redis.h"
@@ -29,7 +29,7 @@ Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args
 template <typename ArgSource>
 Task<RedisValue> RedisPool::executeWithTimeoutImpl(
     ArgSource args, OperationOptions options, std::pmr::memory_resource* resource) {
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto index = co_await acquire(operationTimeout, options.stopToken);
     ConnectionGuard guard(*this, index, options.stopToken);
     auto& connection = guard.connection();
@@ -65,7 +65,7 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
         co_return replies;
     }
 
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto index = co_await acquire(operationTimeout, options.stopToken);
     ConnectionGuard guard(*this, index, options.stopToken);
     auto& connection = guard.connection();

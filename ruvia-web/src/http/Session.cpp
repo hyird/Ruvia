@@ -2,7 +2,6 @@
 
 #include <stdexcept>
 
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -135,7 +134,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
     const bool secure = connection.scheme() == HttpScheme::kHttps;
     if (const auto* cleared = state.cleared()) {
         auto& response = detail::ContextAccess::responseStorage(c);
-        auto staged = detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response, 1);
+        auto staged = response.cloneHeadersForTransaction(1);
         detail::appendExpiredSessionCookieHeader(staged, c.pool(), config_.cookieName, secure);
         if (cleared->oldId.has_value()) {
             std::pmr::string key(c.pool());
@@ -143,7 +142,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
             key.append(cleared->oldId->data(), cleared->oldId->size());
             (void)(co_await c.redis(config_.redisAlias).del(key));
         }
-        detail::HttpResponseHeaderStateAccess::commitHeaders(response, std::move(staged));
+        response.commitHeadersFrom(std::move(staged));
         co_return;
     }
 
@@ -180,7 +179,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
     auto& response = detail::ContextAccess::responseStorage(c);
     std::optional<HttpResponse> staged;
     if (mintNewId) {
-        staged.emplace(detail::HttpResponseHeaderStateAccess::cloneHeadersForTransaction(response, 1));
+        staged.emplace(response.cloneHeadersForTransaction(1));
         detail::appendSessionCookieHeader(*staged, c.pool(), config_.cookieName, existingId, secure);
     }
 
@@ -208,7 +207,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
                 break;
             }
             case detail::SessionCommitStep::kPublishCurrentCookie: {
-                detail::HttpResponseHeaderStateAccess::commitHeaders(response, std::move(*staged));
+                response.commitHeadersFrom(std::move(*staged));
                 break;
             }
         }

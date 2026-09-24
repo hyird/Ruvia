@@ -6,10 +6,10 @@
 
 #include <asio.hpp>
 
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/SocketUtils.h"
-#include "ruvia/http/detail/util/PmrString.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/Socket.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 
 namespace ruvia::detail {
@@ -28,8 +28,8 @@ public:
 
     [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         const auto oldSize = buffer.size();
-        resizePmrStringForOverwrite(buffer, oldSize + 4096);
-        auto readCompletion = co_await asyncAsio<std::size_t>([this, oldSize, &buffer](
+        ::ruvia::resizePmrStringForOverwrite(buffer, oldSize + 4096);
+        auto readCompletion = co_await ruvia::asyncAsio<std::size_t>([this, oldSize, &buffer](
                                                                   auto handler) mutable {
             stream_.async_read_some(
                 asio::buffer(buffer.data() + oldSize, buffer.size() - oldSize), std::move(handler));
@@ -49,12 +49,12 @@ public:
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(
-        std::string_view bytes, WsTransportDisposition /*disposition*/) {
+        std::string_view bytes, WebSocketServerTransportDisposition /*disposition*/) {
         if (bytes.empty()) {
             co_return std::error_code{};
         }
         const auto buffer = asio::buffer(bytes.data(), bytes.size());
-        const auto writeCompletion = co_await asyncAsio([this, buffer](auto handler) mutable {
+        const auto writeCompletion = co_await ruvia::asyncAsio([this, buffer](auto handler) mutable {
             asio::async_write(stream_, buffer, std::move(handler));
         });
         co_return writeCompletion.errorCode();
@@ -62,9 +62,9 @@ public:
 
     void abort() noexcept {
         if constexpr (requires(Stream& value) { value.next_layer(); }) {
-            closeSocket(stream_.next_layer());
+            ruvia::closeSocket(stream_.next_layer());
         } else {
-            closeSocket(stream_);
+            ruvia::closeSocket(stream_);
         }
     }
 

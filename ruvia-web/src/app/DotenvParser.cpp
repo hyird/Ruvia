@@ -40,7 +40,7 @@ namespace {
     // variable name is ASCII by definition, whereas the <cctype> predicates are
     // locale-dependent (a non-"C" LC_CTYPE set by the host app could admit high
     // bytes into a key). This also matches how the rest of the codebase validates
-    // identifiers (isValidSessionId, isValidConfigHost, ...).
+    // identifiers (isValidSessionId, ruvia::isValidConfigHost, ...).
     const auto isAsciiAlpha = [](char value) noexcept {
         return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
     };

@@ -136,12 +136,12 @@ Task<DbExecResult> PostgreSqlPool::execute(std::pmr::string sql, std::pmr::vecto
 
 Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
     std::span<const DbValue> params, std::pmr::memory_resource* resource,
-    const OperationTimeout& operationTimeout) {
+    const ruvia::OperationTimeout& operationTimeout) {
     throwIfCancelled(slot);
     if (!slot.connected) {
         co_await connectUnlocked(slot, operationTimeout);
     }
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
+    const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
     co_await sendQuery(slot, sql, params, deadline, false);
 
     auto output = DbResultAccess::makeResult(resource);
@@ -176,12 +176,12 @@ Task<DbRows> PostgreSqlPool::queryOnSlot(ConnectionSlot& slot, const std::pmr::s
 
 Task<DbExecResult> PostgreSqlPool::executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
     std::span<const DbValue> params, std::pmr::memory_resource*,
-    const OperationTimeout& operationTimeout) {
+    const ruvia::OperationTimeout& operationTimeout) {
     throwIfCancelled(slot);
     if (!slot.connected) {
         co_await connectUnlocked(slot, operationTimeout);
     }
-    const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
+    const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
     co_await sendQuery(slot, sql, params, deadline, false);
 
     std::uint64_t affectedRows = 0;
@@ -210,7 +210,7 @@ Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vect
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto slotIndex = co_await acquireSlot(operationTimeout, options.stopToken);
     DbSlotCancellationGuard cancellation(*this, slotIndex, options.stopToken);
     try {
@@ -219,7 +219,7 @@ Task<DbStreamResult> PostgreSqlPool::stream(std::pmr::string sql, std::pmr::vect
         if (!slot.connected) {
             co_await connectUnlocked(slot, operationTimeout);
         }
-        const OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
+        const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.queryTimeout);
         co_await sendQuery(slot, sql, std::span<const DbValue>(params), deadline, true);
         co_return DbStreamResult(DbPoolRef{this}, slotIndex, nullptr, resource, std::move(options));
     } catch (...) {
@@ -240,8 +240,8 @@ Task<std::optional<DbRow>> PostgreSqlPool::readStreamRow(std::size_t slotIndex, 
     bool slotReleased = false;
     try {
         throwIfCancelled(slot);
-        const OperationTimeout deadline =
-            OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
+        const ruvia::OperationTimeout deadline =
+            ruvia::OperationTimeout(options.timeout).constrainedBy(config_.queryTimeout);
         co_await waitUntilResultReady(slot, deadline);
         PostgreSqlResultOwner result(PQgetResult(slot.connection));
         if (result.get() == nullptr) {
@@ -317,7 +317,7 @@ void PostgreSqlPool::abortStream(std::size_t slot, void*) noexcept {
 }
 
 Task<void> PostgreSqlPool::executeControl(ConnectionSlot& slot, std::string_view sql,
-    std::pmr::memory_resource* resource, const OperationTimeout& operationTimeout) {
+    std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout) {
     const std::pmr::string command(sql, resource_);
     (void)co_await executeOnSlot(slot, command, {}, resource, operationTimeout);
 }

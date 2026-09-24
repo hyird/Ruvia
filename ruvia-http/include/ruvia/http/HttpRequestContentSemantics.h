@@ -3,12 +3,10 @@
 #include <cstdint>
 #include <string_view>
 
-namespace ruvia::detail {
+namespace ruvia {
 
-// Method requirements for a request that explicitly carries content. This is
-// shared by senders and recipients so the selected wire version and endpoint
-// role cannot change the request's method semantics. RFC 9110 Sections 9.3.6,
-// 9.3.7, and 9.3.8 define the CONNECT, OPTIONS, and TRACE requirements below.
+// RFC 9110 method requirements for a request that explicitly carries content.
+// Senders and recipients use the same protocol rule regardless of wire version.
 enum class HttpRequestContentSemantics : std::uint8_t {
     kNoAdditionalRequirements,
     kForbidden,
@@ -26,4 +24,4 @@ enum class HttpRequestContentSemantics : std::uint8_t {
     return HttpRequestContentSemantics::kNoAdditionalRequirements;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

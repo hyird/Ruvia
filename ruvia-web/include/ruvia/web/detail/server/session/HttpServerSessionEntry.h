@@ -7,7 +7,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
@@ -35,7 +35,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
         std::error_code remoteEc;
         const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
         if (!remoteEc) {
-            assignRemoteAddress(remoteAddress, remoteEndpoint.address());
+            ruvia::assignRemoteAddress(remoteAddress, remoteEndpoint.address());
         }
         ContextServices baseServices = capabilities_.contextServices(stopToken_);
         if (listener.tls() != nullptr) {
@@ -50,14 +50,14 @@ inline Task<void> WebWorkerRuntime::handleSession(
                 // connection's socket one requestHeaderTimeout after the handshake
                 // regardless of session activity -- severing long-lived TLS
                 // sessions (WebSocket, keep-alive, slow uploads, streaming).
-                ConnectionScanner::Entry handshakeEntry;
-                ConnectionScanner::Guard handshakeGuard(
+                ruvia::ConnectionScanner::Entry handshakeEntry;
+                ruvia::ConnectionScanner::Guard handshakeGuard(
                     &connectionScanner_, handshakeEntry, socket);
-                handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+                handshakeEntry.setPhase(ruvia::ConnectionScanner::Phase::kReadingInitial);
                 const auto handshakeCompletion =
-                    co_await asyncAsio(TlsServerHandshakeInitiator{&tlsStream});
+                    co_await ruvia::asyncAsio(TlsServerHandshakeInitiator{&tlsStream});
                 if (handshakeCompletion.errorCode()) {
-                    closeSocket(socket);
+                    ruvia::closeSocket(socket);
                     co_return;
                 }
             }
@@ -70,7 +70,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
             } else {
                 co_await handleStreamSession(listener, tlsStream, socket, tlsServices);
             }
-            closeSocket(socket);
+            ruvia::closeSocket(socket);
             co_return;
         }
         co_await handleStreamSession(
@@ -86,7 +86,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
         // only place that reason exists, so it goes to the connection-failure
         // sink before the frame unwinds.
         const auto failure = std::current_exception();
-        closeSocket(socket);
+        ruvia::closeSocket(socket);
         options_.connectionFailure.invoke(remoteAddress, failure);
     }
 }
@@ -94,8 +94,8 @@ inline Task<void> WebWorkerRuntime::handleSession(
 template <typename Stream>
 Task<void> WebWorkerRuntime::handleHttp2Session(
     Stream& stream, TcpSocket& socket, ContextServices services, std::string_view initialBytes) {
-    ConnectionScanner::Entry scannerEntry;
-    ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
+    ruvia::ConnectionScanner::Entry scannerEntry;
+    ruvia::ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
 
     co_await runHttp2ServerSession(
         Http2ServerSessionSetup<Stream>{

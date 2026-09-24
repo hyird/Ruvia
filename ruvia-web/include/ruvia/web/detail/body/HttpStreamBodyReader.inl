@@ -9,7 +9,7 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/body/HttpContinueWriter.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl"
 #include "ruvia/web/detail/body/HttpStreamBodyReaderContentLength.inl"

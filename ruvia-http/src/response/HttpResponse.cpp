@@ -11,13 +11,49 @@
 #include <utility>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
+
+std::string_view HttpResponse::bodyBytes() const& noexcept {
+    return detail::responseBody(*this).bytes();
+}
+
+std::optional<HttpResponseFileView> HttpResponse::fileBody() const& noexcept {
+    return detail::responseBody(*this).file();
+}
+
+bool HttpBufferedResponseWritePlan::matchesResponse(const HttpResponse& response) const noexcept {
+    return response.status() == bodyPlan_.responseStatus() &&
+           contentLength_ == detail::httpBufferedResponseWritePlan(
+                                 bodyPlan_.requestMethod(), response)
+                                 .contentLength();
+}
+
+HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
+    HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
+    const auto plan = detail::httpBufferedResponseWritePlan(requestMethod, response);
+    return HttpBufferedResponseWritePlan(
+        planHttpResponseBody(requestMethod, response.status()), plan.contentLength());
+}
+
+HttpResponseBodyPlan planHttpResponseBody(
+    HttpKnownMethod requestMethod, HttpStatusCode responseStatus) noexcept {
+    const auto plan = detail::httpResponseBodyPlan(requestMethod, responseStatus);
+    return HttpResponseBodyPlan(
+        requestMethod, responseStatus, plan.statusAllowsBody(), plan.bodySuppressed());
+}
+
 namespace {
 
 [[nodiscard]] std::pmr::string weakEtagForNewRepresentation(
@@ -70,6 +106,10 @@ HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
+}
+
+std::pmr::memory_resource* HttpResponse::memoryResource() const noexcept {
+    return resource();
 }
 
 HttpResponse HttpResponse::cloneHeadersForTransaction(std::size_t additionalHeaders) const {
@@ -138,8 +178,70 @@ void HttpResponse::status(HttpStatusCode statusCode) {
     statusCode_ = statusCode;
 }
 
+void HttpResponse::transferHeadersFrom(
+    const HttpResponse& source, HttpResponseHeaderTransfer mode) {
+    auto staged = cloneHeadersForTransaction(source.headers().size());
+    bool removedCookies = false;
+    for (const auto& header : source.headers()) {
+        const auto knownBit = detail::responseHeaderKnownBit(header);
+        if (mode == HttpResponseHeaderTransfer::kAssign &&
+            knownBit == detail::kResponseHeaderContentType) {
+            continue;
+        }
+        const auto name = header.name();
+        const auto value = header.value();
+        if (knownBit == detail::kResponseHeaderSetCookie) {
+            if (mode == HttpResponseHeaderTransfer::kAssign && !removedCookies) {
+                staged.removeHeader("Set-Cookie");
+                removedCookies = true;
+            }
+            staged.header(name, value, {.mode = HttpResponseHeaderMode::kAppend});
+        } else if (detail::responseHeaderAppend(header)) {
+            const auto occurrenceThrough = [&] {
+                std::size_t count = 0;
+                for (const auto& candidate : source.headers()) {
+                    if (httpAsciiEqualsIgnoreCase(candidate.name(), name) && candidate.value() == value) {
+                        ++count;
+                    }
+                    if (&candidate == &header) {
+                        break;
+                    }
+                }
+                return count;
+            }();
+            const auto existingCount = [&] {
+                std::size_t count = 0;
+                for (const auto& candidate : staged.headers()) {
+                    if (httpAsciiEqualsIgnoreCase(candidate.name(), name) && candidate.value() == value) {
+                        ++count;
+                    }
+                }
+                return count;
+            }();
+            if (existingCount < occurrenceThrough) {
+                staged.header(name, value, {.mode = HttpResponseHeaderMode::kAppend});
+            }
+        } else if (mode == HttpResponseHeaderTransfer::kMerge) {
+            if (!staged.header(name)) {
+                staged.header(name, value);
+            }
+        } else {
+            staged.header(name, value);
+        }
+    }
+    commitHeadersFrom(std::move(staged));
+}
+
 void HttpResponse::body(std::string_view value) {
     body_.setCopy(resource(), value);
+}
+
+void HttpResponse::ownedBody(std::pmr::string&& value) {
+    setBodyOwned(std::move(value));
+}
+
+void HttpResponse::staticBody(std::string_view value) noexcept {
+    setBodyStaticView(value);
 }
 
 void HttpResponse::setBodyBorrowedView(std::string_view value) noexcept {
@@ -344,6 +446,28 @@ void HttpResponse::replaceBodyWithContentEncoding(
 void HttpResponse::materializeBody() {
     body_.materialize(resource());
 }
+
+void HttpResponse::fileBody(std::filesystem::path file, std::uint64_t size,
+    std::uint64_t offset, std::uint64_t length, std::array<std::uint64_t, 4> identity,
+    bool checked) {
+    setFileBody(std::move(file), size, offset, length,
+        checked ? detail::ResponseFileIdentity::checked(identity)
+                : detail::ResponseFileIdentity::unchecked());
+}
+
+void HttpResponse::contentRange(
+    std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
+    setContentRange(offset, length, size);
+}
+
+void HttpResponse::contentRangeUnsatisfied(std::uint64_t size) {
+    setContentRangeUnsatisfied(size);
+}
+
+void HttpResponse::addVaryToken(std::string_view token) {
+    detail::addVaryToken(*this, token);
+}
+
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
     setFileBody(std::move(file), size, 0, size);

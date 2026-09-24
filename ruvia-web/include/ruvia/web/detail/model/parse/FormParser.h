@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "ruvia/core/Integer.h"
-#include "ruvia/core/detail/number/DecimalNumber.h"
+#include "ruvia/core/DecimalNumber.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Traits.h"
@@ -48,7 +48,7 @@ template <typename NumberT>
     }
     NumberT parsed{};
     if constexpr (std::is_floating_point_v<NumberT>) {
-        const auto value = parseDecimalNumber<NumberT>(decoded);
+        const auto value = ruvia::parseDecimalNumber<NumberT>(decoded);
         if (!value) {
             return std::nullopt;
         }

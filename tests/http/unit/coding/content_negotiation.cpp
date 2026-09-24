@@ -1,19 +1,20 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
+#include "ruvia/http/detail/field/HttpQualityValue.h"
 
 #include "test_harness.h"
 
 namespace {
 
+using ruvia::HttpAcceptedEncodingQuality;
 using ruvia::HttpContentCoding;
-using ruvia::detail::HttpAcceptedEncodingQuality;
+using ruvia::HttpResponseCodingCandidates;
+using ruvia::HttpResponseCodingQualities;
+using ruvia::HttpResponseCodingSelection;
 using ruvia::detail::httpParseQualityValue;
-using ruvia::detail::HttpResponseCodingCandidates;
-using ruvia::detail::HttpResponseCodingQualities;
-using ruvia::detail::HttpResponseCodingSelection;
 
 // Reference form: one full Accept-Encoding scan per coding. The aggregate
 // single-pass update must produce identical qualities.
@@ -140,7 +141,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         RUVIA_CHECK(result.failure() != nullptr);
         if (const auto* failure = result.failure()) {
             RUVIA_CHECK(failure->error() ==
-                        ruvia::detail::HttpResponseCodingSelectionError::kNoAcceptableCoding);
+                        ruvia::HttpResponseCodingSelectionError::kNoAcceptableCoding);
         }
     }
     HttpResponseCodingQualities explicitEmpty;

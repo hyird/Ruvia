@@ -11,8 +11,8 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
-#include "ruvia/core/detail/util/Base64.h"
-#include "ruvia/core/detail/util/ConstantTime.h"
+#include "ruvia/core/Base64.h"
+#include "ruvia/core/ConstantTime.h"
 
 namespace ruvia::detail {
 
@@ -21,7 +21,7 @@ namespace {
 inline constexpr std::size_t kHmacSha256Size = 32;
 inline constexpr std::size_t kMaxHmacParameterBytes =
     static_cast<std::size_t>((std::numeric_limits<int>::max)());
-static_assert(kCookieSignatureSize == base64EncodedSize(kHmacSha256Size));
+static_assert(kCookieSignatureSize == ruvia::base64EncodedSize(kHmacSha256Size));
 
 }  // namespace
 
@@ -75,11 +75,11 @@ void writeCookieSignature(
         digestSize != kHmacSha256Size) {
         throw std::runtime_error("signed cookie HMAC failed");
     }
-    encodeBase64(output, std::span<const std::uint8_t>(digest.data(), digestSize));
+    ruvia::encodeBase64(output, std::span<const std::uint8_t>(digest.data(), digestSize));
 }
 
 bool cookieSignatureEquals(std::string_view left, std::string_view right) noexcept {
-    return constantTimeBytesEqual(left, right);
+    return ruvia::constantTimeBytesEqual(left, right);
 }
 
 }  // namespace ruvia::detail

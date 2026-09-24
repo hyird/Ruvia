@@ -6,9 +6,10 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -242,14 +243,14 @@ Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output)
 
 std::optional<std::string_view> HttpClientResponse::header(std::string_view name) const& noexcept {
     const auto match = std::ranges::find_if(state_->headers,
-        [name](const auto& header) { return detail::httpAsciiEqualsIgnoreCase(header.name(), name); });
+        [name](const auto& header) { return httpAsciiEqualsIgnoreCase(header.name(), name); });
     return match == state_->headers.end() ? std::nullopt
                                           : std::optional<std::string_view>(match->value());
 }
 
 std::optional<std::string_view> HttpClientResponse::trailer(std::string_view name) const& noexcept {
     const auto match = std::ranges::find_if(state_->trailers,
-        [name](const auto& header) { return detail::httpAsciiEqualsIgnoreCase(header.name(), name); });
+        [name](const auto& header) { return httpAsciiEqualsIgnoreCase(header.name(), name); });
     return match == state_->trailers.end() ? std::nullopt
                                            : std::optional<std::string_view>(match->value());
 }
@@ -265,7 +266,7 @@ void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
     if (response.state_->incrementalRead) {
         return;
     }
-    const auto parsedCoding = httpClientContentCodingOf(response.state_->headers);
+    const auto parsedCoding = parseHttpContentCodingHeaders(response.state_->headers);
     const auto* coding = parsedCoding.coding();
     if (coding == nullptr) {
         throw HttpClientError(

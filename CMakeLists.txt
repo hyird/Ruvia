@@ -226,7 +226,7 @@ function(ruvia_install_public_header_closure component relative_dir)
         "EXCLUDE_DIRECTORIES;EXCLUDE_HEADERS")
     ruvia_assert_component_header_path(${component} "${relative_dir}")
 
-    file(GLOB_RECURSE _ruvia_closure_candidates
+    file(GLOB_RECURSE _ruvia_closure_candidates CONFIGURE_DEPENDS
         RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/${relative_dir}/*.inl")

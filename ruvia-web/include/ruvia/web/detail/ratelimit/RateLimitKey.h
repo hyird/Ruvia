@@ -7,7 +7,7 @@
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
 
-#include "ruvia/core/detail/io/IpAddress.h"
+#include "ruvia/core/IpAddress.h"
 
 namespace ruvia::detail {
 
@@ -32,7 +32,7 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
     if (!remoteAddress.contains(':')) {
         return remoteAddress;  // no ':' -> IPv4 or empty; already a per-host key
     }
-    const auto parsed = parseIpAddress(remoteAddress);
+    const auto parsed = ruvia::parseIpAddress(remoteAddress);
     if (!parsed || !parsed->is_v6()) {
         return remoteAddress;
     }

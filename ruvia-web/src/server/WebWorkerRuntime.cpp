@@ -25,12 +25,10 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/detail/util/FailureReport.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/FailureReport.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -136,9 +134,9 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
     }
 }
 
-[[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(
+[[nodiscard]] ruvia::ConnectionScannerOptions makeConnectionScannerOptions(
     const HttpServerOptions& options) noexcept {
-    return ConnectionScannerOptions{.scanInterval = options.scanInterval,
+    return ruvia::ConnectionScannerOptions{.scanInterval = options.scanInterval,
         .idleTimeout = options.idleTimeout,
         .initialReadTimeout = options.requestHeaderTimeout,
         .payloadReadTimeout = options.requestBodyTimeout,
@@ -233,7 +231,7 @@ WebWorkerRuntime::~WebWorkerRuntime() {
         // it on. A server destroyed without an explicit join -- or one whose
         // failure raced the App's own shutdown -- would otherwise take the
         // reason with it.
-        reportUnhandledFailure("web server worker", std::current_exception());
+        ruvia::reportUnhandledFailure("web server worker", std::current_exception());
     }
     // Retire the execution context first. Failure shutdown already releases
     // abandoned mailbox tasks on the worker; detach defensively releases any
@@ -501,7 +499,7 @@ void WebWorkerRuntime::runIoContext() noexcept {
         workerRuntime_.run(
             [this] {
                 capabilities_.initializeWorkerState();
-                asio::co_spawn(ioContext_, taskAsAwaitable(runWorker()),
+                asio::co_spawn(ioContext_, ruvia::asAwaitable(runWorker()),
                     asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
             },
             [this, &workerFailed](const std::exception_ptr& failure) noexcept {

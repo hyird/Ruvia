@@ -2,9 +2,9 @@
 #include <ctime>
 #include <string_view>
 
+#include "ruvia/http/HttpConditionalRequest.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/field/HttpConditionalRequest.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 
@@ -17,7 +17,7 @@
 // live in date_parsing.cpp. This file covers precondition evaluation.
 
 RUVIA_TEST(conditional_method_plan_follows_precondition_and_range_semantics) {
-    using ruvia::detail::httpConditionalMethodPlan;
+    using ruvia::httpConditionalMethodPlan;
 
     const auto get = httpConditionalMethodPlan(ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(get.evaluatesPreconditions);
@@ -90,8 +90,8 @@ RUVIA_TEST(etag_list_parses_opaque_commas_and_rejects_malformed_suffixes) {
 }
 
 RUVIA_TEST(http_date_precondition_comparisons) {
-    using ruvia::detail::httpDateNotModified;
-    using ruvia::detail::httpDateUnmodified;
+    using ruvia::httpDateNotModified;
+    using ruvia::httpDateUnmodified;
 
     constexpr std::time_t canonical{784111777};
     const auto later = canonical + 1;
@@ -110,7 +110,7 @@ RUVIA_TEST(http_date_precondition_comparisons) {
 }
 
 RUVIA_TEST(http_if_range_requires_exact_validator) {
-    using ruvia::detail::httpIfRangeAllows;
+    using ruvia::httpIfRangeAllows;
 
     constexpr std::time_t canonical{784111777};
     constexpr auto etag = R"("abc")";
@@ -125,8 +125,8 @@ RUVIA_TEST(http_if_range_requires_exact_validator) {
 }
 
 RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
+    using ruvia::httpEtagPreconditions;
     using ruvia::HttpHeaderView;
-    using ruvia::detail::httpEtagPreconditions;
     using ruvia::detail::HttpRequestAccess;
     using ruvia::detail::RequestKnownHeader;
 

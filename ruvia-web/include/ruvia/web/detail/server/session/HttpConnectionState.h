@@ -5,10 +5,10 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
+#include "ruvia/http/HttpResponseHeadBuffer.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 
 namespace ruvia::detail {
@@ -41,7 +41,7 @@ struct ConnectionWorkSet final {
     explicit ConnectionWorkSet(WorkerMemory& memory);
 
     std::pmr::string readBuffer;
-    ResponseHeadBuffer responseHead;
+    HttpResponseHeadBuffer responseHead;
     std::pmr::string fileChunk;
     Http1ServerRequestParser parser;
     Http1ServerRequestParseState parsed;

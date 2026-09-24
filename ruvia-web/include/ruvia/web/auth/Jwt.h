@@ -3,6 +3,7 @@
 #ifdef RUVIA_ENABLE_JWT
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -14,7 +15,6 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
@@ -153,7 +153,9 @@ private:
 [[nodiscard]] std::optional<std::string_view> jwtBearerToken(
     std::string_view authorization) noexcept;
 
-template <detail::HttpTemporaryOwningCharString Authorization>
+template <typename Authorization>
+    requires(std::convertible_to<Authorization &&, std::string_view> &&
+                !std::constructible_from<BorrowedText, Authorization &&>)
 std::optional<std::string_view> jwtBearerToken(Authorization&&) = delete;
 
 }  // namespace ruvia

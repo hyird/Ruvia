@@ -5,9 +5,9 @@
 #include <exception>
 #include <memory>
 
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 
 namespace ruvia::detail {
@@ -30,7 +30,7 @@ ConnectionWorkSet::ConnectionWorkSet(WorkerMemory& memory)
     : readBuffer(memory.allocator<char>()),
       responseHead(memory.allocator<char>()),
       fileChunk(memory.allocator<char>()) {
-    resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
+    ::ruvia::resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
 }
 
 void ConnectionWorkSet::resetForReuse() {
@@ -104,7 +104,7 @@ void installConnectionReadBufferPipeline(
     // `pipeline` is request-scoped storage handed over by a body runtime, never
     // an alias of readBuffer, so this copies rather than shifts in place.
     if (pipeline.size() > readBuffer.size()) {
-        resizePmrStringForOverwrite(readBuffer, pipeline.size());
+        ::ruvia::resizePmrStringForOverwrite(readBuffer, pipeline.size());
     }
     if (!pipeline.empty()) {
         std::memcpy(readBuffer.data(), pipeline.data(), pipeline.size());
@@ -137,7 +137,7 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
 
     if (readBuffer.capacity() > kReadBufferShrinkCapacityBytes) {
         std::pmr::string compact(readBuffer.get_allocator());
-        resizePmrStringForOverwrite(compact, kInitialReadBufferBytes);
+        ::ruvia::resizePmrStringForOverwrite(compact, kInitialReadBufferBytes);
         if (usedBytes > 0) {
             std::memcpy(compact.data(), readBuffer.data(), usedBytes);
         }
@@ -146,13 +146,13 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
     }
 
     if (readBuffer.size() != kInitialReadBufferBytes) {
-        resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
+        ::ruvia::resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
     }
 }
 
 void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes) {
     if (usedBytes == readBuffer.size() && readBuffer.size() < kMaxHttpHeaderBytes) {
-        resizePmrStringForOverwrite(
+        ::ruvia::resizePmrStringForOverwrite(
             readBuffer, std::min(readBuffer.size() * 2, kMaxHttpHeaderBytes));
     }
 }

@@ -38,10 +38,6 @@ public:
         return handle_;
     }
 
-    [[nodiscard]] WorkerDispatcher& dispatcher() const noexcept {
-        return *dispatcher_;
-    }
-
     void run() {
         dispatcher_->runContext();
     }
@@ -59,6 +55,10 @@ public:
 
     void close() noexcept {
         dispatcher_->close();
+    }
+
+    void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept {
+        dispatcher_->deferOrTerminate(std::move(task));
     }
 
     void stopTimers() noexcept {
