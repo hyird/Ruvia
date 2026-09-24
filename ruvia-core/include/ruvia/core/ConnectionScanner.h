@@ -1,11 +1,13 @@
 #pragma once
 
+#include "ruvia/core/ConnectionScannerOptions.h"
 #include "ruvia/core/detail/io/ConnectionScanner.h"
 
 namespace ruvia {
 
-// Worker-owned connection activity tracking used by protocol runtimes.
-using ConnectionScanner = detail::ConnectionScanner;
-using ConnectionScannerOptions = detail::ConnectionScannerOptions;
+class ConnectionScanner final : public detail::ConnectionScanner {
+public:
+    using detail::ConnectionScanner::ConnectionScanner;
+};
 
 }  // namespace ruvia

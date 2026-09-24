@@ -3,5 +3,11 @@
 #include "ruvia/core/detail/worker/WorkerRuntimeContext.h"
 
 namespace ruvia {
-using WorkerRuntimeContext = detail::WorkerRuntimeContext;
-}
+
+// Owns the worker dispatcher endpoint and detaches escaped handles on teardown.
+class WorkerRuntimeContext final : public detail::WorkerRuntimeContext {
+public:
+    using detail::WorkerRuntimeContext::WorkerRuntimeContext;
+};
+
+}  // namespace ruvia

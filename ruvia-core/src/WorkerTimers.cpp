@@ -11,7 +11,7 @@
 // thread, re-arming the single asio timer, and firing everything due on the
 // worker.
 
-namespace ruvia::detail {
+namespace ruvia {
 
 void WorkerTimerCancellation::cancel() const noexcept {
     if (dispatcher_ != nullptr && generation_ != 0) {
@@ -53,7 +53,7 @@ WorkerTimerCancellation WorkerTimerRegistration::cancellation() const& {
 }
 
 void WorkerTimerRegistration::bind(
-    WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
+    detail::WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept {
     dispatcher_ = &dispatcher;
     slot_ = slot;
     generation_ = generation;
@@ -64,6 +64,10 @@ void WorkerTimerRegistration::release() noexcept {
     slot_ = 0;
     generation_ = 0;
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 void WorkerDispatcher::scheduleTimer(WorkerTimerRegistration& registration,
     std::chrono::steady_clock::time_point deadline,

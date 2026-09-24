@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/PoolLeaseReleaseStatus.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
@@ -21,18 +22,13 @@
 
 namespace ruvia::detail {
 
-enum class PoolLeaseReleaseStatus : std::uint8_t {
-    kReleased,
-    kTransferredToWaiter,
-    kInvalidSlot,
-    kAlreadyReleased,
-};
+using PoolLeaseReleaseStatus = ::ruvia::PoolLeaseReleaseStatus;
 
 // Allocation-stable lease ownership for a single-worker connection pool.
 // Concrete integrations map the typed acquire result to their own public error
 // type and retain ownership of protocol connections; slot availability,
 // timeout queueing, handoff, double-release rejection, and closure live here.
-class PoolLeaseScheduler final {
+class PoolLeaseScheduler {
 public:
     PoolLeaseScheduler(std::size_t poolSize, std::pmr::memory_resource* resource = nullptr)
         : freeSlots_(pmrResourceOrDefault(resource)),
