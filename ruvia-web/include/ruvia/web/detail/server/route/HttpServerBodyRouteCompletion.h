@@ -8,10 +8,10 @@
 #include <string_view>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/body/HttpLazyBufferedBody.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"
@@ -30,7 +30,7 @@ struct HttpLazyBufferedBodyRouteState final {
     void emplace(Stream& stream, std::pmr::polymorphic_allocator<char> workerAllocator,
         std::pmr::memory_resource* requestResource, std::string_view bodyAndPipeline,
         Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit,
-        ConnectionScanner::Entry& scannerEntry) {
+        ruvia::ConnectionScanner::Entry& scannerEntry) {
         body.emplace(stream, workerAllocator, requestResource, bodyAndPipeline, bodyPlan, bodyLimit,
             scannerEntry);
     }
@@ -63,7 +63,7 @@ inline void prepareHttpLazyBufferedBodyRoute(HttpLazyBufferedBodyRouteState<Stre
 }
 
 inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
-    ConnectionScanner::Entry& scannerEntry, std::exception_ptr exception,
+    ruvia::ConnectionScanner::Entry& scannerEntry, std::exception_ptr exception,
     const Http1ServerRequestParseState& parsed, const RouteTable& routes,
     RequestMemory& requestMemory, ContextServices exceptionServices, HttpResponse& response) {
     response = co_await routes.handleException(
@@ -81,7 +81,7 @@ inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
 // and the access log not recorded yet, and both still read views that borrow it.
 template <typename TakePipeline>
 [[nodiscard]] inline Http1SessionRequestCompletion completeSuccessfulHttpBodyRoute(
-    ConnectionScanner::Entry& scannerEntry, HttpResponse& response,
+    ruvia::ConnectionScanner::Entry& scannerEntry, HttpResponse& response,
     Http1ServerConnectionPlan connectionPlan, Http1RequestSequence& requestSequence,
     Http1RequestBodyConsumption bodyConsumption, std::pmr::string& pipelineStash,
     TakePipeline takePipeline) {

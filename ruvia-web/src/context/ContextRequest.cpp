@@ -9,15 +9,12 @@
 #include <utility>
 
 #include "ruvia/core/Bytes.h"
+#include "ruvia/http/HttpAcceptMatch.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpContentCoding.h"
+#include "ruvia/http/HttpCookieFields.h"
+#include "ruvia/http/HttpRequestContentDecoding.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/field/HttpAcceptToken.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/detail/auth/CookieSignature.h"
@@ -180,23 +177,21 @@ const RequestNameValueList& Context::requestCookies() const {
     auto& cache = requestStorage().cookies;
     if (!cache) {
         auto cookies = detail::RequestNameValueListAccess::make(arena());
-        if (detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kCookie)) {
+        const auto headers = request_.headers();
+        if (request_.header("Cookie").has_value()) {
             detail::RequestNameValueListAccess::reserve(
                 cookies, detail::boundedFieldReserve(8));
-            const auto headers = request_.headers();
-            for (std::size_t i = 0; i < headers.size(); ++i) {
-                if (detail::HttpRequestAccess::headerKind(request_, i) !=
-                    std::to_underlying(detail::RequestHeaderKind::kCookie)) {
-                    continue;
-                }
-                const auto& header = headers[i];
-                detail::httpVisitSemicolonParameters(
-                    header.value(), [&cookies](std::string_view key, std::string_view value) {
-                        detail::RequestNameValueListAccess::pushBack(
-                            cookies, detail::RequestNameValueViewAccess::make(key, value));
-                        return true;
-                    });
+        }
+        for (const auto& header : headers) {
+            if (!httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+                continue;
             }
+            httpVisitCookiePairs(header.value(), [&cookies](std::string_view key,
+                                                 std::string_view value) {
+                detail::RequestNameValueListAccess::pushBack(
+                    cookies, detail::RequestNameValueViewAccess::make(key, value));
+                return true;
+            });
         }
         cache.emplace(std::move(cookies));
     }
@@ -253,22 +248,19 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     // every Accept line into one best-match accumulator (equivalent to the joined
     // value, and correct for a q=0 exclusion spread across lines) without
     // allocating to concatenate.
-    if (!detail::requestHasKnownHeader(request_, detail::RequestKnownHeader::kAccept)) {
+    if (!request_.header("Accept").has_value()) {
         return true;
     }
-    int bestSpecificity = -1;
-    int bestQuality = 0;
+    HttpAcceptMatch match;
     bool sawAccept = false;
     const auto headers = request_.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (detail::HttpRequestAccess::headerKind(request_, i) !=
-            std::to_underlying(detail::RequestHeaderKind::kAccept)) {
+    for (const auto& header : headers) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Accept")) {
             continue;
         }
         sawAccept = true;
-        if (!headers[i].value().empty()) {
-            detail::httpAccumulateMediaTypeAcceptance(
-                headers[i].value(), mediaType, bestSpecificity, bestQuality);
+        if (!header.value().empty()) {
+            match.updateMediaType(header.value(), mediaType);
         }
     }
     // Only absence means no preference. A present but empty Accept field is an
@@ -276,7 +268,7 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     if (!sawAccept) {
         return true;
     }
-    return bestSpecificity >= 0 && bestQuality > 0;
+    return match.matched();
 }
 
 namespace {
@@ -307,48 +299,40 @@ std::optional<std::string_view> Context::requestNegotiate(
     const bool mediaType = field == ContextRequest::Negotiable::kMediaType;
     // Only Accept-Language does RFC 4647 prefix matching; an encoding or charset
     // either is the offered token or is "*".
-    const bool prefixMatching = field == ContextRequest::Negotiable::kLanguage;
+    const auto tokenMode = field == ContextRequest::Negotiable::kLanguage
+                               ? HttpAcceptTokenMatchMode::kLanguagePrefix
+                               : HttpAcceptTokenMatchMode::kExact;
 
-    const auto expectedKind = mediaType ? std::to_underlying(detail::RequestHeaderKind::kAccept)
-                              : field == ContextRequest::Negotiable::kEncoding
-                                  ? std::to_underlying(detail::RequestHeaderKind::kAcceptEncoding)
-                                  : std::uint8_t{0};
     std::array<std::string_view, kMaxHttpHeaderFields> fieldValues{};
     std::size_t fieldValueCount = 0;
     bool sawField = false;
     const auto headers = request_.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (expectedKind != 0) {
-            if (detail::HttpRequestAccess::headerKind(request_, i) != expectedKind) {
-                continue;
-            }
-        } else if (!detail::httpAsciiEqualsIgnoreCase(headers[i].name(), headerName)) {
+    for (const auto& header : headers) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), headerName)) {
             continue;
         }
         sawField = true;
-        if (headers[i].value().empty() || fieldValueCount == fieldValues.size()) {
+        if (header.value().empty() || fieldValueCount == fieldValues.size()) {
             continue;
         }
-        fieldValues[fieldValueCount++] = headers[i].value();
+        fieldValues[fieldValueCount++] = header.value();
     }
 
     std::optional<std::string_view> best;
     int bestQuality = 0;
     for (const auto offered : supported) {
-        int specificity = -1;
-        int quality = 0;
+        HttpAcceptMatch match;
         for (std::size_t i = 0; i < fieldValueCount; ++i) {
             if (mediaType) {
-                detail::httpAccumulateMediaTypeAcceptance(
-                    fieldValues[i], offered, specificity, quality);
+                match.updateMediaType(fieldValues[i], offered);
             } else {
-                detail::httpAccumulateTokenAcceptance(
-                    fieldValues[i], offered, prefixMatching, specificity, quality);
+                match.updateToken(fieldValues[i], offered, tokenMode);
             }
         }
-        if (specificity < 0 || quality <= 0) {
+        if (!match.matched()) {
             continue;
         }
+        const auto quality = match.quality();
         // Strictly greater, so `supported` order breaks the client's ties and
         // reads as the server's own preference.
         if (quality > bestQuality) {
@@ -377,12 +361,12 @@ Task<std::string_view> Context::requestBody() const {
     } else if (requestBodySource().streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
-        raw = asChars(detail::requestBodyBytes(request_));
+        raw = asChars(request_.bodyBytes());
     }
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
-    const auto parsedCoding = detail::requestContentCoding(request_);
+    const auto parsedCoding = requestContentCoding(request_);
     if (const auto* invalid = parsedCoding.invalid()) {
         throw HttpProtocolError(invalid->status(), "invalid request Content-Encoding");
     }
@@ -393,7 +377,7 @@ Task<std::string_view> Context::requestBody() const {
     if (coding == HttpContentCoding::kIdentity) {
         co_return raw;
     }
-    auto decodeResult = detail::decodeHttpRequestContent(
+    auto decodeResult = decodeHttpRequestContent(
         coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = arena()});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
@@ -434,8 +418,8 @@ std::optional<std::string_view> ContextRequest::signedCookie(
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {
-    return detail::contentTypeMatches(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType), expected);
+    return detail::contentTypeMatches(request_.header("Content-Type").value_or(std::string_view{}),
+        expected);
 }
 
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
@@ -478,7 +462,7 @@ MultipartReader Context::requestMultipartReader() const {
 
 MultipartBoundary Context::multipartBoundary() const {
     const auto boundary = parseMultipartBoundary(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
+        request_.header("Content-Type").value_or(std::string_view{}));
     if (const auto* parsed = boundary.boundary()) {
         return *parsed;
     }

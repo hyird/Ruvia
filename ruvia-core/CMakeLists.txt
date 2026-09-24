@@ -41,13 +41,6 @@ ruvia_install_generated_public_header(
 
 ruvia_install_public_header_closure(core include/ruvia/core)
 
-# Cross-target contracts consumed by ruvia-web.
-ruvia_install_public_headers(core
-    include/ruvia/core/detail/io/IpAddress.h
-    include/ruvia/core/detail/number/DecimalNumber.h
-    include/ruvia/core/detail/util/Base64.h
-    include/ruvia/core/detail/util/DnsHost.h)
-
 if(WIN32)
     target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
 endif()

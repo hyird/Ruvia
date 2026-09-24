@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 
@@ -17,7 +17,7 @@ namespace ruvia::detail {
     if (prefix.empty() || prefix.front() != '/') {
         throw std::invalid_argument("fallback prefix must start with '/'");
     }
-    if (prefix.contains('?') || !isValidOriginFormTarget(prefix)) {
+    if (prefix.contains('?') || !isValidHttpOriginFormTarget(prefix)) {
         throw std::invalid_argument("fallback prefix must be an origin-form path without query");
     }
     while (prefix.size() > 1 && prefix.back() == '/') {

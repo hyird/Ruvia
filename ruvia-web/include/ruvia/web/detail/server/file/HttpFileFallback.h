@@ -12,9 +12,9 @@
 #include <asio.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
@@ -23,7 +23,7 @@ namespace ruvia::detail {
 
 template <typename Stream>
 Task<std::error_code> writeFileChunk(Stream& stream, std::pmr::string& chunk, std::size_t size) {
-    const auto writeCompletion = co_await asyncAsio([&stream, &chunk, size](auto handler) mutable {
+    const auto writeCompletion = co_await ruvia::asyncAsio([&stream, &chunk, size](auto handler) mutable {
         asio::async_write(stream, asio::buffer(chunk.data(), size), std::move(handler));
     });
     co_return writeCompletion.errorCode();
@@ -31,7 +31,7 @@ Task<std::error_code> writeFileChunk(Stream& stream, std::pmr::string& chunk, st
 
 template <typename Stream>
 Task<std::error_code> writeFileFallback(
-    Stream& stream, std::pmr::string& chunk, ResponseFileBody fileBody) {
+    Stream& stream, std::pmr::string& chunk, HttpResponseFileView fileBody) {
     ensureFileChunkBuffer(chunk);
     std::error_code error;
 
@@ -68,7 +68,7 @@ Task<std::error_code> writeFileFallback(
         const auto nextRead =
             static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), remaining));
         auto readCompletion =
-            co_await asyncAsio<std::size_t>([&input, &chunk, nextRead](auto handler) mutable {
+            co_await ruvia::asyncAsio<std::size_t>([&input, &chunk, nextRead](auto handler) mutable {
                 input.async_read_some(asio::buffer(chunk.data(), nextRead), std::move(handler));
             });
         const auto readEc = readCompletion.errorCode();
@@ -116,14 +116,14 @@ Task<std::error_code> writeFileFallback(
 
 template <typename Stream>
 Task<std::error_code> writeFileFallbackWithLocalChunk(
-    Stream& stream, WorkerMemory& memory, ResponseFileBody fileBody) {
+    Stream& stream, WorkerMemory& memory, HttpResponseFileView fileBody) {
     std::pmr::string localChunk(memory.allocator<char>());
     co_return co_await writeFileFallback(stream, localChunk, fileBody);
 }
 
 template <typename Stream>
 Task<std::error_code> writeFileFallback(Stream& stream, WorkerMemory& memory,
-    std::pmr::string* reusableChunk, ResponseFileBody fileBody) {
+    std::pmr::string* reusableChunk, HttpResponseFileView fileBody) {
     if (reusableChunk != nullptr) {
         return writeFileFallback(stream, *reusableChunk, fileBody);
     }

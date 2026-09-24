@@ -7,8 +7,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/http1/Http1CleartextInput.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/CleartextUpgrade.h"
 #include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
@@ -45,8 +45,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
     // parse result, response head, file chunk) is borrowed from a per-worker
     // pool only while the connection is actively serving and returned the moment
     // it goes idle, so an idle keep-alive connection holds none of it.
-    ConnectionScanner::Entry scannerEntry;
-    ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
+    ruvia::ConnectionScanner::Entry scannerEntry;
+    ruvia::ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
     const auto remoteAddress = baseRouteServices.connInfo().remote().address();
     // Re-resolved per request: one keep-alive connection carries many requests,
@@ -72,7 +72,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
     for (;;) {
-        scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+        scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kIdle);
 
         // Borrow-on-use / return-on-idle for the whole work set: when the
         // connection has no buffered bytes, return the work set to the
@@ -91,9 +91,9 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 // Idle wait for the next keep-alive request uses idleTimeout;
                 // the connection's first request uses requestHeaderTimeout.
                 scannerEntry.setPhase(servedKeepaliveRequest
-                                          ? ConnectionScanner::Phase::kIdle
-                                          : ConnectionScanner::Phase::kReadingInitial);
-                auto idleCompletion = co_await asyncAsio<std::size_t>(
+                                          ? ruvia::ConnectionScanner::Phase::kIdle
+                                          : ruvia::ConnectionScanner::Phase::kReadingInitial);
+                auto idleCompletion = co_await ruvia::asyncAsio<std::size_t>(
                     [&socket, &idleReadBuffer](auto handler) mutable {
                         socket.async_read_some(
                             asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()),
@@ -135,7 +135,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         struct RequestHeaderLifetime final {
             HttpRequest& request;
             ~RequestHeaderLifetime() {
-                HttpRequestAccess::reset(request);
+                request.reset();
             }
         } headerLifetime{parsed.request};
         HttpResponse response({.resource = requestMemory.resource()});
@@ -192,7 +192,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 // buffered write path sets kWriting before responding. Until
                 // one of those transitions, idleTimeout governs as the
                 // deadman switch for hung handlers.
-                scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+                scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kIdle);
                 // Negotiate against every coding first. A document root or a
                 // Context::staticFile route may serve an indexed precompressed
                 // sidecar even when this worker has no runtime encoder. The
@@ -241,7 +241,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                     break;
                 }
                 if (const auto* redirect = listener.redirect()) {
-                    if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
+                    if (parsed.request.header("Host").value_or(std::string_view{}).empty()) {
                         closingRejection = Http1ClosingRejection::error(
                             HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
                                 .message = "missing Host header"}));
@@ -423,7 +423,10 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             if (const auto* failure = parsed.failure()) {
                 if constexpr (kPlainTcp) {
                     if (listener.redirect() == nullptr &&
-                        shouldDropInvalidCleartextHttp1Input(bufferView, failure->source())) {
+                        ruvia::shouldDropInvalidCleartextHttp1Input(bufferView,
+                             failure->source() == Http1ServerRequestParseFailureSource::kRequestLine
+                                 ? Http1RequestParseFailureSource::kRequestLine
+                                 : Http1RequestParseFailureSource::kMessage)) {
                         co_return;
                     }
                 }
@@ -439,8 +442,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             // keepalive idle wait (idleTimeout); once any header bytes are
             // buffered, or on the first request, requestHeaderTimeout governs.
             scannerEntry.setPhase((usedBytes == 0 && servedKeepaliveRequest)
-                                      ? ConnectionScanner::Phase::kIdle
-                                      : ConnectionScanner::Phase::kReadingInitial);
+                                      ? ruvia::ConnectionScanner::Phase::kIdle
+                                      : ruvia::ConnectionScanner::Phase::kReadingInitial);
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 const auto error = httpParseProtocolError(HttpParseError::kHeaderTooLarge);
@@ -449,7 +452,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 break;
             }
 
-            auto readCompletion = co_await asyncAsio<std::size_t>(
+            auto readCompletion = co_await ruvia::asyncAsio<std::size_t>(
                 [&stream, &readBuffer, usedBytes](auto handler) mutable {
                     stream.async_read_some(
                         asio::buffer(readBuffer.data() + usedBytes, readBuffer.size() - usedBytes),
@@ -483,7 +486,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
         }
         auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
-            scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
+            scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kWriting);
             auto preparation = co_await prepareBufferedHttpResponseAsync(
                 parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
             if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy,
@@ -510,7 +513,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
             const auto responsePlan = http1BufferedResponsePlan(writePlan, connectionPlan);
             const auto writeResult = co_await writeResponse(
                 stream, memory_, &responseHead, &fileChunk, response, responsePlan);
-            scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+            scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kIdle);
             if (const auto committedStatus = writeResult.committedStatus()) {
                 recordHttpAccess(options_.accessLog, parsed.request, clientAddress,
                     *committedStatus, requestStart);
@@ -519,7 +522,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 co_return;
             }
         } else if (const auto* committed = requestCompletion->committedStream()) {
-            scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+            scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kIdle);
             recordHttpAccess(options_.accessLog, parsed.request, clientAddress, committed->status(),
                 requestStart);
         } else {

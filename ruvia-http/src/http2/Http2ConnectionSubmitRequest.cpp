@@ -2,8 +2,8 @@
 #include <memory_resource>
 #include <utility>
 
+#include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"

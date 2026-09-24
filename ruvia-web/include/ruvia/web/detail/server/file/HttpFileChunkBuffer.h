@@ -4,7 +4,7 @@
 #include <memory_resource>
 #include <string>
 
-#include "ruvia/http/detail/util/PmrString.h"
+#include "ruvia/core/PmrString.h"
 
 namespace ruvia::detail {
 
@@ -12,7 +12,7 @@ inline constexpr std::size_t kFileChunkBytes = 64 * 1024;
 
 inline void ensureFileChunkBuffer(std::pmr::string& chunk) {
     if (chunk.size() < kFileChunkBytes) {
-        resizePmrStringForOverwrite(chunk, kFileChunkBytes);
+        ::ruvia::resizePmrStringForOverwrite(chunk, kFileChunkBytes);
     }
 }
 

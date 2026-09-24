@@ -3,8 +3,8 @@
 
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -29,7 +29,7 @@ namespace {
 }  // namespace
 
 Task<void> HttpClientPool::initializeHttp2(
-    Connection& connection, const OperationTimeout& timeout) {
+    Connection& connection, const ruvia::OperationTimeout& timeout) {
     connection.http2 = makePmrObject<::ruvia::Http2Connection>(
         resource_, ::ruvia::Http2Connection::client({.resource = resource_}));
     while (connection.http2->wantsWrite()) {
@@ -123,8 +123,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 auto responseHead = std::move(*head).takeHead();
                 pending->response->state_->status = responseHead.status();
                 pending->response->state_->protocolVersion = responseHead.protocolVersion();
-                pending->response->state_->headers =
-                    std::move(HttpClientResponseHeadAccess::headers(responseHead));
+                pending->response->state_->headers = std::move(responseHead).takeHeaders();
                 pending->response->state_->headReady = true;
                 pending->response->state_->headSignal.notify();
             } catch (...) {
@@ -290,11 +289,11 @@ Task<void> HttpClientPool::runHttp2Reader(Connection& connection, std::uint64_t 
         while (runtime.generation == generation && !runtime.failed) {
             AsioCompletion<std::size_t> completion =
                 config_.scheme == HttpScheme::kHttps
-                    ? co_await asyncAsio<std::size_t>([&connection, &input](auto handler) mutable {
+                    ? co_await ruvia::asyncAsio<std::size_t>([&connection, &input](auto handler) mutable {
                           connection.stream.async_read_some(
                               asio::buffer(input), std::move(handler));
                       })
-                    : co_await asyncAsio<std::size_t>([&connection, &input](auto handler) mutable {
+                    : co_await ruvia::asyncAsio<std::size_t>([&connection, &input](auto handler) mutable {
                           connection.stream.next_layer().async_read_some(
                               asio::buffer(input), std::move(handler));
                       });
@@ -343,7 +342,7 @@ Task<void> HttpClientPool::runHttp2Writer(Connection& connection, std::uint64_t 
                 const auto pending = connection.http2->pendingOutput();
                 output.assign(pending);
                 (void)connection.http2->consumeOutput(pending.size());
-                const OperationTimeout writeTimeout(config_.writeTimeout);
+                const ruvia::OperationTimeout writeTimeout(config_.writeTimeout);
                 if (!armDeadline(connection, writeTimeout, DeadlineKind::kSocket)) {
                     failHttp2Session(
                         connection, generation, std::make_error_code(std::errc::timed_out));
@@ -351,12 +350,12 @@ Task<void> HttpClientPool::runHttp2Writer(Connection& connection, std::uint64_t 
                 }
                 AsioCompletion<std::size_t> completion =
                     config_.scheme == HttpScheme::kHttps
-                        ? co_await asyncAsio<std::size_t>(
+                        ? co_await ruvia::asyncAsio<std::size_t>(
                               [&connection, &output](auto handler) mutable {
                                   asio::async_write(
                                       connection.stream, asio::buffer(output), std::move(handler));
                               })
-                        : co_await asyncAsio<std::size_t>(
+                        : co_await ruvia::asyncAsio<std::size_t>(
                               [&connection, &output](auto handler) mutable {
                                   asio::async_write(connection.stream.next_layer(),
                                       asio::buffer(output), std::move(handler));
@@ -447,7 +446,7 @@ void HttpClientPool::removeHttp2Pending(
 }
 
 Task<void> HttpClientPool::waitForHttp2SessionStop(
-    Connection& connection, const OperationTimeout& timeout, StopToken stopToken) {
+    Connection& connection, const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     auto& runtime = *connection.http2Runtime;
     WorkerTimerRegistration deadlineTimer;
     if (const auto remaining = timeout.remaining()) {
@@ -505,7 +504,7 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
 }
 
 Task<void> HttpClientPool::executeHttp2(Connection& connection,
-    const HttpClientRequestStorage& request, const OperationTimeout& timeout, StopToken stopToken,
+    const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout, StopToken stopToken,
     HttpClientResponse& response) {
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestStorageAccess::view(request, headers);

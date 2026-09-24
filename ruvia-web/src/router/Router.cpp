@@ -2,7 +2,7 @@
 #include <stdexcept>
 
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 
@@ -212,7 +212,7 @@ void detail::RouterImpl::validateRouteTarget(
     if (!methodToken.empty() && RouteTable::isDynamicPath(path)) {
         throw std::invalid_argument("extension method routes must use a static path");
     }
-    if (path.contains('?') || !ruvia::detail::isValidOriginFormTarget(path)) {
+    if (path.contains('?') || !ruvia::isValidHttpOriginFormTarget(path)) {
         throw std::invalid_argument("route path must be an origin-form path without query");
     }
 

@@ -8,7 +8,7 @@ template <typename Stream>
 StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
     std::pmr::polymorphic_allocator<char> allocator, std::string_view initialBodyAndPipeline,
     Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit,
-    ConnectionScanner::Entry& scannerEntry)
+    ruvia::ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
       transferOutput_(allocator),
@@ -97,7 +97,7 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
     std::string_view input, std::pmr::string& target) {
     for (;;) {
         const auto oldSize = target.size();
-        resizePmrStringForOverwrite(target, oldSize + kBodyReadChunkBytes);
+        ::ruvia::resizePmrStringForOverwrite(target, oldSize + kBodyReadChunkBytes);
         const auto result = transferDecoder_->decode(
             input, std::span<char>(target.data() + oldSize, kBodyReadChunkBytes));
         input.remove_prefix(std::min(input.size(), result.consumedBytes()));
@@ -148,11 +148,11 @@ Task<void> StreamBodyReader<Stream>::readMore() {
         buffer_.reserve(nextCapacity);
     }
     const auto writable = std::min<std::size_t>(kBodyReadChunkBytes, hardLimit - oldSize);
-    resizePmrStringForOverwrite(buffer_, oldSize + writable);
+    ::ruvia::resizePmrStringForOverwrite(buffer_, oldSize + writable);
 
-    scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingPayload);
+    scannerEntry_.setPhase(ruvia::ConnectionScanner::Phase::kReadingPayload);
     auto readCompletion =
-        co_await asyncAsio<std::size_t>([this, oldSize, writable](auto handler) mutable {
+        co_await ruvia::asyncAsio<std::size_t>([this, oldSize, writable](auto handler) mutable {
             stream_.async_read_some(
                 asio::buffer(buffer_.data() + oldSize, writable), std::move(handler));
         });
@@ -174,7 +174,7 @@ bool StreamBodyReader<Stream>::exceedsLimit(std::size_t bytes) const noexcept {
 template <typename Stream>
 void StreamBodyReader<Stream>::markFinished() noexcept {
     finished_ = true;
-    scannerEntry_.setPhase(ConnectionScanner::Phase::kIdle);
+    scannerEntry_.setPhase(ruvia::ConnectionScanner::Phase::kIdle);
 }
 
 }  // namespace ruvia::detail

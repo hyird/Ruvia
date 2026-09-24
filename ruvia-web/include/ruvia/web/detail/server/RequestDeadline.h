@@ -6,7 +6,7 @@
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 
 // One request's handler deadline: a stop source that trips either when the
 // worker begins stopping or when the deadline elapses, whichever comes first.

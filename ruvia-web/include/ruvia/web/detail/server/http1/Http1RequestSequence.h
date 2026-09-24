@@ -5,7 +5,7 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
+#include "ruvia/http/Http1ServerSemantics.h"
 
 namespace ruvia::detail {
 

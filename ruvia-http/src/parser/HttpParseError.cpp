@@ -1,6 +1,6 @@
 #include "ruvia/http/HttpParseError.h"
 
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 
 namespace ruvia {
 
@@ -10,7 +10,7 @@ HttpProtocolError httpParseProtocolError(HttpParseError error) noexcept {
             return HttpProtocolError(
                 http_status::kRequestHeaderFieldsTooLarge, "request header is too large");
         case HttpParseError::kBodyTooLarge:
-            return detail::HttpRequestBodyFailure::tooLarge().protocolError();
+            return HttpRequestBodyFailure::tooLarge().protocolError();
         case HttpParseError::kInvalidRequestLine:
             return HttpProtocolError(http_status::kBadRequest, "invalid request line");
         case HttpParseError::kUnsupportedHttpVersion:

@@ -1,8 +1,7 @@
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpAcceptEncoding.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 
 namespace ruvia {
@@ -33,14 +32,11 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);
     }
 
-    detail::HttpResponseCodingQualities qualities;
-    if (detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding)) {
-        const auto headers = request.headers();
-        for (std::size_t i = 0; i < headers.size(); ++i) {
-            if (detail::HttpRequestAccess::headerKind(request, i) ==
-                std::to_underlying(detail::RequestHeaderKind::kAcceptEncoding)) {
-                qualities.update(headers[i].value());
-            }
+    HttpResponseCodingQualities qualities;
+    const auto headers = request.headers();
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        if (httpAsciiEqualsIgnoreCase(headers[i].name(), "Accept-Encoding")) {
+            qualities.update(headers[i].value());
         }
     }
 
@@ -56,7 +52,7 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         {".gz", HttpContentCoding::kGzip, std::nullopt, std::nullopt},
     };
 
-    auto available = detail::HttpResponseCodingCandidates::identityOnly();
+    auto available = HttpResponseCodingCandidates::identityOnly();
     std::pmr::string variantPath(resource);
     for (auto& candidate : candidates) {
         if (!qualities.accepts(candidate.contentCoding)) {
@@ -86,7 +82,7 @@ std::optional<StaticFileRepresentation> selectStaticFileRepresentation(const Sta
         }
     }
 
-    const auto selectionResult = detail::HttpResponseCodingSelection::select(qualities, available);
+    const auto selectionResult = HttpResponseCodingSelection::select(qualities, available);
     if (const auto* selection = selectionResult.selected()) {
         if (selection->coding() == HttpContentCoding::kIdentity) {
             return StaticFileRepresentation(identity, HttpContentCoding::kIdentity);

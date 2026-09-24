@@ -7,7 +7,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/http/Http1InterimResponseWriter.h"
 
 namespace ruvia::detail {
@@ -23,7 +23,7 @@ Task<void> writeHttp1Continue(Stream& stream) {
     }
 
     const auto writeCompletion =
-        co_await asyncAsio([&stream, head = prepared->head()](auto handler) mutable {
+        co_await ruvia::asyncAsio([&stream, head = prepared->head()](auto handler) mutable {
             asio::async_write(stream, asio::buffer(head), std::move(handler));
         });
     const auto ec = writeCompletion.errorCode();

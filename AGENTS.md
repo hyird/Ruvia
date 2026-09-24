@@ -90,9 +90,9 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 禁止在本 target 下创建或安装到另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target 目录里的文件。
 
-跨 target 复用的编译期契约头放在所属 target 的 `include/ruvia/<target>/detail/`。禁止把另一个 target 的 `src/` 加入 include path，也禁止通过物理相对或绝对路径包含另一个 target 的源码或私有头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头。
+跨 target 只能引用依赖库非 `detail` 的公开头，不得直接引用另一个 target 的内部头或 `src/`；库内实现可以引用本库的 `detail` 头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头，不得通过物理相对或绝对路径穿透源码目录。跨库复用能力由所属 target 提供职责明确的公开 API，不把私有状态访问器直接公开。
 
-安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。少数跨 target 编译期契约由拥有它的 target 显式安装。
+安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。
 
 `src/` 下最多保留一层业务分类目录，例如 `server/`、`http2/`、`websocket/`、`client/`；不要引入 `src/net/...`、`src/*/core/...` 等重复层级。`ruvia-core/src/` 保持扁平。`src/` 只保存实现和 target 自有 `pch.h`，契约头统一放在公开 `detail/` 根。
 

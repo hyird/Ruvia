@@ -12,14 +12,13 @@
 
 #include <asio.hpp>
 
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/util/PmrString.h"
-#include "ruvia/http/detail/websocket/WsConnection.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/WebSocketServerProtocol.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 #include "ruvia/web/detail/websocket/WsTransportReadResult.h"
@@ -32,13 +31,13 @@ namespace ruvia::detail {
 // policy, which supplies four transport-specific operations:
 //   asio-executor executor() const;
 //   Task<WsTransportReadResult> readMore(std::pmr::string& buffer);
-//   Task<std::error_code> writeBytes(std::string_view, WsTransportDisposition);
+//   Task<std::error_code> writeBytes(std::string_view, WebSocketServerTransportDisposition);
 //   void abort() noexcept;  // abort this WebSocket transport, not an unrelated h2 stream
 template <typename Transport>
 class WebSocketConnection final {
 public:
     WebSocketConnection(Transport transport, const WorkerHandle& worker,
-        ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions,
+        ruvia::ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions,
         ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource,
         std::string_view initialBytes = {},
         WebSocketCompression compression = WebSocketCompression::kDisabled,
@@ -55,7 +54,7 @@ public:
             periodicCheck_, this, &WebSocketConnection::heartbeatTickThunk);
     }
 
-    WebSocketConnection(Transport, WorkerHandle&&, ConnectionScanner::Entry&,
+    WebSocketConnection(Transport, WorkerHandle&&, ruvia::ConnectionScanner::Entry&,
         WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*,
         std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled, int = 6) = delete;
 
@@ -207,10 +206,10 @@ private:
     void notifyWriteIdle() noexcept;
 
     Transport transport_;
-    ConnectionScanner::Entry& scannerEntry_;
+    ruvia::ConnectionScanner::Entry& scannerEntry_;
     WebSocketLifecycleOptions lifecycleOptions_{};
     std::pmr::string buffer_;
-    WsConnection protocol_;
+    WebSocketServerProtocol protocol_;
     WorkerSignal backgroundWriteSignal_;
     WorkerSignal readerDoneSignal_;
     WritePhase writePhase_{WritePhase::kIdle};
@@ -219,7 +218,7 @@ private:
     WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
-    ConnectionScanner::PeriodicCheckRegistration periodicCheck_;
+    ruvia::ConnectionScanner::PeriodicCheckRegistration periodicCheck_;
 };
 
 }  // namespace ruvia::detail

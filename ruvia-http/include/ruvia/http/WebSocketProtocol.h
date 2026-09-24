@@ -59,6 +59,14 @@ struct WebSocketMessageAccess;
 
 class WebSocketMessage final {
 public:
+    // Construct a message view over caller-owned payload storage. The payload
+    // must remain valid until the next read on its connection or until the
+    // caller otherwise stops using this view.
+    [[nodiscard]] static constexpr WebSocketMessage borrow(
+        WebSocketOpcode opcode, std::string_view payload) noexcept {
+        return WebSocketMessage(opcode, payload);
+    }
+
     WebSocketMessage(const WebSocketMessage&) noexcept = default;
     WebSocketMessage& operator=(const WebSocketMessage&) noexcept = default;
     WebSocketMessage(WebSocketMessage&&) noexcept = default;

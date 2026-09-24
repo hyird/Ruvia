@@ -1,15 +1,15 @@
 #include <string_view>
 
+#include "ruvia/http/Http2CleartextPreface.h"
 #include "ruvia/http/Http2Framing.h"
-#include "ruvia/http/detail/http2/Http2CleartextPreface.h"
 
 #include "test_harness.h"
 
 namespace {
 
+using ruvia::Http2CleartextPrefaceProbe;
 using ruvia::kHttp2ClientPreface;
-using ruvia::detail::Http2CleartextPrefaceProbe;
-using ruvia::detail::probeHttp2CleartextPreface;
+using ruvia::probeHttp2CleartextPreface;
 
 }  // namespace
 

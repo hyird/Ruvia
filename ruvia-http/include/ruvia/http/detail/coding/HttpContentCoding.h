@@ -24,10 +24,6 @@ struct HttpContentCodingFieldResultAccess final {
     }
 };
 
-[[nodiscard]] inline constexpr std::string_view httpSupportedRequestContentCodings() noexcept {
-    return "gzip, br, zstd";
-}
-
 // Accumulates list grammar across every Content-Encoding field line. Recipients
 // ignore empty list members, while senders cannot generate them.
 class HttpContentCodingFieldParser final {

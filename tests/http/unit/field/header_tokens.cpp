@@ -3,6 +3,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/HttpFieldWhitespace.h"
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
@@ -29,6 +30,11 @@ struct MatchAnyHeaderToken final {
 };
 
 }  // namespace
+
+RUVIA_TEST(http_field_ows_trims_only_space_and_tab) {
+    RUVIA_CHECK_EQ(ruvia::httpTrimOws(" \t text/plain \t"), std::string_view("text/plain"));
+    RUVIA_CHECK_EQ(ruvia::httpTrimOws("\ntext/plain\n"), std::string_view("\ntext/plain\n"));
+}
 
 RUVIA_TEST(header_has_token_case_insensitive) {
     RUVIA_CHECK(httpHasToken("gzip, deflate", "deflate"));

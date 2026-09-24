@@ -2,7 +2,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -25,7 +25,7 @@ struct Http2ServerSessionSetup final {
     WorkerMemory& memory;
     const RouteTable& routes;
     const HttpServerOptions& options;
-    ConnectionScanner::Entry& scannerEntry;
+    ruvia::ConnectionScanner::Entry& scannerEntry;
     ContextServices services;
     const HttpServerWorkerState& workerState;
 };

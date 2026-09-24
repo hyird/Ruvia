@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ruvia/core/BlockingPool.h"
-#include "ruvia/core/detail/util/FailureReport.h"
+#include "ruvia/core/FailureReport.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/RateLimitRule.h"
@@ -61,7 +61,7 @@ struct ConnectionFailureSink final {
             callback(ConnectionFailureRecordAccess::make(remoteAddress, std::move(exception)));
             return;
         }
-        reportUnhandledFailure("web connection", std::move(exception));
+        ruvia::reportUnhandledFailure("web connection", std::move(exception));
     }
 };
 

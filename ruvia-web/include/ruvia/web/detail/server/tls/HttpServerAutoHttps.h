@@ -12,10 +12,8 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 namespace ruvia::detail {
 
@@ -40,9 +38,8 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kPermanentRedirect);
 
-    const auto hostField = requestKnownHeader(request, RequestKnownHeader::kHost);
-    const auto authority = parseHttpAuthority(hostField);
-    const auto host = authority.has_value() ? authority->host() : std::string_view{};
+    const auto hostField = request.header("Host").value_or(std::string_view{});
+    const auto host = parseHttpAuthorityHost(hostField).value_or(std::string_view{});
     auto path = request.path();
     if (path.empty() || path.front() != '/') {
         path = "/";
@@ -66,7 +63,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     // varies by Host. Mark it private so a shared cache never stores one Host's
     // redirect and serves it for another (a Host-header cache-poisoning open
     // redirect); a browser still caches it per-origin, keeping the HTTPS memory.
-    setResponseHeaderStableView(response, "Cache-Control", "private");
+    response.header("Cache-Control", "private");
     return response;
 }
 

@@ -7,7 +7,7 @@
 #include <asio/bind_executor.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"

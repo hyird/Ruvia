@@ -7,15 +7,15 @@
 
 #include "ruvia/http/detail/util/PmrString.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
-void ResponseHeadBuffer::reset() noexcept {
+void HttpResponseHeadBuffer::reset() noexcept {
     // Same retain-small-else-release policy as every other pooled scratch buffer.
-    clearPmrStringRetainingSmall(heap_, kResponseHeadRetainedHeapBytes);
+    detail::clearPmrStringRetainingSmall(heap_, kResponseHeadRetainedHeapBytes);
     state_.emplace<StackState>();
 }
 
-void ResponseHeadBuffer::spillToHeap(std::size_t minCapacity) {
+void HttpResponseHeadBuffer::spillToHeap(std::size_t minCapacity) {
     const auto* const stackState = std::get_if<StackState>(&state_);
     if (stackState == nullptr) {
         return;
@@ -26,7 +26,7 @@ void ResponseHeadBuffer::spillToHeap(std::size_t minCapacity) {
     state_.emplace<HeapState>();
 }
 
-void ResponseHeadBuffer::append(std::string_view value) {
+void HttpResponseHeadBuffer::append(std::string_view value) {
     if (auto* const stackState = std::get_if<StackState>(&state_)) {
         if (value.size() <= stack_.size() - stackState->used) {
             std::memcpy(stack_.data() + stackState->used, value.data(), value.size());
@@ -41,7 +41,7 @@ void ResponseHeadBuffer::append(std::string_view value) {
     heap_.append(value);
 }
 
-void ResponseHeadBuffer::append(char value) {
+void HttpResponseHeadBuffer::append(char value) {
     if (auto* const stackState = std::get_if<StackState>(&state_)) {
         if (stackState->used < stack_.size()) {
             stack_[stackState->used++] = value;
@@ -52,7 +52,7 @@ void ResponseHeadBuffer::append(char value) {
     heap_.push_back(value);
 }
 
-void ResponseHeadBuffer::appendUnsigned(std::uint64_t value) {
+void HttpResponseHeadBuffer::appendUnsigned(std::uint64_t value) {
     std::array<char, 32> buffer;
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec == std::errc{}) {
@@ -60,7 +60,7 @@ void ResponseHeadBuffer::appendUnsigned(std::uint64_t value) {
     }
 }
 
-void ResponseHeadBuffer::reserveAdditional(std::size_t size) {
+void HttpResponseHeadBuffer::reserveAdditional(std::size_t size) {
     if (std::holds_alternative<HeapState>(state_)) {
         if (size > heap_.max_size() - heap_.size()) {
             throw std::length_error("HTTP response head is too large");
@@ -75,16 +75,16 @@ void ResponseHeadBuffer::reserveAdditional(std::size_t size) {
     spillToHeap(used + size);
 }
 
-std::string_view ResponseHeadBuffer::view() const& noexcept {
+std::string_view HttpResponseHeadBuffer::view() const& noexcept {
     if (const auto* const stackState = std::get_if<StackState>(&state_)) {
         return std::string_view(stack_.data(), stackState->used);
     }
     return std::string_view(heap_);
 }
 
-bool ResponseHeadBuffer::canAppendOnStack(std::size_t size) const noexcept {
+bool HttpResponseHeadBuffer::canAppendOnStack(std::size_t size) const noexcept {
     const auto* const stackState = std::get_if<StackState>(&state_);
     return stackState != nullptr && size <= stack_.size() - stackState->used;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

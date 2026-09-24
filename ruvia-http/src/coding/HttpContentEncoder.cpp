@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/coding/HttpContentEncoder.h"
+#include "ruvia/http/HttpContentEncoder.h"
 
 #include <brotli/encode.h>
 #include <zlib.h>
@@ -19,15 +19,15 @@
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 namespace {
 
 voidpf gzipAllocate(voidpf opaque, uInt items, uInt size) noexcept {
-    return zlibPmrAllocate(static_cast<std::pmr::memory_resource*>(opaque), items, size);
+    return detail::zlibPmrAllocate(static_cast<std::pmr::memory_resource*>(opaque), items, size);
 }
 
 void gzipFree(voidpf, voidpf address) noexcept {
-    zlibPmrFree(address);
+    detail::zlibPmrFree(address);
 }
 
 [[nodiscard]] bool appendOutput(
@@ -84,12 +84,12 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
             return deflateInit2(&impl.gzip, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8,
                        Z_DEFAULT_STRATEGY) == Z_OK;
         case HttpContentCoding::kBrotli:
-            impl.brotli = BrotliEncoderCreateInstance(&pmrCodecAllocate, &pmrCodecFree, resource);
+            impl.brotli = BrotliEncoderCreateInstance(&detail::pmrCodecAllocate, &detail::pmrCodecFree, resource);
             return impl.brotli != nullptr &&
                    BrotliEncoderSetParameter(impl.brotli, BROTLI_PARAM_QUALITY, 5) == BROTLI_TRUE;
         case HttpContentCoding::kZstd: {
             impl.zstd = ZSTD_createCCtx_advanced(
-                ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, resource});
+                ZSTD_customMem{&detail::pmrCodecAllocate, &detail::pmrCodecFree, resource});
             return impl.zstd != nullptr &&
                    ZSTD_isError(ZSTD_CCtx_setParameter(
                        impl.zstd, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) == 0 &&
@@ -219,7 +219,7 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
 HttpContentEncoder::HttpContentEncoder(
     HttpContentCoding coding, std::pmr::memory_resource* resource)
     : coding_(coding),
-      resource_(httpPmrResourceOrDefault(resource)),
+      resource_(detail::httpPmrResourceOrDefault(resource)),
       impl_(nullptr) {
     if (coding_ == HttpContentCoding::kIdentity) {
         return;
@@ -329,4 +329,4 @@ HttpContentEncodeStep HttpContentEncoder::finish(std::pmr::string& output) {
     return result;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

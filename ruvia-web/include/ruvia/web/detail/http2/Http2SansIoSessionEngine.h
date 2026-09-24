@@ -11,9 +11,10 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/core/WorkerSignal.h"
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
+#include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 #include "ruvia/web/detail/http2/Http2SansIoSessionContext.h"
 #include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -40,7 +41,6 @@ public:
     Http2SansIoSessionEngine(Http2SansIoSessionEngine&&) = delete;
     Http2SansIoSessionEngine& operator=(Http2SansIoSessionEngine&&) = delete;
 
-    void beginConnection();
     void drainEvents();
     [[nodiscard]] Http2FeedResult feedAndDrain(std::string_view bytes);
 
@@ -50,6 +50,7 @@ public:
     [[nodiscard]] bool writerShouldExit() const noexcept;
     [[nodiscard]] Task<void> waitForWrite();
     void writerWriteFailed(std::error_code error) noexcept;
+    void outputWriteCompleted() noexcept;
     void writerCompleted(std::exception_ptr exception) noexcept;
 
     [[nodiscard]] bool connectionFailed() const noexcept;
@@ -70,7 +71,6 @@ private:
     [[nodiscard]] Task<void> dispatchOne(std::uint32_t streamId);
     [[nodiscard]] bool admitStream(std::uint32_t streamId);
     void resetStreamNoThrow(std::uint32_t streamId, Http2ErrorCode error) noexcept;
-    void unpinStreamNoThrow(std::uint32_t streamId) noexcept;
 
     asio::any_io_executor executor_;
     asio::ip::tcp::socket& socket_;
@@ -78,8 +78,9 @@ private:
     WorkerMemory& worker_;
     Http2SansIoSessionContext session_;
     std::string_view remoteAddress_;
-    Http2Connection connection_;
+    ruvia::Http2Connection connection_;
     WorkerSignal writeSignal_;
+    Http2DataOutputBudget outputBudget_;
     WorkerSignal handlerFinished_;
     WorkerSignal writerFinished_;
     Http2SansIoSessionLifecycle lifecycle_;

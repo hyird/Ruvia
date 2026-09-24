@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/coding/HttpRequestContentSemantics.h"
+#include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -424,6 +424,30 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
     http2EncodeWebSocketHandshakeHeaders(stream->localHeaderBlock(), negotiation);
     commitConnectResponseHead(*stream, terminalRemoteHalf);
     return Http2WebSocketHandshakeSubmitResult::makeSubmitted(std::move(negotiation));
+}
+
+Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId, const WebSocketHandshakeValidationResult& validation,
+    WebSocketServerNegotiation&& negotiation) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isAborted()) {
+        return Http2WebSocketHandshakeSubmitResult::makeFailure(
+            Http2WebSocketHandshakeSubmitError::kClosed);
+    }
+    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
+        http2RemotePeerHalfClosed(*stream) || stream->localSend().headPending() == nullptr ||
+        !http2IsPendingWebSocketConnect(*stream) || validation.accepted() == nullptr) {
+        return Http2WebSocketHandshakeSubmitResult::makeFailure(
+            Http2WebSocketHandshakeSubmitError::kInvalidState);
+    }
+    return submitWebSocketHandshake(streamId, std::move(negotiation));
+}
+
+Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId, const HttpRequest& request,
+    const WebSocketHandshakeValidationResult& validation) {
+    auto negotiation = makeWebSocketServerNegotiation(request);
+    return submitWebSocketHandshake(streamId, validation, std::move(negotiation));
 }
 
 Http2FinishSubmitStatus Http2Connection::finishResponse(

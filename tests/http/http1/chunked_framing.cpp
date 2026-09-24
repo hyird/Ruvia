@@ -6,15 +6,16 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/Http1ChunkedFraming.h"
 #include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 
 #include "test_harness.h"
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
-    const ruvia::detail::Http1ChunkHeader zero(0);
-    const ruvia::detail::Http1ChunkHeader fifteen(15);
-    const ruvia::detail::Http1ChunkHeader sixteen(16);
-    const ruvia::detail::Http1ChunkHeader abc(0xabc);
+    const ruvia::Http1ChunkHeader zero(0);
+    const ruvia::Http1ChunkHeader fifteen(15);
+    const ruvia::Http1ChunkHeader sixteen(16);
+    const ruvia::Http1ChunkHeader abc(0xabc);
     RUVIA_CHECK_EQ(zero.view(), std::string_view("0\r\n"));
     RUVIA_CHECK_EQ(fifteen.view(), std::string_view("f\r\n"));
     RUVIA_CHECK_EQ(sixteen.view(), std::string_view("10\r\n"));
@@ -22,7 +23,7 @@ RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {
 }
 
 RUVIA_TEST(http1_chunk_header_buffer_covers_size_t_max) {
-    const ruvia::detail::Http1ChunkHeader header((std::numeric_limits<std::size_t>::max)());
+    const ruvia::Http1ChunkHeader header((std::numeric_limits<std::size_t>::max)());
     const auto encoded = header.view();
     RUVIA_CHECK_EQ(encoded.size(), sizeof(std::size_t) * 2 + 2);
     RUVIA_CHECK(encoded.ends_with("\r\n"));

@@ -6,8 +6,8 @@
 
 #include <openssl/rand.h>
 
+#include "ruvia/core/Hex.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/Hex.h"
 #include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 
@@ -23,8 +23,8 @@ SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept {
         return SecureTokenResult::makeFailure();
     }
     for (std::size_t i = 0; i < kRandomBytes; ++i) {
-        buffer[i * 2] = lowerHexDigit(raw[i] >> 4);
-        buffer[i * 2 + 1] = lowerHexDigit(raw[i]);
+        buffer[i * 2] = ::ruvia::lowerHexDigit(raw[i] >> 4);
+        buffer[i * 2 + 1] = ::ruvia::lowerHexDigit(raw[i]);
     }
     return SecureTokenResult::makeReady(std::string_view(buffer.data(), kRandomBytes * 2));
 }

@@ -7,7 +7,7 @@
 
 #include <asio/bind_executor.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/db/DbClientState.h"
 
 namespace ruvia::detail {

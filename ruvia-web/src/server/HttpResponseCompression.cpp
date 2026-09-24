@@ -7,16 +7,10 @@
 #include <utility>
 
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpMediaType.h"
 
 namespace ruvia::detail {
 namespace {
@@ -67,7 +61,7 @@ struct BufferedCompressionAttempt final {
     if (contentType.empty()) {
         return false;
     }
-    const auto mediaType = httpMediaTypeOnly(contentType);
+    const auto mediaType = ::ruvia::httpMediaTypeOnly(contentType);
     if (mediaType.empty()) {
         return false;
     }
@@ -91,11 +85,8 @@ struct BufferedCompressionAttempt final {
 
 [[nodiscard]] CacheControl responseCacheControl(const HttpResponse& response) noexcept {
     CacheControlFieldParser parser;
-    if (!responseHasKnownHeader(response, kResponseHeaderCacheControl)) {
-        return parser.finish();
-    }
     for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) == kResponseHeaderCacheControl) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Cache-Control")) {
             parser.update(header.value());
         }
     }
@@ -107,7 +98,7 @@ struct BufferedCompressionAttempt final {
 HttpResponseCompressionEligibility httpResponseCompressionEligibility(
     const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod,
     const HttpResponse& response, ResponseStreamKind kind) noexcept {
-    const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
+    const auto bodyPlan = planHttpServerResponseBody(requestMethod, response.status());
     if (!bodyPlan.statusAllowsBody()) {
         return HttpResponseCompressionEligibility::kIneligible;
     }
@@ -117,11 +108,11 @@ HttpResponseCompressionEligibility httpResponseCompressionEligibility(
         return HttpResponseCompressionEligibility::kIneligible;
     }
 
-    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
-        responseHasKnownHeader(response, kResponseHeaderContentRange) ||
+    if (responseHasHeaderName(response, "Content-Encoding") ||
+        responseHasHeaderName(response, "Content-Range") ||
         (kind != ResponseStreamKind::kSse &&
             responseContentTypeSkipsCompression(
-                responseKnownHeader(response, kResponseHeaderContentType))) ||
+                response.header("Content-Type").value_or(std::string_view{}))) ||
         responseCacheControl(response).has(CacheControlDirective::kNoTransform)) {
         return HttpResponseCompressionEligibility::kIneligible;
     }
@@ -130,14 +121,14 @@ HttpResponseCompressionEligibility httpResponseCompressionEligibility(
 
 HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection,
     HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
-    const auto& responseContent = responseBody(response);
+    const auto responseContent = response.bodyBytes();
 
     // These responses never vary by Accept-Encoding, so they are served identity
     // with no Vary (RFC 9110 12.5.5 SHOULD NOT list a field that does not affect
     // the representation): a file body (framed and Vary'd by the static-file path),
     // an already-chosen Content-Encoding, a Content-Range, an incompressible media
     // type, or an explicit no-transform.
-    if (responseContent.file().has_value() ||
+    if (response.fileBody().has_value() ||
         httpResponseCompressionEligibility(selection, requestMethod, response,
             ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
         return HttpResponseCompressionResult::makeNotApplicable();
@@ -150,18 +141,18 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     // accepted no coding we support, or the body is below the size threshold. Set
     // Vary regardless of the outcome so a shared cache never serves this identity
     // body to a client that would receive the compressed one (RFC 9110 12.5.5).
-    addVaryToken(response, "Accept-Encoding");
+    response.addVaryToken("Accept-Encoding");
 
     if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes ||
         responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
-    const auto body = responseContent.bytes();
+    const auto body = responseContent;
     const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
     std::optional<HttpContentEncodeResult> encoding;
     try {
         encoding.emplace(encodeHttpContent(coding, body,
-            {.maxEncodedBytes = maxEncodedBytes, .resource = responseResource(response)}));
+            {.maxEncodedBytes = maxEncodedBytes, .resource = response.memoryResource()}));
     } catch (...) {
         return HttpResponseCompressionResult::makeFailed();
     }
@@ -176,8 +167,8 @@ HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingS
     }
 
     try {
-        replaceResponseBodyWithContentEncoding(
-            response, std::move(*encoded).takeBytes(), httpContentCodingToken(coding));
+        response.replaceBodyWithContentEncoding(
+            std::move(*encoded).takeBytes(), httpContentCodingToken(coding));
     } catch (...) {
         // The representation commit stages every affected header before
         // publishing the owned body. A request-resource failure therefore
@@ -192,8 +183,8 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
     const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
     HttpResponse& response, CompressionConfig options, BlockingPool* pool,
     const WorkerHandle& worker) {
-    const auto& responseContent = responseBody(response);
-    if (responseContent.file().has_value() ||
+    const auto responseContent = response.bodyBytes();
+    if (response.fileBody().has_value() ||
         httpResponseCompressionEligibility(selection, requestMethod, response,
             ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
         co_return HttpResponseCompressionResult::makeNotApplicable();
@@ -211,14 +202,14 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
         options.syncBytes = options.maxBytes;
         co_return applyResponseCompression(selection, requestMethod, response, options);
     }
-    addVaryToken(response, "Accept-Encoding");
+    response.addVaryToken("Accept-Encoding");
     if (coding == HttpContentCoding::kIdentity || size < options.minBytes ||
         size > options.maxBytes) {
         co_return HttpResponseCompressionResult::makeNotApplicable();
     }
 
     try {
-        std::pmr::string plain(responseContent.bytes(), processResource());
+        std::pmr::string plain(responseContent, processResource());
         auto result =
             co_await tryRunBlocking(*pool, worker, [coding, plain = std::move(plain)]() mutable {
                 return encodeBufferedBody(coding, std::move(plain));
@@ -240,8 +231,8 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
             co_return HttpResponseCompressionResult::makeFailed();
         }
         try {
-            replaceResponseBodyWithContentEncoding(
-                response, std::move(attempt.bytes), httpContentCodingToken(coding));
+            response.replaceBodyWithContentEncoding(
+                std::move(attempt.bytes), httpContentCodingToken(coding));
         } catch (...) {
             co_return HttpResponseCompressionResult::makeFailed();
         }
@@ -261,8 +252,8 @@ bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& sele
         return false;
     }
 
-    addVaryToken(response, "Accept-Encoding");
-    applyResponseContentEncoding(response, httpContentCodingToken(selection.coding()));
+    response.addVaryToken("Accept-Encoding");
+    response.applyContentEncoding(httpContentCodingToken(selection.coding()));
     return true;
 }
 

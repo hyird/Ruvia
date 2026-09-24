@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/PmrObject.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/app/EnvState.h"
 
 namespace ruvia {
@@ -53,14 +53,14 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
     // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
     // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
     // fold bytes unexpectedly).
-    if (detail::httpAsciiEqualsIgnoreCase(value, "true") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "yes") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "on")) {
+    if (httpAsciiEqualsIgnoreCase(value, "true") ||
+        httpAsciiEqualsIgnoreCase(value, "yes") ||
+        httpAsciiEqualsIgnoreCase(value, "on")) {
         return true;
     }
-    if (detail::httpAsciiEqualsIgnoreCase(value, "false") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "no") ||
-        detail::httpAsciiEqualsIgnoreCase(value, "off")) {
+    if (httpAsciiEqualsIgnoreCase(value, "false") ||
+        httpAsciiEqualsIgnoreCase(value, "no") ||
+        httpAsciiEqualsIgnoreCase(value, "off")) {
         return false;
     }
 

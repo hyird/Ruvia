@@ -8,13 +8,13 @@
 #include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
-#include "ruvia/http/detail/util/PmrString.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 
@@ -47,6 +47,43 @@ public:
         queuedBytes_ += queuedChunk_.size() - before;
     }
 
+    void enqueue(std::string_view data, Http2ReceivedDataCredit&& credit) {
+        if (data.empty()) {
+            return;
+        }
+        const auto before = queuedChunk_.size();
+        // Commit byte accounting only after append succeeds. The incoming
+        // credit is still untouched if allocation throws, so its owner can
+        // safely return it during unwinding.
+        queuedChunk_.append(data.data(), data.size());
+        queuedBytes_ += queuedChunk_.size() - before;
+        if (!credit.valid()) {
+            return;
+        }
+        if (!queuedCredit_.has_value()) {
+            queuedCredit_.emplace(std::move(credit));
+            return;
+        }
+        if (queuedCredit_->merge(std::move(credit)) !=
+            Http2ReceivedDataCreditMergeStatus::kMerged) {
+            std::terminate();
+        }
+    }
+
+    [[nodiscard]] bool enqueueBounded(std::string_view data,
+        Http2ReceivedDataCredit&& credit, std::size_t backlogLimit) {
+        if (queuedBytes_ > backlogLimit || data.size() > backlogLimit - queuedBytes_) {
+            return false;
+        }
+        enqueue(data, std::move(credit));
+        return true;
+    }
+
+    // Release credits only after the consumer has copied/finished the active view.
+    void releaseActiveCredits() noexcept {
+        activeCredit_.reset();
+    }
+
     [[nodiscard]] bool empty() const noexcept {
         return queuedChunk_.empty();
     }
@@ -57,18 +94,27 @@ public:
 
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() & {
-        clearPmrStringRetainingSmall(activeChunk_);
+        ::ruvia::clearPmrStringRetainingSmall(activeChunk_);
+        releaseActiveCredits();
         if (queuedChunk_.empty()) {
             return {};
         }
         activeChunk_.swap(queuedChunk_);
+        if (queuedCredit_.has_value()) {
+            activeCredit_.emplace(std::move(*queuedCredit_));
+            queuedCredit_.reset();
+        }
         queuedBytes_ = 0;
-        clearPmrStringRetainingSmall(queuedChunk_);
+        ::ruvia::clearPmrStringRetainingSmall(queuedChunk_);
         return std::string_view(activeChunk_);
     }
     std::string_view pop() && = delete;
 
 private:
+    // The byte storage is destroyed before its credits, so return-window side
+    // effects cannot outlive the copied data they account for.
+    std::optional<Http2ReceivedDataCredit> queuedCredit_;
+    std::optional<Http2ReceivedDataCredit> activeCredit_;
     std::pmr::string queuedChunk_;
     std::pmr::string activeChunk_;
     std::size_t queuedBytes_{0};
@@ -200,17 +246,13 @@ public:
 
     [[nodiscard]] Http2RequestBodyStoreResult store(
         std::string_view data, ProtocolByteLimit totalLimit, std::size_t backlogLimit) {
-        if (const auto failure =
-                httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
-            return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
-        }
-        if (queue_.queuedBytes() > backlogLimit ||
-            data.size() > backlogLimit - queue_.queuedBytes()) {
-            return Http2RequestBodyStoreResult::makeBacklogOverflow();
-        }
-        receivedBytes_ += data.size();
-        queue_.enqueue(data);
-        return Http2RequestBodyStoreResult::makeStored();
+        return storeImpl(data, totalLimit, backlogLimit, nullptr);
+    }
+
+    [[nodiscard]] Http2RequestBodyStoreResult store(std::string_view data,
+        ProtocolByteLimit totalLimit, std::size_t backlogLimit,
+        Http2ReceivedDataCredit&& credit) {
+        return storeImpl(data, totalLimit, backlogLimit, &credit);
     }
 
     [[nodiscard]] std::size_t receivedBytes() const noexcept {
@@ -228,6 +270,26 @@ public:
     const Http2SansIoBodyQueue& queue() const&& = delete;
 
 private:
+    [[nodiscard]] Http2RequestBodyStoreResult storeImpl(std::string_view data,
+        ProtocolByteLimit totalLimit, std::size_t backlogLimit,
+        Http2ReceivedDataCredit* credit) {
+        if (const auto failure =
+                httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
+            return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
+        }
+        if (queue_.queuedBytes() > backlogLimit ||
+            data.size() > backlogLimit - queue_.queuedBytes()) {
+            return Http2RequestBodyStoreResult::makeBacklogOverflow();
+        }
+        if (credit != nullptr) {
+            queue_.enqueue(data, std::move(*credit));
+        } else {
+            queue_.enqueue(data);
+        }
+        receivedBytes_ += data.size();
+        return Http2RequestBodyStoreResult::makeStored();
+    }
+
     std::size_t receivedBytes_{0};
     Http2SansIoBodyQueue queue_;
 };
@@ -270,6 +332,16 @@ public:
         }
         return std::get<Http2StreamingRequestBody>(storage_).store(
             data, totalLimit, streamingBacklogLimit);
+    }
+
+    [[nodiscard]] Http2RequestBodyStoreResult store(std::string_view data,
+        ProtocolByteLimit totalLimit, std::size_t streamingBacklogLimit,
+        Http2ReceivedDataCredit&& credit) {
+        if (auto* value = buffered()) {
+            return value->store(data, totalLimit);
+        }
+        return std::get<Http2StreamingRequestBody>(storage_).store(
+            data, totalLimit, streamingBacklogLimit, std::move(credit));
     }
 
     [[nodiscard]] std::size_t receivedBytes() const noexcept {

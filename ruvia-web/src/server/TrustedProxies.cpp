@@ -9,7 +9,7 @@
 #include <asio/ip/address.hpp>
 #include <asio/ip/address_v6.hpp>
 
-#include "ruvia/core/detail/io/IpAddress.h"
+#include "ruvia/core/IpAddress.h"
 
 namespace ruvia::detail {
 
@@ -25,7 +25,7 @@ struct MappedAddress final {
 // writes 10.0.0.0/8 still matches a peer that arrives as ::ffff:10.1.2.3.
 [[nodiscard]] std::expected<MappedAddress, std::error_code> toMappedBytes(
     std::string_view text) noexcept {
-    const auto parsed = parseIpAddress(text);
+    const auto parsed = ruvia::parseIpAddress(text);
     if (!parsed) {
         return std::unexpected(parsed.error());
     }

@@ -10,6 +10,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/WebSocketSubprotocolSet.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
@@ -150,6 +151,15 @@ RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
     RUVIA_CHECK(chooseWebSocketSubprotocol(malformed, chat).empty());
     RUVIA_CHECK(chooseWebSocketSubprotocol(request, malformedSupported).empty());
     RUVIA_CHECK(chooseWebSocketSubprotocol(request, duplicateSupported).empty());
+}
+
+RUVIA_TEST(ws_public_subprotocol_set_validates_unique_tokens) {
+    ruvia::WebSocketSubprotocolSet protocols;
+    RUVIA_CHECK(protocols.appendList(", chat, superchat,"));
+    RUVIA_CHECK(protocols.contains("chat"));
+    RUVIA_CHECK(protocols.contains("superchat"));
+    RUVIA_CHECK(!protocols.append("chat"));
+    RUVIA_CHECK(!protocols.append("bad token"));
 }
 
 RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {

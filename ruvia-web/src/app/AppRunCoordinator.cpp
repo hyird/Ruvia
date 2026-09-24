@@ -14,7 +14,7 @@
 
 #include <asio/signal_set.hpp>
 
-#include "ruvia/core/detail/util/FailureReport.h"
+#include "ruvia/core/FailureReport.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
@@ -40,7 +40,7 @@ void invokeStopHooks(detail::AppState& state) noexcept {
         try {
             hook();
         } catch (...) {
-            detail::reportUnhandledFailure("app stop hook", std::current_exception());
+            ruvia::reportUnhandledFailure("app stop hook", std::current_exception());
         }
     }
 }
@@ -150,7 +150,7 @@ private:
             nullptr, detail::PmrObjectDeleter<StaticRoot>{runtimeResource_});
         if (state_.documentRootConfig.has_value()) {
             const auto documentRootPath =
-                detail::makePathFromNativePath(state_.documentRootConfig->root);
+                ruvia::makePathFromNativePath(state_.documentRootConfig->root);
             configuredDocumentRoot = detail::StaticRootAccess::make(
                 runtimeResource_, documentRootPath, state_.documentRootConfig->staticOptions);
             if (preparedOptions.compression.has_value() &&
@@ -279,7 +279,7 @@ private:
             try {
                 worker.runtime->stop();
             } catch (...) {
-                detail::reportUnhandledFailure("web worker stop", std::current_exception());
+                ruvia::reportUnhandledFailure("web worker stop", std::current_exception());
             }
         }
     }
@@ -302,7 +302,7 @@ private:
                 if (firstFailure == nullptr) {
                     firstFailure = std::current_exception();
                 } else {
-                    detail::reportUnhandledFailure(
+                    ruvia::reportUnhandledFailure(
                         "additional web worker failure", std::current_exception());
                 }
             }

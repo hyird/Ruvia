@@ -6,7 +6,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
-#include "ruvia/core/detail/util/ConstantTime.h"
+#include "ruvia/core/ConstantTime.h"
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
@@ -71,7 +71,7 @@ std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, st
 }
 
 bool jwtConstantTimeEquals(std::string_view left, std::string_view right) noexcept {
-    return constantTimeBytesEqual(left, right);
+    return ruvia::constantTimeBytesEqual(left, right);
 }
 
 }  // namespace ruvia::detail

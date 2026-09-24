@@ -5,8 +5,8 @@
 
 #include <asio/ip/address_v4.hpp>
 
-#include "ruvia/core/detail/util/FailureReport.h"
-#include "ruvia/core/detail/worker/WorkerSelection.h"
+#include "ruvia/core/FailureReport.h"
+#include "ruvia/core/WorkerSelection.h"
 #include "ruvia/web/detail/app/AppRunCoordinator.h"
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
 #include "ruvia/web/detail/app/AppState.h"
@@ -95,7 +95,7 @@ WebWorkerHandle App::workerFor(std::uint64_t key) const {
 }
 
 WebWorkerHandle App::workerFor(std::string_view key) const {
-    return workerFor(detail::workerSelectionHash(key));
+    return workerFor(ruvia::workerSelectionHash(key));
 }
 
 void App::run() {
@@ -114,7 +114,7 @@ void App::stop() {
                 try {
                     worker.runtime->stop();
                 } catch (...) {
-                    detail::reportUnhandledFailure(
+                    ruvia::reportUnhandledFailure(
                         "web worker stop request", std::current_exception());
                 }
             }

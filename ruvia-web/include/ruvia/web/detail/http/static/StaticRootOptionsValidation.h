@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 
@@ -67,14 +67,14 @@ inline void validateStaticRootOptions(const StaticRootOptions& options) {
     }
     if (!ruvia::isValidHttpHeaderValue(options.cacheControl) ||
         (!options.defaultContentType.empty() &&
-            !ruvia::detail::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
+            !ruvia::isValidHttpContentTypeFieldValue(options.defaultContentType))) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (std::size_t i = 0; i < options.mimeTypes.size(); ++i) {
         const auto& mime = options.mimeTypes[i];
         if (!ruvia::detail::isValidStaticFileExtension(mime.extension) ||
             mime.contentType.empty() ||
-            !ruvia::detail::isValidHttpContentTypeFieldValue(mime.contentType)) {
+            !ruvia::isValidHttpContentTypeFieldValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
         }
         for (std::size_t previous = 0; previous < i; ++previous) {

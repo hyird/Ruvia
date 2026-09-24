@@ -129,7 +129,7 @@ private:
 
 [[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
     HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
-    const auto bodyPlan = httpResponseBodyPlan(requestMethod, response.status());
+    const auto bodyPlan = ::ruvia::detail::httpResponseBodyPlan(requestMethod, response.status());
     return HttpBufferedResponseWritePlan(bodyPlan, bodyPlan.bufferedRepresentationLength(response));
 }
 

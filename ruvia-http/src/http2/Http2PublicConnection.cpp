@@ -10,6 +10,9 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
+#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/HttpPmrObject.h"
@@ -29,6 +32,33 @@ namespace {
 }
 
 }  // namespace
+
+static std::expected<HttpRequest, HttpProtocolError> buildHttp2ServerRequest(
+    detail::Http2Connection& connection, std::uint32_t streamId,
+    std::pmr::memory_resource* resource, std::string_view body) {
+    auto* stream = connection.stream(streamId);
+    if (stream == nullptr) {
+        return std::unexpected(HttpProtocolError(
+            http_status::kBadRequest, "missing HTTP/2 request stream"));
+    }
+    auto request = detail::HttpRequestAccess::make();
+    auto result = detail::Http2RequestBuilder::build(*stream, request, resource, body);
+    if (const auto* failure = result.failure()) {
+        return std::unexpected(failure->protocolError());
+    }
+    return request;
+}
+
+static WebSocketHandshakeValidationResult validateServerWebSocketHandshake(
+    detail::Http2Connection& connection, std::uint32_t streamId,
+    const HttpRequest& request) noexcept {
+    const auto* stream = connection.stream(streamId);
+    if (stream == nullptr) {
+        return detail::WebSocketHandshakeValidationResultAccess::invalidRequest();
+    }
+    return detail::validateHttp2WebSocketHandshake(*stream, request);
+}
+
 
 Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
     detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
@@ -358,9 +388,10 @@ Http2ReceivedDataCreditMergeStatus Http2ReceivedDataCredit::merge(
 
 Http2RequestHeadEvent::Http2RequestHeadEvent(detail::Http2ConnectionOwnerEndpoint* endpoint,
     std::uint32_t streamId, HttpRequest request, HttpRequestExpectations expectations,
-    HttpRequestContentIndication content) noexcept
+    HttpRequestContentIndication content, Http2ServerRequestSnapshot snapshot) noexcept
     : streamId_(streamId),
       request_(std::move(request)),
+      snapshot_(snapshot),
       expectations_(expectations),
       content_(content),
       endpoint_(endpoint) {
@@ -378,6 +409,7 @@ Http2RequestHeadEvent::~Http2RequestHeadEvent() {
 Http2RequestHeadEvent::Http2RequestHeadEvent(Http2RequestHeadEvent&& other) noexcept
     : streamId_(std::exchange(other.streamId_, 0)),
       request_(std::move(other.request_)),
+      snapshot_(other.snapshot_),
       expectations_(other.expectations_),
       content_(other.content_),
       endpoint_(std::exchange(other.endpoint_, nullptr)) {}
@@ -405,8 +437,60 @@ Http2Connection::~Http2Connection() = default;
 Http2Connection::Http2Connection(Http2Connection&&) noexcept = default;
 Http2Connection& Http2Connection::operator=(Http2Connection&&) noexcept = default;
 
+std::expected<HttpRequest, HttpProtocolError> makeHttp2ServerRequest(
+    Http2Connection& connection, std::uint32_t streamId,
+    std::pmr::memory_resource* resource, std::string_view body) {
+    return buildHttp2ServerRequest(connection.impl_->connection, streamId, resource, body);
+}
+
+WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(
+    Http2Connection& connection, std::uint32_t streamId,
+    const HttpRequest& request) noexcept {
+    return validateServerWebSocketHandshake(connection.impl_->connection, streamId, request);
+}
+
+Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId, const HttpRequest& request,
+    const WebSocketHandshakeValidationResult& validation) {
+    auto result = impl_->connection.submitWebSocketHandshake(streamId, request, validation);
+    if (const auto* negotiation = result.submitted()) {
+        return Http2WebSocketHandshakeSubmitResult(Http2WebSocketNegotiation(
+            negotiation->subprotocol(), negotiation->compression()));
+    }
+    const auto error = result.failure()->error();
+    return Http2WebSocketHandshakeSubmitResult(Http2WebSocketHandshakeSubmitFailure(
+        error == detail::Http2WebSocketHandshakeSubmitError::kClosed
+            ? Http2WebSocketHandshakeSubmitError::kClosed
+            : Http2WebSocketHandshakeSubmitError::kInvalidState));
+}
+
+Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId, const HttpRequest& request,
+    const WebSocketHandshakeValidationResult& validation,
+    Http2WebSocketServerHandshakeOptions options) {
+    auto negotiation = detail::makeWebSocketServerNegotiation(request, {
+        .supportedSubprotocols = options.supportedSubprotocols,
+        .responseHeaders = options.responseHeaders,
+        .resource = impl_->resource,
+    });
+    auto result = impl_->connection.submitWebSocketHandshake(
+        streamId, validation, std::move(negotiation));
+    if (const auto* submitted = result.submitted()) {
+        return Http2WebSocketHandshakeSubmitResult(Http2WebSocketNegotiation(
+            submitted->subprotocol(), submitted->compression()));
+    }
+    const auto error = result.failure()->error();
+    return Http2WebSocketHandshakeSubmitResult(Http2WebSocketHandshakeSubmitFailure(
+        error == detail::Http2WebSocketHandshakeSubmitError::kClosed
+            ? Http2WebSocketHandshakeSubmitError::kClosed
+            : Http2WebSocketHandshakeSubmitError::kInvalidState));
+}
+
 Http2Role Http2Connection::role() const noexcept {
     return impl_->role;
+}
+bool Http2Connection::headerBlockInProgress() const noexcept {
+    return impl_->connection.headerBlockInProgress();
 }
 bool Http2Connection::receivedPeerSettings() const noexcept {
     return impl_->connection.receivedPeerSettings();
@@ -449,8 +533,18 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
             impl_->connection.pinStream(value->streamId());
-            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(), std::move(request),
-                stream->requestExpectations(), stream->requestContentIndication());
+            const auto content = stream->requestContentIndication();
+            const auto& remote = stream->remoteReceive();
+            const bool connectPending = remote.connectPending() != nullptr ||
+                                        remote.connectPendingEndStream() != nullptr;
+            const Http2ServerRequestSnapshot snapshot{
+                .content = content,
+                .bodyOpen = content == HttpRequestContentIndication::kWillFollow &&
+                            !connectPending,
+                .connectPending = connectPending,
+            };
+            auto result = Http2Event::requestHead(impl_->endpoint, value->streamId(),
+                std::move(request), stream->requestExpectations(), content, snapshot);
             impl_->connection.consumeEvent();
             return std::optional<Http2Event>(std::move(result));
         }
@@ -579,6 +673,31 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     return impl_->connection.submitInterimResponseHead(streamId, response);
 }
 
+Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
+    std::uint32_t streamId, const HttpResponse& response,
+    HttpServerBufferedResponseWritePlan writePlan) {
+    const auto result = impl_->connection.submitResponseHead(streamId, response, std::move(writePlan));
+    if (const auto* failure = result.failure()) {
+        Http2ResponseHeadSubmitError error;
+        switch (failure->error()) {
+            case detail::Http2ResponseHeadSubmitError::kClosed:
+                error = Http2ResponseHeadSubmitError::kClosed;
+                break;
+            case detail::Http2ResponseHeadSubmitError::kInvalidState:
+                error = Http2ResponseHeadSubmitError::kInvalidState;
+                break;
+            case detail::Http2ResponseHeadSubmitError::kResponsePlanMismatch:
+                error = Http2ResponseHeadSubmitError::kResponsePlanMismatch;
+                break;
+            case detail::Http2ResponseHeadSubmitError::kInvalidMessage:
+                error = Http2ResponseHeadSubmitError::kInvalidMessage;
+                break;
+        }
+        return Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(error));
+    }
+    return Http2ResponseHeadSubmitResult(*result.submitted());
+}
+
 Http2SubmitStatus Http2Connection::submitBufferedResponse(
     std::uint32_t streamId, const HttpResponse& response) {
     auto* stream = impl_->connection.stream(streamId);
@@ -613,22 +732,65 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     return Http2SubmitStatus::kAccepted;
 }
 
-Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
-    std::uint32_t streamId, HttpResponse response) {
-    const auto result = impl_->connection.submitStreamingResponseHead(streamId, std::move(response),
-        detail::ResponseStreamKind::kGeneric, detail::ResponseTrailerIntent::kNone);
+Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId, HttpResponse response, ResponseStreamKind kind,
+    ResponseTrailerIntent trailerIntent) {
+    const auto result = impl_->connection.submitStreamingResponseHead(
+        streamId, std::move(response), kind, trailerIntent);
     if (const auto* failure = result.failure()) {
+        Http2ResponseHeadSubmitError error;
         switch (failure->error()) {
             case detail::Http2ResponseHeadSubmitError::kClosed:
-                return Http2SubmitStatus::kClosed;
+                error = Http2ResponseHeadSubmitError::kClosed;
+                break;
             case detail::Http2ResponseHeadSubmitError::kInvalidState:
+                error = Http2ResponseHeadSubmitError::kInvalidState;
+                break;
             case detail::Http2ResponseHeadSubmitError::kResponsePlanMismatch:
-                return Http2SubmitStatus::kInvalidState;
+                error = Http2ResponseHeadSubmitError::kResponsePlanMismatch;
+                break;
             case detail::Http2ResponseHeadSubmitError::kInvalidMessage:
+                error = Http2ResponseHeadSubmitError::kInvalidMessage;
+                break;
+        }
+        return Http2StreamingResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure(error));
+    }
+    return Http2StreamingResponseHeadSubmitResult(*result.submitted());
+}
+
+Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId, HttpResponse response) {
+    const auto result = submitStreamingResponseHead(streamId, std::move(response),
+        ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+    if (const auto* failure = result.failure()) {
+        switch (failure->error()) {
+            case Http2ResponseHeadSubmitError::kClosed:
+                return Http2SubmitStatus::kClosed;
+            case Http2ResponseHeadSubmitError::kInvalidState:
+            case Http2ResponseHeadSubmitError::kResponsePlanMismatch:
+                return Http2SubmitStatus::kInvalidState;
+            case Http2ResponseHeadSubmitError::kInvalidMessage:
                 return Http2SubmitStatus::kInvalidMessage;
         }
     }
     return Http2SubmitStatus::kAccepted;
+}
+
+Http2FinishResponseStatus Http2Connection::finishResponse(
+    std::uint32_t streamId, const HttpResponseTrailerSection& trailers) {
+    switch (impl_->connection.finishResponse(streamId, trailers)) {
+        case detail::Http2FinishSubmitStatus::kAccepted:
+            return Http2FinishResponseStatus::kAccepted;
+        case detail::Http2FinishSubmitStatus::kQueued:
+            return Http2FinishResponseStatus::kQueued;
+        case detail::Http2FinishSubmitStatus::kClosed:
+            return Http2FinishResponseStatus::kClosed;
+        case detail::Http2FinishSubmitStatus::kInvalidState:
+            return Http2FinishResponseStatus::kInvalidState;
+        case detail::Http2FinishSubmitStatus::kContentLengthIncomplete:
+            return Http2FinishResponseStatus::kContentLengthIncomplete;
+    }
+    std::terminate();
 }
 
 Http2SubmitStatus Http2Connection::submitReset(std::uint32_t streamId, Http2ErrorCode error) {
@@ -660,6 +822,48 @@ Http2ReceivedDataAcknowledgeStatus Http2Connection::acknowledge(Http2ReceivedDat
 }
 bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
     return impl_->connection.hasQueuedData(streamId);
+}
+
+Http2DataQueueState Http2Connection::dataQueueState(std::uint32_t streamId) const noexcept {
+    return impl_->connection.dataQueueState(streamId);
+}
+std::size_t Http2Connection::pendingDataOutputBytes(std::uint32_t streamId) const noexcept {
+    return impl_->connection.pendingDataOutputBytes(streamId);
+}
+std::optional<Http2SendWindowState> Http2Connection::sendWindowState(
+    std::uint32_t streamId) const noexcept {
+    return impl_->connection.sendWindowState(streamId);
+}
+bool Http2Connection::streamAborted(std::uint32_t streamId) const noexcept {
+    return impl_->connection.streamAborted(streamId);
+}
+Http2StreamReceiveStatus Http2Connection::streamReceiveStatus(
+    std::uint32_t streamId) const noexcept {
+    return impl_->connection.streamReceiveStatus(streamId);
+}
+std::optional<Http2ServerRequestRouteView> detail::Http2Connection::serverRequestRoute(
+    std::uint32_t streamId) const noexcept {
+    if (role_ != Http2Role::kServer) {
+        return std::nullopt;
+    }
+    const auto* streamState = streams_.find(streamId);
+    if (streamState == nullptr || streamState->requestMethod().empty()) {
+        return std::nullopt;
+    }
+    const auto* pending = streamState->tunnel().pending();
+    const bool webSocketConnect = pending != nullptr &&
+                                  pending->form() == detail::Http2ConnectForm::kExtended &&
+                                  streamState->protocolIsWebSocket();
+    return Http2ServerRequestRouteView{
+        .method = detail::Http2RequestBuilder::routeMethod(*streamState),
+        .requestMethod = streamState->requestMethod(),
+        .path = detail::Http2RequestBuilder::requestPath(*streamState),
+        .webSocketConnect = webSocketConnect,
+    };
+}
+std::optional<Http2ServerRequestRouteView> Http2Connection::serverRequestRoute(
+    std::uint32_t streamId) const noexcept {
+    return impl_->connection.serverRequestRoute(streamId);
 }
 std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() & noexcept {
     return impl_->connection.takeDrainedDataStreams();

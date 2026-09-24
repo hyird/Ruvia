@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/core/ConfigValidation.h"
 
 namespace ruvia::detail {
 

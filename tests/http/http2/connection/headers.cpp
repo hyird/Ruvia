@@ -1,3 +1,4 @@
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 
@@ -200,12 +201,13 @@ RUVIA_TEST(http2_connection_accepts_host_without_authority_pseudo_header) {
     if (stream != nullptr) {
         RUVIA_CHECK(stream->hasHost());
         RUVIA_CHECK(!stream->hasAuthority());
-        auto httpRequest = ruvia::detail::HttpRequestAccess::make();
-        const auto built = ruvia::detail::Http2RequestBuilder::build(
-            *stream, httpRequest, &resource, {});
-        RUVIA_CHECK(built.built() != nullptr);
-        RUVIA_CHECK_EQ(httpRequest.authority(), std::string_view("example.com"));
-        RUVIA_CHECK_EQ(httpRequest.header("host").value_or(""), std::string_view("example.com"));
+        auto built = ruvia::detail::HttpRequestAccess::make();
+        const auto build = ruvia::detail::Http2RequestBuilder::build(
+            *stream, built, &resource, {});
+        RUVIA_CHECK(build.built() != nullptr);
+        RUVIA_CHECK_EQ(built.authority(), std::string_view("example.com"));
+        RUVIA_CHECK_EQ(
+            built.header("host").value_or(""), std::string_view("example.com"));
     }
 }
 

@@ -5,11 +5,11 @@
 #include <utility>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
+#include "ruvia/http/Http1ServerSemantics.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
@@ -27,14 +27,14 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDi
     const auto streamPlan =
         http1PlanResponseStream(d.parsed, d.requestSequence.nextResponseClosePolicy());
     auto connectionPlan = streamPlan.requestConnectionPlan();
-    using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
+    using ResponseSink = ResponseStreamSink<Stream, ruvia::ConnectionScanner::Entry>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().responseStream();
     ResponseSink responseSink(d.stream, d.memory, responseHead, d.scannerEntry,
         d.baseRouteServices.worker(), endpoint.kind(), streamPlan, d.responseCoding,
         d.responseCodingAvailability);
 
-    d.scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
+    d.scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(responseSink, d.routes, d.parsed.request,
         resolved, d.requestMemory, d.baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });

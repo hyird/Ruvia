@@ -1,6 +1,7 @@
 #include <array>
 
 #include "http2_connection_fixture.h"
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 
 // Http2Connection: inbound and outbound DATA.
 
@@ -342,6 +343,7 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
                 Http2FinishSubmitStatus::kContentLengthIncomplete);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
     RUVIA_CHECK(conn.hasQueuedData(1));
+    RUVIA_CHECK(conn.dataQueueState(1) == ruvia::Http2DataQueueState::kQueued);
     RUVIA_CHECK(conn.pendingOutput().empty());
 
     char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
@@ -353,12 +355,33 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
     RUVIA_CHECK((drainedFrame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
     conn.consumeOutput(drainedOutput.size());
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
+    RUVIA_CHECK(conn.dataQueueState(1) == ruvia::Http2DataQueueState::kDrained);
 
     RUVIA_CHECK(
         conn.submitData(1, "678", Http2EndStream::kEndStream) == Http2DataSubmitStatus::kAccepted);
     RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{8});
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
     RUVIA_CHECK(stream->localSend().endStreamCommitted() != nullptr);
+}
+
+RUVIA_TEST(http2_connection_reset_aborts_queued_data_state) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshakeWithWindow(conn, 0);
+    driveGetRequest(conn, &resource);
+
+    ruvia::HttpResponse response({.resource = &resource});
+    response.status(ruvia::http_status::kOk);
+    response.header("Content-Length", "5");
+    RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(std::uint32_t{1},
+        std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
+        ResponseTrailerIntent::kNone)));
+    RUVIA_CHECK(conn.submitData(1, "reset", Http2EndStream::kKeepOpen) ==
+                Http2DataSubmitStatus::kQueued);
+    RUVIA_CHECK(conn.dataQueueState(1) == ruvia::Http2DataQueueState::kQueued);
+    RUVIA_CHECK(conn.submitReset(1, Http2ErrorCode::kCancel) == Http2SubmitStatus::kAccepted);
+    RUVIA_CHECK(conn.dataQueueState(1) == ruvia::Http2DataQueueState::kAborted);
+    RUVIA_CHECK(!conn.hasQueuedData(1));
 }
 
 // RFC 8441 Extended CONNECT: a CONNECT + :protocol=websocket head emits kMessageHead
@@ -410,25 +433,23 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     const auto negotiationRequest = negotiationParser.parseMessage(
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Protocol: chat\r\n"
         "\r\n");
-    constexpr std::array<std::string_view, 1> supportedProtocols{"chat"};
-    auto negotiation = ruvia::detail::makeWebSocketServerNegotiation(
-        negotiationRequest.request, {.supportedSubprotocols = supportedProtocols});
-    const auto handshakeResult = conn.submitWebSocketHandshake(1, std::move(negotiation));
+    const auto validation = ruvia::detail::validateHttp2WebSocketHandshake(
+        *stream, negotiationRequest.request);
+    const auto handshakeResult =
+        conn.submitWebSocketHandshake(1, negotiationRequest.request, validation);
     RUVIA_CHECK(handshakeResult.submitted() != nullptr);
     RUVIA_CHECK(handshakeResult.failure() == nullptr);
-    RUVIA_CHECK(handshakeResult.submitted()->subprotocol() == "chat");
+    RUVIA_CHECK(handshakeResult.submitted()->subprotocol().empty());
 
-    auto duplicateNegotiation = ruvia::detail::makeWebSocketServerNegotiation(
-        negotiationRequest.request, {.supportedSubprotocols = supportedProtocols});
     const auto duplicateHandshakeResult =
-        conn.submitWebSocketHandshake(1, std::move(duplicateNegotiation));
+        conn.submitWebSocketHandshake(1, negotiationRequest.request, validation);
     RUVIA_CHECK(duplicateHandshakeResult.submitted() == nullptr);
     RUVIA_CHECK(duplicateHandshakeResult.failure() != nullptr);
     RUVIA_CHECK(duplicateHandshakeResult.failure()->error() ==
                 ruvia::detail::Http2WebSocketHandshakeSubmitError::kInvalidState);
-    RUVIA_CHECK_EQ(duplicateNegotiation.subprotocol(), std::string_view("chat"));
 
     const auto out = conn.pendingOutput();
     RUVIA_CHECK(out.size() > 9);
@@ -500,10 +521,12 @@ RUVIA_TEST(http2_connection_rejects_half_closed_websocket_opening_handshake) {
     const auto negotiationRequest = negotiationParser.parseMessage(
         "GET /ws HTTP/1.1\r\n"
         "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
         "\r\n");
-    auto negotiation =
-        ruvia::detail::makeWebSocketServerNegotiation(negotiationRequest.request, {});
-    const auto handshakeResult = conn.submitWebSocketHandshake(1, std::move(negotiation));
+    const auto validation = ruvia::detail::validateHttp2WebSocketHandshake(
+        *stream, negotiationRequest.request);
+    const auto handshakeResult =
+        conn.submitWebSocketHandshake(1, negotiationRequest.request, validation);
     RUVIA_CHECK(handshakeResult.submitted() == nullptr);
     RUVIA_CHECK(handshakeResult.failure() != nullptr);
     if (const auto* failure = handshakeResult.failure()) {

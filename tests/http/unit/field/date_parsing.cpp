@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/HttpDate.h"
 #include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/field/HttpImfFixdate.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
@@ -15,7 +16,7 @@
 namespace {
 
 std::string formatDate(std::time_t time) {
-    const auto out = ruvia::detail::httpFormatDate(time).value();
+    const auto out = ruvia::formatHttpDate(time).value();
     return std::string(out.data(), out.size());
 }
 
@@ -227,6 +228,7 @@ RUVIA_TEST(http_date_conversion_rejects_unrepresentable_years) {
             continue;
         }
         const auto date = ruvia::detail::httpFormatDate(static_cast<std::time_t>(time));
+        RUVIA_CHECK(!ruvia::formatHttpDate(static_cast<std::time_t>(time)));
         RUVIA_CHECK(!date);
         if (!date) {
             RUVIA_CHECK(date.error() == ruvia::detail::HttpDateFormatError::kOutOfRange);
@@ -260,7 +262,7 @@ RUVIA_TEST(http_date_cache_omits_unavailable_dates_and_recovers) {
 
 RUVIA_TEST(imf_fixdate_format_known_vector) {
     const auto date = ruvia::detail::httpFormatDate(784111777).value();
-    RUVIA_CHECK_EQ(date.size(), ruvia::detail::kImfFixdateSize);
+    RUVIA_CHECK_EQ(date.size(), ruvia::kHttpImfFixdateSize);
     RUVIA_CHECK_EQ(std::string(date.data(), date.size()), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
 }
 

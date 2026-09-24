@@ -18,11 +18,11 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/PoolLeaseScheduler.h"
+#include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"
@@ -137,7 +137,7 @@ private:
 // bug in the caller, not a runtime condition, and cannot be reported through a
 // noexcept path.
 template <typename Pool>
-Task<std::size_t> acquireDbSlot(Pool& pool, OperationTimeout timeout, StopToken stopToken) {
+Task<std::size_t> acquireDbSlot(Pool& pool, ruvia::OperationTimeout timeout, StopToken stopToken) {
     const auto acquireTimeout = timeout.constrainedBy(pool.config_.acquireTimeout).remaining();
     const auto result =
         co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken), pool.worker_);
@@ -172,7 +172,7 @@ class DbPoolLifecycleBase {
 public:
     [[nodiscard]] Task<void> connect() {
         auto& pool = derived();
-        const OperationTimeout operationTimeout(std::nullopt);
+        const ruvia::OperationTimeout operationTimeout(std::nullopt);
         for (auto& slot : pool.slots_) {
             co_await pool.connectUnlocked(slot, operationTimeout);
         }
@@ -186,7 +186,7 @@ public:
         }
     }
 
-    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken stopToken) {
+    [[nodiscard]] Task<std::size_t> acquireSlot(ruvia::OperationTimeout timeout, StopToken stopToken) {
         return acquireDbSlot(derived(), timeout, std::move(stopToken));
     }
 
@@ -236,7 +236,7 @@ Task<void> finishDbTransaction(Pool& pool, std::size_t slot, std::string_view co
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     DbSlotCancellationGuard cancellation(pool, slot, options.stopToken);
     try {
         co_await pool.executeControl(pool.slots_[slot], command, resource, operationTimeout);
@@ -257,7 +257,7 @@ template <typename Pool>
 Task<DbTransaction> beginDbTransaction(Pool& pool, std::pmr::memory_resource* resource,
     OperationOptions operationOptions,
     DbTransactionStartPlan plan) {
-    const OperationTimeout operationTimeout(operationOptions.timeout);
+    const ruvia::OperationTimeout operationTimeout(operationOptions.timeout);
     const auto slotIndex = co_await pool.acquireSlot(operationTimeout, operationOptions.stopToken);
     DbSlotCancellationGuard cancellation(pool, slotIndex, operationOptions.stopToken);
     try {
@@ -285,7 +285,7 @@ Task<DbRows> queryOnDbTransactionSlot(Pool& pool, std::size_t slot, std::pmr::st
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     DbSlotCancellationGuard cancellation(pool, slot, options.stopToken);
     try {
         co_return co_await pool.queryOnSlot(
@@ -305,7 +305,7 @@ Task<DbExecResult> executeOnDbTransactionSlot(Pool& pool, std::size_t slot, std:
     if (slot >= pool.slots_.size()) {
         throw std::logic_error("database transaction slot is invalid");
     }
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     DbSlotCancellationGuard cancellation(pool, slot, options.stopToken);
     try {
         co_return co_await pool.executeOnSlot(
@@ -329,7 +329,7 @@ Task<DbRows> executeDbQuery(Pool& pool, std::pmr::string sql, std::pmr::vector<D
         throw std::invalid_argument("SQL must not be empty");
     }
 
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto slotIndex = co_await pool.acquireSlot(operationTimeout, options.stopToken);
     typename Pool::SlotGuard guard(pool, slotIndex);
     DbSlotCancellationGuard cancellation(pool, slotIndex, options.stopToken);
@@ -350,7 +350,7 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql,
         throw std::invalid_argument("SQL must not be empty");
     }
 
-    const OperationTimeout operationTimeout(options.timeout);
+    const ruvia::OperationTimeout operationTimeout(options.timeout);
     const auto slotIndex = co_await pool.acquireSlot(operationTimeout, options.stopToken);
     typename Pool::SlotGuard guard(pool, slotIndex);
     DbSlotCancellationGuard cancellation(pool, slotIndex, options.stopToken);
@@ -387,7 +387,7 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql,
 // it declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
 Task<DbResolvedAddresses> resolveDbHost(
-    Pool& pool, Slot& slot, OperationTimeout deadline, std::string_view backend) {
+    Pool& pool, Slot& slot, ruvia::OperationTimeout deadline, std::string_view backend) {
     const auto timedOut = [&pool, backend] {
         return DbError(DbError::Code::kTimeout, pool.config_.driver,
             std::string(backend).append(" host resolve timed out"));
@@ -408,7 +408,7 @@ Task<DbResolvedAddresses> resolveDbHost(
 
     const auto port = formatDbPort(pool.config_.port, backend);
     try {
-        auto completion = co_await asyncAsio<asio::ip::tcp::resolver::results_type>(
+        auto completion = co_await ruvia::asyncAsio<asio::ip::tcp::resolver::results_type>(
             [&pool, &slot, &port](auto handler) mutable {
                 slot.resolver.async_resolve(
                     pool.config_.host, std::string_view(port.data()), std::move(handler));

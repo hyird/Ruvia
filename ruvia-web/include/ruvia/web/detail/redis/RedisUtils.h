@@ -8,8 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/NumberFormat.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
 
 namespace ruvia::detail {
 
@@ -18,11 +18,11 @@ inline void emplaceRedisString(std::pmr::vector<std::pmr::string>& target, std::
 }
 
 inline void appendRedisNumber(std::pmr::string& output, std::uint64_t value) {
-    appendHttpFormattedNumber(output, value, "failed to format redis number");
+    appendFormattedNumber(output, value, "failed to format redis number");
 }
 
 inline void appendRedisNumber(std::pmr::string& output, std::int64_t value) {
-    appendHttpFormattedNumber(output, value, "failed to format redis number");
+    appendFormattedNumber(output, value, "failed to format redis number");
 }
 
 [[nodiscard]] inline std::pmr::string redisIntString(
@@ -35,7 +35,7 @@ inline void appendRedisNumber(std::pmr::string& output, std::int64_t value) {
 [[nodiscard]] inline std::pmr::string redisScoreString(
     double value, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmrResourceOrDefault(resource));
-    appendHttpFormattedFiniteNumber(output, value, "redis sorted set score must be finite",
+    appendFormattedFiniteNumber(output, value, "redis sorted set score must be finite",
         "redis sorted set score is invalid");
     return output;
 }

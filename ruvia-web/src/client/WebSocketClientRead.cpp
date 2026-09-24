@@ -11,8 +11,7 @@
 #include <asio/ssl/error.hpp>
 
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketMessageAccess.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
@@ -56,7 +55,7 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             continue;
         }
         if (const auto* message = event->message()) {
-            co_return WebSocketMessageAccess::make(message->opcode(), message->payload());
+            co_return WebSocketMessage::borrow(message->opcode(), message->payload());
         }
         if (event->pong() != nullptr) {
             const bool awaitingPong =
@@ -93,7 +92,7 @@ Task<std::size_t> WebSocketClientState::readTransport(
                 asio::buffer(output.data(), output.size()), std::move(handler));
         }
     };
-    const auto completion = co_await asyncAsio<std::size_t>(std::move(initiateRead));
+    const auto completion = co_await ruvia::asyncAsio<std::size_t>(std::move(initiateRead));
     disarm(readTimer_);
     throwAbort();
     if (completion.errorCode() == asio::error::eof ||

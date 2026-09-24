@@ -37,10 +37,9 @@ using ruvia::detail::ResponseHeadBuffer;
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {
-    const ruvia::detail::HttpConnectionOptions options;
     return protocolVersion == ruvia::HttpProtocolVersion::kHttp10
-               ? ruvia::detail::http1PlanHttp10RequestConnection(options)
-               : ruvia::detail::http1PlanHttp11RequestConnection(options);
+               ? ruvia::http1PlanHttp10RequestConnection(false, false)
+               : ruvia::http1PlanHttp11RequestConnection(false);
 }
 
 std::string emitHead(HttpResponse& response, const Http1ResponseHeadPlan& plan) {

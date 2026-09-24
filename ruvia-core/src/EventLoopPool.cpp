@@ -189,12 +189,12 @@ struct EventLoopState final {
                 finishExternalStop();
             }
         } else if (externalContext) {
-            runtime.dispatcher().deferOrTerminate([keepAlive = std::move(keepAlive)] {
+            runtime.deferOrTerminate([keepAlive = std::move(keepAlive)] {
                 keepAlive->runtime.stopTimers();
                 keepAlive->finishExternalStop();
             });
         } else {
-            runtime.dispatcher().deferOrTerminate([runtime = &runtime] { runtime->stopTimers(); });
+            runtime.deferOrTerminate([runtime = &runtime] { runtime->stopTimers(); });
         }
         work.reset();
     }

@@ -8,11 +8,9 @@
 #include <string_view>
 #include <utility>
 
-namespace ruvia::detail {
+#include "ruvia/http/HttpDate.h"
 
-// Number of bytes an RFC 9110 §5.6.7 IMF-fixdate occupies, e.g.
-// "Sun, 06 Nov 1994 08:49:37 GMT".
-inline constexpr std::size_t kImfFixdateSize = 29;
+namespace ruvia::detail {
 
 enum class HttpDateFormatError { kOutOfRange };
 
@@ -45,14 +43,14 @@ enum class HttpDateFormatError { kOutOfRange };
 // Allocation-free wire value; an unrepresentable date must not be truncated or
 // substituted with a different timestamp. Fixed English names are independent
 // of the process locale, as required by RFC 9110 section 5.6.7.
-[[nodiscard]] inline std::expected<std::array<char, kImfFixdateSize>, HttpDateFormatError>
+[[nodiscard]] inline std::expected<std::array<char, kHttpImfFixdateSize>, HttpDateFormatError>
 httpFormatDate(std::time_t time) noexcept {
     const auto converted = httpUtcTm(time);
     if (!converted) {
         return std::unexpected(converted.error());
     }
     const auto& utc = *converted;
-    std::array<char, kImfFixdateSize> output{};
+    std::array<char, kHttpImfFixdateSize> output{};
     auto* out = output.data();
     static constexpr std::array<std::string_view, 7> dayNames{
         "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};

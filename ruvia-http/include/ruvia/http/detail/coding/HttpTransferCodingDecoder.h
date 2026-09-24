@@ -11,9 +11,9 @@
 #include <variant>
 
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/coding/HttpTransferCoding.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
 
 namespace ruvia::detail {
 

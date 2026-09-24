@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpAscii.h"
 
 namespace ruvia::detail {
 

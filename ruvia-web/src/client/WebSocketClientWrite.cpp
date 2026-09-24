@@ -8,7 +8,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
@@ -45,7 +45,7 @@ Task<void> WebSocketClientState::writeTransport(
             asio::async_write(stream_.next_layer(), asio::buffer(bytes), std::move(handler));
         }
     };
-    const auto completion = co_await asyncAsio<std::size_t>(std::move(initiateWrite));
+    const auto completion = co_await ruvia::asyncAsio<std::size_t>(std::move(initiateWrite));
     disarm(writeTimer_);
     throwAbort();
     if (completion.errorCode()) {

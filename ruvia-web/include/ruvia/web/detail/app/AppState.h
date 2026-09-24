@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/detail/util/NativePath.h"
+#include "ruvia/core/NativePath.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/AppLifecycle.h"
@@ -39,7 +39,7 @@ struct AppDocumentRootConfig final {
         : root(resource),
           staticOptions(std::move(configuredStaticOptions)) {}
 
-    NativePathString root;
+    ruvia::NativePathString root;
     StaticRootConfigStorage staticOptions;
     DocumentRootRuntimeConfig runtime;
     StaticRootPrecompressionOptions precompression;

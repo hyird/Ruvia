@@ -11,13 +11,13 @@
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/TcpSocketOptions.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/TcpSocketOptions.h"
+#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
@@ -165,7 +165,7 @@ std::uint16_t HttpClientPool::port() const noexcept {
     return httpClientPort(config_);
 }
 
-Task<std::size_t> HttpClientPool::acquire(const OperationTimeout& timeout, StopToken stopToken) {
+Task<std::size_t> HttpClientPool::acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     auto result = co_await scheduler_.acquire(
         timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), worker_);
     if (result.timedOut()) {
@@ -221,7 +221,7 @@ void HttpClientPool::cancelOperationById(std::uint64_t cancellationId) noexcept 
 }
 
 bool HttpClientPool::armDeadline(
-    Connection& connection, const OperationTimeout& timeout, DeadlineKind kind) {
+    Connection& connection, const ruvia::OperationTimeout& timeout, DeadlineKind kind) {
     connection.deadlineTimer->cancel();
     const auto remaining = timeout.remaining();
     if (!remaining) {
@@ -303,7 +303,7 @@ HttpClientError::Code HttpClientPool::transportErrorCode(
 }
 
 Task<void> HttpClientPool::write(
-    Connection& connection, std::string_view bytes, const OperationTimeout& timeout) {
+    Connection& connection, std::string_view bytes, const ruvia::OperationTimeout& timeout) {
     if (bytes.empty()) {
         co_return;
     }
@@ -313,10 +313,10 @@ Task<void> HttpClientPool::write(
     }
     AsioCompletion<std::size_t> completion =
         config_.scheme == HttpScheme::kHttps
-            ? co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
+            ? co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
                   asio::async_write(connection.stream, asio::buffer(bytes), std::move(handler));
               })
-            : co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
+            : co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
                   asio::async_write(
                       connection.stream.next_layer(), asio::buffer(bytes), std::move(handler));
               });
@@ -333,17 +333,17 @@ Task<void> HttpClientPool::write(
 }
 
 Task<std::size_t> HttpClientPool::readSome(
-    Connection& connection, std::span<char> bytes, const OperationTimeout& timeout, bool allowEof) {
+    Connection& connection, std::span<char> bytes, const ruvia::OperationTimeout& timeout, bool allowEof) {
     if (!armDeadline(connection, timeout, DeadlineKind::kSocket)) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client request timed out");
     }
     AsioCompletion<std::size_t> completion =
         config_.scheme == HttpScheme::kHttps
-            ? co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
+            ? co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
                   connection.stream.async_read_some(
                       asio::buffer(bytes.data(), bytes.size()), std::move(handler));
               })
-            : co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
+            : co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
                   connection.stream.next_layer().async_read_some(
                       asio::buffer(bytes.data(), bytes.size()), std::move(handler));
               });
@@ -364,7 +364,7 @@ Task<std::size_t> HttpClientPool::readSome(
 }
 
 Task<void> HttpClientPool::ensureConnected(Connection& connection,
-    const OperationTimeout& operationTimeout, const OperationTimeout& acquireTimeout,
+    const ruvia::OperationTimeout& operationTimeout, const ruvia::OperationTimeout& acquireTimeout,
     StopToken stopToken) {
     auto& runtime = *connection.http2Runtime;
     auto acquired =
@@ -450,7 +450,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     if (!armDeadline(connection, timeout, DeadlineKind::kResolve)) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client resolve timed out");
     }
-    auto resolve = co_await asyncAsio<asio::ip::tcp::resolver::results_type>(
+    auto resolve = co_await ruvia::asyncAsio<asio::ip::tcp::resolver::results_type>(
         [&connection, this, port](auto handler) mutable {
             connection.resolver.async_resolve(config_.host, port, std::move(handler));
         });
@@ -467,7 +467,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     if (!armDeadline(connection, timeout, DeadlineKind::kSocket)) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client connect timed out");
     }
-    auto connected = co_await asyncAsio([&connection, &endpoints](auto handler) mutable {
+    auto connected = co_await ruvia::asyncAsio([&connection, &endpoints](auto handler) mutable {
         asio::async_connect(connection.stream.lowest_layer(), endpoints, std::move(handler));
     });
     const bool connectTimedOut = clearDeadline(connection) || timeout.expired();
@@ -480,7 +480,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
             HttpClientError::Code::kConnectFailed, connected.errorCode().message());
     }
     const auto transport = config_.transport.view();
-    configureTcpSocketOptions(
+    ruvia::applyTcpSocketPolicies(
         connection.stream.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
 
     if (config_.scheme == HttpScheme::kHttps) {
@@ -494,7 +494,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
             throw HttpClientError(
                 HttpClientError::Code::kTimeout, "http client TLS handshake timed out");
         }
-        auto handshake = co_await asyncAsio([&connection](auto handler) mutable {
+        auto handshake = co_await ruvia::asyncAsio([&connection](auto handler) mutable {
             connection.stream.async_handshake(asio::ssl::stream_base::client, std::move(handler));
         });
         const bool handshakeTimedOut = clearDeadline(connection) || timeout.expired();
@@ -542,7 +542,7 @@ Task<HttpClientResponse> HttpClientPool::execute(
         const auto code = static_cast<HttpClientError::Code>(*state->errorCode);
         throw HttpClientError(code, "HTTP client request failed before the response head");
     }
-    const auto contentCoding = httpClientContentCodingOf(state->headers);
+    const auto contentCoding = parseHttpContentCodingHeaders(state->headers);
     if (contentCoding.coding() == nullptr ||
         *contentCoding.coding() != HttpContentCoding::kIdentity) {
         state->collectAll = true;
@@ -582,7 +582,7 @@ Task<void> HttpClientPool::executeInto(
 Task<void> HttpClientPool::executeRequestInto(
     HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state) {
     HttpClientResponse response(state, true);
-    const OperationTimeout timeout(
+    const ruvia::OperationTimeout timeout(
         options.timeout.has_value() ? options.timeout : config_.requestTimeout);
     const auto acquireTimeout = timeout.constrainedBy(config_.acquireTimeout);
     if (requestsBuffered_ >= config_.maxBufferedRequests) {

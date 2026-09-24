@@ -5,7 +5,7 @@
 
 #include "ruvia/http/Http2Framing.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 enum class Http2CleartextPrefaceProbe : std::uint8_t {
     kHttp1,
@@ -36,4 +36,4 @@ enum class Http2CleartextPrefaceProbe : std::uint8_t {
     return Http2CleartextPrefaceProbe::kHttp1;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

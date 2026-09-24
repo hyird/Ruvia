@@ -1,4 +1,6 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
+#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
+#include "ruvia/http/HttpResponseServer.h"
 
 #include <array>
 #include <charconv>
@@ -280,3 +282,17 @@ void appendResponseHead(
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+void appendHttp1ResponseHead(const HttpResponse& response, HttpResponseHeadBuffer& head,
+    const Http1ResponseHeadPlan& plan) {
+    detail::appendResponseHead(response, head, plan);
+}
+
+void appendHttp1ResponseTrailers(
+    std::pmr::string& output, const HttpResponseTrailerSection& trailers) {
+    detail::appendHttp1TrailerSection(output, trailers);
+}
+
+}  // namespace ruvia

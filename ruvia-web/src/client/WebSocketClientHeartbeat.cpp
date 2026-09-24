@@ -12,8 +12,8 @@
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
@@ -91,7 +91,7 @@ void WebSocketClientState::heartbeatTimerFired() noexcept {
     heartbeatInFlight_ = true;
     try {
         auto state = shared_from_this();
-        asio::co_spawn(loop_.executor(), taskAsAwaitable(heartbeatOwned(std::move(state))),
+        asio::co_spawn(loop_.executor(), ruvia::asAwaitable(heartbeatOwned(std::move(state))),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         finishHeartbeat();

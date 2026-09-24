@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "ruvia/http/Http1WebSocketClientHandshake.h"
-#include "ruvia/http/HttpClientRequestTarget.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/websocket/WebSocketHeartbeatConfigValidation.h"
@@ -26,7 +26,7 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     if (config.port.has_value() && config.port.value() == 0) {
         throw std::invalid_argument("WebSocket client port must be greater than zero");
     }
-    if (!isValidHttpClientOriginTarget(config.target)) {
+    if (!isValidHttpOriginFormTarget(config.target)) {
         throw std::invalid_argument("WebSocket client target must use origin-form");
     }
     if (config.maxMessageBytes == 0) {

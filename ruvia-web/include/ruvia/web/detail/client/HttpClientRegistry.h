@@ -16,13 +16,12 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/io/OperationDeadline.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
-#include "ruvia/core/detail/worker/WorkerCancellationPost.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/PoolLeaseScheduler.h"
+#include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/Http2Connection.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
@@ -208,22 +207,22 @@ private:
         bool discard_{false};
     };
 
-    [[nodiscard]] Task<std::size_t> acquire(const OperationTimeout& timeout, StopToken stopToken);
+    [[nodiscard]] Task<std::size_t> acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken);
     void release(std::size_t index) noexcept;
     void close(Connection& connection) noexcept;
     void cancelOperationById(std::uint64_t cancellationId) noexcept;
     void cancelOperation(std::size_t index, std::uint64_t generation, AbortReason reason) noexcept;
     [[nodiscard]] bool armDeadline(
-        Connection& connection, const OperationTimeout& timeout, DeadlineKind kind);
+        Connection& connection, const ruvia::OperationTimeout& timeout, DeadlineKind kind);
     [[nodiscard]] bool clearDeadline(Connection& connection) noexcept;
     void throwAbort(const Connection& connection) const;
     [[nodiscard]] HttpClientError::Code transportErrorCode(
         const std::error_code& error) const noexcept;
     [[nodiscard]] Task<void> ensureConnected(Connection& connection,
-        const OperationTimeout& timeout, const OperationTimeout& acquireTimeout,
+        const ruvia::OperationTimeout& timeout, const ruvia::OperationTimeout& acquireTimeout,
         StopToken stopToken);
     [[nodiscard]] Task<void> initializeHttp2(
-        Connection& connection, const OperationTimeout& timeout);
+        Connection& connection, const ruvia::OperationTimeout& timeout);
     [[nodiscard]] Task<void> runHttp2Reader(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<void> runHttp2Writer(Connection& connection, std::uint64_t generation);
     [[nodiscard]] Task<void> executeInto(
@@ -231,15 +230,15 @@ private:
     [[nodiscard]] Task<void> executeRequestInto(
         HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state);
     [[nodiscard]] Task<void> executeHttp1(Connection& connection,
-        const HttpClientRequestStorage& request, const OperationTimeout& timeout,
+        const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
         HttpClientResponse& response);
     [[nodiscard]] Task<void> executeHttp2(Connection& connection,
-        const HttpClientRequestStorage& request, const OperationTimeout& timeout,
+        const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
         StopToken stopToken, HttpClientResponse& response);
     [[nodiscard]] Task<void> write(
-        Connection& connection, std::string_view bytes, const OperationTimeout& timeout);
+        Connection& connection, std::string_view bytes, const ruvia::OperationTimeout& timeout);
     [[nodiscard]] Task<std::size_t> readSome(Connection& connection, std::span<char> bytes,
-        const OperationTimeout& timeout, bool allowEof = false);
+        const ruvia::OperationTimeout& timeout, bool allowEof = false);
     void appendAutomaticHeaders(const HttpClientRequestStorage& request,
         std::pmr::vector<HttpHeaderView>& headers, std::pmr::string& cookieHeader);
     void retainResponseCookies(
@@ -264,7 +263,7 @@ private:
     void releaseResponseData(HttpClientResponseState& state) noexcept;
     void removeHttp2Pending(Connection& connection, Http2PendingStream& pending) noexcept;
     [[nodiscard]] Task<void> waitForHttp2SessionStop(
-        Connection& connection, const OperationTimeout& timeout, StopToken stopToken);
+        Connection& connection, const ruvia::OperationTimeout& timeout, StopToken stopToken);
     asio::io_context& ioContext_;
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;

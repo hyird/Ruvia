@@ -5,17 +5,24 @@
 #include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/http/HttpAcceptEncoding.h"
+#include "ruvia/http/HttpFieldValues.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/coding/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/ServerConfig.h"
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline bool responseHasHeaderName(
+    const HttpResponse& response, std::string_view name) noexcept {
+    for (const auto& header : response.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), name)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Runtime capability is deliberately separate from Accept-Encoding
 // negotiation. A precompressed file sidecar can satisfy a selected coding
@@ -96,10 +103,10 @@ private:
     bool sawUnknownCoding = false;
     bool accepted = true;
     for (const auto& header : response.headers()) {
-        if (responseHeaderKnownBit(header) != kResponseHeaderContentEncoding) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
             continue;
         }
-        httpVisitCommaSeparatedQuotedItems(header.value(), [&](std::string_view item) noexcept {
+        httpVisitCommaSeparatedQuotedFieldItems(header.value(), [&](std::string_view item) noexcept {
             if (item.empty()) {
                 sawUnknownCoding = true;
             } else if (httpAsciiEqualsIgnoreCase(item, "gzip") ||
@@ -135,16 +142,16 @@ private:
 [[nodiscard]] inline bool httpResponseCodingFallbackForbidden(
     const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
     const HttpResponse& response) noexcept {
-    if (!httpResponseBodyPlan(requestMethod, response.status()).statusAllowsBody()) {
+    if (!planHttpServerResponseBody(requestMethod, response.status()).statusAllowsBody()) {
         return false;
     }
-    if (responseHasKnownHeader(response, kResponseHeaderContentEncoding)) {
+    if (responseHasHeaderName(response, "Content-Encoding")) {
         // An already-encoded response is a valid representation source, but it
         // still cannot bypass Accept-Encoding. Ruvia can classify a single
         // coding and a stack made entirely from its known codings without
         // taking ownership of arbitrary application coding registries; stacks
         // containing a custom coding remain application-managed.
-        const auto contentCoding = httpContentCodingFromHeaders(response.headers());
+        const auto contentCoding = parseHttpContentCodingHeaders(response.headers());
         if (const auto* coding = contentCoding.coding(); coding != nullptr) {
             return !selection.accepts(*coding);
         }

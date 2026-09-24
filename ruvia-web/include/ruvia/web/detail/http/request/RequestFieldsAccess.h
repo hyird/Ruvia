@@ -5,23 +5,17 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/util/BorrowedView.h"
 #include "ruvia/web/RequestFields.h"
 
 namespace ruvia::detail {
 
 struct RequestNameValueViewAccess final {
     [[nodiscard]] static constexpr RequestNameValueView make(
-        std::string_view name, std::string_view value) noexcept {
-        return RequestNameValueView{name, value};
+        BorrowedText name, BorrowedText value) noexcept {
+        return RequestNameValueView{name.view(), value.view()};
     }
-
-    template <HttpTemporaryOwningCharString Name>
-    static RequestNameValueView make(Name&&, std::string_view) = delete;
-
-    template <HttpTemporaryOwningCharString Value>
-    static RequestNameValueView make(std::string_view, Value&&) = delete;
 };
 
 struct RequestNameValueListAccess final {

@@ -11,7 +11,7 @@ public:
     LazyBufferedBody(Stream& stream, std::pmr::polymorphic_allocator<char> workerAllocator,
         std::pmr::memory_resource* requestResource, std::string_view initialBodyAndPipeline,
         Http1RequestBodyPlan bodyPlan, ProtocolByteLimit bodyLimit,
-        ConnectionScanner::Entry& scannerEntry)
+        ruvia::ConnectionScanner::Entry& scannerEntry)
         : reader_(
               stream, workerAllocator, initialBodyAndPipeline, bodyPlan, bodyLimit, scannerEntry),
           body_(pmrResourceOrDefault(requestResource)) {}

@@ -20,20 +20,21 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
+#include "ruvia/http/HttpRequestContentDecoding.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
-#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/request/HttpRequestBodyFailure.h"
-#include "ruvia/http/detail/request/RequestBodyDecoding.h"
 
 #include "test_harness.h"
 
 namespace content_decoding_test {
 
 using ruvia::decodeHttpContent;
+using ruvia::decodeHttpRequestContent;
 using ruvia::encodeHttpContent;
 using ruvia::Http1RequestBodyPlan;
 using ruvia::HttpContentCoding;
@@ -47,17 +48,16 @@ using ruvia::HttpContentEncodeOptions;
 using ruvia::HttpContentEncodeResult;
 using ruvia::HttpDecodedContent;
 using ruvia::HttpEncodedContent;
+using ruvia::HttpRequestContentDecodeProtocolFailure;
+using ruvia::HttpRequestContentDecodeResult;
+using ruvia::HttpRequestContentDecoderFailure;
 using ruvia::HttpTransferCoding;
 using ruvia::HttpTransferCodings;
 using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::parseHttpContentCoding;
 using ruvia::ProtocolByteLimit;
-using ruvia::detail::decodeHttpRequestContent;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpRequestContentDecodeProtocolFailure;
-using ruvia::detail::HttpRequestContentDecodeResult;
-using ruvia::detail::HttpRequestContentDecoderFailure;
 using ruvia::detail::TransferCodingDecodeNeedInput;
 using ruvia::detail::TransferCodingDecodeOutput;
 using ruvia::detail::TransferCodingDecodeProtocolFailure;

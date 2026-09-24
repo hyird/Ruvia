@@ -8,8 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
 #include "ruvia/web/RequestFields.h"
 
 // Primitives shared by everything that turns a delimited request field list into
@@ -52,7 +52,7 @@ inline constexpr std::size_t kMaxParsedFieldReserve = 4096;
 inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     for (const char ch : input) {
         output.push_back(
-            static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch))));
+            static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(ch))));
     }
 }
 

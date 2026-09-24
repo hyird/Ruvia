@@ -6,7 +6,7 @@
 #include <variant>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/HttpResponseServer.h"
 
 namespace ruvia {
 

@@ -321,4 +321,15 @@ Http2StreamState* Http2Connection::stream(std::uint32_t streamId) & noexcept {
     return streams_.find(streamId);
 }
 
+Http2StreamReceiveStatus Http2Connection::streamReceiveStatus(
+    std::uint32_t streamId) const noexcept {
+    const auto* current = streams_.find(streamId);
+    if (current == nullptr || current->isAborted()) {
+        return Http2StreamReceiveStatus::kClosed;
+    }
+    return current->remoteReceive().endStream() != nullptr
+               ? Http2StreamReceiveStatus::kEnded
+               : Http2StreamReceiveStatus::kOpen;
+}
+
 }  // namespace ruvia::detail

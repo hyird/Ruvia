@@ -13,40 +13,40 @@ namespace ruvia {
 namespace detail {
 
 void applyServerConfig(AppState& state, const ServerConfig& config) {
-    ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
+    ruvia::ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
     if (config.processSignalHandlers != ProcessSignalHandlerPolicy::kExternalOwner &&
         config.processSignalHandlers != ProcessSignalHandlerPolicy::kInstall) {
         throw std::invalid_argument("process signal handler policy is invalid");
     }
-    ensurePositiveSize(
+    ruvia::ensurePositiveSize(
         config.workerMailboxCapacity, "worker mailbox capacity must be greater than zero");
-    ensurePositiveOptionalDuration(
+    ruvia::ensurePositiveOptionalDuration(
         config.idleTimeout, "configured idle timeout must be greater than zero");
-    ensurePositiveDuration(
+    ruvia::ensurePositiveDuration(
         config.connectionScanInterval, "connection scan interval must be greater than zero");
-    ensurePositiveOptionalDuration(
+    ruvia::ensurePositiveOptionalDuration(
         config.requestHeaderTimeout, "configured request header timeout must be greater than zero");
-    ensurePositiveOptionalDuration(
+    ruvia::ensurePositiveOptionalDuration(
         config.requestBodyTimeout, "configured request body timeout must be greater than zero");
-    ensurePositiveOptionalDuration(
+    ruvia::ensurePositiveOptionalDuration(
         config.writeTimeout, "configured write timeout must be greater than zero");
     if (config.maxConnectionsPerWorker) {
-        ensurePositiveSize(*config.maxConnectionsPerWorker,
+        ruvia::ensurePositiveSize(*config.maxConnectionsPerWorker,
             "configured connection limit must be greater than zero");
     }
     if (config.maxRequestsPerConnection) {
-        ensurePositiveSize(*config.maxRequestsPerConnection,
+        ruvia::ensurePositiveSize(*config.maxRequestsPerConnection,
             "configured requests-per-connection limit must be greater than zero");
     }
-    ensurePositiveSize(
+    ruvia::ensurePositiveSize(
         config.maxBufferedBodyBytes, "buffered body limit must be greater than zero");
     if (config.maxStreamBodyBytes) {
-        ensurePositiveSize(
+        ruvia::ensurePositiveSize(
             *config.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
     }
-    ensurePositiveSize(
+    ruvia::ensurePositiveSize(
         config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
-    ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
+    ruvia::ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
         "memory pool config values must be greater than zero");
 
     state.workerCount = config.workerCount;
@@ -86,8 +86,8 @@ App& App::listen(ListenConfig config) {
             if (!config.http.has_value() && !config.https.has_value()) {
                 throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
             }
-            detail::ensureNonZeroOptionalPort(config.http, "HTTP listen port must not be zero");
-            detail::ensureNonZeroOptionalPort(config.https, "HTTPS listen port must not be zero");
+            ruvia::ensureNonZeroOptionalPort(config.http, "HTTP listen port must not be zero");
+            ruvia::ensureNonZeroOptionalPort(config.https, "HTTPS listen port must not be zero");
             if (config.http.has_value() && config.http == config.https) {
                 throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
             }
@@ -130,7 +130,7 @@ App& App::server(ServerConfig config) {
 App& App::deadline(DeadlineConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change the deadline while app is running", [config](detail::AppState& state) {
-            detail::ensurePositiveDuration(
+            ruvia::ensurePositiveDuration(
                 config.handler, "handler deadline must be greater than zero");
             state.options.deadline = config;
         });

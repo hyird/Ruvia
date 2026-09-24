@@ -7,8 +7,8 @@
 
 namespace {
 
+using ruvia::Http2CleartextPrefaceProbe;
 using ruvia::kHttp2ClientPreface;
-using ruvia::detail::Http2CleartextPrefaceProbe;
 using ruvia::detail::probeCleartextHttp2Preface;
 
 }  // namespace

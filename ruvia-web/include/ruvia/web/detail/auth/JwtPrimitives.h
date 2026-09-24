@@ -3,13 +3,14 @@
 #ifdef RUVIA_ENABLE_JWT
 
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <ratio>
 #include <string_view>
 
-#include "ruvia/http/detail/util/BorrowedView.h"
+#include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/auth/Jwt.h"
 
 namespace ruvia::detail {
@@ -109,7 +110,9 @@ struct JwtTokenParts final {
 
 [[nodiscard]] JwtTokenParts jwtSplitToken(std::string_view token);
 
-template <HttpTemporaryOwningCharString Token>
+template <typename Token>
+    requires(std::convertible_to<Token &&, std::string_view> &&
+                !std::constructible_from<BorrowedText, Token &&>)
 JwtTokenParts jwtSplitToken(Token&&) = delete;
 
 }  // namespace ruvia::detail

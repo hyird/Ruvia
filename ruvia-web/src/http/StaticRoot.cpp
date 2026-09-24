@@ -17,10 +17,10 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpDate.h"
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
@@ -108,29 +108,29 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 [[nodiscard]] bool mediaTypeStartsWith(
     std::string_view mediaType, std::string_view prefix) noexcept {
     return mediaType.size() >= prefix.size() &&
-           detail::httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+           httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool mediaTypeEndsWith(std::string_view mediaType, std::string_view suffix) noexcept {
     return mediaType.size() >= suffix.size() &&
-           detail::httpAsciiEqualsIgnoreCase(
+           httpAsciiEqualsIgnoreCase(
                mediaType.substr(mediaType.size() - suffix.size()), suffix);
 }
 
 [[nodiscard]] bool staticContentTypeEligibleForPrecompression(
     std::string_view contentType) noexcept {
-    const auto mediaType = detail::httpMediaTypeOnly(contentType);
+    const auto mediaType = httpMediaTypeOnly(contentType);
     if (mediaType.empty()) {
         return false;
     }
     return mediaTypeStartsWith(mediaType, "text/") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/json") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/javascript") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/x-javascript") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/wasm") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xml") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "application/xhtml+xml") ||
-           detail::httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/json") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/javascript") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/x-javascript") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/wasm") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/xml") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "application/xhtml+xml") ||
+           httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml") ||
            mediaTypeEndsWith(mediaType, "+json") || mediaTypeEndsWith(mediaType, "+xml");
 }
 
@@ -568,7 +568,7 @@ StaticRoot::StaticRoot(PreparedConstruction prepared)
     const auto& canonicalRoot = prepared.canonicalRoot;
     std::error_code ec;
     auto& state = *state_;
-    detail::assignNativePath(state.root, canonicalRoot);
+    ruvia::assignNativePath(state.root, canonicalRoot);
 
     auto* const upstream = detail::processResource();
     const auto& config = state.config;
@@ -640,7 +640,7 @@ StaticRoot::StaticRoot(PreparedConstruction prepared)
             config.responseValidators == StaticResponseValidatorPolicy::kEmit;
         detail::StaticRootEntry entry(upstream);
         entry.relativePath = std::move(relative);
-        detail::assignNativePath(entry.filePath, filePath);
+        ruvia::assignNativePath(entry.filePath, filePath);
         entry.contentType = detail::contentTypeFor(filePath, extension, config, upstream);
         entry.size = snapshot.size;
         entry.identity = snapshot.identity;
@@ -650,7 +650,7 @@ StaticRoot::StaticRoot(PreparedConstruction prepared)
         if (emitResponseValidators) {
             entry.etag = detail::makeStaticFileSnapshotEtag(
                 upstream, snapshot.size, snapshot.modifiedToken, snapshot.identity);
-            if (const auto date = detail::httpFormatDate(snapshot.modifiedSeconds)) {
+            if (const auto date = formatHttpDate(snapshot.modifiedSeconds)) {
                 entry.lastModified.assign(date->data(), date->size());
             }
         }
@@ -683,7 +683,7 @@ void StaticRoot::StateDeleter::operator()(detail::StaticRootState* state) const 
 }
 
 std::filesystem::path StaticRoot::path() const {
-    return detail::makePathFromNativePath(state_->root);
+    return ruvia::makePathFromNativePath(state_->root);
 }
 
 }  // namespace ruvia
