@@ -9,128 +9,88 @@
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
-class HttpResponseBodyPlan final {
+class HttpServerResponseBodyPlan final {
 public:
-    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
-        return requestMethod_;
-    }
-
-    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
-        return responseStatus_;
-    }
-
-    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
-        return policy_;
-    }
-
-    [[nodiscard]] bool statusAllowsBody() const noexcept {
-        return policy_.bodyAllowed();
-    }
-
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept { return requestMethod_; }
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept { return responseStatus_; }
+    [[nodiscard]] detail::ResponseWritePolicy policy() const noexcept { return policy_; }
+    [[nodiscard]] bool statusAllowsBody() const noexcept { return policy_.bodyAllowed(); }
     [[nodiscard]] bool bodySuppressed() const noexcept {
-        return !policy_.bodyAllowed() || semantics_ != HttpResponseContentSemantics::kWithContent;
+        return !policy_.bodyAllowed() || semantics_ != detail::HttpResponseContentSemantics::kWithContent;
     }
-
-    [[nodiscard]] HttpResponseContentSemantics contentSemantics() const noexcept {
-        return semantics_;
-    }
-
-    [[nodiscard]] std::uint64_t bufferedRepresentationLength(
-        const HttpResponse& response) const noexcept {
-        if (!statusAllowsBody() || semantics_ == HttpResponseContentSemantics::kConnectTunnel) {
+    [[nodiscard]] detail::HttpResponseContentSemantics contentSemantics() const noexcept { return semantics_; }
+    [[nodiscard]] std::uint64_t bufferedRepresentationLength(const HttpResponse& response) const noexcept {
+        if (!statusAllowsBody() || semantics_ == detail::HttpResponseContentSemantics::kConnectTunnel) {
             return 0;
         }
-        return static_cast<std::uint64_t>(responseBody(response).size());
+        return static_cast<std::uint64_t>(detail::responseBody(response).size());
     }
 
 private:
-    friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, HttpStatusCode) noexcept;
-    friend class HttpBufferedResponseWritePlan;
-
-    constexpr HttpResponseBodyPlan(HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
-        ResponseWritePolicy policy, HttpResponseContentSemantics semantics) noexcept
-        : requestMethod_(requestMethod),
-          responseStatus_(responseStatus),
-          policy_(policy),
-          semantics_(semantics) {}
-
+    friend HttpServerResponseBodyPlan planHttpServerResponseBody(
+        HttpKnownMethod, HttpStatusCode) noexcept;
+    friend class HttpServerBufferedResponseWritePlan;
+    constexpr HttpServerResponseBodyPlan(HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
+        detail::ResponseWritePolicy policy, detail::HttpResponseContentSemantics semantics) noexcept
+        : requestMethod_(requestMethod), responseStatus_(responseStatus), policy_(policy), semantics_(semantics) {}
     HttpKnownMethod requestMethod_;
     HttpStatusCode responseStatus_;
-    ResponseWritePolicy policy_;
-    HttpResponseContentSemantics semantics_;
+    detail::ResponseWritePolicy policy_;
+    detail::HttpResponseContentSemantics semantics_;
 };
 
-static_assert(std::is_trivially_copyable_v<HttpResponseBodyPlan>);
-static_assert(sizeof(HttpResponseBodyPlan) <= 12);
+static_assert(std::is_trivially_copyable_v<HttpServerResponseBodyPlan>);
+static_assert(sizeof(HttpServerResponseBodyPlan) <= 12);
 
-[[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
-    HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
-    const auto policy = responseWritePolicy(statusCode);
-    return HttpResponseBodyPlan(
-        requestMethod, statusCode, policy, httpResponseContentSemantics(requestMethod, statusCode));
-}
-
-class HttpBufferedResponseWritePlan final {
+class HttpServerBufferedResponseWritePlan final {
 public:
-    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
-        return bodyPlan_.requestMethod();
-    }
-
-    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
-        return bodyPlan_.responseStatus();
-    }
-
-    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
-        return bodyPlan_;
-    }
-
-    [[nodiscard]] ResponseWritePolicy policy() const noexcept {
-        return bodyPlan_.policy();
-    }
-
-    [[nodiscard]] bool bodySuppressed() const noexcept {
-        return bodyPlan_.bodySuppressed();
-    }
-
-    [[nodiscard]] bool statusAllowsBody() const noexcept {
-        return bodyPlan_.statusAllowsBody();
-    }
-
-    [[nodiscard]] std::uint64_t contentLength() const noexcept {
-        return contentLength_;
-    }
-
-    [[nodiscard]] bool sendBody() const noexcept {
-        return !bodySuppressed() && contentLength_ != 0;
-    }
-
-    // The response remains mutable after planning. Consumers validate this
-    // snapshot before wire mutation so a changed status/body cannot silently
-    // reuse stale representation metadata.
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept { return bodyPlan_.requestMethod(); }
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept { return bodyPlan_.responseStatus(); }
+    [[nodiscard]] HttpServerResponseBodyPlan bodyPlan() const noexcept { return bodyPlan_; }
+    [[nodiscard]] detail::ResponseWritePolicy policy() const noexcept { return bodyPlan_.policy(); }
+    [[nodiscard]] bool bodySuppressed() const noexcept { return bodyPlan_.bodySuppressed(); }
+    [[nodiscard]] bool statusAllowsBody() const noexcept { return bodyPlan_.statusAllowsBody(); }
+    [[nodiscard]] std::uint64_t contentLength() const noexcept { return contentLength_; }
+    [[nodiscard]] bool sendBody() const noexcept { return !bodySuppressed() && contentLength_ != 0; }
     [[nodiscard]] bool matchesResponse(const HttpResponse& response) const noexcept {
         return responseStatus() == response.status() &&
                contentLength_ == bodyPlan_.bufferedRepresentationLength(response);
     }
 
 private:
-    friend HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
+    friend HttpServerBufferedResponseWritePlan planHttpServerBufferedResponseWrite(
         HttpKnownMethod, const HttpResponse&) noexcept;
-
-    HttpBufferedResponseWritePlan(
-        HttpResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
-        : bodyPlan_(bodyPlan),
-          contentLength_(contentLength) {}
-
-    HttpResponseBodyPlan bodyPlan_;
+    HttpServerBufferedResponseWritePlan(HttpServerResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
+        : bodyPlan_(bodyPlan), contentLength_(contentLength) {}
+    HttpServerResponseBodyPlan bodyPlan_;
     std::uint64_t contentLength_{0};
 };
 
-[[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
-    HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
-    const auto bodyPlan = ::ruvia::detail::httpResponseBodyPlan(requestMethod, response.status());
-    return HttpBufferedResponseWritePlan(bodyPlan, bodyPlan.bufferedRepresentationLength(response));
+[[nodiscard]] inline HttpServerResponseBodyPlan planHttpServerResponseBody(
+    HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {
+    return HttpServerResponseBodyPlan(requestMethod, statusCode, detail::responseWritePolicy(statusCode),
+        detail::httpResponseContentSemantics(requestMethod, statusCode));
 }
 
+[[nodiscard]] inline HttpServerBufferedResponseWritePlan planHttpServerBufferedResponseWrite(
+    HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
+    const auto bodyPlan = planHttpServerResponseBody(requestMethod, response.status());
+    return HttpServerBufferedResponseWritePlan(bodyPlan, bodyPlan.bufferedRepresentationLength(response));
+}
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
+using HttpResponseBodyPlan = ::ruvia::HttpServerResponseBodyPlan;
+using HttpBufferedResponseWritePlan = ::ruvia::HttpServerBufferedResponseWritePlan;
+[[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
+    HttpKnownMethod method, HttpStatusCode status) noexcept {
+    return ::ruvia::planHttpServerResponseBody(method, status);
+}
+[[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
+    HttpKnownMethod method, const HttpResponse& response) noexcept {
+    return ::ruvia::planHttpServerBufferedResponseWrite(method, response);
+}
 }  // namespace ruvia::detail

@@ -337,7 +337,7 @@ private:
 };
 
 using Http2BufferedResponseHeadSubmitResult =
-    Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
+    Http2ResponseHeadSubmitResult<HttpServerBufferedResponseWritePlan>;
 using Http2StreamingResponseHeadSubmitResult =
     Http2ResponseHeadSubmitResult<ResponseStreamCommitPlan>;
 
@@ -430,7 +430,7 @@ public:
     // Http2ResponseHeadPlan owns canonical, explicit, absent, or forbidden
     // Content-Length metadata before the encoder and local DATA state advance.
     [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(std::uint32_t streamId,
-        const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
+        const HttpResponse& response, HttpServerBufferedResponseWritePlan writePlan);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK
     // metadata and all later DATA. With no explicit value the body is unbounded.

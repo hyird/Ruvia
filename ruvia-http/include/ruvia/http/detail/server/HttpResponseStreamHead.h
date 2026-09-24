@@ -14,7 +14,7 @@
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 enum class ResponseStreamFraming : std::uint8_t {
     kHttp1KnownLength,
@@ -69,7 +69,7 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
+    [[nodiscard]] HttpServerResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -85,7 +85,7 @@ private:
     friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
         ResponseStreamFraming, HttpKnownMethod, HttpStatusCode, ResponseTrailerIntent) noexcept;
 
-    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpResponseBodyPlan bodyPlan,
+    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpServerResponseBodyPlan bodyPlan,
         ResponseStreamTrailerFraming trailerFraming,
         ResponseStreamHeadDisposition headDisposition) noexcept
         : framing_(framing),
@@ -94,7 +94,7 @@ private:
           headDisposition_(headDisposition) {}
 
     ResponseStreamFraming framing_{ResponseStreamFraming::kHttp2Frames};
-    HttpResponseBodyPlan bodyPlan_;
+    HttpServerResponseBodyPlan bodyPlan_;
     ResponseStreamTrailerFraming trailerFraming_{ResponseStreamTrailerFraming::kUnavailable};
     ResponseStreamHeadDisposition headDisposition_{ResponseStreamHeadDisposition::kMessageEnded};
 };
@@ -102,7 +102,7 @@ private:
 [[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
     ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
-    const auto bodyPlan = ::ruvia::detail::httpResponseBodyPlan(requestMethod, responseStatus);
+    const auto bodyPlan = planHttpServerResponseBody(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
         return ResponseStreamCommitPlan(framing, bodyPlan,
             ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
@@ -177,37 +177,47 @@ private:
     }
 
     const bool needsSseContentType = kind == ResponseStreamKind::kSse &&
-                                     !responseHasKnownHeader(response, kResponseHeaderContentType);
-    const bool needsHttp1Chunked = writerOwnsHttp1Chunked && !responseHasKnownHeader(response,
-                                                                 kResponseHeaderTransferEncoding);
+                                     !detail::responseHasKnownHeader(response, detail::kResponseHeaderContentType);
+    const bool needsHttp1Chunked = writerOwnsHttp1Chunked && !detail::responseHasKnownHeader(response,
+                                                                 detail::kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
         kind == ResponseStreamKind::kSse &&
         (framing == ResponseStreamFraming::kHttp2Frames || policy.transferEncodingAllowed()) &&
-        !responseHasKnownHeader(response, kResponseHeaderCacheControl);
+        !detail::responseHasKnownHeader(response, detail::kResponseHeaderCacheControl);
     const auto additionalHeaders = static_cast<std::size_t>(needsSseContentType) +
                                    static_cast<std::size_t>(needsHttp1Chunked) +
                                    static_cast<std::size_t>(needsSseCacheControl);
     if (additionalHeaders != 0) {
-        reserveResponseHeaders(response, response.headers().size() + additionalHeaders);
+        detail::reserveResponseHeaders(response, response.headers().size() + additionalHeaders);
     }
 
     if (needsSseContentType) {
-        setResponseHeaderStableView(response, "Content-Type", "text/event-stream");
+        detail::setResponseHeaderStableView(response, "Content-Type", "text/event-stream");
     }
     if (writerOwnsHttp1Chunked) {
-        setResponseHeaderStableView(response, "Transfer-Encoding", "chunked");
+        detail::setResponseHeaderStableView(response, "Transfer-Encoding", "chunked");
     }
     if (needsSseCacheControl) {
         // Gate on the guard that was already computed for the reserve count above,
-        // which includes !responseHasKnownHeader(...Cache-Control). Re-inlining only
+        // which includes !detail::responseHasKnownHeader(...Cache-Control). Re-inlining only
         // the mode/framing condition here (as before) dropped that guard and
         // overwrote a handler's own Cache-Control -- e.g. the recommended SSE
         // "no-cache" -- with "no-store". This mirrors the Content-Type path, which
         // uses needsSseContentType, so a caller-provided value is honored.
-        setResponseHeaderStableView(response, "Cache-Control", "no-store");
+        detail::setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 
     return ResponseStreamHead(std::move(response), commitPlan);
 }
 
+}  // namespace ruvia
+
+namespace ruvia::detail {
+using ::ruvia::ResponseStreamFraming;
+using ::ruvia::ResponseStreamKind;
+using ::ruvia::ResponseTrailerIntent;
+using ::ruvia::ResponseStreamTrailerFraming;
+using ::ruvia::ResponseStreamHeadDisposition;
+using ::ruvia::ResponseStreamCommitPlan;
+using ::ruvia::ResponseStreamHead;
 }  // namespace ruvia::detail

@@ -39,7 +39,7 @@ class Http2ResponseHeadPlanResult;
 
 class Http2ResponseHeadPlan final {
 public:
-    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
+    [[nodiscard]] HttpServerResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -70,13 +70,13 @@ private:
         kExplicit,
     };
 
-    Http2ResponseHeadPlan(HttpResponseBodyPlan bodyPlan, ContentLengthMode contentLengthMode,
+    Http2ResponseHeadPlan(HttpServerResponseBodyPlan bodyPlan, ContentLengthMode contentLengthMode,
         std::uint64_t contentLength = 0) noexcept
         : bodyPlan_(bodyPlan),
           contentLengthMode_(contentLengthMode),
           contentLength_(contentLength) {}
 
-    HttpResponseBodyPlan bodyPlan_;
+    HttpServerResponseBodyPlan bodyPlan_;
     ContentLengthMode contentLengthMode_;
     std::uint64_t contentLength_{0};
 };
@@ -98,11 +98,11 @@ public:
 
 private:
     friend Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(
-        const HttpBufferedResponseWritePlan&, const HttpResponse&) noexcept;
+        const HttpServerBufferedResponseWritePlan&, const HttpResponse&) noexcept;
     friend Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(
-        const HttpResponseBodyPlan&, const HttpResponse&) noexcept;
+        const HttpServerResponseBodyPlan&, const HttpResponse&) noexcept;
     friend Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(
-        const HttpResponseBodyPlan&) noexcept;
+        const HttpServerResponseBodyPlan&) noexcept;
 
     using Value = std::expected<Http2ResponseHeadPlan, Http2ResponseHeadPlanFailure>;
 
@@ -113,13 +113,13 @@ private:
         : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http2ResponseHeadPlanResult canonical(
-        HttpResponseBodyPlan bodyPlan, std::uint64_t value) noexcept {
+        HttpServerResponseBodyPlan bodyPlan, std::uint64_t value) noexcept {
         return Http2ResponseHeadPlanResult(Http2ResponseHeadPlan(
             bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kCanonical, value));
     }
 
     [[nodiscard]] static Http2ResponseHeadPlanResult preserveExplicit(
-        HttpResponseBodyPlan bodyPlan, const HttpResponse& response) noexcept {
+        HttpServerResponseBodyPlan bodyPlan, const HttpResponse& response) noexcept {
         if (!responseHasKnownHeader(response, kResponseHeaderContentLength)) {
             return omit(bodyPlan);
         }
@@ -135,7 +135,7 @@ private:
             bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kExplicit, parsed));
     }
 
-    [[nodiscard]] static Http2ResponseHeadPlanResult omit(HttpResponseBodyPlan bodyPlan) noexcept {
+    [[nodiscard]] static Http2ResponseHeadPlanResult omit(HttpServerResponseBodyPlan bodyPlan) noexcept {
         return Http2ResponseHeadPlanResult(
             Http2ResponseHeadPlan(bodyPlan, Http2ResponseHeadPlan::ContentLengthMode::kOmit));
     }
@@ -149,7 +149,7 @@ private:
 };
 
 [[nodiscard]] inline Http2ResponseHeadPlanResult http2BufferedResponseHeadPlan(
-    const HttpBufferedResponseWritePlan& writePlan, const HttpResponse& response) noexcept {
+    const HttpServerBufferedResponseWritePlan& writePlan, const HttpResponse& response) noexcept {
     const auto bodyPlan = writePlan.bodyPlan();
     if (writePlan.responseStatus() != response.status()) {
         return Http2ResponseHeadPlanResult::failure(
@@ -170,7 +170,7 @@ private:
 }
 
 [[nodiscard]] inline Http2ResponseHeadPlanResult http2StreamingResponseHeadPlan(
-    const HttpResponseBodyPlan& bodyPlan, const HttpResponse& response) noexcept {
+    const HttpServerResponseBodyPlan& bodyPlan, const HttpResponse& response) noexcept {
     if (bodyPlan.responseStatus() != response.status()) {
         return Http2ResponseHeadPlanResult::failure(
             Http2ResponseHeadPlanError::kResponseStatusMismatch);
@@ -185,7 +185,7 @@ private:
 }
 
 [[nodiscard]] inline Http2ResponseHeadPlanResult http2ConnectResponseHeadPlan(
-    const HttpResponseBodyPlan& bodyPlan) noexcept {
+    const HttpServerResponseBodyPlan& bodyPlan) noexcept {
     return bodyPlan.contentSemantics() == HttpResponseContentSemantics::kConnectTunnel
                ? Http2ResponseHeadPlanResult::omit(bodyPlan)
                : Http2ResponseHeadPlanResult::failure(

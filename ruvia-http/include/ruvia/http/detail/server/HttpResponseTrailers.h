@@ -11,6 +11,7 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpResponseTrailerSection.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
@@ -220,6 +221,13 @@ template <typename Visitor>
 }
 
 class HttpResponseTrailerSectionResult;
+[[nodiscard]] HttpResponseTrailerSectionResult httpResponseTrailerSection(
+    std::span<const HttpHeaderView>) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
 class HttpResponseTrailerSectionFailure;
 
 class HttpResponseTrailerSectionError final : public std::exception {
@@ -237,26 +245,7 @@ private:
 // Borrowed proof that the complete terminal section passed the shared response-
 // trailer rules. Protocol encoders accept this value instead of revalidating raw
 // fields independently. The source span must outlive its synchronous consumption.
-class HttpResponseTrailerSection final {
-public:
-    [[nodiscard]] std::span<const HttpHeaderView> fields() const noexcept {
-        return fields_;
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return fields_.empty();
-    }
-
-private:
-    friend class HttpResponseTrailerSectionResult;
-    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
-        std::span<const HttpHeaderView>) noexcept;
-
-    explicit HttpResponseTrailerSection(std::span<const HttpHeaderView> fields) noexcept
-        : fields_(fields) {}
-
-    std::span<const HttpHeaderView> fields_;
-};
+using HttpResponseTrailerSection = ::ruvia::HttpResponseTrailerSection;
 
 class HttpResponseTrailerSectionFailure final {
 public:

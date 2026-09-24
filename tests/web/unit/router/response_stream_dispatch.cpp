@@ -115,7 +115,7 @@ private:
         }
         const auto response = co_await streamingHead_(*context_);
         commitPlan_.emplace(
-            ruvia::detail::httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp1Chunked,
+            ruvia::planHttpResponseStreamCommit(ResponseStreamFraming::kHttp1Chunked,
                 HttpKnownMethod::kGet, response.status(), trailerIntent));
     }
 
