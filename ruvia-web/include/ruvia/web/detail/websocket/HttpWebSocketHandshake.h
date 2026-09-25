@@ -7,8 +7,8 @@
 
 #include <asio/write.hpp>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/Async.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketHandshake.h"
 
 namespace ruvia::detail {

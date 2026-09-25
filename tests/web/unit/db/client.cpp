@@ -21,8 +21,8 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
@@ -35,6 +35,7 @@
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 #ifdef RUVIA_ENABLE_MARIADB
 #include "ruvia/web/detail/db/DbMysqlRuntime.h"
 #endif
@@ -122,13 +123,25 @@ struct ClosingResolvePool final {
 }
 
 class DbRegistryTestRuntime final {
-public:
-    DbRegistryTestRuntime()
-        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8)),
-          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)) {}
+#ifndef _WIN32
+    asio::io_context ownedIoContext;
+#endif
 
-    asio::io_context ioContext;
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
+public:
+#ifdef _WIN32
+    DbRegistryTestRuntime()
+        : ioContext(ruvia::test::newTestIoContext()),
+          attachment(ruvia::attachEventLoop(ioContext)),
+          worker(attachment.loop().handle()) {}
+#else
+    DbRegistryTestRuntime()
+        : ioContext(ownedIoContext),
+          attachment(ruvia::attachEventLoop(ioContext)),
+          worker(attachment.loop().handle()) {}
+#endif
+
+    asio::io_context& ioContext;
+    ruvia::EventLoopAttachment attachment;
     ruvia::WorkerHandle worker;
 };
 
@@ -208,7 +221,7 @@ RUVIA_TEST(db_resolve_shutdown_preserves_slot_until_it_reports_closing) {
     ClosingResolvePool pool;
     ClosingResolveSlot slot;
     auto future = asio::co_spawn(ioContext,
-        ruvia::detail::taskAsAwaitable(ruvia::detail::resolveDbHost(
+        ruvia::asAwaitable(ruvia::detail::resolveDbHost(
             pool, slot, ruvia::detail::OperationTimeout(std::nullopt), "test database")),
         asio::use_future);
     ioContext.run();
@@ -425,7 +438,7 @@ RUVIA_TEST(database_operation_guard_releases_cold_reservation) {
     {
         Guard reservation(owner.state_);
         auto future = asio::co_spawn(io,
-            ruvia::detail::taskAsAwaitable(operate(std::move(reservation), observedValue)),
+            ruvia::asAwaitable(operate(std::move(reservation), observedValue)),
             asio::use_future);
         io.run();
         future.get();
@@ -486,7 +499,7 @@ RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) 
 
     asio::io_context io(1);
     auto future =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(std::move(task)), asio::use_future);
+        asio::co_spawn(io, ruvia::asAwaitable(std::move(task)), asio::use_future);
     io.poll();
     RUVIA_CHECK(gate.continuation_ != nullptr);
 

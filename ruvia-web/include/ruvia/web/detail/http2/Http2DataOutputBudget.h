@@ -21,7 +21,8 @@ inline constexpr std::size_t kHttp2DataOutputCreditSlots = 4;
 // storage and are deliberately not included in this DATA-only bound.
 class Http2DataOutputBudget final {
 public:
-    explicit Http2DataOutputBudget(const WorkerHandle& worker) : changed_(worker) {}
+    explicit Http2DataOutputBudget(const WorkerHandle& worker)
+        : changed_(worker) {}
 
     Http2DataOutputBudget(const Http2DataOutputBudget&) = delete;
     Http2DataOutputBudget& operator=(const Http2DataOutputBudget&) = delete;
@@ -73,6 +74,16 @@ public:
                 return;
             }
         }
+    }
+
+    // Release a stream's reservation against the current core state immediately.
+    // This is required when reset/close discards queued DATA without producing a
+    // socket completion callback. Already serialized bytes remain charged until
+    // their containing socket batch completes.
+    void releaseAndReconcile(std::uint32_t streamId,
+        const ruvia::Http2Connection& connection) noexcept {
+        release(streamId);
+        reconcile(connection, false);
     }
 
     void reconcile(const ruvia::Http2Connection& connection, bool socketWriteCompleted) noexcept {

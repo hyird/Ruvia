@@ -6,10 +6,10 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/PmrString.h"
-#include "ruvia/core/Task.h"
 #include "ruvia/core/Async.h"
+#include "ruvia/core/PmrString.h"
 #include "ruvia/core/Socket.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 
 namespace ruvia::detail {
@@ -30,7 +30,7 @@ public:
         const auto oldSize = buffer.size();
         ::ruvia::resizePmrStringForOverwrite(buffer, oldSize + 4096);
         auto readCompletion = co_await ruvia::asyncAsio<std::size_t>([this, oldSize, &buffer](
-                                                                  auto handler) mutable {
+                                                                         auto handler) mutable {
             stream_.async_read_some(
                 asio::buffer(buffer.data() + oldSize, buffer.size() - oldSize), std::move(handler));
         });

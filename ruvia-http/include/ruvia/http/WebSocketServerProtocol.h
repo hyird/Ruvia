@@ -99,8 +99,8 @@ public:
         return core_.livenessMode();
     }
     [[nodiscard]] WebSocketServerFrameSubmitStatus submitFrame(
-        WebSocketOpcode opcode, std::string_view payload) {
-        return core_.submitFrame(opcode, payload);
+        WebSocketOpcode opcode, std::string_view payload, bool compress = true) {
+        return core_.submitFrame(opcode, payload, compress);
     }
     [[nodiscard]] WebSocketServerCloseSubmitStatus submitClose(
         std::uint16_t code, std::string_view reason) {

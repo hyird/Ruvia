@@ -1,7 +1,9 @@
 #include <limits>
+#include <stdexcept>
 
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -15,9 +17,11 @@ namespace {
 
 ruvia::ScopedOperation<ruvia::HttpResponse> makeExpiredNotFoundResponse() {
     ruvia::WorkerMemory worker;
-    auto request = ruvia::detail::HttpRequestAccess::make();
     ruvia::RequestMemory memory(worker);
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    auto [request, error] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, memory.resource());
+    if (error) {
+        throw std::runtime_error("invalid test request");
+    }
     auto context =
         ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     return context.notFound();
@@ -86,7 +90,7 @@ RUVIA_TEST(response_stream_cold_operation_rejects_after_capability_teardown) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
+        ruvia::asAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -100,7 +104,7 @@ RUVIA_TEST(websocket_cold_operation_rejects_after_facade_teardown) {
     bool rejected = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
+        ruvia::asAwaitable(awaitExpiredWrite(operation, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -112,7 +116,7 @@ RUVIA_TEST(body_reader_cold_operation_rejects_after_facade_teardown) {
     bool rejected = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredBodyRead(operation, rejected)),
+        ruvia::asAwaitable(awaitExpiredBodyRead(operation, rejected)),
         asio::use_future);
     ctx.run();
     future.get();
@@ -152,7 +156,7 @@ RUVIA_TEST(body_reader_preserves_octets_and_shares_text_read_lane) {
         RUVIA_CHECK(!(co_await reader.read()));
     };
     asio::io_context ctx(1);
-    auto future = asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
+    auto future = asio::co_spawn(ctx, ruvia::asAwaitable(operation()), asio::use_future);
     ctx.run();
     future.get();
 }
@@ -162,7 +166,7 @@ RUVIA_TEST(context_not_found_cold_operation_rejects_after_context_teardown) {
     bool rejected = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(awaitExpiredNotFoundResponse(operation, rejected)),
+        ruvia::asAwaitable(awaitExpiredNotFoundResponse(operation, rejected)),
         asio::use_future);
     ctx.run();
     future.get();
@@ -175,7 +179,7 @@ RUVIA_TEST(sse_writer_rejects_after_stream_writer_teardown) {
     bool rejected = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(writeExpiredSse(writer, rejected)), asio::use_future);
+        ctx, ruvia::asAwaitable(writeExpiredSse(writer, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);
@@ -190,7 +194,7 @@ RUVIA_TEST(sse_writer_checks_lifetime_before_message_validation) {
     bool validationRan = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             writeExpiredInvalidSse(writer, lifetimeRejected, validationRan)),
         asio::use_future);
     ctx.run();
@@ -246,7 +250,7 @@ RUVIA_TEST(multipart_reader_rejects_after_body_reader_teardown) {
     bool rejected = false;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(readExpiredMultipart(reader, rejected)), asio::use_future);
+        ruvia::asAwaitable(readExpiredMultipart(reader, rejected)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK(rejected);

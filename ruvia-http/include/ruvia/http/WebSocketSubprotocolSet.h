@@ -15,11 +15,17 @@ namespace ruvia {
 class WebSocketSubprotocolSet final {
 public:
     [[nodiscard]] bool append(std::string_view protocol) noexcept {
-        if (protocol.empty()) return false;
-        for (const char character : protocol) {
-            if (!detail::isHttpTokenChar(static_cast<unsigned char>(character))) return false;
+        if (protocol.empty()) {
+            return false;
         }
-        if (size_ == protocols_.size() || contains(protocol)) return false;
+        for (const char character : protocol) {
+            if (!detail::isHttpTokenChar(static_cast<unsigned char>(character))) {
+                return false;
+            }
+        }
+        if (size_ == protocols_.size() || contains(protocol)) {
+            return false;
+        }
         protocols_[size_++] = protocol;
         return true;
     }
@@ -29,19 +35,27 @@ public:
             const auto comma = value.find(',');
             const auto protocol = detail::httpTrimOws(
                 comma == std::string_view::npos ? value : value.substr(0, comma));
-            if (!protocol.empty() && !append(protocol)) return false;
-            if (comma == std::string_view::npos) return true;
+            if (!protocol.empty() && !append(protocol)) {
+                return false;
+            }
+            if (comma == std::string_view::npos) {
+                return true;
+            }
             value.remove_prefix(comma + 1);
         }
     }
 
     [[nodiscard]] bool contains(std::string_view protocol) const noexcept {
         for (std::size_t i = 0; i < size_; ++i) {
-            if (protocols_[i] == protocol) return true;
+            if (protocols_[i] == protocol) {
+                return true;
+            }
         }
         return false;
     }
-    [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+    [[nodiscard]] bool empty() const noexcept {
+        return size_ == 0;
+    }
 
 private:
     std::array<std::string_view, kMaxHttpHeaderFields> protocols_{};

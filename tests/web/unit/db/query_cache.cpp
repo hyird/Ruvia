@@ -6,11 +6,12 @@
 #include <string>
 #include <system_error>
 
-#include <asio/bind_executor.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/web/db/DbQuery.h"
 #include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
@@ -228,17 +229,34 @@ Task<DbRows> operation(StoreState& state, bool ignore = false,
         Database{&state, std::pmr::string(500, 'x', state.resource)}, state.resource,
         OperationOptions{.timeout = timeout});
 }
+template <typename Callback>
+asio::awaitable<void> awaitTask(Task<DbRows> task, Callback callback) {
+    std::optional<DbRows> result;
+    std::exception_ptr failure;
+    try {
+        result.emplace(co_await asAwaitable(std::move(task)));
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    callback(std::move(failure), std::move(result));
+    co_return;
+}
+template <typename Callback>
+void startTask(asio::io_context& context, Task<DbRows> task, Callback callback) {
+    asio::co_spawn(context, awaitTask(std::move(task), std::move(callback)), asio::detached);
+    context.poll();
+    context.restart();
+}
 DbRows run(Task<DbRows> task) {
     asio::io_context context;
     std::optional<DbRows> result;
     std::exception_ptr failure;
-    detail::asyncStartTask(std::move(task), asio::bind_executor(context, [&](auto completion) {
-        if (completion.failure()) {
-            failure = completion.failure()->exception();
-        } else {
-            result.emplace(std::move(*completion.success()).takeValue());
+    startTask(context, std::move(task), [&](std::exception_ptr error, std::optional<DbRows> rows) {
+        failure = std::move(error);
+        if (rows) {
+            result.emplace(std::move(*rows));
         }
-    }));
+    });
     context.run();
     if (failure) {
         std::rethrow_exception(failure);
@@ -319,11 +337,9 @@ RUVIA_TEST(db_cache_timeout_budget_is_shared_and_not_ignored) {
     TimerGate putGate(context, 200ms);
     StoreState state{.timerGate = &getGate, .timerWriteGate = &putGate, .timerDbGate = &sqlGate, .resource = &resource};
     std::exception_ptr failure;
-    detail::asyncStartTask(operation(state, true, 100ms), asio::bind_executor(context, [&](auto completion) {
-        if (completion.failure()) {
-            failure = completion.failure()->exception();
-        }
-    }));
+    startTask(context, operation(state, true, 100ms), [&](std::exception_ptr error, std::optional<DbRows>) {
+        failure = std::move(error);
+    });
     context.run();
 
     RUVIA_CHECK(failure != nullptr);
@@ -348,11 +364,9 @@ RUVIA_TEST(db_cache_get_timeout_is_not_ignored_or_followed_by_database) {
     TimerGate getGate(context, 150ms);
     StoreState state{.timerGate = &getGate, .resource = &resource};
     std::exception_ptr failure;
-    detail::asyncStartTask(operation(state, true, 100ms), asio::bind_executor(context, [&](auto completion) {
-        if (completion.failure()) {
-            failure = completion.failure()->exception();
-        }
-    }));
+    startTask(context, operation(state, true, 100ms), [&](std::exception_ptr error, std::optional<DbRows>) {
+        failure = std::move(error);
+    });
     context.run();
 
     RUVIA_CHECK(failure != nullptr);
@@ -410,15 +424,15 @@ RUVIA_TEST(db_cache_failure_policy_cold_drop_and_cancellation_release_storage) {
         state.getError = RedisError::Code::kCancelled;
         asio::io_context context;
         bool cancelled = false;
-        detail::asyncStartTask(operation(state, true), asio::bind_executor(context, [&](auto completion) {
-            if (completion.failure()) {
+        startTask(context, operation(state, true), [&](std::exception_ptr failure, std::optional<DbRows>) {
+            if (failure) {
                 try {
-                    std::rethrow_exception(completion.failure()->exception());
+                    std::rethrow_exception(failure);
                 } catch (const RedisError& error) {
                     cancelled = error.code() == RedisError::Code::kCancelled;
                 }
             }
-        }));
+        });
         RUVIA_CHECK(gate.continuation != nullptr);
         gate.resume();
         context.run();
@@ -442,17 +456,17 @@ RUVIA_TEST(db_cache_suspended_database_and_write_cancellation_release_results) {
             }
             asio::io_context context;
             bool cancelled = false;
-            detail::asyncStartTask(operation(state, true), asio::bind_executor(context, [&](auto completion) {
-                if (completion.failure()) {
+            startTask(context, operation(state, true), [&](std::exception_ptr failure, std::optional<DbRows>) {
+                if (failure) {
                     try {
-                        std::rethrow_exception(completion.failure()->exception());
+                        std::rethrow_exception(failure);
                     } catch (const RedisError& error) {
                         cancelled = error.code() == RedisError::Code::kCancelled;
                     } catch (const DbError& error) {
                         cancelled = error.code() == DbError::Code::kCancelled;
                     }
                 }
-            }));
+            });
             RUVIA_CHECK(gate.continuation != nullptr);
             RUVIA_CHECK(resource.liveAllocations() > 0);
             gate.resume();

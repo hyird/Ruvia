@@ -106,6 +106,13 @@ ruvia::Task<void> endOwned(void* target,
     co_await end(target, trailers.views);
 }
 
+void requireWebSocketWorker(void* target) noexcept {
+    const auto* worker = static_cast<const ruvia::WorkerHandle*>(target);
+    if (worker != nullptr && !worker->isCurrent()) {
+        std::terminate();
+    }
+}
+
 ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void* target,
     ruvia::Task<std::optional<ruvia::WebSocketMessage>> (*read)(void*),
     WebSocketActivityLease activity) {
@@ -269,8 +276,9 @@ ScopedOperation<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
 ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() & {
     requireActive();
     WebSocketActivityLease activity(readActive_, "concurrent websocket reads are not supported");
-    return detail::makeScopedOperation(
-        operationScope_, readWebSocket(target_, read_, std::move(activity)));
+    return detail::makeScopedOperation(operationScope_,
+        readWebSocket(target_, read_, std::move(activity)), &requireWebSocketWorker,
+        const_cast<WorkerHandle*>(worker_));
 }
 
 ScopedOperation<void> WebSocket::text(std::string_view payload, WebSocketSendOptions options) & {
@@ -314,10 +322,14 @@ ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) & {
     WebSocketActivityLease closeActivity(closeActive_, "websocket close is already in progress");
     return detail::makeScopedOperation(operationScope_,
         closeWebSocketWithReason(target_, close_, options, std::move(owned),
-            std::move(readActivity), std::move(writeActivity), std::move(closeActivity)));
+            std::move(readActivity), std::move(writeActivity), std::move(closeActivity)),
+        &requireWebSocketWorker, const_cast<WorkerHandle*>(worker_));
 }
 
 void WebSocket::abort() noexcept {
+    if (worker_ != nullptr && !worker_->isCurrent()) {
+        std::terminate();
+    }
     if (!operationScope_.active()) {
         return;
     }
@@ -336,7 +348,8 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&
         writeActive_, "concurrent websocket output operations are not supported");
     std::pmr::string owned(std::move(payload), resource_);
     return detail::makeScopedOperation(operationScope_,
-        writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity), compress));
+        writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity), compress),
+        &requireWebSocketWorker, const_cast<WorkerHandle*>(worker_));
 }
 
 ScopedOperation<void> SseWriter::write(const SseMessage& message) {

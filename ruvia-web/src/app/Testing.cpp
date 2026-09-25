@@ -13,8 +13,8 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"

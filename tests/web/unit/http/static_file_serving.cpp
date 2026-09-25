@@ -6,6 +6,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <memory_resource>
@@ -17,25 +18,23 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/http/HttpCache.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/StaticFiles.h"
@@ -53,6 +52,47 @@
 
 namespace {
 
+class StaticFileTestRequest final {
+public:
+    explicit StaticFileTestRequest(std::pmr::memory_resource* resource)
+        : resource_(resource) {}
+
+    void setMethod(std::string_view method) noexcept {
+        method_ = method;
+    }
+
+    void setTarget(std::string_view target) noexcept {
+        target_ = target;
+    }
+
+    void setPath(std::string_view path) noexcept {
+        target_ = path;
+    }
+
+    void addHeader(ruvia::HttpHeaderView header) {
+        headers_.push_back(header);
+    }
+
+    operator ruvia::HttpRequest&() {
+        if (!request_.has_value()) {
+            auto [request, error] = ruvia::makeParsedHttpRequest(
+                method_, target_, headers_, {}, resource_);
+            if (error.has_value()) {
+                throw std::invalid_argument("invalid static-file test HTTP request");
+            }
+            request_.emplace(std::move(request));
+        }
+        return *request_;
+    }
+
+private:
+    std::pmr::memory_resource* resource_;
+    std::string_view method_ = "GET";
+    std::string_view target_ = "/";
+    std::vector<ruvia::HttpHeaderView> headers_;
+    std::optional<ruvia::HttpRequest> request_;
+};
+
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 
@@ -64,7 +104,7 @@ template <typename Result>
         context,
         [task = std::move(task), &result, &exception]() mutable -> asio::awaitable<void> {
             try {
-                result.emplace(co_await ruvia::detail::taskAsAwaitable(std::move(task)));
+                result.emplace(co_await ruvia::asAwaitable(std::move(task)));
             } catch (...) {
                 exception = std::current_exception();
             }
@@ -241,7 +281,6 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
     namespace fs = std::filesystem;
     using ruvia::detail::ContextAccess;
     using ruvia::detail::ContextServices;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_local_root";
     fs::create_directories(dir);
@@ -252,10 +291,8 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
 
     auto response = [&] {
@@ -267,7 +304,7 @@ RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed)
             handlerLocalRoot, {.relativePath = "payload.txt", .contentType = "text/plain"});
     }();
 
-    const auto file = ruvia::detail::responseBody(response).file();
+    const auto file = response.fileBody();
     RUVIA_CHECK(file.has_value());
     if (file.has_value()) {
         auto input = ruvia::detail::openResponseFileInput(*file);
@@ -340,20 +377,15 @@ RUVIA_TEST(static_file_without_sidecar_stays_identity_when_precompressed_variant
 
     ruvia::WorkerMemory workerMemory;
     ruvia::RequestMemory requestMemory(workerMemory);
-    auto request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
-    ruvia::detail::HttpRequestAccess::addHeader(request,
-        ruvia::HttpHeaderView{"Accept-Encoding", "gzip"},
-        ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kAcceptEncoding));
+    StaticFileTestRequest request(requestMemory.resource());
+    request.setMethod("GET");
+    request.addHeader(ruvia::HttpHeaderView{"Accept-Encoding", "gzip"});
 
     auto context = ruvia::detail::ContextAccess::make(
         requestMemory, request, ruvia::test::testContextServices().withPrecompressedStaticFiles());
     auto response =
         context.staticFile(root, {.relativePath = "payload.txt", .contentType = "text/plain"});
-    RUVIA_CHECK(ruvia::detail::responseBody(response).file().has_value());
+    RUVIA_CHECK(response.fileBody().has_value());
     RUVIA_CHECK(!response.header("Content-Encoding").has_value());
 
     fs::remove_all(dir);
@@ -401,12 +433,10 @@ RUVIA_TEST(configured_document_root_binding_is_a_move_only_request_snapshot_leas
     ruvia::StaticRoot root(dir, std::move(options));
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setTarget(request, "/payload.txt");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/payload.txt");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
+    request.setTarget("/payload.txt");
+    request.setPath("/payload.txt");
 
     ruvia::detail::RouteTable routes(memory.resource());
     const auto resolution = routes.resolve(request);
@@ -499,7 +529,6 @@ RUVIA_TEST(standalone_static_root_bindings_do_not_share_request_lease_state) {
 RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
     namespace fs = std::filesystem;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_replacement_identity";
     const auto servedPath = dir / "payload.txt";
@@ -530,15 +559,13 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
     auto response =
         context.staticFile(root, {.relativePath = "payload.txt", .contentType = "text/plain"});
     const std::string oldEtag(response.header("ETag").value_or(""));
-    const auto file = ruvia::detail::responseBody(response).file();
+    const auto file = response.fileBody();
     RUVIA_CHECK(file.has_value());
     if (file.has_value()) {
         RUVIA_CHECK(file->identity().requiresValidation());
@@ -564,7 +591,6 @@ RUVIA_TEST(static_file_replacement_cannot_reuse_indexed_metadata) {
 RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
     namespace fs = std::filesystem;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_context_file_replacement_identity";
     const auto servedPath = dir / "payload.txt";
@@ -578,10 +604,8 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
     auto response = context.file({.path = servedPath, .contentType = "text/plain"});
 
@@ -594,7 +618,7 @@ RUVIA_TEST(context_file_replacement_cannot_reuse_response_metadata) {
 #endif
     fs::rename(replacementPath, servedPath);
 
-    const auto file = ruvia::detail::responseBody(response).file();
+    const auto file = response.fileBody();
     RUVIA_CHECK(file.has_value());
     if (file.has_value()) {
         RUVIA_CHECK(file->identity().requiresValidation());
@@ -671,8 +695,6 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_range_dir";
     fs::create_directories(dir);
@@ -693,13 +715,10 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
                                  std::string_view range) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, method);
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod(method);
         if (!range.empty()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"Range", range},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+            request.addHeader(HttpHeaderView{"Range", range});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         const auto response =
@@ -762,7 +781,6 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_pct_dir";
     fs::create_directories(dir);
@@ -779,10 +797,8 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
     const auto serve = [&root](std::string_view path) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         ruvia::HttpStatusCode status = ruvia::http_status::kInternalServerError;
         try {
@@ -816,7 +832,6 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_vary_dir";
     fs::create_directories(dir);
@@ -833,10 +848,8 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
 
     // No sidecar and no Accept-Encoding -> the identity file is served, but it must
@@ -858,7 +871,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     RUVIA_CHECK(!direct.header("Vary").has_value());
     RUVIA_CHECK_EQ(direct.header("Content-Type").value_or(""),
         std::string_view("text/javascript; charset=utf-8"));
-    RUVIA_CHECK(ruvia::detail::responseBody(direct).ownedFile() != nullptr);
+    RUVIA_CHECK(direct.fileBody().has_value());
 
     fs::remove_all(dir);
 }
@@ -868,7 +881,6 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_vary_merge_dir";
     fs::create_directories(dir);
@@ -883,10 +895,8 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
     context.header("Vary", "Origin");
 
@@ -896,16 +906,15 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
     // Context response metadata is applied after the file's base headers. It
     // must not erase the negotiation dimension, or a shared cache can reuse an
     // identity/encoded representation for the wrong Accept-Encoding request.
-    RUVIA_CHECK(ruvia::detail::httpHasToken(vary, "Origin"));
-    RUVIA_CHECK(ruvia::detail::httpHasToken(vary, "Accept-Encoding"));
+    RUVIA_CHECK(vary.find("Origin") != std::string_view::npos);
+    RUVIA_CHECK(vary.find("Accept-Encoding") != std::string_view::npos);
 
     fs::remove_all(dir);
 }
 
 RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
-    using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
     using ruvia::prepareHttpResponseStreamHead;
+    using ruvia::detail::ContextAccess;
     using ruvia::detail::ResponseStreamFraming;
     using ruvia::detail::ResponseStreamKind;
     using ruvia::detail::ResponseTrailerIntent;
@@ -913,10 +922,8 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
     const auto head = [](bool presetNoCache) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         if (presetNoCache) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
@@ -942,8 +949,6 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_if_range_dir";
     fs::create_directories(dir);
@@ -961,15 +966,11 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     const auto serve = [&root](std::optional<std::string_view> ifRange) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Range", "bytes=0-4"},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
+        request.addHeader(HttpHeaderView{"Range", "bytes=0-4"});
         if (ifRange.has_value()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"If-Range", *ifRange},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+            request.addHeader(HttpHeaderView{"If-Range", *ifRange});
         }
         auto ctx = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         const auto response =
@@ -982,17 +983,10 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     const auto base = serve(std::nullopt);
     RUVIA_CHECK_EQ(base.first, ruvia::http_status::kPartialContent);
     RUVIA_CHECK(!base.second.empty());
-    const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
+    const auto lastModified = ruvia::parseHttpDate(base.second);
     RUVIA_CHECK(lastModified.has_value());
-    const std::time_t modified = lastModified.value_or(0);
-
-    const auto fmt = [](std::time_t t) {
-        const auto out = ruvia::detail::httpFormatDate(t).value();
-        return std::string(out.data(), out.size());
-    };
-
     // Exact match -> the representation is unchanged, so the range is honored (206).
-    RUVIA_CHECK_EQ(serve(fmt(modified)).first, ruvia::http_status::kPartialContent);
+    RUVIA_CHECK_EQ(serve(base.second).first, ruvia::http_status::kPartialContent);
 
     // A present empty If-Range is not an entity-tag or HTTP-date. Its condition
     // is therefore false, so it must suppress the Range rather than being
@@ -1003,10 +997,10 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     // DIFFERENT representation than the client holds. RFC 9110 §13.1.5 requires an
     // exact match, so the range MUST be refused and the full 200 served. (The old
     // "<=" comparison wrongly returned 206 here -- the corruption path.)
-    RUVIA_CHECK_EQ(serve(fmt(modified + 86400)).first, ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(serve("Fri, 31 Dec 9999 23:59:59 GMT").first, ruvia::http_status::kOk);
 
     // If-Range date OLDER than Last-Modified: representation has since changed -> 200.
-    RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(serve("Thu, 01 Jan 1970 00:00:00 GMT").first, ruvia::http_status::kOk);
 
     fs::remove_all(dir);
 }
@@ -1015,8 +1009,6 @@ RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
     namespace fs = std::filesystem;
     using namespace std::chrono;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_historical_mtime_dir";
     fs::create_directories(dir);
@@ -1038,13 +1030,10 @@ RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
     const auto serve = [&](bool snapshot, std::optional<std::string_view> since) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        auto request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         if (since) {
-            HttpRequestAccess::addHeader(request, ruvia::HttpHeaderView{"If-Modified-Since", *since},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfModifiedSince));
+            request.addHeader(ruvia::HttpHeaderView{"If-Modified-Since", *since});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         const auto response = snapshot
@@ -1055,7 +1044,7 @@ RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
     for (const auto snapshot : {false, true}) {
         const auto base = serve(snapshot, std::nullopt);
         RUVIA_CHECK_EQ(base.first, ruvia::http_status::kOk);
-        const auto date = ruvia::detail::httpParseHttpDate(base.second);
+        const auto date = ruvia::parseHttpDate(base.second);
         RUVIA_CHECK(date.has_value());
         if (date) {
             RUVIA_CHECK(*date >= -315619260 && *date <= -315619140);
@@ -1072,8 +1061,6 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_future_mtime_dir";
     fs::create_directories(dir);
@@ -1094,15 +1081,11 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     const auto serve = [&root](std::optional<std::string_view> ifRange) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Range", "bytes=0-1"},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
+        request.addHeader(HttpHeaderView{"Range", "bytes=0-1"});
         if (ifRange.has_value()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"If-Range", *ifRange},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+            request.addHeader(HttpHeaderView{"If-Range", *ifRange});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         const auto response =
@@ -1115,7 +1098,7 @@ RUVIA_TEST(static_file_clamps_future_last_modified_and_rejects_it_for_if_range) 
     const auto base = serve(std::nullopt);
     const auto after = std::time(nullptr);
     RUVIA_CHECK_EQ(base.first, ruvia::http_status::kPartialContent);
-    const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
+    const auto lastModified = ruvia::parseHttpDate(base.second);
     RUVIA_CHECK(lastModified.has_value());
     RUVIA_CHECK(lastModified.value_or(after + 1) >= before);
     RUVIA_CHECK(lastModified.value_or(after + 1) <= after);
@@ -1136,8 +1119,6 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_ifrange_novalidator_dir";
     fs::create_directories(dir);
@@ -1157,15 +1138,11 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     const auto serve = [&root](std::string_view ifRange) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Range", "bytes=0-4"},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
+        request.addHeader(HttpHeaderView{"Range", "bytes=0-4"});
         if (!ifRange.empty()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"If-Range", ifRange},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+            request.addHeader(HttpHeaderView{"If-Range", ifRange});
         }
         auto ctx = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         return ctx.staticFile(root, {.relativePath = "data.txt", .contentType = "text/plain"})
@@ -1187,17 +1164,14 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
         bool hasLastModified;
     };
     const auto serveConditional = [&root](std::string_view method,
-                                      std::optional<RequestKnownHeader> slot, std::string_view name,
+                                      std::string_view name,
                                       std::string_view value) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, method);
-        HttpRequestAccess::setResource(request, memory.resource());
-        if (slot.has_value()) {
-            HttpRequestAccess::addHeader(
-                request, HttpHeaderView{name, value}, HttpRequestAccess::knownHeaderSlot(*slot));
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod(method);
+        if (!name.empty()) {
+            request.addHeader(HttpHeaderView{name, value});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         try {
@@ -1210,7 +1184,7 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
         }
     };
 
-    const auto plain = serveConditional("GET", std::nullopt, {}, {});
+    const auto plain = serveConditional("GET", {}, {});
     RUVIA_CHECK_EQ(plain.status, ruvia::http_status::kOk);
     RUVIA_CHECK(!plain.hasEtag);
     RUVIA_CHECK(!plain.hasLastModified);
@@ -1220,24 +1194,22 @@ RUVIA_TEST(static_file_without_response_validators_still_enforces_preconditions)
     // exists and therefore require no ETag at all; date conditions use the
     // origin's file metadata even when Last-Modified is not emitted.
     const auto getExisting =
-        serveConditional("GET", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*");
+        serveConditional("GET", "If-None-Match", "*");
     RUVIA_CHECK_EQ(getExisting.status, ruvia::http_status::kNotModified);
     RUVIA_CHECK(!getExisting.hasEtag);
     RUVIA_CHECK(!getExisting.hasLastModified);
     RUVIA_CHECK_EQ(
-        serveConditional("POST", RequestKnownHeader::kIfNoneMatch, "If-None-Match", "*").status,
+        serveConditional("POST", "If-None-Match", "*").status,
         ruvia::http_status::kPreconditionFailed);
-    RUVIA_CHECK_EQ(serveConditional("POST", RequestKnownHeader::kIfMatch, "If-Match", "*").status,
+    RUVIA_CHECK_EQ(serveConditional("POST", "If-Match", "*").status,
         ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
-        serveConditional("POST", RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"").status,
+        serveConditional("POST", "If-Match", "\"stale\"").status,
         ruvia::http_status::kPreconditionFailed);
-    RUVIA_CHECK_EQ(serveConditional("POST", RequestKnownHeader::kIfUnmodifiedSince,
-                       "If-Unmodified-Since", "Thu, 01 Jan 1970 00:00:00 GMT")
+    RUVIA_CHECK_EQ(serveConditional("POST", "If-Unmodified-Since", "Thu, 01 Jan 1970 00:00:00 GMT")
                        .status,
         ruvia::http_status::kPreconditionFailed);
-    RUVIA_CHECK_EQ(serveConditional("GET", RequestKnownHeader::kIfModifiedSince,
-                       "If-Modified-Since", "Fri, 31 Dec 9999 23:59:59 GMT")
+    RUVIA_CHECK_EQ(serveConditional("GET", "If-Modified-Since", "Fri, 31 Dec 9999 23:59:59 GMT")
                        .status,
         ruvia::http_status::kNotModified);
 
@@ -1250,8 +1222,6 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_precedence_dir";
     fs::create_directories(dir);
@@ -1266,7 +1236,6 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     StaticRoot root(dir, std::move(options));
 
     struct Header {
-        RequestKnownHeader slot;
         std::string_view name;
         std::string_view value;
     };
@@ -1274,13 +1243,10 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
                                  std::string_view method, std::initializer_list<Header> headers) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, method);
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod(method);
         for (const auto& header : headers) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{header.name, header.value},
-                HttpRequestAccess::knownHeaderSlot(header.slot));
+            request.addHeader(HttpHeaderView{header.name, header.value});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         ruvia::HttpStatusCode status = ruvia::http_status::kInternalServerError;
@@ -1309,44 +1275,44 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
 
     // If-Unmodified-Since alone (stale date) is a 412 precondition failure.
     RUVIA_CHECK_EQ(
-        serve({{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
+        serve({{"If-Unmodified-Since", kOldDate}}).first,
         ruvia::http_status::kPreconditionFailed);
 
     // With a matching If-Match present, RFC 9110 §13.2.2 requires If-Unmodified-Since
     // to be ignored -- the strong validator matched, so serve 200 rather than 412.
     RUVIA_CHECK_EQ(
-        serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
-                  {RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}})
+        serve({{"If-Match", etag},
+                  {"If-Unmodified-Since", kOldDate}})
             .first,
         ruvia::http_status::kOk);
 
     // Presence is distinct from a non-empty field value. The empty #entity-tag
     // list matches no current representation, so an empty If-Match fails rather
     // than being treated as if the field were absent.
-    RUVIA_CHECK_EQ(serve({{RequestKnownHeader::kIfMatch, "If-Match", ""}}).first,
+    RUVIA_CHECK_EQ(serve({{"If-Match", ""}}).first,
         ruvia::http_status::kPreconditionFailed);
 
     constexpr std::string_view kFutureDate = "Fri, 31 Dec 9999 23:59:59 GMT";
     RUVIA_CHECK_EQ(
-        serve({{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}}).first,
+        serve({{"If-Modified-Since", kFutureDate}}).first,
         ruvia::http_status::kNotModified);
     // Even an empty If-None-Match is present and therefore takes precedence over
     // If-Modified-Since. Its empty list does not match, so the response is 200.
     RUVIA_CHECK_EQ(
-        serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", ""},
-                  {RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}})
+        serve({{"If-None-Match", ""},
+                  {"If-Modified-Since", kFutureDate}})
             .first,
         ruvia::http_status::kOk);
 
     // If-Match and If-None-Match are list fields. Repeated field lines are
     // equivalent to one comma-joined value, so a match on the first line must
     // not be lost when the known-header cache records the second line.
-    RUVIA_CHECK_EQ(serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
-                             {RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}})
+    RUVIA_CHECK_EQ(serve({{"If-Match", etag},
+                             {"If-Match", "\"stale\""}})
                        .first,
         ruvia::http_status::kOk);
-    RUVIA_CHECK_EQ(serve({{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag},
-                             {RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}})
+    RUVIA_CHECK_EQ(serve({{"If-None-Match", etag},
+                             {"If-None-Match", "\"stale\""}})
                        .first,
         ruvia::http_status::kNotModified);
 
@@ -1354,30 +1320,30 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     // stale If-Match / If-Unmodified-Since on POST must fail with 412 instead of
     // serving the file as an unconditional 200.
     RUVIA_CHECK_EQ(
-        serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag}}).first,
+        serveMethod("POST", {{"If-None-Match", etag}}).first,
         ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(
-        serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
+        serveMethod("POST", {{"If-Match", "\"stale\""}}).first,
         ruvia::http_status::kPreconditionFailed);
     RUVIA_CHECK_EQ(serveMethod("POST",
-                       {{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}})
+                       {{"If-Unmodified-Since", kOldDate}})
                        .first,
         ruvia::http_status::kPreconditionFailed);
-    RUVIA_CHECK_EQ(serveMethod("POST", {{RequestKnownHeader::kIfMatch, "If-Match", etag}}).first,
+    RUVIA_CHECK_EQ(serveMethod("POST", {{"If-Match", etag}}).first,
         ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(
-        serveMethod("POST", {{RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\""}})
+        serveMethod("POST", {{"If-None-Match", "\"stale\""}})
             .first,
         ruvia::http_status::kOk);
     RUVIA_CHECK_EQ(serveMethod("POST",
-                       {{RequestKnownHeader::kIfModifiedSince, "If-Modified-Since", kFutureDate}})
+                       {{"If-Modified-Since", kFutureDate}})
                        .first,
         ruvia::http_status::kOk);
 
     // OPTIONS does not select or modify a representation, so RFC 9110 §13.2.1
     // requires these conditional fields to be ignored for that method.
     RUVIA_CHECK_EQ(
-        serveMethod("OPTIONS", {{RequestKnownHeader::kIfMatch, "If-Match", "\"stale\""}}).first,
+        serveMethod("OPTIONS", {{"If-Match", "\"stale\""}}).first,
         ruvia::http_status::kOk);
 
     fs::remove_all(dir);
@@ -1389,7 +1355,6 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_conditional_dir";
     fs::create_directories(dir);
@@ -1403,17 +1368,14 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
     StaticRoot root(dir, std::move(options));
 
-    const auto serve = [&root](ruvia::detail::RequestKnownHeader slot, std::string_view headerName,
+    const auto serve = [&root](std::string_view headerName,
                            std::string_view headerValue) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         if (!headerName.empty()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerValue},
-                HttpRequestAccess::knownHeaderSlot(slot));
+            request.addHeader(HttpHeaderView{headerName, headerValue});
         }
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         const auto response =
@@ -1423,17 +1385,17 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     };
 
     // An unconditional GET yields 200 and a strong ETag validator.
-    const auto plain = serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "", "");
+    const auto plain = serve("", "");
     RUVIA_CHECK_EQ(plain.first, ruvia::http_status::kOk);
     RUVIA_CHECK(!plain.second.empty());
     const std::string etag = plain.second;
 
     // If-None-Match with the current ETag -> 304; a stale one falls through to 200.
     RUVIA_CHECK_EQ(
-        serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag).first,
+        serve("If-None-Match", etag).first,
         ruvia::http_status::kNotModified);
     RUVIA_CHECK_EQ(
-        serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\"").first,
+        serve("If-None-Match", "\"stale\"").first,
         ruvia::http_status::kOk);
 
     // A comma inside an opaque tag is data, not a list separator. This malformed
@@ -1441,14 +1403,14 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     // the apparent suffix satisfy the condition.
     const std::string malformedList = std::string("\"stale, ") + etag;
     RUVIA_CHECK_EQ(
-        serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", malformedList)
+        serve("If-None-Match", malformedList)
             .first,
         ruvia::http_status::kOk);
 
     // If-Match against a non-matching ETag is a 412 precondition failure (thrown).
     bool precondition = false;
     try {
-        (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"");
+        (void)serve("If-Match", "\"stale\"");
     } catch (const ruvia::HttpError& error) {
         precondition = error.info().status() == ruvia::http_status::kPreconditionFailed;
     }
@@ -1456,7 +1418,7 @@ RUVIA_TEST(static_file_conditional_request_serving) {
 
     precondition = false;
     try {
-        (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", malformedList);
+        (void)serve("If-Match", malformedList);
     } catch (const ruvia::HttpError& error) {
         precondition = error.info().status() == ruvia::http_status::kPreconditionFailed;
     }
@@ -1471,8 +1433,6 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_variant_dir";
     fs::create_directories(dir);
@@ -1518,13 +1478,10 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
                            bool precompressed = true) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         if (!acceptEncoding.empty()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", acceptEncoding},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+            request.addHeader(HttpHeaderView{"Accept-Encoding", acceptEncoding});
         }
         auto services = ruvia::test::testContextServices();
         if (precompressed) {
@@ -1533,7 +1490,7 @@ RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
         auto context = ContextAccess::make(memory, request, services);
         const auto response =
             context.staticFile(root, {.relativePath = relative, .contentType = "text/plain"});
-        const auto file = ruvia::detail::responseBody(response).file();
+        const auto file = response.fileBody();
         return ServedRepresentation{
             .contentEncoding = std::string(response.header("Content-Encoding").value_or("")),
             .vary = std::string(response.header("Vary").value_or("")),
@@ -1595,8 +1552,6 @@ RUVIA_TEST(static_file_rejects_a_stale_precompressed_sidecar) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_stale_sidecar_dir";
     fs::remove_all(dir);
@@ -1623,16 +1578,13 @@ RUVIA_TEST(static_file_rejects_a_stale_precompressed_sidecar) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setResource(request, memory.resource());
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", "gzip"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
+    request.addHeader(HttpHeaderView{"Accept-Encoding", "gzip"});
     auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
     const auto response =
         context.staticFile(root, {.relativePath = "data.txt", .contentType = "text/plain"});
-    const auto file = ruvia::detail::responseBody(response).file();
+    const auto file = response.fileBody();
 
     // The stale sidecar is not a representation of the current identity file;
     // negotiation must fall back to the current file instead of serving old
@@ -1651,8 +1603,6 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
     using ruvia::HttpHeaderView;
     using ruvia::StaticRoot;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_sidecar_policy_dir";
     fs::create_directories(dir);
@@ -1672,19 +1622,16 @@ RUVIA_TEST(static_file_internal_sidecar_does_not_bypass_file_type_policy) {
                            std::string_view acceptEncoding) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         if (!acceptEncoding.empty()) {
-            HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", acceptEncoding},
-                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+            request.addHeader(HttpHeaderView{"Accept-Encoding", acceptEncoding});
         }
         auto context = ContextAccess::make(
             memory, request, ruvia::test::testContextServices().withPrecompressedStaticFiles());
         try {
             const auto response = context.staticFile(selectedRoot, {.relativePath = path});
-            const auto file = ruvia::detail::responseBody(response).file();
+            const auto file = response.fileBody();
             return std::tuple{response.status(),
                 std::string(response.header("Content-Encoding").value_or("")),
                 file.has_value() ? file->length() : std::uint64_t{0}};
@@ -1837,8 +1784,6 @@ RUVIA_TEST(static_file_rejects_an_empty_accept_encoding_set) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_no_acceptable_coding_dir";
     fs::create_directories(dir);
@@ -1851,14 +1796,11 @@ RUVIA_TEST(static_file_rejects_an_empty_accept_encoding_set) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setTarget(request, "/data.txt");
-    HttpRequestAccess::setPath(request, "/data.txt");
-    HttpRequestAccess::setResource(request, memory.resource());
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Accept-Encoding", "identity;q=0, *;q=0"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+    StaticFileTestRequest request(memory.resource());
+    request.setMethod("GET");
+    request.setTarget("/data.txt");
+    request.setPath("/data.txt");
+    request.addHeader(HttpHeaderView{"Accept-Encoding", "identity;q=0, *;q=0"});
     auto context = ContextAccess::make(
         memory, request, ruvia::test::testContextServices().withPrecompressedStaticFiles());
 
@@ -1889,8 +1831,6 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_ims_dir";
     fs::create_directories(dir);
@@ -1907,12 +1847,9 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
     const auto serve = [&root](std::string_view ifModifiedSince) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"If-Modified-Since", ifModifiedSince},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfModifiedSince));
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
+        request.addHeader(HttpHeaderView{"If-Modified-Since", ifModifiedSince});
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         return context.staticFile(root, {.relativePath = "data.txt", .contentType = "text/plain"})
             .status();
@@ -1932,7 +1869,6 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
     using ruvia::StaticRoot;
     using ruvia::StaticRootOptions;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
 
     const auto dir = fs::temp_directory_path() / "ruvia_static_dir_index";
     fs::create_directories(dir);
@@ -1944,10 +1880,8 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
     const auto serveRoot = [](StaticRoot& root) -> ruvia::HttpStatusCode {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, "GET");
-        HttpRequestAccess::setResource(request, memory.resource());
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod("GET");
         auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
         try {
             return context.staticFile(root, {.relativePath = "", .contentType = "text/html"})

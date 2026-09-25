@@ -1,5 +1,7 @@
 #include <new>
 
+#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
+
 #include "http2_connection_fixture.h"
 
 namespace {
@@ -60,6 +62,35 @@ RUVIA_TEST(http2_connection_feed_connection_window_update_ok) {
     RUVIA_CHECK(!conn.connectionError().has_value());
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
+
+#if !defined(_MSC_VER)
+RUVIA_TEST(http2_connection_begin_client_connection_is_atomic_on_second_segment_failure) {
+    ToggleRejectingMemoryResource resource;
+    Http2Connection conn(&resource, ruvia::Http2Role::kClient);
+    resource.rejectAllocationsOfSize(
+        sizeof(ruvia::detail::Http2OutputBuffer::Segment) * std::size_t{2});
+
+    bool allocationFailed = false;
+    try {
+        conn.beginConnection();
+    } catch (const std::bad_alloc&) {
+        allocationFailed = true;
+    }
+    RUVIA_CHECK(allocationFailed);
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    RUVIA_CHECK(conn.feed({}) == Http2FeedResult::kConnectionNotStarted);
+
+    resource.clearAllocationSizeRejection();
+    conn.beginConnection();
+    const auto expectedBytes = ruvia::kHttp2ClientPreface.size() +
+                               ruvia::detail::Http2LocalSettings::kFrameBytes +
+                               ruvia::detail::kHttp2WindowUpdateFrameBytes;
+    RUVIA_CHECK_EQ(conn.pendingOutput().size(), expectedBytes);
+    const auto firstAttempt = std::string(conn.pendingOutput());
+    conn.beginConnection();
+    RUVIA_CHECK_EQ(conn.pendingOutput(), std::string_view(firstAttempt));
+}
+#endif  // !_MSC_VER
 
 #if !defined(_MSC_VER)
 // These fault-injection paths include PMR string growth. MSVC's debug

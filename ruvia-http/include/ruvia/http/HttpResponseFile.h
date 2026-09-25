@@ -20,7 +20,9 @@ public:
         return HttpResponseFileIdentity(words, true);
     }
 
-    [[nodiscard]] constexpr bool requiresValidation() const noexcept { return checked_; }
+    [[nodiscard]] constexpr bool requiresValidation() const noexcept {
+        return checked_;
+    }
     [[nodiscard]] constexpr const std::array<std::uint64_t, 4>& words() const& noexcept {
         return words_;
     }
@@ -31,7 +33,8 @@ public:
 
 private:
     constexpr HttpResponseFileIdentity(std::array<std::uint64_t, 4> words, bool checked) noexcept
-        : words_(words), checked_(checked) {}
+        : words_(words),
+          checked_(checked) {}
 
     std::array<std::uint64_t, 4> words_{};
     bool checked_{false};
@@ -45,16 +48,30 @@ public:
 
     constexpr HttpResponseFileView(const NativePathChar* nativePath, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) noexcept
-        : nativePath_(nativePath), size_(size), offset_(offset), length_(length), identity_(identity) {}
+        : nativePath_(nativePath),
+          size_(size),
+          offset_(offset),
+          length_(length),
+          identity_(identity) {}
 
     [[nodiscard]] constexpr const NativePathChar* nativePathCStr() const noexcept {
         return nativePath_;
     }
-    [[nodiscard]] std::filesystem::path toPath() const { return std::filesystem::path(nativePath_); }
-    [[nodiscard]] constexpr std::uint64_t size() const noexcept { return size_; }
-    [[nodiscard]] constexpr std::uint64_t offset() const noexcept { return offset_; }
-    [[nodiscard]] constexpr std::uint64_t length() const noexcept { return length_; }
-    [[nodiscard]] constexpr HttpResponseFileIdentity identity() const noexcept { return identity_; }
+    [[nodiscard]] std::filesystem::path toPath() const {
+        return std::filesystem::path(nativePath_);
+    }
+    [[nodiscard]] constexpr std::uint64_t size() const noexcept {
+        return size_;
+    }
+    [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
+        return offset_;
+    }
+    [[nodiscard]] constexpr std::uint64_t length() const noexcept {
+        return length_;
+    }
+    [[nodiscard]] constexpr HttpResponseFileIdentity identity() const noexcept {
+        return identity_;
+    }
 
 private:
     const NativePathChar* nativePath_;

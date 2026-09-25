@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/Async.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
 

@@ -8,9 +8,9 @@
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 
-#include "ruvia/core/Timer.h"
 #include "ruvia/core/Async.h"
 #include "ruvia/core/Socket.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"

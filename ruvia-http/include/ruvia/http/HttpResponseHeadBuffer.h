@@ -17,7 +17,9 @@ inline constexpr std::size_t kResponseHeadRetainedHeapBytes = std::size_t{4} * 1
 // Reusable scratch storage for serialized HTTP response heads. Keeps small heads
 // inline and retains only bounded heap capacity across requests.
 class HttpResponseHeadBuffer final {
-    struct StackState final { std::size_t used{0}; };
+    struct StackState final {
+        std::size_t used{0};
+    };
     struct HeapState final {};
 
 public:
@@ -51,7 +53,9 @@ public:
 
     [[nodiscard]] char* stackCursor(std::size_t bound) & noexcept {
         auto* const stackState = std::get_if<StackState>(&state_);
-        if (stackState == nullptr || bound > stack_.size() - stackState->used) return nullptr;
+        if (stackState == nullptr || bound > stack_.size() - stackState->used) {
+            return nullptr;
+        }
         return stack_.data() + stackState->used;
     }
     [[nodiscard]] char* stackCursor(std::size_t) && = delete;

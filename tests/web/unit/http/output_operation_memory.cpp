@@ -13,7 +13,7 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/http/StreamingAccess.h"
@@ -140,7 +140,7 @@ ruvia::Task<void> writeManyWebSocket(ruvia::WebSocket& socket) {
 void run(asio::io_context& context, ruvia::Task<void> operation) {
     context.restart();
     auto future = asio::co_spawn(context,
-        ruvia::detail::taskAsAwaitable(std::move(operation)), asio::use_future);
+        ruvia::asAwaitable(std::move(operation)), asio::use_future);
     context.run();
     future.get();
 }
@@ -263,7 +263,7 @@ RUVIA_TEST(output_pending_operation_returns_owner_allocation_after_resume) {
     auto writer = makeWriter(sink, owner);
     asio::io_context context(1);
     auto operation = writer.write(std::string(256, 's'));
-    auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(awaitOperation(operation)), asio::use_future);
+    auto future = asio::co_spawn(context, ruvia::asAwaitable(awaitOperation(operation)), asio::use_future);
     context.poll();
     RUVIA_CHECK(owner.liveAllocations() > 0);
     sink.continuation.resume();
@@ -280,7 +280,7 @@ RUVIA_TEST(output_pending_failure_returns_owner_allocation_and_releases_lane) {
     auto writer = makeWriter(sink, owner);
     asio::io_context context(1);
     auto operation = writer.write(std::string(256, 'f'));
-    auto future = asio::co_spawn(context, ruvia::detail::taskAsAwaitable(awaitOperation(operation)), asio::use_future);
+    auto future = asio::co_spawn(context, ruvia::asAwaitable(awaitOperation(operation)), asio::use_future);
     context.poll();
     RUVIA_CHECK(owner.liveAllocations() > 0);
     sink.continuation.resume();

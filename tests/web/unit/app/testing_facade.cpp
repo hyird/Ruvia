@@ -209,7 +209,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto& body = c.req().validated<TestingFacadeEcho>();
         const auto value = body.get<"value">().has_value() ? body.get<"value">()->view()
-                                                            : std::string_view("missing");
+                                                           : std::string_view("missing");
         if (const auto independent = c.req().header("X-Test-Independent")) {
             std::pmr::string reply(c.arena());
             reply.append(*independent);

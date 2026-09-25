@@ -187,7 +187,7 @@ const RequestNameValueList& Context::requestCookies() const {
                 continue;
             }
             httpVisitCookiePairs(header.value(), [&cookies](std::string_view key,
-                                                 std::string_view value) {
+                                                     std::string_view value) {
                 detail::RequestNameValueListAccess::pushBack(
                     cookies, detail::RequestNameValueViewAccess::make(key, value));
                 return true;

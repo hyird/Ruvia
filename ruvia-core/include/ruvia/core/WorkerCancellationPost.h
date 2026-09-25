@@ -21,25 +21,38 @@ class WorkerCancellationMailbox final
     : public std::enable_shared_from_this<WorkerCancellationMailbox<Owner>> {
 public:
     WorkerCancellationMailbox(Owner& owner, const WorkerHandle& worker) noexcept
-        : owner_(&owner), worker_(worker) {}
+        : owner_(&owner),
+          worker_(worker) {}
 
-    [[nodiscard]] const WorkerHandle& worker() const noexcept { return worker_; }
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        return worker_;
+    }
     [[nodiscard]] std::uint64_t nextOperationId() noexcept {
-        if (!worker_.isCurrent()) std::terminate();
-        if (++nextOperationId_ == 0) ++nextOperationId_;
+        if (!worker_.isCurrent()) {
+            std::terminate();
+        }
+        if (++nextOperationId_ == 0) {
+            ++nextOperationId_;
+        }
         return nextOperationId_;
     }
     [[nodiscard]] std::shared_ptr<WorkerCancellationMailbox> retain() noexcept {
         auto mailbox = this->weak_from_this().lock();
-        if (!mailbox) std::terminate();
+        if (!mailbox) {
+            std::terminate();
+        }
         return mailbox;
     }
     void dispatch(std::uint64_t operationId) noexcept {
-        if (auto* owner = owner_.load(std::memory_order_acquire)) owner->cancelOperationById(operationId);
+        if (auto* owner = owner_.load(std::memory_order_acquire)) {
+            owner->cancelOperationById(operationId);
+        }
     }
     void detach(Owner& owner) noexcept {
         auto* previous = owner_.exchange(nullptr, std::memory_order_acq_rel);
-        if (previous && previous != &owner) std::terminate();
+        if (previous && previous != &owner) {
+            std::terminate();
+        }
     }
 
 private:
@@ -60,8 +73,12 @@ template <typename Mailbox>
 class WorkerCancellationDispatch final {
 public:
     WorkerCancellationDispatch(std::shared_ptr<Mailbox> mailbox, std::uint64_t operationId) noexcept
-        : mailbox_(std::move(mailbox)), operationId_(operationId) {}
-    void operator()() noexcept { mailbox_->dispatch(operationId_); }
+        : mailbox_(std::move(mailbox)),
+          operationId_(operationId) {}
+    void operator()() noexcept {
+        mailbox_->dispatch(operationId_);
+    }
+
 private:
     std::shared_ptr<Mailbox> mailbox_;
     std::uint64_t operationId_;
@@ -71,8 +88,11 @@ template <typename Mailbox>
 class WorkerCancellationPost final {
 public:
     WorkerCancellationPost(const std::shared_ptr<Mailbox>& mailbox, std::uint64_t operationId) noexcept
-        : mailbox_(mailbox.get()), operationId_(operationId) {
-        if (!mailbox_) std::terminate();
+        : mailbox_(mailbox.get()),
+          operationId_(operationId) {
+        if (!mailbox_) {
+            std::terminate();
+        }
     }
     void operator()() noexcept {
         if (mailbox_->worker().isCurrent()) {
@@ -81,8 +101,11 @@ public:
         }
         auto retained = mailbox_->retain();
         auto result = retained->worker().post(WorkerCancellationDispatch<Mailbox>(retained, operationId_));
-        if (result.status() != PostStatus::kAccepted) std::terminate();
+        if (result.status() != PostStatus::kAccepted) {
+            std::terminate();
+        }
     }
+
 private:
     Mailbox* mailbox_;
     std::uint64_t operationId_;

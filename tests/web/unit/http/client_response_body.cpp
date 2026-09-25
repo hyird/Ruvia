@@ -1,9 +1,9 @@
 #include <cstddef>
 #include <exception>
-#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -11,11 +11,10 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/post.hpp>
-#include <asio/use_future.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 
@@ -24,18 +23,38 @@
 #include "test_io_context.h"
 
 namespace {
-ruvia::WorkerHandle bodyWorker(asio::io_context& io) {
-    return ruvia::detail::WorkerHandleAccess::make(
-        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8));
+class TestWorker final {
+public:
+    explicit TestWorker(asio::io_context& io)
+        : attachment(ruvia::attachEventLoop(io, {.mailboxCapacity = 8})),
+          handle(attachment.loop().handle()) {}
+
+    ruvia::EventLoopAttachment attachment;
+    ruvia::WorkerHandle handle;
+};
+
+template <typename Operation>
+void runOperation(TestWorker& worker, asio::io_context& io, Operation&& operation) {
+    std::exception_ptr failure;
+    asio::co_spawn(io, ruvia::asAwaitable(operation()),
+        [&worker, &failure](std::exception_ptr error) {
+            failure = error;
+            worker.attachment.stop();
+        });
+    worker.attachment.run();
+    io.restart();
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 }  // namespace
 
 RUVIA_TEST(client_body_chunks_preserve_octets_and_pending_data_does_not_invalidate_views) {
     auto& io = ruvia::test::newTestIoContext();
-    const auto worker = bodyWorker(io);
+    TestWorker worker(io);
     ruvia::test::CountingMemoryResource resource;
     {
-        ruvia::detail::HttpClientResponseState state(worker, &resource);
+        ruvia::detail::HttpClientResponseState state(worker.handle, &resource);
         state.buffered.assign("\0\xff\xc3", 3);
         state.pending.assign("\xa9", 1);
         state.complete = true;
@@ -52,23 +71,21 @@ RUVIA_TEST(client_body_chunks_preserve_octets_and_pending_data_does_not_invalida
             RUVIA_CHECK((*next)[0] == std::byte{0xa9});
             RUVIA_CHECK(!(co_await state.read<std::string_view>()));
         };
-        auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
-        io.run();
-        result.get();
+        runOperation(worker, io, operation);
     }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(client_body_collection_reclaims_temporaries_and_retains_results_and_headers) {
     auto& io = ruvia::test::newTestIoContext();
-    const auto worker = bodyWorker(io);
+    TestWorker worker(io);
     ruvia::test::CountingMemoryResource resource;
     std::optional<std::pmr::vector<std::byte>> retained;
     {
-        ruvia::detail::HttpClientResponseState state(worker, &resource);
+        ruvia::detail::HttpClientResponseState state(worker.handle, &resource);
         const std::string payload(1024, '\xff');
         const std::string header(128, 'h');
-        state.headers.push_back(ruvia::detail::HttpHeaderAccess::make("x-retained", header, &resource));
+        state.headers.push_back(ruvia::HttpHeader::copyOf("x-retained", header, &resource));
         state.buffered.assign(payload);
         state.pending.reserve(payload.size());
         state.complete = true;
@@ -118,9 +135,7 @@ RUVIA_TEST(client_body_collection_reclaims_temporaries_and_retains_results_and_h
             RUVIA_CHECK(failed);
             RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
         };
-        auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
-        io.run();
-        result.get();
+        runOperation(worker, io, operation);
     }
     RUVIA_CHECK(retained->back() == std::byte{0xff});
     RUVIA_CHECK(resource.liveAllocations() > 0);
@@ -131,13 +146,15 @@ RUVIA_TEST(client_body_collection_reclaims_temporaries_and_retains_results_and_h
 
 RUVIA_TEST(client_body_collection_cancellation_joins_before_storage_is_released) {
     auto& io = ruvia::test::newTestIoContext();
-    const auto worker = bodyWorker(io);
+    TestWorker worker(io);
     ruvia::test::CountingMemoryResource resource;
     {
-        ruvia::detail::HttpClientResponseState state(worker, &resource);
+        ruvia::detail::HttpClientResponseState state(worker.handle, &resource);
         state.buffered.assign(256, 'x');
         const auto baseline = resource.liveAllocations();
         bool cancelled = false;
+        bool pendingBeforeCancel = false;
+        std::exception_ptr failure;
         auto operation = [&]() -> ruvia::Task<void> {
             try {
                 (void)co_await ruvia::detail::makeScopedOperation(state.bodyOperationScope, state.readAll(4096));
@@ -145,17 +162,24 @@ RUVIA_TEST(client_body_collection_cancellation_joins_before_storage_is_released)
                 cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
             }
         };
-        auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
-        io.poll();
-        RUVIA_CHECK(!cancelled);
-        io.restart();
+        asio::co_spawn(io, ruvia::asAwaitable(operation()),
+            [&worker, &failure](std::exception_ptr error) {
+                failure = error;
+                worker.attachment.stop();
+            });
         asio::post(io, [&] {
-            state.failure = std::make_exception_ptr(std::system_error(std::make_error_code(std::errc::operation_canceled)));
+            pendingBeforeCancel = !cancelled;
+            state.failure = std::make_exception_ptr(
+                std::system_error(std::make_error_code(std::errc::operation_canceled)));
             state.complete = true;
             state.dataSignal.notify();
         });
-        io.run();
-        result.get();
+        worker.attachment.run();
+        io.restart();
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
+        }
+        RUVIA_CHECK(pendingBeforeCancel);
         RUVIA_CHECK(cancelled);
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }

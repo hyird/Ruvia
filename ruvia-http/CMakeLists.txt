@@ -11,7 +11,9 @@ else()
 endif()
 
 ruvia_collect_cpp_sources(RUVIA_HTTP_SOURCES src)
-add_library(ruvia-http ${RUVIA_HTTP_SOURCES})
+add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
+    include/ruvia/http/Http3Frames.h
+    include/ruvia/http/Http3VarInt.h)
 add_library(ruvia::http ALIAS ruvia-http)
 
 set_target_properties(ruvia-http PROPERTIES

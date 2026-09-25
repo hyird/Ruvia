@@ -7,8 +7,8 @@
 #include <asio/buffer.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/StopToken.h"
 #include "ruvia/core/Async.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 

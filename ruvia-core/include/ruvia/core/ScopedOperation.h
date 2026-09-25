@@ -114,6 +114,10 @@ protected:
     void setExpireCold(void (*expireCold)(ScopedOperationNode&) noexcept) noexcept {
         expireCold_ = expireCold;
     }
+    void setStartCheck(void (*check)(void*) noexcept, void* target) noexcept {
+        startCheck_ = check;
+        startCheckTarget_ = target;
+    }
     void begin();
     void complete() noexcept;
 
@@ -130,10 +134,15 @@ private:
     ScopedOperationNode* next_{nullptr};
     Phase phase_{Phase::kCold};
     void (*expireCold_)(ScopedOperationNode&) noexcept {nullptr};
+    void (*startCheck_)(void*) noexcept {nullptr};
+    void* startCheckTarget_{nullptr};
 };
 
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task);
+template <typename T>
+[[nodiscard]] ScopedOperation<T> makeScopedOperation(
+    ScopedOperationScope& scope, Task<T> task, void (*startCheck)(void*) noexcept, void* target);
 
 }  // namespace detail
 
@@ -201,10 +210,15 @@ public:
 private:
     template <typename U>
     friend ScopedOperation<U> detail::makeScopedOperation(detail::ScopedOperationScope&, Task<U>);
+    template <typename U>
+    friend ScopedOperation<U> detail::makeScopedOperation(
+        detail::ScopedOperationScope&, Task<U>, void (*)(void*) noexcept, void*);
 
-    ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task)
+    ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task,
+        void (*startCheck)(void*) noexcept = nullptr, void* startCheckTarget = nullptr)
         : detail::ScopedOperationNode(scope),
           task_(std::move(task)) {
+        setStartCheck(startCheck, startCheckTarget);
         setExpireCold([](detail::ScopedOperationNode& node) noexcept {
             static_cast<ScopedOperation&>(node).task_.reset();
         });
@@ -218,6 +232,12 @@ namespace detail {
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task) {
     return ScopedOperation<T>(scope, std::move(task));
+}
+
+template <typename T>
+[[nodiscard]] ScopedOperation<T> makeScopedOperation(
+    ScopedOperationScope& scope, Task<T> task, void (*startCheck)(void*) noexcept, void* target) {
+    return ScopedOperation<T>(scope, std::move(task), startCheck, target);
 }
 
 }  // namespace detail

@@ -7,11 +7,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/body/HttpLazyBufferedBody.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/http/request/RequestBodyLoader.h"

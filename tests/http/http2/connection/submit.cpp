@@ -1,10 +1,10 @@
 #include <array>
 #include <new>
 
+#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
 #include "http2_connection_fixture.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 
 // Http2Connection: submitting request and response heads.
 
@@ -397,14 +397,14 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
     response.body("old");
 
     const auto wrongMethodPlan =
-        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kHead, response);
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kHead, response);
     const auto wrongMethod = connection.submitResponseHead(1, response, wrongMethodPlan);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(wrongMethod) ==
                 "HTTP/2 response head does not match its write plan");
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto staleRepresentationPlan =
-        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
     response.body("longer");
     const auto staleRepresentation =
         connection.submitResponseHead(1, response, staleRepresentationPlan);
@@ -413,7 +413,7 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto staleStatusPlan =
-        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response);
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
     response.status(ruvia::http_status::kAlreadyReported);
     const auto staleStatus = connection.submitResponseHead(1, response, staleStatusPlan);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(staleStatus) ==
@@ -421,7 +421,7 @@ RUVIA_TEST(http2_connection_buffered_response_requires_matching_prepared_plan) {
     RUVIA_CHECK(connection.pendingOutput().empty());
 
     const auto submitted = connection.submitResponseHead(1, response,
-        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kGet, response));
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response));
     RUVIA_CHECK(responseHeadSubmitted(submitted));
     const auto& committedPlan = submittedResponsePlan(submitted);
     RUVIA_CHECK(committedPlan.requestMethod() == ruvia::HttpKnownMethod::kGet);

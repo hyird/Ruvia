@@ -15,11 +15,11 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
 
 #include "test_harness.h"
@@ -100,7 +100,7 @@ struct SegmentedBodyStream final {
 };
 
 ruvia::Http1RequestBodyPlan parseBodyPlan(std::string_view wire) {
-    return ruvia::detail::Http1ServerRequestParser().parseMessage(wire).bodyPlan;
+    return ruvia::Http1ServerRequestParser().parseMessage(wire).bodyPlan;
 }
 
 struct KnownLengthObservation final {
@@ -117,7 +117,7 @@ KnownLengthObservation readKnownLengthBody(
     std::size_t contentLength, std::string initial, std::vector<std::string> socketSegments) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     SegmentedBodyStream stream{&io, std::move(socketSegments)};
-    ruvia::detail::ConnectionScanner::Entry scannerEntry;
+    ruvia::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
     auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: " +
                               std::to_string(contentLength) + "\r\n\r\n");
@@ -130,7 +130,7 @@ KnownLengthObservation readKnownLengthBody(
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                while (const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
+                while (const auto part = co_await ruvia::asAwaitable(reader.read())) {
                     observation.body.append(ruvia::asChars(*part));
                 }
             } catch (const ruvia::HttpProtocolError& error) {
@@ -224,7 +224,7 @@ struct TransferBodyObservation final {
 TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     EofBodyStream stream{&io};
-    ruvia::detail::ConnectionScanner::Entry scannerEntry;
+    ruvia::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
     auto plan = parseBodyPlan(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -240,13 +240,13 @@ TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
             try {
                 if (streaming) {
                     while (
-                        const auto part = co_await ruvia::detail::taskAsAwaitable(reader.read())) {
+                        const auto part = co_await ruvia::asAwaitable(reader.read())) {
                         observation.body.append(ruvia::asChars(*part));
                     }
                 } else {
                     std::pmr::string body(&resource);
                     const auto decoded =
-                        co_await ruvia::detail::taskAsAwaitable(reader.readAll(body));
+                        co_await ruvia::asAwaitable(reader.readAll(body));
                     observation.body.assign(decoded);
                 }
             } catch (const ruvia::HttpProtocolError& error) {
@@ -271,7 +271,7 @@ RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
     RUVIA_CHECK(plan.withoutBody() != nullptr);
 
     UnusedBodyStream stream;
-    ruvia::detail::ConnectionScanner::Entry scannerEntry;
+    ruvia::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
     ruvia::detail::StreamBodyReader<UnusedBodyStream> reader(stream,
         std::pmr::polymorphic_allocator<char>(&resource), "GET /next HTTP/1.1\r\nHost: x\r\n\r\n",

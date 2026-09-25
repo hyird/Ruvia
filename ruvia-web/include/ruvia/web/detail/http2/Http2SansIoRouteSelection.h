@@ -2,8 +2,8 @@
 
 #include <utility>
 
-#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 

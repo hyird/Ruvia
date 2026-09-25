@@ -74,6 +74,16 @@ Http2OutputConsumeStatus Http2Connection::consumeOutput(std::size_t bytes) noexc
     return status;
 }
 
+Http2OutputBatchResult Http2Connection::takeOutputBatch(std::size_t maxBytes,
+    std::pmr::string& into, Http2DataOutputObserver observer, void* observerContext) {
+    const auto result = output_.takeBatch(maxBytes, into, observer, observerContext);
+    if (result.status == Http2OutputBatchStatus::kTaken && !output_.wantsWrite()) {
+        consecutivePings_ = 0;
+        consecutiveSettings_ = 0;
+    }
+    return result;
+}
+
 void Http2Connection::takeOutput(std::pmr::string& into) {
     consecutivePings_ = 0;     // outbound (incl. PING ACKs) is being flushed
     consecutiveSettings_ = 0;  // outbound (incl. SETTINGS ACKs) is being flushed
@@ -152,6 +162,7 @@ void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug)
     // A fatal transition is only observable together with its GOAWAY. Preflight the
     // complete frame so a throwing PMR resource cannot leave the connection marked
     // failed while the required terminal bytes were never queued.
+    output_.reserveSegmentsAdditional(1);
     output_.reserveAdditional(http2GoawayEncodedBytes(debug));
     localConnectionState_.fail(error);
     output_.appendGoawayFrame(advertised, error, debug);
@@ -167,6 +178,7 @@ void Http2Connection::beginDrain() {
     // Keep the lifecycle transition and its GOAWAY as one externally visible
     // operation. The reservation is made while the state is still open, so a
     // failed allocation leaves beginDrain() retryable.
+    output_.reserveSegmentsAdditional(1);
     output_.reserveAdditional(http2GoawayEncodedBytes("connection draining"));
     if (!localConnectionState_.beginGracefulDrain(lastStreamId_)) {
         return;
@@ -631,6 +643,7 @@ void Http2Connection::beginConnection() {
     // Queue the complete local preface before publishing that this connection has
     // started. A failed reserve therefore leaves the exact beginConnection() call
     // retryable instead of exposing a half-started protocol state.
+    output_.reserveSegmentsAdditional(role_ == Http2Role::kClient ? 2 : 1);
     output_.reserveAdditional(prefaceBytes + settingsBytes);
     if (role_ == Http2Role::kClient) {
         output_.appendBytes(kHttp2ClientPreface);

@@ -1,24 +1,14 @@
 #pragma once
 
-#include <cstdint>
+#include <string_view>
 
-#include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 
-// One protocol-level classification shared by response writers and HTTP/1 +
-// HTTP/2 response parsers. It deliberately distinguishes a successful CONNECT
-// tunnel and 101 protocol switch from ordinary content framing, while preserving
-// the RFC 9110 Section 6.4.1 distinction between a response with zero-length
-// content and a response that is defined to have no content at all.
-enum class HttpResponseContentSemantics : std::uint8_t {
-    kInformational,
-    kProtocolSwitch,
-    kConnectTunnel,
-    kWithoutContent,
-    kWithContent,
-};
+// Keep protocol implementation code on the public response contract's single
+// authoritative classification.
+using HttpResponseContentSemantics = ::ruvia::HttpResponseContentSemantics;
 
 [[nodiscard]] constexpr HttpResponseContentSemantics httpResponseContentSemantics(
     HttpKnownMethod requestMethod, HttpStatusCode statusCode) noexcept {

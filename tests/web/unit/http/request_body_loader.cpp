@@ -1,27 +1,29 @@
+#include <chrono>
+#include <exception>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
-#include <asio/use_future.hpp>
+#include <asio/steady_timer.hpp>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
 struct SuspendedLoader final {
-    explicit SuspendedLoader(asio::io_context& io)
-        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
-          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
-          signal(worker) {}
+    explicit SuspendedLoader(const ruvia::WorkerHandle& worker)
+        : signal(worker) {}
 
     ruvia::Task<std::string_view> readAll() {
         ++readCalls;
@@ -34,14 +36,31 @@ struct SuspendedLoader final {
         co_await signal.wait();
     }
 
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
-    ruvia::WorkerHandle worker;
-    ruvia::detail::WorkerSignal signal;
+    ruvia::WorkerSignal signal;
     int readCalls{0};
     int discardCalls{0};
 };
 
-ruvia::Task<void> completeLoad(ruvia::detail::RequestBodyLoader& loader, std::string_view& body) {
+void runBounded(ruvia::EventLoopAttachment& attachment, asio::io_context& io) {
+    asio::steady_timer timeout(io);
+    auto timedOut = std::make_shared<bool>(false);
+    timeout.expires_after(std::chrono::seconds(5));
+    timeout.async_wait([timedOut, &io](const std::error_code& error) {
+        if (!error) {
+            *timedOut = true;
+            io.stop();
+        }
+    });
+
+    attachment.run();
+    timeout.cancel();
+    if (*timedOut) {
+        throw std::runtime_error("request body loader test timed out");
+    }
+}
+
+ruvia::Task<void> completeLoad(
+    ruvia::detail::RequestBodyLoader& loader, std::string_view& body) {
     body = co_await loader.readAll();
 }
 
@@ -54,7 +73,8 @@ ruvia::Task<void> rejectConcurrentDiscard(
     }
 }
 
-ruvia::Task<void> discardThenRejectLoad(ruvia::detail::RequestBodyLoader& loader, bool& rejected) {
+ruvia::Task<void> discardThenRejectLoad(
+    ruvia::detail::RequestBodyLoader& loader, bool& rejected) {
     co_await loader.discard();
     try {
         (void)co_await loader.readAll();
@@ -72,24 +92,46 @@ ruvia::Task<void> loadTwice(
 }  // namespace
 
 RUVIA_TEST(request_body_loader_rejects_read_discard_overlap) {
-    asio::io_context io(1);
-    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(io);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(worker);
     std::string_view body;
     bool rejected = false;
+    std::exception_ptr firstFailure;
+    std::exception_ptr secondFailure;
+    int completedOperations = 0;
+    const auto complete = [&] {
+        if (++completedOperations == 2) {
+            io.stop();
+        }
+    };
 
-    auto first = asio::co_spawn(
-        io, ruvia::detail::taskAsAwaitable(completeLoad(binding.facade(), body)), asio::use_future);
-    io.poll();
+    asio::co_spawn(io, ruvia::asAwaitable(completeLoad(binding.facade(), body)),
+        [&](std::exception_ptr failure) {
+            firstFailure = failure;
+            complete();
+        });
+    // Let the first read suspend before restarting the context for the overlap check.
+    asio::post(io, [&io] { io.stop(); });
+    runBounded(attachment, io);
     RUVIA_CHECK(body.empty());
+    RUVIA_CHECK_EQ(binding.loader().readCalls, 1);
 
     io.restart();
-    auto second = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(rejectConcurrentDiscard(binding.facade(), rejected)),
-        asio::use_future);
+    asio::co_spawn(io, ruvia::asAwaitable(rejectConcurrentDiscard(binding.facade(), rejected)),
+        [&](std::exception_ptr failure) {
+            secondFailure = failure;
+            complete();
+        });
     asio::post(io, [&binding] { binding.loader().signal.notify(); });
-    io.run();
-    first.get();
-    second.get();
+    runBounded(attachment, io);
+    if (firstFailure) {
+        std::rethrow_exception(firstFailure);
+    }
+    if (secondFailure) {
+        std::rethrow_exception(secondFailure);
+    }
 
     RUVIA_CHECK_EQ(body, std::string_view("buffered"));
     RUVIA_CHECK(rejected);
@@ -98,20 +140,29 @@ RUVIA_TEST(request_body_loader_rejects_read_discard_overlap) {
 }
 
 RUVIA_TEST(request_body_loader_discard_is_terminal) {
-    asio::io_context io(1);
-    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(io);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(worker);
     bool rejected = false;
+    std::exception_ptr failure;
 
-    auto future = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(discardThenRejectLoad(binding.facade(), rejected)),
-        asio::use_future);
-    io.poll();
+    asio::co_spawn(io,
+        ruvia::asAwaitable(discardThenRejectLoad(binding.facade(), rejected)),
+        [&](std::exception_ptr error) {
+            failure = error;
+            io.stop();
+        });
+    asio::post(io, [&io] { io.stop(); });
+    runBounded(attachment, io);
     RUVIA_CHECK(!rejected);
 
     io.restart();
     asio::post(io, [&binding] { binding.loader().signal.notify(); });
-    io.run();
-    future.get();
+    runBounded(attachment, io);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(binding.loader().discardCalls, 1);
@@ -119,21 +170,29 @@ RUVIA_TEST(request_body_loader_discard_is_terminal) {
 }
 
 RUVIA_TEST(request_body_loader_reuses_one_buffered_result) {
-    asio::io_context io(1);
-    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(io);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    ruvia::detail::RequestBodyLoaderBinding<SuspendedLoader> binding(worker);
     std::string_view first;
     std::string_view second;
+    std::exception_ptr failure;
 
-    auto future = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(loadTwice(binding.facade(), first, second)),
-        asio::use_future);
-    io.poll();
+    asio::co_spawn(io, ruvia::asAwaitable(loadTwice(binding.facade(), first, second)),
+        [&](std::exception_ptr error) {
+            failure = error;
+            io.stop();
+        });
+    asio::post(io, [&io] { io.stop(); });
+    runBounded(attachment, io);
     RUVIA_CHECK(first.empty());
 
     io.restart();
     asio::post(io, [&binding] { binding.loader().signal.notify(); });
-    io.run();
-    future.get();
+    runBounded(attachment, io);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 
     RUVIA_CHECK_EQ(first, std::string_view("buffered"));
     RUVIA_CHECK_EQ(second, first);

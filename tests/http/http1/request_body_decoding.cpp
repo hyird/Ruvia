@@ -1,6 +1,6 @@
-#include "content_decoding_fixture.h"
-
 #include "ruvia/http/Http1RequestParser.h"
+
+#include "content_decoding_fixture.h"
 
 // Decoding a request body: what each coding accepts and what it refuses.
 
@@ -33,7 +33,7 @@ RUVIA_TEST(http1_public_parser_classifies_cleartext_request_line_failures) {
     RUVIA_CHECK(lineFailure != nullptr);
     if (lineFailure != nullptr) {
         RUVIA_CHECK(lineFailure->source() ==
-            ruvia::Http1RequestParseFailureSource::kRequestLine);
+                    ruvia::Http1RequestParseFailureSource::kRequestLine);
         RUVIA_CHECK(ruvia::shouldDropInvalidCleartextHttp1Input(
             invalidRequestLine, lineFailure->source()));
     }
@@ -43,7 +43,7 @@ RUVIA_TEST(http1_public_parser_classifies_cleartext_request_line_failures) {
     RUVIA_CHECK(messageFailure != nullptr);
     if (messageFailure != nullptr) {
         RUVIA_CHECK(messageFailure->source() ==
-            ruvia::Http1RequestParseFailureSource::kMessage);
+                    ruvia::Http1RequestParseFailureSource::kMessage);
         RUVIA_CHECK(!ruvia::shouldDropInvalidCleartextHttp1Input(
             "GET / HTTP/1.1\r\nBad Header\r\n\r\n",
             messageFailure->source()));

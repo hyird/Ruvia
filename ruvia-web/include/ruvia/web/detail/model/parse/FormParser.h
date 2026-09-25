@@ -10,8 +10,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/Integer.h"
 #include "ruvia/core/DecimalNumber.h"
+#include "ruvia/core/Integer.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Traits.h"

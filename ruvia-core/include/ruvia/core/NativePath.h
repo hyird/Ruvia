@@ -33,10 +33,10 @@ inline void assignNativePath(NativePathString& output, const std::filesystem::pa
 }  // namespace ruvia
 
 namespace ruvia::detail {
+using ::ruvia::assignNativePath;
+using ::ruvia::makePathFromNativePath;
 using ::ruvia::NativePathChar;
 using ::ruvia::NativePathString;
 using ::ruvia::NativePathView;
-using ::ruvia::assignNativePath;
-using ::ruvia::makePathFromNativePath;
 using ::ruvia::nativePathView;
 }  // namespace ruvia::detail

@@ -612,7 +612,7 @@ RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_pub
         ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
     RUVIA_CHECK(rejected.failure() != nullptr);
     RUVIA_CHECK(rejected.failure() && rejected.failure()->error() ==
-                ruvia::Http2ResponseHeadSubmitError::kInvalidState);
+                                          ruvia::Http2ResponseHeadSubmitError::kInvalidState);
     (void)server.consumeOutput(server.pendingOutput().size());
 
     const std::array<ruvia::HttpHeaderView, 1> fields{{{"x-final", "done"}}};
@@ -624,12 +624,12 @@ RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_pub
     const auto trailerFrame = ruvia::parseHttp2FrameHeader(
         std::span<const char>(server.pendingOutput().data(), server.pendingOutput().size()));
     RUVIA_CHECK(trailerFrame && trailerFrame->type ==
-                    static_cast<std::uint8_t>(ruvia::Http2FrameType::kData));
+                                    static_cast<std::uint8_t>(ruvia::Http2FrameType::kData));
     (void)server.consumeOutput(ruvia::kHttp2FrameHeaderBytes + trailerFrame->length);
     const auto terminal = ruvia::parseHttp2FrameHeader(
         std::span<const char>(server.pendingOutput().data(), server.pendingOutput().size()));
     RUVIA_CHECK(terminal && terminal->type ==
-                    static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
+                                static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders));
     RUVIA_CHECK(terminal && (terminal->flags & 0x1U) != 0);
     RUVIA_CHECK(server.finishResponse(1, trailers) ==
                 ruvia::Http2FinishResponseStatus::kInvalidState);
@@ -655,7 +655,7 @@ RUVIA_TEST(http2_public_streaming_head_response_ends_at_headers) {
         ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
     RUVIA_CHECK(committed.submitted() != nullptr);
     RUVIA_CHECK(committed.submitted() && committed.submitted()->headDisposition() ==
-                    ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+                                             ruvia::ResponseStreamHeadDisposition::kMessageEnded);
     const auto output = server.pendingOutput();
     const auto frame = ruvia::parseHttp2FrameHeader(
         std::span<const char>(output.data(), output.size()));
@@ -682,7 +682,7 @@ RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_
 
     ruvia::HttpResponse response({.resource = &resource});
     response.body("payload");
-    const auto writePlan = ruvia::planHttpServerBufferedResponseWrite(
+    const auto writePlan = ruvia::planBufferedHttpResponseWrite(
         ruvia::HttpKnownMethod::kPost, response);
     const auto submitted = server.submitResponseHead(1, response, writePlan);
     RUVIA_CHECK(submitted.failure() == nullptr);

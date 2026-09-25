@@ -1,3 +1,5 @@
+#include "ruvia/core/AsioTask.h"
+
 #include "streaming_fixture.h"
 
 // Server-sent events: field formatting and the bytes a caller may never inject.
@@ -9,7 +11,7 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             writeOneSse(sse, ruvia::SseMessage{.data = "line1\nline2",
                                  .event = "update",
                                  .id = "7",
@@ -35,7 +37,7 @@ RUVIA_TEST(sse_writer_distinguishes_absent_and_empty_data) {
         auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
         asio::io_context ctx(1);
         auto future = asio::co_spawn(
-            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+            ctx, ruvia::asAwaitable(writeOneSse(sse, message)), asio::use_future);
         ctx.run();
         future.get();
         return sink.writes.empty() ? std::string{} : sink.writes[0];
@@ -71,7 +73,7 @@ RUVIA_TEST(sse_writer_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
         auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
         asio::io_context ctx(1);
         auto future = asio::co_spawn(ctx,
-            ruvia::detail::taskAsAwaitable(writeOneSse(sse, ruvia::SseMessage{.data = data})),
+            ruvia::asAwaitable(writeOneSse(sse, ruvia::SseMessage{.data = data})),
             asio::use_future);
         ctx.run();
         future.get();
@@ -97,7 +99,7 @@ RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {
     const auto throwsFor = [&](ruvia::SseMessage message) {
         asio::io_context ctx(1);
         auto future = asio::co_spawn(
-            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+            ctx, ruvia::asAwaitable(writeOneSse(sse, message)), asio::use_future);
         ctx.run();
         try {
             future.get();
@@ -124,7 +126,7 @@ RUVIA_TEST(sse_writer_rejects_nul_in_id) {
     const auto throwsFor = [&](ruvia::SseMessage message) {
         asio::io_context ctx(1);
         auto future = asio::co_spawn(
-            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+            ctx, ruvia::asAwaitable(writeOneSse(sse, message)), asio::use_future);
         ctx.run();
         try {
             future.get();
@@ -142,7 +144,7 @@ RUVIA_TEST(sse_writer_rejects_nul_in_id) {
     // event and data carry no such rule, so a NUL there is accepted and emitted.
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             writeOneSse(sse, ruvia::SseMessage{.data = std::string_view("d\0e", 3),
                                  .event = std::string_view("v\0w", 3)})),
         asio::use_future);

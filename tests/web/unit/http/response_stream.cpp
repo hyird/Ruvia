@@ -1,3 +1,5 @@
+#include "ruvia/core/AsioTask.h"
+
 #include "memory_resource_fixture.h"
 #include "streaming_fixture.h"
 
@@ -36,7 +38,7 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
     }
 
     auto first = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(completeBodyRead(binding.facade(), firstCompleted)),
+        ruvia::asAwaitable(completeBodyRead(binding.facade(), firstCompleted)),
         asio::use_future);
     while (!binding.reader().readSuspended) {
         RUVIA_CHECK_EQ(io.run_one(), std::size_t{1});
@@ -45,7 +47,7 @@ RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
 
     io.restart();
     auto second = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(rejectConcurrentBodyRead(binding.facade(), secondRejected)),
+        ruvia::asAwaitable(rejectConcurrentBodyRead(binding.facade(), secondRejected)),
         asio::use_future);
     asio::post(io, [&binding] { binding.reader().resume(); });
     io.run();
@@ -131,7 +133,7 @@ RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
 
     asio::io_context io(1);
     auto future = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
+        ruvia::asAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
         asio::use_future);
     io.run();
     future.get();
@@ -175,7 +177,7 @@ RUVIA_TEST(response_stream_byte_writes_own_and_reclaim_each_payload) {
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     };
     asio::io_context io(1);
-    auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(operation()), asio::use_future);
+    auto result = asio::co_spawn(io, ruvia::asAwaitable(operation()), asio::use_future);
     io.run();
     result.get();
     RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
@@ -209,7 +211,7 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
     }
 
     auto first = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "first", firstCompleted)),
+        ruvia::asAwaitable(completeStreamWrite(writer, "first", firstCompleted)),
         asio::use_future);
     while (!sink.writeSuspended) {
         RUVIA_CHECK_EQ(io.run_one(), std::size_t{1});
@@ -219,10 +221,10 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
 
     io.restart();
     auto overlappingWrite = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(rejectConcurrentStreamWrite(writer, writeRejected)),
+        ruvia::asAwaitable(rejectConcurrentStreamWrite(writer, writeRejected)),
         asio::use_future);
     auto overlappingEnd = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(rejectConcurrentStreamEnd(writer, endRejected)),
+        ruvia::asAwaitable(rejectConcurrentStreamEnd(writer, endRejected)),
         asio::use_future);
     io.poll();
     overlappingWrite.get();
@@ -242,7 +244,7 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
     sink.failNextWrite = true;
     io.restart();
     auto failing = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(observeStreamWriteFailure(writer, failureObserved)),
+        ruvia::asAwaitable(observeStreamWriteFailure(writer, failureObserved)),
         asio::use_future);
     io.run();
     failing.get();
@@ -250,7 +252,7 @@ RUVIA_TEST(response_stream_rejects_overlapping_output_operations) {
 
     io.restart();
     auto following = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(completeStreamWrite(writer, "following", firstCompleted)),
+        ruvia::asAwaitable(completeStreamWrite(writer, "following", firstCompleted)),
         asio::use_future);
     io.run();
     following.get();
@@ -266,7 +268,7 @@ RUVIA_TEST(response_stream_writeln_emits_independent_lines) {
 
     asio::io_context ctx(1);
     auto future =
-        asio::co_spawn(ctx, ruvia::detail::taskAsAwaitable(writeLines(writer)), asio::use_future);
+        asio::co_spawn(ctx, ruvia::asAwaitable(writeLines(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -281,7 +283,7 @@ RUVIA_TEST(response_stream_stored_writeln_operations_own_independent_payloads) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(writeStoredLines(writer)), asio::use_future);
+        ctx, ruvia::asAwaitable(writeStoredLines(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -296,7 +298,7 @@ RUVIA_TEST(websocket_stored_operation_owns_temporary_payload) {
         ruvia::detail::WebSocketAccess::make(*ruvia::detail::processResource(), &capture, &readSocket, &writeSocket, &closeSocket);
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
+        ruvia::asAwaitable(writeStoredTemporaryWebSocketPayload(socket)),
         asio::use_future);
     ctx.run();
     future.get();
@@ -310,7 +312,7 @@ RUVIA_TEST(response_stream_pmr_overload_transfers_prebuilt_chunk) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(writePrebuiltChunk(writer)), asio::use_future);
+        ctx, ruvia::asAwaitable(writePrebuiltChunk(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -325,7 +327,7 @@ RUVIA_TEST(websocket_text_pmr_overload_transfers_prebuilt_payload) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(writePrebuiltTextFrame(socket)), asio::use_future);
+        ctx, ruvia::asAwaitable(writePrebuiltTextFrame(socket)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -339,7 +341,7 @@ RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(endWithTrailers(writer)), asio::use_future);
+        ctx, ruvia::asAwaitable(endWithTrailers(writer)), asio::use_future);
     ctx.run();
     future.get();
 
@@ -353,7 +355,7 @@ RUVIA_TEST(response_stream_stored_end_owns_trailer_names_and_values) {
     auto writer = makeWriter(sink);
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(endWithExpiredTrailerSources(writer)), asio::use_future);
+        ruvia::asAwaitable(endWithExpiredTrailerSources(writer)), asio::use_future);
     ctx.run();
     future.get();
     RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{1});

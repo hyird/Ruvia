@@ -10,9 +10,9 @@
 #include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
-#include "ruvia/http/Http2Connection.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/server/file/HttpFileChunkBuffer.h"
@@ -46,7 +46,9 @@ Http2BufferedResponseWriter::Http2BufferedResponseWriter(ruvia::Http2Connection&
 Http2BufferedResponseWriter::Http2BufferedResponseWriter(
     ruvia::Http2Connection& connection, Http2SansIoStreamRuntimeTable& streamRuntimes,
     WorkerMemory& worker, WorkerSignal& writeSignal) noexcept
-    : connection_(connection), streamRuntimes_(streamRuntimes), worker_(worker),
+    : connection_(connection),
+      streamRuntimes_(streamRuntimes),
+      worker_(worker),
       writeSignal_(writeSignal) {}
 
 void Http2BufferedResponseWriter::wakeWriter() noexcept {
@@ -117,7 +119,7 @@ Task<Http2BufferedResponseWriter::DataWriteResult> Http2BufferedResponseWriter::
 }
 
 Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
-    std::uint32_t streamId, const HttpResponse& response, HttpServerBufferedResponseWritePlan writePlan) {
+    std::uint32_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan writePlan) {
     if (connection_.streamAborted(streamId)) {
         co_return Http2BufferedResponseWriteResult::makePeerAbortedBeforeCommit();
     }

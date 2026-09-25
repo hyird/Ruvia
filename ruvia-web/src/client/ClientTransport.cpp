@@ -12,8 +12,8 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/ConfigValidation.h"
-#include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/core/DnsHost.h"
+#include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpRequestTarget.h"
 

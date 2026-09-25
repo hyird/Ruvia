@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Http2Types.h"
+#include "ruvia/http/HttpHeader.h"
 
 // HTTP/2 sans-I/O connection core.
 //
@@ -9,8 +9,7 @@
 // or asio. You feed it inbound bytes and it advances the protocol and emits events
 // (request ready, body chunk, stream closed, ...); you submit responses and it
 // produces outbound bytes for you to write. The I/O loop, concurrency model and
-// timeouts live entirely in the caller (see the generic asio driver in ruvia-core;
-// external users can drive it from any runtime, nghttp2-style).
+// timeouts live entirely in the caller; any runtime can drive it, nghttp2-style.
 //
 // Design mirrors nghttp2's mem_recv / mem_send: feed() ~ nghttp2_session_mem_recv,
 // pendingOutput()/consumeOutput() ~ nghttp2_session_mem_send. Flow-control back
@@ -46,7 +45,6 @@
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/detail/http2/flow/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
@@ -247,6 +245,11 @@ enum class Http2ResponseHeadSubmitError : std::uint8_t {
     kInvalidMessage,
 };
 
+// Shadow the non-template public result before the dependent friend declaration;
+// otherwise MSVC resolves the friend to the enclosing namespace's result.
+template <typename Plan>
+class Http2ResponseHeadSubmitResult;
+
 class Http2ResponseHeadSubmitFailure final {
 public:
     [[nodiscard]] constexpr bool peerClosed() const noexcept {
@@ -337,7 +340,7 @@ private:
 };
 
 using Http2BufferedResponseHeadSubmitResult =
-    Http2ResponseHeadSubmitResult<HttpServerBufferedResponseWritePlan>;
+    Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
 using Http2StreamingResponseHeadSubmitResult =
     Http2ResponseHeadSubmitResult<ResponseStreamCommitPlan>;
 
@@ -416,6 +419,8 @@ public:
     // REQUIRED for any writer that awaits mid-write: a pendingOutput() view dangles if
     // a concurrent submit reallocates the buffer during the write.
     void takeOutput(std::pmr::string& into);
+    [[nodiscard]] Http2OutputBatchResult takeOutputBatch(std::size_t maxBytes,
+        std::pmr::string& into, Http2DataOutputObserver observer, void* observerContext);
     [[nodiscard]] bool wantsWrite() const noexcept {
         return output_.wantsWrite();
     }
@@ -430,7 +435,7 @@ public:
     // Http2ResponseHeadPlan owns canonical, explicit, absent, or forbidden
     // Content-Length metadata before the encoder and local DATA state advance.
     [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(std::uint32_t streamId,
-        const HttpResponse& response, HttpServerBufferedResponseWritePlan writePlan);
+        const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK
     // metadata and all later DATA. With no explicit value the body is unbounded.

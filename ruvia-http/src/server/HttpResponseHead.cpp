@@ -1,6 +1,4 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
-#include "ruvia/http/HttpResponseServer.h"
 
 #include <array>
 #include <charconv>
@@ -10,11 +8,13 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
@@ -196,18 +196,17 @@ void appendResponseHead(
         throw std::invalid_argument("HTTP/1 response plan representation does not match response");
     }
     const auto responseStatus = bodyPlan.responseStatus();
-    const auto policy = bodyPlan.policy();
     const bool chunkedPayloadPlan = plan.chunkedStream() != nullptr &&
-                                    policy.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
+                                    bodyPlan.transferEncodingAllowed() && !bodyPlan.bodySuppressed();
     if (chunkedPayloadPlan && plan.protocolVersion() == HttpProtocolVersion::kHttp10) {
         throw std::invalid_argument("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emitChunkedTransferEncoding = chunkedPayloadPlan;
     const bool autoContentLengthOwnedByWriter =
-        policy.autoContentLengthAllowed() && !emitChunkedTransferEncoding &&
-        (buffered != nullptr || knownLengthStream != nullptr || !policy.bodyAllowed());
+        bodyPlan.autoContentLengthAllowed() && !emitChunkedTransferEncoding &&
+        (buffered != nullptr || knownLengthStream != nullptr || !bodyPlan.statusAllowsBody());
     const bool explicitContentLengthAllowed =
-        policy.explicitContentLengthAllowed() && !emitChunkedTransferEncoding &&
+        bodyPlan.explicitContentLengthAllowed() && !emitChunkedTransferEncoding &&
         !autoContentLengthOwnedByWriter &&
         (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
     const auto knownBits = responseKnownHeaderBits(response);
@@ -222,7 +221,7 @@ void appendResponseHead(
         // A status-level no-content policy that still owns framing (205) is
         // canonicalized to zero for both buffered and streaming heads.
         .canonicalContentLength = declaredContentLength.value_or(
-            policy.bodyAllowed()
+            bodyPlan.statusAllowsBody()
                 ? (buffered != nullptr
                           ? buffered->contentLength()
                           : (knownLengthStream != nullptr ? knownLengthStream->contentLength()
