@@ -3,8 +3,9 @@
 #include <concepts>
 #include <cstdint>
 #include <functional>
-#include <memory>
+#include <future>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,12 +14,13 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/Async.h"
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 
@@ -28,19 +30,13 @@
 namespace {
 
 using asio::ip::tcp;
+using ruvia::ConnectionScanner;
 using ruvia::WebSocketCompression;
 using ruvia::WebSocketOpcode;
-using ruvia::detail::ConnectionScanner;
 using ruvia::detail::SocketWebSocketConnection;
 using ruvia::detail::WebSocketConnection;
-using ruvia::detail::WebSocketDeflate;
 using ruvia::detail::WebSocketSocketTransport;
 using ruvia::detail::WsTransportDisposition;
-
-ruvia::WorkerHandle testWorker(asio::io_context& io) {
-    return ruvia::detail::WorkerHandleAccess::make(
-        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
-}
 
 struct RecordingTransportState final {
     bool aborted{false};
@@ -48,7 +44,9 @@ struct RecordingTransportState final {
     std::error_code readError;
     std::string lastNonEmptyBytes;
     WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
+    bool suspendNextRead{false};
     bool suspendNextWrite{false};
+    std::function<void()> completeRead;
     std::function<void()> completeWrite;
     void* beforeWriteCompletionTarget{nullptr};
     void (*beforeWriteCompletion)(void*) noexcept {nullptr};
@@ -65,6 +63,13 @@ public:
     }
 
     [[nodiscard]] ruvia::Task<ruvia::detail::WsTransportReadResult> readMore(std::pmr::string&) {
+        if (std::exchange(state_->suspendNextRead, false)) {
+            static_cast<void>(co_await ruvia::asyncAsio<void>([state = state_](auto completion) mutable {
+                state->completeRead = [completion = std::move(completion)]() mutable {
+                    completion(std::error_code{});
+                };
+            }));
+        }
         if (state_->readError) {
             co_return ruvia::detail::WsTransportReadResult::makeFailure(state_->readError);
         }
@@ -84,7 +89,7 @@ public:
         }
         if (std::exchange(state_->suspendNextWrite, false)) {
             static_cast<void>(
-                co_await ruvia::detail::asyncAsio<void>([state = state_](auto completion) mutable {
+                co_await ruvia::asyncAsio<void>([state = state_](auto completion) mutable {
                     state->completeWrite = [completion = std::move(completion)]() mutable {
                         completion(std::error_code{});
                     };
@@ -95,6 +100,10 @@ public:
 
     void abort() noexcept {
         state_->aborted = true;
+        if (state_->completeRead != nullptr) {
+            auto completion = std::exchange(state_->completeRead, std::function<void()>{});
+            completion();
+        }
         if (state_->completeWrite != nullptr) {
             auto completion = std::exchange(state_->completeWrite, std::function<void()>{});
             completion();
@@ -137,11 +146,74 @@ asio::awaitable<std::string> readShortServerFrame(tcp::socket& socket) {
     co_return frame;
 }
 
+template <typename... Results>
+void runUntilReady(asio::io_context& io, std::future<Results>&... futures) {
+    static_assert(sizeof...(Results) > 0);
+    while (((futures.wait_for(std::chrono::seconds(0)) != std::future_status::ready) || ...)) {
+        io.run_one();
+    }
+}
+
 }  // namespace
+
+RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_reader) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
+    RecordingTransportState state;
+    state.suspendNextRead = true;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
+        scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
+
+    auto reader = asio::co_spawn(io, [&]() -> asio::awaitable<std::optional<ruvia::WebSocketMessage>> { co_return co_await ruvia::asAwaitable(connection.read()); }, asio::use_future);
+    auto teardown = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.detachAndDrainWrites()); }, asio::use_future);
+    runUntilReady(io, reader, teardown);
+
+    RUVIA_CHECK(state.aborted);
+    RUVIA_CHECK(!state.completeRead);
+    RUVIA_CHECK(!reader.get().has_value());
+    teardown.get();
+}
+
+RUVIA_TEST(websocket_drain_waits_for_a_cold_read_reservation_to_be_released) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
+        scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
+    bool drained = false;
+    bool reservationReleased = false;
+    bool drainedBeforeReservationRelease = false;
+    std::optional<ruvia::Task<std::optional<ruvia::WebSocketMessage>>> cold;
+
+    auto test = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        cold.emplace(connection.read());
+        asio::steady_timer release(io);
+        release.expires_after(std::chrono::milliseconds(1));
+        release.async_wait([&](const std::error_code&) {
+            cold.reset();
+            reservationReleased = true;
+        });
+        co_await ruvia::asAwaitable(connection.detachAndDrainWrites());
+        drainedBeforeReservationRelease = !reservationReleased;
+        drained = true; }, asio::use_future);
+    runUntilReady(io, test);
+    test.get();
+
+    RUVIA_CHECK(drained);
+    RUVIA_CHECK(!drainedBeforeReservationRelease);
+    RUVIA_CHECK(reservationReleased);
+}
 
 RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     state.readError = std::make_error_code(std::errc::connection_reset);
     ConnectionScanner::Entry scannerEntry;
@@ -150,17 +222,18 @@ RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
     std::error_code observed;
 
-    asio::co_spawn(
+    auto reader = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                (void)co_await ruvia::detail::taskAsAwaitable(connection.read());
+                (void)co_await ruvia::asAwaitable(connection.read());
             } catch (const std::system_error& error) {
                 observed = error.code();
             }
         },
-        asio::detached);
-    io.run();
+        asio::use_future);
+    runUntilReady(io, reader);
+    reader.get();
 
     RUVIA_CHECK_EQ(observed, state.readError);
     RUVIA_CHECK(state.aborted);
@@ -168,37 +241,39 @@ RUVIA_TEST(websocket_transport_read_failure_preserves_error_and_aborts) {
 
 RUVIA_TEST(websocket_read_reservation_rejects_cold_overlap_and_releases) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
     WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
 
-    {
+    bool rejected = false;
+    bool closeRejected = false;
+    auto reserve = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
         auto cold = connection.read();
-        bool rejected = false;
         try {
             auto overlapping = connection.read();
             static_cast<void>(overlapping);
         } catch (const std::logic_error&) {
             rejected = true;
         }
-        RUVIA_CHECK(rejected);
-
-        bool closeRejected = false;
         try {
             auto closing = connection.close();
             static_cast<void>(closing);
         } catch (const std::logic_error&) {
             closeRejected = true;
         }
-        RUVIA_CHECK(closeRejected);
-    }
+        co_return; }, asio::use_future);
+    runUntilReady(io, reserve);
+    reserve.get();
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK(closeRejected);
 
-    auto following =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.read()), asio::use_future);
-    io.run();
+    io.restart();
+    auto following = asio::co_spawn(io, [&]() -> asio::awaitable<std::optional<ruvia::WebSocketMessage>> { co_return co_await ruvia::asAwaitable(connection.read()); }, asio::use_future);
+    runUntilReady(io, following);
     const auto message = following.get();
     RUVIA_CHECK(!message.has_value());
     RUVIA_CHECK(!state.aborted);
@@ -206,7 +281,8 @@ RUVIA_TEST(websocket_read_reservation_rejects_cold_overlap_and_releases) {
 
 RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
@@ -236,11 +312,11 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
             observation);
 
     auto future = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(ruvia::detail::finishWebSocketSession(connection,
+        ruvia::asAwaitable(ruvia::detail::finishWebSocketSession(connection,
             std::make_exception_ptr(std::runtime_error("middleware post failed")),
             connectionFailure, "127.0.0.1")),
         asio::use_future);
-    io.run();
+    runUntilReady(io, future);
     future.get();
 
     RUVIA_CHECK_EQ(observation.calls, std::size_t{1});
@@ -261,7 +337,8 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
 // means RST_STREAM(CANCEL), so one silent tunnel cannot tear down unrelated streams.
 RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
@@ -276,7 +353,7 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     asio::post(io, [&connection] {
         WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10);
     });
-    io.run();
+    (void)io.poll();
     RUVIA_CHECK_EQ(state.writes, std::size_t{1});
     RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kKeepOpen);
 
@@ -287,13 +364,14 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     asio::post(io, [&connection, timeoutNow] {
         WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, timeoutNow);
     });
-    io.run();
+    (void)io.poll();
     RUVIA_CHECK(state.aborted);
 }
 
 RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
@@ -309,9 +387,8 @@ RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
         WebSocketConnection<RecordingTransport>::heartbeatTickThunk(runtime, 10000);
     };
 
-    auto future =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.close()), asio::use_future);
-    io.run();
+    auto future = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.close()); }, asio::use_future);
+    runUntilReady(io, future);
     future.get();
 
     RUVIA_CHECK(!state.aborted);
@@ -320,7 +397,8 @@ RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
 
 RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
@@ -331,30 +409,31 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
     bool closeRejected = false;
     const std::string invalidText("\xc0\x80", 2);
 
-    asio::co_spawn(
+    auto validation = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                co_await ruvia::detail::taskAsAwaitable(
+                co_await ruvia::asAwaitable(
                     connection.write(WebSocketOpcode::kText, "12345"));
             } catch (const std::invalid_argument&) {
                 messageRejected = true;
             }
             try {
-                co_await ruvia::detail::taskAsAwaitable(
+                co_await ruvia::asAwaitable(
                     connection.write(WebSocketOpcode::kText, invalidText));
             } catch (const std::invalid_argument&) {
                 invalidTextRejected = true;
             }
             try {
-                co_await ruvia::detail::taskAsAwaitable(connection.close({.code = 1005}));
+                co_await ruvia::asAwaitable(connection.close({.code = 1005}));
             } catch (const std::invalid_argument&) {
                 closeRejected = true;
             }
         },
-        asio::detached);
+        asio::use_future);
 
-    io.run();
+    runUntilReady(io, validation);
+    validation.get();
     RUVIA_CHECK(messageRejected);
     RUVIA_CHECK(invalidTextRejected);
     RUVIA_CHECK(closeRejected);
@@ -364,7 +443,8 @@ RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
 
 RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     state.suspendNextWrite = true;
     ConnectionScanner::Entry scannerEntry;
@@ -372,40 +452,41 @@ RUVIA_TEST(websocket_write_guard_rejects_overlap_and_releases_after_suspend) {
     WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
 
-    auto first = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(connection.write(WebSocketOpcode::kText, "first")),
-        asio::use_future);
+    auto first = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.write(WebSocketOpcode::kText, "first")); }, asio::use_future);
     io.poll();
     RUVIA_CHECK(state.completeWrite != nullptr);
 
     io.restart();
     bool rejected = false;
-    try {
-        auto overlapping = connection.write(WebSocketOpcode::kText, "overlap");
-        static_cast<void>(overlapping);
-    } catch (const std::logic_error&) {
-        rejected = true;
-    }
+    auto overlapCheck = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        try {
+            auto overlapping = connection.write(WebSocketOpcode::kText, "overlap");
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        co_return; }, asio::use_future);
+    io.poll();
+    overlapCheck.get();
     RUVIA_CHECK(rejected);
 
     auto completeWrite = std::move(state.completeWrite);
     asio::post(io, std::move(completeWrite));
     io.restart();
-    io.run();
+    runUntilReady(io, first);
     first.get();
 
     io.restart();
-    auto following = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(connection.write(WebSocketOpcode::kText, "following")),
-        asio::use_future);
-    io.run();
+    auto following = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.write(WebSocketOpcode::kText, "following")); }, asio::use_future);
+    runUntilReady(io, following);
     following.get();
     RUVIA_CHECK_EQ(state.writes, std::size_t{2});
 }
 
 RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     state.suspendNextWrite = true;
     ConnectionScanner::Entry scannerEntry;
@@ -413,25 +494,28 @@ RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
     WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
 
-    auto closing =
-        asio::co_spawn(io, ruvia::detail::taskAsAwaitable(connection.close()), asio::use_future);
+    auto closing = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.close()); }, asio::use_future);
     io.poll();
     RUVIA_CHECK(state.completeWrite != nullptr);
 
     io.restart();
     bool rejected = false;
-    try {
-        auto overlapping = connection.write(WebSocketOpcode::kText, "late");
-        static_cast<void>(overlapping);
-    } catch (const std::logic_error&) {
-        rejected = true;
-    }
+    auto overlapCheck = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        try {
+            auto overlapping = connection.write(WebSocketOpcode::kText, "late");
+            static_cast<void>(overlapping);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        co_return; }, asio::use_future);
+    io.poll();
+    overlapCheck.get();
     RUVIA_CHECK(rejected);
 
     auto completeWrite = std::move(state.completeWrite);
     asio::post(io, std::move(completeWrite));
     io.restart();
-    io.run();
+    runUntilReady(io, closing);
     closing.get();
     RUVIA_CHECK_EQ(state.writes, std::size_t{2});
     RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kEndTransport);
@@ -439,7 +523,8 @@ RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
 
 RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     RecordingTransportState state;
     state.suspendNextWrite = true;
     ConnectionScanner::Entry scannerEntry;
@@ -447,16 +532,14 @@ RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
     WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource());
 
-    auto writing = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(connection.write(WebSocketOpcode::kText, "in flight")),
-        asio::use_future);
+    auto writing = asio::co_spawn(io, [&]() -> asio::awaitable<void> { co_await ruvia::asAwaitable(connection.write(WebSocketOpcode::kText, "in flight")); }, asio::use_future);
     io.poll();
     RUVIA_CHECK(state.completeWrite != nullptr);
 
     io.restart();
     auto teardown = asio::co_spawn(
-        io, ruvia::detail::taskAsAwaitable(connection.detachAndDrainWrites()), asio::use_future);
-    io.run();
+        io, ruvia::asAwaitable(connection.detachAndDrainWrites()), asio::use_future);
+    runUntilReady(io, writing, teardown);
 
     writing.get();
     teardown.get();
@@ -469,7 +552,8 @@ RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {
 // same core, and the normal Close is emitted on the socket transport.
 RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();
     bool serverSawMessage = false;
@@ -478,7 +562,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
     bool gotClose = false;
     bool serverCloseCompleted = false;
 
-    asio::co_spawn(
+    auto server = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             auto socket = co_await acceptor.async_accept(asio::use_awaitable);
@@ -487,18 +571,18 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
             SocketWebSocketConnection<tcp::socket> connection(
                 WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {},
                 ruvia::ProtocolByteLimit::limited(1024), memory.resource());
-            const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
+            const auto message = co_await ruvia::asAwaitable(connection.read());
             serverSawMessage = message.has_value() && message->payload() == "hello";
             if (message) {
-                co_await ruvia::detail::taskAsAwaitable(
+                co_await ruvia::asAwaitable(
                     connection.write(message->opcode(), message->payload()));
             }
-            co_await ruvia::detail::taskAsAwaitable(connection.close());
+            co_await ruvia::asAwaitable(connection.close());
             serverCloseCompleted = true;
         },
-        asio::detached);
+        asio::use_future);
 
-    asio::co_spawn(
+    auto client = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket socket(io);
@@ -523,9 +607,11 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
                 co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
             }
         },
-        asio::detached);
+        asio::use_future);
 
-    io.run();
+    runUntilReady(io, server, client);
+    server.get();
+    client.get();
     RUVIA_CHECK(serverSawMessage);
     RUVIA_CHECK(gotPong);
     RUVIA_CHECK(gotEcho);
@@ -533,18 +619,50 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
     RUVIA_CHECK(serverCloseCompleted);
 }
 
+RUVIA_TEST(websocket_write_honors_per_frame_compression_choice) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
+        scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {},
+        WebSocketCompression::kPermessageDeflate);
+    const std::string payload(200, 'x');
+    std::string uncompressedFrame;
+    std::string compressedFrame;
+
+    auto writing = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        co_await ruvia::asAwaitable(
+            connection.write(WebSocketOpcode::kText, payload, false));
+        uncompressedFrame = state.lastNonEmptyBytes;
+        co_await ruvia::asAwaitable(connection.write(WebSocketOpcode::kText, payload));
+        compressedFrame = state.lastNonEmptyBytes; }, asio::use_future);
+    runUntilReady(io, writing);
+    writing.get();
+
+    RUVIA_CHECK(!uncompressedFrame.empty());
+    RUVIA_CHECK(!compressedFrame.empty());
+    if (!uncompressedFrame.empty() && !compressedFrame.empty()) {
+        RUVIA_CHECK((static_cast<unsigned char>(uncompressedFrame[0]) & 0x40U) == 0);
+        RUVIA_CHECK((static_cast<unsigned char>(compressedFrame[0]) & 0x40U) != 0);
+    }
+}
+
 // Negotiated permessage-deflate crosses the actual socket bridge in both
 // directions: core decode on read, core encode on application write.
 RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();
     const std::string original(200, 'a');
     bool serverDecoded = false;
     bool clientDecoded = false;
 
-    asio::co_spawn(
+    auto server = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             auto socket = co_await acceptor.async_accept(asio::use_awaitable);
@@ -554,46 +672,58 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
                 WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {},
                 ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {},
                 WebSocketCompression::kPermessageDeflate);
-            const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
+            const auto message = co_await ruvia::asAwaitable(connection.read());
             serverDecoded = message.has_value() && message->payload() == original;
             if (message) {
-                co_await ruvia::detail::taskAsAwaitable(
+                co_await ruvia::asAwaitable(
                     connection.write(WebSocketOpcode::kText, message->payload()));
             }
-            co_await ruvia::detail::taskAsAwaitable(connection.close());
+            co_await ruvia::asAwaitable(connection.close());
         },
-        asio::detached);
+        asio::use_future);
 
-    asio::co_spawn(
+    auto clientFuture = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket socket(io);
             co_await socket.async_connect(endpoint, asio::use_awaitable);
-            WebSocketDeflate encoder;
-            std::pmr::string compressed(std::pmr::get_default_resource());
-            if (!encoder.compress(original, compressed)) {
+            ruvia::WebSocketConnection client({
+                .messageLimit = ruvia::ProtocolByteLimit::limited(1024),
+                .compression = WebSocketCompression::kPermessageDeflate,
+                .role = ruvia::WebSocketConnectionRole::kClient,
+                .maskKeyGenerator = +[](void*, ruvia::WebSocketMaskKey& key) noexcept {
+                    key = {'\x11', '\x22', '\x33', '\x44'};
+                    return true;
+                },
+            });
+            if (client.submitFrame(WebSocketOpcode::kText, original) !=
+                ruvia::WebSocketFrameSubmitStatus::kAccepted) {
                 co_return;
             }
-            const auto request = maskedFrame(
-                0x1, std::string_view(compressed.data(), compressed.size()), true, true);
+            const std::string request(client.outputPlan().bytes());
+            (void)client.consumeOutput(request.size());
             co_await asio::async_write(socket, asio::buffer(request), asio::use_awaitable);
 
             const auto response = co_await readShortServerFrame(socket);
             if (response.size() < 2 || (static_cast<unsigned char>(response[0]) & 0x40U) == 0) {
                 co_return;
             }
-            WebSocketDeflate decoder;
-            std::pmr::string decoded(std::pmr::get_default_resource());
-            const auto result =
-                decoder.decompress(std::string_view(response.data() + 2, response.size() - 2),
-                    decoded, ruvia::ProtocolByteLimit::limited(1024));
-            clientDecoded = result == ruvia::detail::WebSocketInflateResult::kOk &&
-                            std::string_view(decoded.data(), decoded.size()) == original;
-            (void)(co_await readShortServerFrame(socket));
+            if (client.feed(response) == ruvia::WebSocketFeedStatus::kAccepted) {
+                const auto event = client.nextEvent();
+                clientDecoded = event && event->message() && event->message()->payload() == original;
+            }
+            const auto close = co_await readShortServerFrame(socket);
+            if (close.size() >= 4 &&
+                (static_cast<unsigned char>(close[0]) & 0x0fU) == 0x8U) {
+                const auto reply = maskedFrame(0x8, std::string_view(close).substr(2));
+                co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
+            }
         },
-        asio::detached);
+        asio::use_future);
 
-    io.run();
+    runUntilReady(io, server, clientFuture);
+    server.get();
+    clientFuture.get();
     RUVIA_CHECK(serverDecoded);
     RUVIA_CHECK(clientDecoded);
 }
@@ -602,13 +732,14 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
 // flushes the generated 1002 Close instead of rebuilding it in the web layer.
 RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    const auto workerHandle = testWorker(io);
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const auto endpoint = acceptor.local_endpoint();
     bool serverEnded = false;
     std::uint16_t closeCode = 0;
 
-    asio::co_spawn(
+    auto server = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             auto socket = co_await acceptor.async_accept(asio::use_awaitable);
@@ -617,12 +748,12 @@ RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
             SocketWebSocketConnection<tcp::socket> connection(
                 WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {},
                 ruvia::ProtocolByteLimit::limited(1024), memory.resource());
-            const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
+            const auto message = co_await ruvia::asAwaitable(connection.read());
             serverEnded = !message.has_value();
         },
-        asio::detached);
+        asio::use_future);
 
-    asio::co_spawn(
+    auto client = asio::co_spawn(
         io,
         [&]() -> asio::awaitable<void> {
             tcp::socket socket(io);
@@ -636,9 +767,11 @@ RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
                     static_cast<unsigned char>(close[3]));
             }
         },
-        asio::detached);
+        asio::use_future);
 
-    io.run();
+    runUntilReady(io, server, client);
+    server.get();
+    client.get();
     RUVIA_CHECK(serverEnded);
     RUVIA_CHECK_EQ(closeCode, static_cast<std::uint16_t>(1002));
 }

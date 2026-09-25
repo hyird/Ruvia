@@ -2,6 +2,7 @@
 #include <memory>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -20,10 +21,10 @@
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/Hpack.h"
+#include "ruvia/http/Http2Framing.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -38,10 +39,11 @@
 namespace {
 
 using asio::ip::tcp;
-using ruvia::detail::HpackEncoder;
-using ruvia::detail::Http2FrameType;
+using ruvia::HpackEncoder;
+using ruvia::Http2FrameType;
 
-constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+constexpr std::uint8_t kEndStream = 0x1;
+constexpr std::uint8_t kEndHeaders = 0x4;
 
 struct TlsConnectionObservation final {
     bool sawPlain{false};
@@ -63,9 +65,12 @@ ruvia::Task<ruvia::HttpResponse> tlsPongHandler(void* state, ruvia::Context& ctx
 
 std::string frame(
     std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
-    std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
-    ruvia::detail::http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    std::string bytes(ruvia::kHttp2FrameHeaderBytes, '\0');
+    if (!ruvia::encodeHttp2FrameHeader(std::span<char>(bytes.data(), bytes.size()),
+            static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags,
+            streamId)) {
+        throw std::invalid_argument("invalid test HTTP/2 frame");
+    }
     bytes.append(payload);
     return bytes;
 }
@@ -166,7 +171,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareTlsHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBareTlsHttp2SansIoSession(
                 tls, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -199,7 +204,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
                 co_return !ec && n == size;
             };
 
-            if (!co_await writeAll(kClientPreface)) {
+            if (!co_await writeAll(ruvia::kHttp2ClientPreface)) {
                 co_return;
             }
             if (!co_await writeAll(frame(0x4, 0, 0, {}))) {
@@ -211,24 +216,26 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "https");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    kEndStream | kEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
             for (;;) {
-                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                char hb[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(hb, sizeof(hb))) {
                     break;
                 }
-                const auto header =
-                    ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
-                std::string payload(header.length, '\0');
-                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                const auto header = ruvia::parseHttp2FrameHeader(std::span<const char>(hb));
+                if (!header.has_value()) {
                     break;
                 }
-                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
-                    header.streamId == 1 && !payload.empty()) {
+                std::string payload(header->length, '\0');
+                if (header->length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                    break;
+                }
+                if (header->type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header->streamId == 1 && !payload.empty()) {
                     body = payload;
                     break;
                 }

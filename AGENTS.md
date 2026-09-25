@@ -29,7 +29,7 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
 - 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
 - 公开配置数据统一使用可直接 designated initialization 的普通聚合；所有可默认构造字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
-- 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2 相关 RFC 和标准优先。
+- 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2、HTTP/3 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
 - 机械代码风格（include 形状、错误返回层、命名）见 `STYLE.md`，不要把那些规则再抄进本文件。
@@ -51,7 +51,7 @@ tests/
 ```text
 examples/web/
 tests/core/
-tests/http/{unit,http1,http2,websocket,support}/
+tests/http/{unit,http1,http2,http3,websocket,support}/
 tests/web/unit/
 tests/support/
 ```
@@ -64,7 +64,7 @@ tests/support/
 `web/unit/router/routing_matching.cpp`，不是 `web/unit/router/unit_routing_matching.cpp`。
 单元测试 target 的源码列表按目录分组、组内字母序，不要往末尾追加。
 
-不要把 HTTP/1、HTTP/2 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
+不要把 HTTP/1、HTTP/2、HTTP/3 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
 target 专属的支撑代码跟随所属 target，只有跨 target 的通用支撑保留在
 独立目录。测试只保留可直接验证被测单元正确性的功能单测；不得为历史缺陷、
 目录/target/依赖边界、安装消费或编译 API 表面保留防回归测试或门禁。需要时可为
@@ -90,7 +90,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 禁止在本 target 下创建或安装到另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target 目录里的文件。
 
-跨 target 只能引用依赖库非 `detail` 的公开头，不得直接引用另一个 target 的内部头或 `src/`；库内实现可以引用本库的 `detail` 头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头，不得通过物理相对或绝对路径穿透源码目录。跨库复用能力由所属 target 提供职责明确的公开 API，不把私有状态访问器直接公开。
+跨 target 只能引用依赖库非 `detail` 的公开头，不得直接引用另一个 target 的内部头或 `src/`；这一约束同样适用于示例、测试及公开头中的跨库引用，不能因内部头已安装或能通过传递 include 找到就引用它。AGENTS.md 及其他仓库文档引用头文件时也只能引用公开头，不得引用其他 target 的内部头。库内实现和本 target 的单元测试可以引用本库的 `detail` 头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头，不得通过物理相对或绝对路径穿透源码目录。跨库复用能力由所属 target 提供职责明确的公开 API，不把私有状态访问器直接公开。
 
 安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。
 
@@ -129,7 +129,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 - HTTP/1 parser、chunk parser、request target parser。
 - cookie、cache、range、conditional request、content negotiation、header token/value helper。
 - multipart、form、URL encoding、SSE formatting 与纯 parser。
-- HTTP/1 与 HTTP/2 sans-I/O 协议状态、HPACK、WebSocket sans-I/O 核心。
+- HTTP/1 与 HTTP/2 sans-I/O 协议状态、HTTP/3 varint/frame 纯编解码、HPACK、WebSocket sans-I/O 核心。
 - content-coding、framing、connection、client role 等可由任意 runtime 驱动的纯协议 primitive。
 - 无分配的 `HttpProtocolError` 及其 HTTP status；不得携带 Web JSON error code/details。
 
@@ -161,7 +161,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 ### HTTP 协议与应用边界
 
-`ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。
+`ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、HTTP/3、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。
 
 outbound client 中借用调用方存储的公开类型必须以 `View` 结尾；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，不得恢复不表达生命周期的旧名或兼容别名。
 

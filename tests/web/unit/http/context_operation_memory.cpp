@@ -1,5 +1,5 @@
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
@@ -30,6 +30,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -63,7 +64,7 @@ struct ContextFixture final {
     ContextFixture()
         : worker(),
           requestMemory(worker, std::span<std::byte>(requestBuffer)),
-          request(ruvia::detail::HttpRequestAccess::make()),
+          request(makeRequest(requestMemory)),
 #ifdef RUVIA_ENABLE_DATABASE
           dbDefinitions{makeDbDefinition("default"), makeDbDefinition("reporting")},
 #endif
@@ -73,7 +74,6 @@ struct ContextFixture final {
           httpDefinitions{makeHttpDefinition("default"), makeHttpDefinition("upstream")},
           capabilities(ioContext, ruvia::test::testWorkerHandle(), worker.resource(), definitions(),
               {}) {
-        ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
     }
 
     [[nodiscard]] ruvia::detail::WorkerCapabilityDefinitions definitions() {
@@ -97,6 +97,14 @@ struct ContextFixture final {
 #endif
     }
 #endif
+
+    [[nodiscard]] static ruvia::HttpRequest makeRequest(ruvia::RequestMemory& memory) {
+        auto [request, error] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, memory.resource());
+        if (error) {
+            throw std::runtime_error("invalid test request");
+        }
+        return std::move(request);
+    }
 
     [[nodiscard]] static ruvia::HttpClientConfig httpConfig() {
         return ruvia::HttpClientConfig{
@@ -149,8 +157,10 @@ RUVIA_TEST(context_response_scratch_does_not_remain_in_request_arena) {
     const auto measure = [&](auto&& makeResponse, std::string_view header) {
         alignas(std::max_align_t) std::array<std::byte, 64 * 1024> buffer;
         ruvia::RequestMemory memory(worker, buffer);
-        auto request = ruvia::detail::HttpRequestAccess::make();
-        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+        auto [request, error] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, memory.resource());
+        if (error) {
+            throw std::runtime_error("invalid test request");
+        }
         auto context = ruvia::detail::ContextAccess::make(
             memory, request, ruvia::test::testContextServices());
         const auto response = makeResponse(context);

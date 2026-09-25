@@ -14,11 +14,11 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpAcceptEncoding.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -40,7 +40,6 @@ using ruvia::HttpResponse;
 using ruvia::HttpResponseCodingSelection;
 using ruvia::Task;
 using ruvia::detail::ControllerMiddlewareDescriptor;
-using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::ResponseStreamCommitPlan;
 using ruvia::detail::ResponseStreamDispatchResult;
 using ruvia::detail::ResponseStreamFraming;
@@ -157,11 +156,11 @@ Task<void> failAfterCommit(void* target, Context& context) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory requestMemory(worker);
-    auto request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, "GET");
-    HttpRequestAccess::setPath(request, "/stream");
-    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto [request, parseError] = ruvia::makeParsedHttpRequest(
+        "GET", "/stream", {}, {}, requestMemory.resource());
+    if (parseError.has_value()) {
+        throw std::logic_error("test response stream request was invalid");
+    }
     const auto resolution = routes.resolve(request);
     const auto* resolved = resolution.resolved();
     if (resolved == nullptr) {
@@ -176,7 +175,7 @@ Task<void> failAfterCommit(void* target, Context& context) {
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                result.emplace(co_await ruvia::detail::taskAsAwaitable(
+                result.emplace(co_await ruvia::asAwaitable(
                     ruvia::detail::dispatchResponseStreamWith(sink, routes, request, *resolved,
                         requestMemory, ruvia::test::testContextServices(),
                         [peerAborted]() noexcept { return peerAborted; })));

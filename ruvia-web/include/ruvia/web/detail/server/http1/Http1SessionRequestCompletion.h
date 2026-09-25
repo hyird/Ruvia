@@ -8,8 +8,8 @@
 #include <variant>
 
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/Http1ServerConnectionPlan.h"
+#include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 

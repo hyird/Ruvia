@@ -4,6 +4,7 @@
 #include <fstream>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,36 +20,49 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/Hpack.h"
+#include "ruvia/http/Http2Framing.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 #include "http2_sansio_session_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
-// The production session header owns every declaration needed by its templates;
-// this test intentionally must not rely on a server-wide include-order umbrella.
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/ConnectionScanner.h"
-#include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace {
 
 using asio::ip::tcp;
-using namespace ruvia::detail;
+constexpr std::string_view kClientPreface = ruvia::kHttp2ClientPreface;
+constexpr std::uint8_t kFlagEndStream = 0x1;
+constexpr std::uint8_t kFlagEndHeaders = 0x4;
+constexpr std::uint32_t kConnectionWindowUpdateThreshold = 512 * 1024;
 
-constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+std::uint32_t read31BitBigEndian(const char* bytes) {
+    const auto* value = reinterpret_cast<const unsigned char*>(bytes);
+    return ((static_cast<std::uint32_t>(value[0]) & 0x7fU) << 24) |
+           (static_cast<std::uint32_t>(value[1]) << 16) |
+           (static_cast<std::uint32_t>(value[2]) << 8) |
+           static_cast<std::uint32_t>(value[3]);
+}
+
+std::uint32_t readBigEndian32(const char* bytes) {
+    const auto* value = reinterpret_cast<const unsigned char*>(bytes);
+    return (static_cast<std::uint32_t>(value[0]) << 24) |
+           (static_cast<std::uint32_t>(value[1]) << 16) |
+           (static_cast<std::uint32_t>(value[2]) << 8) |
+           static_cast<std::uint32_t>(value[3]);
+}
 
 std::string frame(
     std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
-    std::string bytes(kHttp2FrameHeaderBytes, '\0');
-    http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    std::string bytes(ruvia::kHttp2FrameHeaderBytes, '\0');
+    if (!ruvia::encodeHttp2FrameHeader(bytes, static_cast<std::uint32_t>(payload.size()),
+            static_cast<ruvia::Http2FrameType>(type), flags, streamId)) {
+        throw std::length_error("invalid test HTTP/2 frame");
+    }
     bytes.append(payload);
     return bytes;
 }
@@ -74,7 +88,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            co_await ruvia::detail::taskAsAwaitable(
+            co_await ruvia::asAwaitable(
                 ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -109,12 +123,12 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
 
             // A complete, body-less request on stream 1 (END_STREAM + END_HEADERS).
             std::pmr::string headerBlock(std::pmr::get_default_resource());
-            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
-            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
-            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
-            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
+                    frame(0x1 /*HEADERS*/, kFlagEndStream | kFlagEndHeaders, 1,
                         std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
@@ -122,7 +136,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             // DATA on the now-ended stream: every frame must be dropped yet still
             // join the connection credit batch. Keep each payload within the local
             // SETTINGS_MAX_FRAME_SIZE advertised by the server.
-            std::string data(Http2LocalSettings::kMaxFrameSize, 'x');
+            std::string data(ruvia::kHttp2DefaultMaxFrameSize, 'x');
             auto remaining = dataBytes;
             while (remaining != 0) {
                 const auto chunkBytes =
@@ -140,19 +154,23 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
 
             // Drain every frame the server emits, recording stream-0 WINDOW_UPDATEs.
             for (;;) {
-                char headerBytes[kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto parsedHeader =
+                    ruvia::parseHttp2FrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                if (!parsedHeader) {
+                    throw std::runtime_error("invalid HTTP/2 frame header from server");
+                }
+                const auto& header = *parsedHeader;
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
                 if (header.type == 0x8 /*WINDOW_UPDATE*/ && header.streamId == 0) {
                     increments.push_back(
-                        http2Read31(reinterpret_cast<const unsigned char*>(payload.data())));
+                        read31BitBigEndian(payload.data()));
                 }
             }
         },
@@ -179,7 +197,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            co_await ruvia::detail::taskAsAwaitable(
+            co_await ruvia::asAwaitable(
                 ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -213,13 +231,13 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             // so the declared length can never be satisfied -> malformed (RFC 9113
             // §8.1.1). The server must RST_STREAM(PROTOCOL_ERROR).
             std::pmr::string headerBlock(std::pmr::get_default_resource());
-            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
-            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
-            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
-            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            HpackEncoder::encodeHeader(headerBlock, "content-length", "5");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, "content-length", "5");
             if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
+                    frame(0x1 /*HEADERS*/, kFlagEndStream | kFlagEndHeaders, 1,
                         std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
@@ -228,23 +246,23 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             sock.shutdown(tcp::socket::shutdown_send, ignore);
 
             for (;;) {
-                char headerBytes[kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto parsedHeader =
+                    ruvia::parseHttp2FrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                if (!parsedHeader) {
+                    throw std::runtime_error("invalid HTTP/2 frame header from server");
+                }
+                const auto& header = *parsedHeader;
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
                 if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
                     payload.size() == 4) {
-                    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
-                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                               (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                               (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                               static_cast<std::uint32_t>(bytes[3]);
+                    rstError = readBigEndian32(payload.data());
                 }
             }
         },
@@ -295,7 +313,7 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             routes.setNotFoundHandler(
                 ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(
                     ruvia::Context&)>(handler));
-            co_await ruvia::detail::taskAsAwaitable(
+            co_await ruvia::asAwaitable(
                 ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -327,16 +345,16 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
-            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
-            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
-            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
-            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             const auto reqView = std::string_view(headerBlock.data(), headerBlock.size());
 
             // Both requests in a single write, so the server dispatches them together.
             std::string both;
-            both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, reqView);
-            both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 3, reqView);
+            both += frame(0x1 /*HEADERS*/, kFlagEndStream | kFlagEndHeaders, 1, reqView);
+            both += frame(0x1 /*HEADERS*/, kFlagEndStream | kFlagEndHeaders, 3, reqView);
             if (!co_await writeAll(both)) {
                 co_return;
             }
@@ -352,12 +370,16 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
 
             std::size_t completedResponses = 0;
             for (;;) {
-                char headerBytes[kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto parsedHeader =
+                    ruvia::parseHttp2FrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                if (!parsedHeader) {
+                    throw std::runtime_error("invalid HTTP/2 frame header from server");
+                }
+                const auto& header = *parsedHeader;
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
@@ -365,7 +387,7 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
                 frames.push_back(EmittedFrame{
                     static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
                 if ((header.type == 0x1 /*HEADERS*/ || header.type == 0x9 /*CONTINUATION*/) &&
-                    (header.flags & kHttp2FlagEndHeaders) != 0 &&
+                    (header.flags & kFlagEndHeaders) != 0 &&
                     (header.streamId == 1 || header.streamId == 3) && ++completedResponses == 2) {
                     break;
                 }
@@ -399,8 +421,8 @@ ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& contex
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
-    ruvia::detail::setResponseFileBody(response, std::filesystem::path(truncatedFileBodyPath()),
-        declaredLength, 0, declaredLength);
+    response.fileBody(std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0,
+        declaredLength, {}, false);
     co_return response;
 }
 
@@ -418,8 +440,8 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
-    ruvia::detail::setResponseFileBody(
-        response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);
+    response.fileBody(std::filesystem::path(missingFileBodyPath()), declaredLength, 0,
+        declaredLength, {}, false);
     co_return response;
 }
 
@@ -447,7 +469,7 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             routes.setNotFoundHandler(
                 ruvia::detail::CallbackAccess::bind<ruvia::Task<ruvia::HttpResponse>(
                     ruvia::Context&)>(handler));
-            co_await ruvia::detail::taskAsAwaitable(
+            co_await ruvia::asAwaitable(
                 ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -478,12 +500,12 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             }
 
             std::pmr::string headerBlock(std::pmr::get_default_resource());
-            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
-            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
-            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
-            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            ruvia::HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(
-                    frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1,
+                    frame(0x1 /*HEADERS*/, kFlagEndStream | kFlagEndHeaders, 1,
                         std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
@@ -498,23 +520,23 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             });
 
             for (;;) {
-                char headerBytes[kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header =
-                    http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                const auto parsedHeader =
+                    ruvia::parseHttp2FrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                if (!parsedHeader) {
+                    throw std::runtime_error("invalid HTTP/2 frame header from server");
+                }
+                const auto& header = *parsedHeader;
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
                 }
                 if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 &&
                     payload.size() == 4) {
-                    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
-                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) |
-                               (static_cast<std::uint32_t>(bytes[1]) << 16) |
-                               (static_cast<std::uint32_t>(bytes[2]) << 8) |
-                               static_cast<std::uint32_t>(bytes[3]);
+                    rstError = readBigEndian32(payload.data());
                     break;
                 }
             }
@@ -569,7 +591,7 @@ RUVIA_TEST(http2_dropped_data_credits_connection_flow_window) {
     // its bytes to be returned at connection scope. The real session batches that
     // credit to avoid per-frame output amplification, then restores one exact
     // threshold when reached.
-    constexpr auto threshold = kHttp2ReceiveWindowUpdateThreshold;
+    constexpr auto threshold = kConnectionWindowUpdateThreshold;
     const auto increments = collectConnectionWindowUpdatesForDroppedData(threshold);
     bool credited = false;
     for (const auto increment : increments) {
@@ -604,11 +626,11 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
                 interleaved = true;
                 break;
             }
-            if ((f.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0) {
+            if ((f.flags & kFlagEndHeaders) != 0) {
                 openStream = 0;
             }
         } else if (f.type == 0x1 /*HEADERS*/ &&
-                   (f.flags & ruvia::detail::kHttp2FlagEndHeaders) == 0) {
+                   (f.flags & kFlagEndHeaders) == 0) {
             openStream = f.streamId;
         }
     }

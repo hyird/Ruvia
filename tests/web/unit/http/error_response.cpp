@@ -4,7 +4,6 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
@@ -46,7 +45,7 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/problem+json"));
 
-    const auto body = ruvia::detail::responseBody(response).bytes();
+    const auto body = response.bodyBytes();
     RUVIA_CHECK(body.starts_with("{") && body.ends_with("}"));
     RUVIA_CHECK(body.find(R"("code":"bad_request")") != std::string_view::npos);
     RUVIA_CHECK(body.find(R"("detail":"invalid \"input\"")") != std::string_view::npos);
@@ -61,7 +60,7 @@ RUVIA_TEST(default_error_response_serializes_typed_validation_details) {
     auto* resource = std::pmr::new_delete_resource();
     const auto response = makeValidationErrorResponse(resource, "x", "m");
 
-    const auto body = ruvia::detail::responseBody(response).bytes();
+    const auto body = response.bodyBytes();
     RUVIA_CHECK(body.find(R"("errors":[{"field":"x","code":"required","message":"m"}])") !=
                 std::string_view::npos);
 }
@@ -70,7 +69,7 @@ RUVIA_TEST(default_error_response_escapes_typed_validation_details) {
     auto* resource = std::pmr::new_delete_resource();
     const auto response = makeValidationErrorResponse(resource, "f\"x", "a\"b\\c");
 
-    const auto body = ruvia::detail::responseBody(response).bytes();
+    const auto body = response.bodyBytes();
     RUVIA_CHECK(body.find(R"("field":"f\"x")") != std::string_view::npos);
     RUVIA_CHECK(body.find(R"("message":"a\"b\\c")") != std::string_view::npos);
 }
@@ -111,7 +110,7 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
             .statusText = std::string_view("Bad\r\nRequest", 12)});
         const auto response = makeDefaultErrorResponse(resource, error);
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
-        const auto body = ruvia::detail::responseBody(response).bytes();
+        const auto body = response.bodyBytes();
         RUVIA_CHECK(body.find(R"("title":"Bad Request")") != std::string_view::npos);
         RUVIA_CHECK(!body.contains('\r'));
         RUVIA_CHECK(!body.contains('\n'));
@@ -122,7 +121,7 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
         const auto response = makeDefaultErrorResponse(
             resource, HttpErrorInfo({.status = ruvia::HttpStatusCode::fromValue(599)}));
         RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(599));
-        const auto body = ruvia::detail::responseBody(response).bytes();
+        const auto body = response.bodyBytes();
         RUVIA_CHECK(body.find(R"("title":"HTTP Error")") != std::string_view::npos);
     }
     // about:blank titles describe the status, not application-specific labels.
@@ -131,7 +130,7 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
             HttpErrorInfo({.status = ruvia::http_status::kBadRequest,
                 .message = "specific failure",
                 .statusText = "Custom Label"}));
-        const auto body = ruvia::detail::responseBody(response).bytes();
+        const auto body = response.bodyBytes();
         RUVIA_CHECK(body.contains(R"("title":"Bad Request")"));
         RUVIA_CHECK(body.contains(R"("detail":"specific failure")"));
     }

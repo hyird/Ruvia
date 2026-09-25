@@ -8,28 +8,29 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
 class TestWorker final {
 public:
     explicit TestWorker(asio::io_context& ioContext)
-        : dispatcher_(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8)),
-          handle_(ruvia::detail::WorkerHandleAccess::make(dispatcher_)) {}
+        : attachment_(ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 8})),
+          handle_(attachment_.loop().handle()) {}
 
     [[nodiscard]] const ruvia::WorkerHandle& handle() const noexcept {
         return handle_;
     }
 
 private:
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher_;
+    ruvia::EventLoopAttachment attachment_;
     ruvia::WorkerHandle handle_;
 };
 
@@ -99,7 +100,7 @@ void verifiesClosedScopeRejectsColdOperation(ruvia::testing::TestContext& ruvia_
 
 #ifdef RUVIA_ENABLE_DATABASE
 RUVIA_TEST(client_operation_arguments_use_db_registry_owner_resource) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     TestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource owner;
 #ifdef RUVIA_ENABLE_MARIADB
@@ -128,7 +129,7 @@ RUVIA_TEST(client_operation_arguments_use_db_registry_owner_resource) {
 
 #ifdef RUVIA_ENABLE_REDIS
 RUVIA_TEST(client_operation_arguments_use_redis_registry_owner_resource) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     TestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource owner;
     const std::array definitions{
@@ -151,7 +152,7 @@ RUVIA_TEST(client_operation_arguments_use_redis_registry_owner_resource) {
 #endif
 
 RUVIA_TEST(client_operation_arguments_use_http_registry_owner_resource) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     TestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource owner;
     const std::array definitions{

@@ -1,9 +1,9 @@
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -17,6 +17,7 @@
 
 #include "context_services_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -98,10 +99,11 @@ ruvia::Task<void> closeWebSocket(void*, ruvia::WebSocketCloseOptions) {
 }
 
 ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource) {
-    auto request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setResource(request, resource);
-    return request;
+    auto [request, parseError] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, resource);
+    if (parseError) {
+        throw std::logic_error("invalid context capability test request");
+    }
+    return std::move(request);
 }
 
 struct BoundBodyReader final {
@@ -173,9 +175,9 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
 }
 
 RUVIA_TEST(context_services_borrows_address_stable_worker_and_stop_token) {
-    asio::io_context ioContext;
-    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 8);
-    const auto handle = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto& ioContext = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 8});
+    const auto handle = attachment.loop().handle();
     const ruvia::StopToken stopToken;
     const ruvia::detail::ContextServices services(handle, stopToken);
     const auto derived = services.withPlainTransport("127.0.0.1");
@@ -289,8 +291,9 @@ RUVIA_TEST(context_services_bind_request_deadline_and_stop_token_atomically) {
 RUVIA_TEST(context_response_output_has_one_active_alternative) {
     OutputSink sink;
     auto writer = makeResponseStreamWriter(sink);
+    const auto workerHandle = ruvia::test::testWorkerHandle();
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     const auto base = ruvia::test::testContextServices();
     RUVIA_CHECK(base.responseOutput().buffered() != nullptr);
@@ -334,8 +337,9 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
     RUVIA_CHECK_EQ(sseHead.header("Content-Type"), std::string_view("text/event-stream"));
     RUVIA_CHECK_EQ(sseHead.header("Cache-Control"), std::string_view("no-cache"));
 
+    const auto workerHandle = ruvia::test::testWorkerHandle();
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
     auto webSocketContext =
         ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
     {
@@ -357,8 +361,9 @@ RUVIA_TEST(context_websocket_binding_restores_capability_during_unwind) {
     auto request = makeRequest(memory.resource());
     auto context =
         ruvia::detail::ContextAccess::make(memory, request, ruvia::test::testContextServices());
+    const auto workerHandle = ruvia::test::testWorkerHandle();
     auto webSocket = ruvia::detail::WebSocketAccess::make(
-        *ruvia::detail::processResource(), nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
+        *ruvia::detail::processResource(), workerHandle, nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);
 
     try {
         ruvia::detail::ContextWebSocketBinding binding(context, webSocket);
@@ -390,10 +395,10 @@ RUVIA_TEST(context_request_exposes_matched_route_path) {
 RUVIA_TEST(context_lazy_request_caches_share_one_typed_storage_owner) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = makeRequest(memory.resource());
-    ruvia::detail::HttpRequestAccess::setQueryString(request, "name=ruvia&name=web");
-    RUVIA_CHECK(ruvia::detail::HttpRequestAccess::addHeader(
-        request, ruvia::HttpHeaderView("Cookie", "theme=dark")));
+    const ruvia::HttpHeaderView headers[]{{"Cookie", "theme=dark"}};
+    auto [request, parseError] = ruvia::makeParsedHttpRequest(
+        "GET", "/?name=ruvia&name=web", headers, {}, memory.resource());
+    RUVIA_CHECK(!parseError);
 
     const std::string_view names[]{"id"};
     const std::string_view values[]{"42"};

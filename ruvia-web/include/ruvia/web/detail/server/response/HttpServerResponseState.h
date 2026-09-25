@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/Http1ServerSemantics.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
 
 namespace ruvia::detail {

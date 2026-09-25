@@ -12,7 +12,7 @@
 #include <asio/io_context.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/detail/config/ConfigValidation.h"
+#include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
@@ -29,16 +29,16 @@ namespace {
 
 using ruvia::test::CountingMemoryResource;
 
+using ruvia::ensureConfigHost;
+using ruvia::ensureNonZeroPort;
+using ruvia::ensurePositiveDuration;
+using ruvia::ensurePositiveSize;
+using ruvia::isValidConfigHost;
+using ruvia::kSeparatedPortHostRules;
 using ruvia::detail::ClientPortTextBuffer;
 using ruvia::detail::clientTransportConfigView;
-using ruvia::detail::ensureConfigHost;
-using ruvia::detail::ensureNonZeroPort;
-using ruvia::detail::ensurePositiveDuration;
-using ruvia::detail::ensurePositiveSize;
 using ruvia::detail::formatClientPort;
-using ruvia::detail::isValidConfigHost;
 using ruvia::detail::isValidSniHost;
-using ruvia::detail::kSeparatedPortHostRules;
 using ruvia::detail::validateClientOriginHost;
 using ruvia::detail::validateClientTransportConfig;
 

@@ -12,15 +12,15 @@ namespace ruvia {
 namespace {
 
 using ruvia::detail::findHttpHeaderEnd;
+using ruvia::detail::HttpChunkScanError;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
-using ruvia::detail::RequestTargetView;
 using ruvia::detail::RequestHeaderKind;
-using ruvia::detail::singletonRequestHeaderBit;
+using ruvia::detail::RequestTargetView;
 using ruvia::detail::scanHttpChunkedBody;
-using ruvia::detail::HttpChunkScanError;
+using ruvia::detail::singletonRequestHeaderBit;
 
 }  // namespace
 
@@ -308,7 +308,7 @@ Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
     return state;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia
 
 namespace ruvia {
 

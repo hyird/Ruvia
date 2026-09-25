@@ -29,6 +29,6 @@ inline constexpr std::string_view kBase64UrlAlphabet =
 }  // namespace ruvia
 
 namespace ruvia::detail {
-using ::ruvia::kBase64UrlAlphabet;
 using ::ruvia::decodeBase64UrlChar;
+using ::ruvia::kBase64UrlAlphabet;
 }  // namespace ruvia::detail

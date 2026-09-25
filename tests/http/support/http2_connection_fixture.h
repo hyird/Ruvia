@@ -113,7 +113,7 @@ inline Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
     const auto requestMethod =
         stream == nullptr ? ruvia::HttpKnownMethod::kUnknown : stream->requestKnownMethod();
     return connection.submitResponseHead(
-        streamId, response, ruvia::detail::httpBufferedResponseWritePlan(requestMethod, response));
+        streamId, response, ruvia::planBufferedHttpResponseWrite(requestMethod, response));
 }
 
 template <typename Result>

@@ -43,6 +43,7 @@ public:
         WebSocketCompression compression = WebSocketCompression::kDisabled,
         int compressionLevel = 6)
         : transport_(std::move(transport)),
+          worker_(&worker),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
@@ -71,7 +72,20 @@ public:
     Task<void> write(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     Task<void> close(::ruvia::WebSocketCloseOptions options = {});
     void abort() noexcept {
+        if (!worker_->isCurrent()) {
+            std::terminate();
+        }
         abortTransport();
+    }
+
+    [[nodiscard]] const WorkerHandle& worker() const noexcept {
+        return *worker_;
+    }
+
+    void requireCurrentWorker() const noexcept {
+        if (!worker_->isCurrent()) {
+            std::terminate();
+        }
     }
     Task<void> detachAndDrainWrites();
 
@@ -126,29 +140,33 @@ private:
 
     class WriteOperationLease final {
     public:
-        explicit WriteOperationLease(bool& active)
-            : active_(&active) {
-            if (*active_) {
-                active_ = nullptr;
+        explicit WriteOperationLease(WebSocketConnection& connection)
+            : connection_(&connection) {
+            if (connection_->writeActive_) {
+                connection_ = nullptr;
                 throw std::logic_error("concurrent websocket writes are not supported");
             }
-            *active_ = true;
+            connection_->writeActive_ = true;
         }
 
         WriteOperationLease(const WriteOperationLease&) = delete;
         WriteOperationLease& operator=(const WriteOperationLease&) = delete;
         WriteOperationLease(WriteOperationLease&& other) noexcept
-            : active_(std::exchange(other.active_, nullptr)) {}
+            : connection_(std::exchange(other.connection_, nullptr)) {}
         WriteOperationLease& operator=(WriteOperationLease&&) = delete;
 
         ~WriteOperationLease() {
-            if (active_ != nullptr) {
-                *active_ = false;
+            if (connection_ != nullptr) {
+                if (!connection_->worker_->isCurrent()) {
+                    std::terminate();
+                }
+                connection_->writeActive_ = false;
+                connection_->notifyWriteIdle();
             }
         }
 
     private:
-        bool* active_;
+        WebSocketConnection* connection_;
     };
 
     class ReadGuard final {
@@ -177,9 +195,12 @@ private:
 
         ~ReadGuard() {
             if (connection_ != nullptr) {
+                if (!connection_->worker_->isCurrent()) {
+                    std::terminate();
+                }
                 const bool started = connection_->readPhase_ == ReadPhase::kActive;
                 connection_->readPhase_ = ReadPhase::kIdle;
-                if (started) {
+                if (started || connection_->worker_->isCurrent()) {
                     connection_->readerDoneSignal_.notify();
                 }
             }
@@ -202,10 +223,14 @@ private:
     Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
     Task<void> flushProtocolOutputExclusive();
     Task<void> flushProtocolOutputNow();
-    void abortTransport() noexcept;
+    void abortTransport(bool forceTransport = false) noexcept;
     void notifyWriteIdle() noexcept;
+    [[nodiscard]] bool hasOperationsToDrain() const noexcept {
+        return readPhase_ != ReadPhase::kIdle || writeActive_ || writePhase_ != WritePhase::kIdle;
+    }
 
     Transport transport_;
+    const WorkerHandle* worker_;
     ruvia::ConnectionScanner::Entry& scannerEntry_;
     WebSocketLifecycleOptions lifecycleOptions_{};
     std::pmr::string buffer_;

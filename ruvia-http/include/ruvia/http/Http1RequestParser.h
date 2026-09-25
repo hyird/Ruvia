@@ -91,7 +91,8 @@ private:
     std::size_t consumedBytes_{0};
 };
 
-enum class Http1RequestParseFailureSource : std::uint8_t { kRequestLine, kMessage };
+enum class Http1RequestParseFailureSource : std::uint8_t { kRequestLine,
+    kMessage };
 
 class Http1RequestParseFailure final {
 public:
@@ -108,7 +109,8 @@ private:
 
     explicit constexpr Http1RequestParseFailure(
         HttpParseError error, Http1RequestParseFailureSource source) noexcept
-        : error_(error), source_(source) {}
+        : error_(error),
+          source_(source) {}
 
     HttpParseError error_;
     Http1RequestParseFailureSource source_;

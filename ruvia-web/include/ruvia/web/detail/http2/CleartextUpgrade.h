@@ -10,8 +10,8 @@
 #include <asio/buffer.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/Async.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/Http2CleartextPreface.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/http2/Http2ServerSessionSetup.h"

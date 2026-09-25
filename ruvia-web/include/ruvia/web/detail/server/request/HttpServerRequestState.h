@@ -2,8 +2,8 @@
 
 #include <optional>
 
-#include "ruvia/http/HttpRequestBodyFailure.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
+#include "ruvia/http/HttpRequestBodyFailure.h"
 
 namespace ruvia::detail {
 

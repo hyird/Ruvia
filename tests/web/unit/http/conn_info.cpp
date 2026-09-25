@@ -6,7 +6,7 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -26,7 +26,6 @@ using ruvia::TlsConnectionTransport;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
-using ruvia::detail::HttpRequestAccess;
 
 // TLS details belong behind the typed transport variant, not flattened back
 // onto ConnInfo. The end-to-end scheme, including TLS a trusted proxy
@@ -73,13 +72,10 @@ RUVIA_TEST(conn_info_transport_has_one_active_alternative) {
 RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
     WorkerMemory worker;
     RequestMemory memory(worker);
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setResource(request, memory.resource());
-    HttpRequestAccess::setTarget(request, "/resource");
-    HttpRequestAccess::setPath(request, "/resource");
-    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "example.test"},
-        HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
+    const HttpHeaderView headers[] = {HttpHeaderView{"Host", "example.test"}};
+    auto [request, error] = ruvia::makeParsedHttpRequest(
+        "GET", "/resource", headers, {}, memory.resource());
+    RUVIA_CHECK(!error.has_value());
 
     const auto plainContext = ContextAccess::make(
         memory, request, ruvia::test::testContextServices().withPlainTransport("192.0.2.44"));

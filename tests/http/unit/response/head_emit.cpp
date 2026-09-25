@@ -22,6 +22,7 @@ namespace {
 
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
+using ruvia::planHttpResponseBody;
 using ruvia::detail::appendResponseHead;
 using ruvia::detail::http1BufferedResponsePlan;
 using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
@@ -32,7 +33,6 @@ using ruvia::detail::Http1FinalResponseCommitResult;
 using ruvia::detail::http1KnownLengthResponseStreamHeadPlan;
 using ruvia::detail::Http1ResponseHeadPlan;
 using ruvia::detail::Http1ServerConnectionPlan;
-using ruvia::detail::httpResponseBodyPlan;
 using ruvia::detail::ResponseHeadBuffer;
 
 ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
@@ -52,7 +52,7 @@ std::string emitHead(HttpResponse& response, const Http1ResponseHeadPlan& plan) 
 std::string emitBufferedHead(HttpResponse& response,
     HttpKnownMethod requestMethod = HttpKnownMethod::kGet,
     ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
-    const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(requestMethod, response);
+    const auto writePlan = ruvia::planBufferedHttpResponseWrite(requestMethod, response);
     const auto responsePlan =
         http1BufferedResponsePlan(writePlan, connectionPlanFor(protocolVersion));
     return emitHead(response, responsePlan.headPlan());
@@ -62,7 +62,7 @@ std::string emitChunkedStreamHead(HttpResponse& response,
     HttpKnownMethod requestMethod = HttpKnownMethod::kGet,
     ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
     return emitHead(response,
-        http1ChunkedResponseStreamHeadPlan(httpResponseBodyPlan(requestMethod, response.status()),
+        http1ChunkedResponseStreamHeadPlan(planHttpResponseBody(requestMethod, response.status()),
             connectionPlanFor(protocolVersion)));
 }
 
@@ -70,7 +70,7 @@ std::string emitKnownLengthStreamHead(HttpResponse& response, std::uint64_t cont
     HttpKnownMethod requestMethod = HttpKnownMethod::kGet,
     ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
     return emitHead(response, http1KnownLengthResponseStreamHeadPlan(
-                                  httpResponseBodyPlan(requestMethod, response.status()),
+                                  planHttpResponseBody(requestMethod, response.status()),
                                   connectionPlanFor(protocolVersion), contentLength));
 }
 
@@ -78,7 +78,7 @@ std::string emitCloseDelimitedStreamHead(HttpResponse& response,
     HttpKnownMethod requestMethod = HttpKnownMethod::kGet,
     ruvia::HttpProtocolVersion protocolVersion = ruvia::HttpProtocolVersion::kHttp11) {
     return emitHead(response, http1CloseDelimitedResponseStreamHeadPlan(
-                                  httpResponseBodyPlan(requestMethod, response.status()),
+                                  planHttpResponseBody(requestMethod, response.status()),
                                   connectionPlanFor(protocolVersion)));
 }
 
@@ -123,9 +123,9 @@ bool throwsLength(Fn&& fn) {
 }  // namespace
 
 RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
+    using ruvia::planBufferedHttpResponseWrite;
     using ruvia::detail::http1BufferedResponsePlan;
     using ruvia::detail::Http1ServerRequestParser;
-    using ruvia::detail::httpBufferedResponseWritePlan;
 
     Http1ServerRequestParser parser;
     const auto emitFor = [&](std::string_view request) {
@@ -134,7 +134,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
         const auto connectionPlan =
             commitResponse(response, parser.parseMessage(request).connectionPlan);
         const auto responsePlan = http1BufferedResponsePlan(
-            httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response), connectionPlan);
+            planBufferedHttpResponseWrite(HttpKnownMethod::kGet, response), connectionPlan);
         RUVIA_CHECK_EQ(
             responsePlan.headPlan().buffered()->contentLength(), responsePlan.contentLength());
         return std::pair(
@@ -159,7 +159,7 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
     response.status(ruvia::http_status::kMultiStatus);
     response.body("planned");
     const auto plan = http1BufferedResponsePlan(
-        ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response),
+        ruvia::planBufferedHttpResponseWrite(HttpKnownMethod::kGet, response),
         connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
 
     response.status(ruvia::http_status::kAlreadyReported);
@@ -173,7 +173,7 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     response.status(ruvia::http_status::kMultiStatus);
     response.body("old");
     const auto plan = http1BufferedResponsePlan(
-        ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response),
+        ruvia::planBufferedHttpResponseWrite(HttpKnownMethod::kGet, response),
         connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
 
     response.body("longer");
@@ -430,7 +430,7 @@ RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
     response.body("hello");
     const auto plan = http1ChunkedResponseStreamHeadPlan(
-        httpResponseBodyPlan(HttpKnownMethod::kGet, response.status()),
+        planHttpResponseBody(HttpKnownMethod::kGet, response.status()),
         connectionPlanFor(ruvia::HttpProtocolVersion::kHttp10));
 
     RUVIA_CHECK(throwsInvalid([&] { (void)emitHead(response, plan); }));

@@ -13,7 +13,7 @@
 
 namespace ruvia {
 class HttpResponse;
-class HttpServerBufferedResponseWritePlan;
+class HttpBufferedResponseWritePlan;
 class WorkerMemory;
 }  // namespace ruvia
 
@@ -231,7 +231,7 @@ public:
     Http2BufferedResponseWriter& operator=(Http2BufferedResponseWriter&&) = delete;
 
     [[nodiscard]] Task<Http2BufferedResponseWriteResult> write(std::uint32_t streamId,
-        const HttpResponse& response, HttpServerBufferedResponseWritePlan writePlan);
+        const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
 
 private:
     enum class DataWriteResult : std::uint8_t { kCompleted,

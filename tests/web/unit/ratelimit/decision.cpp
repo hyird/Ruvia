@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/RateLimitRule.h"
@@ -23,7 +23,6 @@
 
 namespace {
 
-using ruvia::HttpRequest;
 using ruvia::RateLimitOverflowPolicy;
 using ruvia::RateLimitRule;
 using ruvia::RequestMemory;
@@ -32,7 +31,6 @@ using ruvia::detail::applyRouteRateLimit;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::decideRequestRateLimit;
-using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::RateLimitDecision;
 using ruvia::detail::RateLimiter;
 using ruvia::detail::rateLimiterNowMs;
@@ -59,9 +57,11 @@ RouteLimitResult runRouteLimit(
     RateLimiter& limiter, std::uintptr_t scope, const RouteRateLimitOptions& options) {
     WorkerMemory worker;
     RequestMemory memory(worker);
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setResource(request, memory.resource());
+    auto [request, parseError] =
+        ruvia::makeParsedHttpRequest("GET", "/", {}, {}, memory.resource());
+    if (parseError) {
+        throw std::logic_error("invalid rate-limit test request");
+    }
     ContextServices services = ruvia::test::testContextServices().withRateLimiter(limiter);
     auto context = ContextAccess::make(memory, request, scope, services);
 

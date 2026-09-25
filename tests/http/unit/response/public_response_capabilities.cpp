@@ -65,7 +65,7 @@ RUVIA_TEST(response_public_server_plans_preserve_head_representation_length) {
     auto response = makeResponse();
     response.body("head-body");
 
-    const auto writePlan = ruvia::planHttpServerBufferedResponseWrite(
+    const auto writePlan = ruvia::planBufferedHttpResponseWrite(
         ruvia::HttpKnownMethod::kHead, response);
     RUVIA_CHECK(writePlan.bodySuppressed());
     RUVIA_CHECK_EQ(writePlan.contentLength(), std::uint64_t{9});

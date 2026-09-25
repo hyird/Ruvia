@@ -34,7 +34,42 @@ ruvia::Task<void> awaitScopedOperation(ruvia::ScopedOperation<void>& operation) 
     co_await std::move(operation);
 }
 
+void recordStartCheck(void* target) noexcept {
+    ++*static_cast<int*>(target);
+}
+
+ruvia::Task<void> completeImmediately() {
+    co_return;
+}
+
 }  // namespace
+
+RUVIA_TEST(scoped_operation_start_check_runs_before_beginning_task) {
+    ruvia::detail::ScopedOperationScope scope;
+    int checks = 0;
+    auto operation = ruvia::detail::makeScopedOperation(
+        scope, completeImmediately(), &recordStartCheck, &checks);
+    auto root = ruvia::EventLoopPool({.loopCount = 1});
+    const auto loop = root.loop(0);
+    auto awaited = loop.start(awaitScopedOperation(operation));
+    root.start();
+    awaited.get();
+    root.stop();
+    root.join();
+    RUVIA_CHECK_EQ(checks, 1);
+}
+
+RUVIA_TEST(scoped_operation_start_check_runs_before_cold_frame_destruction) {
+    ruvia::detail::ScopedOperationScope scope;
+    int checks = 0;
+    {
+        auto operation = ruvia::detail::makeScopedOperation(
+            scope, completeImmediately(), &recordStartCheck, &checks);
+        RUVIA_CHECK_EQ(checks, 0);
+    }
+    RUVIA_CHECK_EQ(checks, 1);
+    scope.close();
+}
 
 RUVIA_TEST(scoped_operation_close_and_join_waits_before_expiring_capabilities) {
     ruvia::EventLoopPool loops({.loopCount = 1});

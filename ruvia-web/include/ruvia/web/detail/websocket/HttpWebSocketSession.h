@@ -3,8 +3,8 @@
 #include <exception>
 #include <memory_resource>
 
-#include "ruvia/core/Task.h"
 #include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -38,7 +38,7 @@ void webSocketAbortThunk(void* target) noexcept {
 template <typename Connection>
 [[nodiscard]] WebSocket makeWebSocketFacade(
     Connection& connection, std::pmr::memory_resource& resource) noexcept {
-    return WebSocketAccess::make(resource, &connection, &webSocketReadThunk<Connection>,
+    return WebSocketAccess::make(resource, connection.worker(), &connection, &webSocketReadThunk<Connection>,
         &webSocketWriteThunk<Connection>, &webSocketCloseThunk<Connection>,
         &webSocketAbortThunk<Connection>);
 }

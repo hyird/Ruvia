@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ruvia/http/Http1ClosePolicy.h"
-#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/Http1RequestBodyPlan.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 
 namespace ruvia {
 
@@ -29,7 +29,9 @@ private:
     friend constexpr Http1RequestConnectionPlan planHttp11RequestConnection(bool) noexcept;
 
     constexpr Http1RequestConnectionPlan(HttpProtocolVersion version,
-        Http1ClosePolicy disposition) noexcept : version_(version), disposition_(disposition) {}
+        Http1ClosePolicy disposition) noexcept
+        : version_(version),
+          disposition_(disposition) {}
 
     HttpProtocolVersion version_;
     Http1ClosePolicy disposition_;

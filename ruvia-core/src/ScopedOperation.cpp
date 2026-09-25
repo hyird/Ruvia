@@ -216,6 +216,9 @@ ScopedOperationNode::ScopedOperationNode(ScopedOperationScope& scope) noexcept {
 }
 
 ScopedOperationNode::~ScopedOperationNode() {
+    if (startCheck_ != nullptr) {
+        startCheck_(startCheckTarget_);
+    }
     if (phase_ == Phase::kRunning) {
         std::terminate();
     }
@@ -225,6 +228,9 @@ ScopedOperationNode::~ScopedOperationNode() {
 }
 
 void ScopedOperationNode::begin() {
+    if (startCheck_ != nullptr) {
+        startCheck_(startCheckTarget_);
+    }
     if (phase_ == Phase::kExpired) {
         throw std::logic_error("capability operation scope has expired");
     }
@@ -247,6 +253,9 @@ void ScopedOperationNode::complete() noexcept {
 }
 
 void ScopedOperationNode::expire() noexcept {
+    if (startCheck_ != nullptr) {
+        startCheck_(startCheckTarget_);
+    }
     if (phase_ == Phase::kRunning) {
         std::terminate();
     }

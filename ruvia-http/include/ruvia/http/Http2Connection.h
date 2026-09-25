@@ -22,10 +22,10 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/http/WebSocketProtocol.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/WebSocketHandshake.h"
+#include "ruvia/http/WebSocketProtocol.h"
 
 namespace ruvia {
 
@@ -215,10 +215,10 @@ private:
 
 class Http2ResponseHeadSubmitResult final {
 public:
-    [[nodiscard]] const HttpServerBufferedResponseWritePlan* submitted() const& noexcept {
+    [[nodiscard]] const HttpBufferedResponseWritePlan* submitted() const& noexcept {
         return value_ ? &*value_ : nullptr;
     }
-    const HttpServerBufferedResponseWritePlan* submitted() const&& = delete;
+    const HttpBufferedResponseWritePlan* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
         return value_ ? nullptr : &value_.error();
     }
@@ -227,8 +227,8 @@ public:
 private:
     friend class Http2Connection;
     using Value =
-        std::expected<HttpServerBufferedResponseWritePlan, Http2ResponseHeadSubmitFailure>;
-    explicit Http2ResponseHeadSubmitResult(HttpServerBufferedResponseWritePlan plan)
+        std::expected<HttpBufferedResponseWritePlan, Http2ResponseHeadSubmitFailure>;
+    explicit Http2ResponseHeadSubmitResult(HttpBufferedResponseWritePlan plan)
         : value_(std::move(plan)) {}
     explicit Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
         : value_(std::unexpected(failure)) {}
@@ -672,19 +672,25 @@ private:
     Value value_;
 };
 
-enum class Http2WebSocketHandshakeSubmitError : std::uint8_t { kClosed, kInvalidState };
+enum class Http2WebSocketHandshakeSubmitError : std::uint8_t { kClosed,
+    kInvalidState };
 
 class Http2WebSocketNegotiation final {
 public:
-    [[nodiscard]] std::string_view subprotocol() const& noexcept { return subprotocol_; }
+    [[nodiscard]] std::string_view subprotocol() const& noexcept {
+        return subprotocol_;
+    }
     std::string_view subprotocol() const&& = delete;
-    [[nodiscard]] WebSocketCompression compression() const noexcept { return compression_; }
+    [[nodiscard]] WebSocketCompression compression() const noexcept {
+        return compression_;
+    }
 
 private:
     friend class Http2WebSocketHandshakeSubmitResult;
     friend class Http2Connection;
     Http2WebSocketNegotiation(std::string_view subprotocol, WebSocketCompression compression)
-        : subprotocol_(subprotocol), compression_(compression) {}
+        : subprotocol_(subprotocol),
+          compression_(compression) {}
     std::string subprotocol_;
     WebSocketCompression compression_;
 };
@@ -694,11 +700,13 @@ public:
     [[nodiscard]] constexpr Http2WebSocketHandshakeSubmitError error() const noexcept {
         return error_;
     }
+
 private:
     friend class Http2WebSocketHandshakeSubmitResult;
     friend class Http2Connection;
     explicit constexpr Http2WebSocketHandshakeSubmitFailure(
-        Http2WebSocketHandshakeSubmitError error) noexcept : error_(error) {}
+        Http2WebSocketHandshakeSubmitError error) noexcept
+        : error_(error) {}
     Http2WebSocketHandshakeSubmitError error_;
 };
 
@@ -712,6 +720,7 @@ public:
         return value_ ? nullptr : &value_.error();
     }
     const Http2WebSocketHandshakeSubmitFailure* failure() const&& = delete;
+
 private:
     friend class Http2Connection;
     using Value = std::expected<Http2WebSocketNegotiation, Http2WebSocketHandshakeSubmitFailure>;
@@ -751,6 +760,13 @@ public:
     std::string_view pendingOutput() const&& = delete;
     [[nodiscard]] Http2OutputConsumeStatus consumeOutput(std::size_t bytes) noexcept;
     void takeOutput(std::pmr::string& output);
+    // Copies whole frame boundaries (the first frame may exceed maxBytes). On
+    // copy failure the output cursor and observer are untouched. After legacy
+    // partial-byte consumeOutput(), returns kUnaligned until takeOutput() drains
+    // the remaining suffix; a client preface is treated as one indivisible segment.
+    [[nodiscard]] Http2OutputBatchResult takeOutputBatch(std::size_t maxBytes,
+        std::pmr::string& output, Http2DataOutputObserver observer = nullptr,
+        void* observerContext = nullptr);
     [[nodiscard]] bool wantsWrite() const noexcept;
 
     [[nodiscard]] Http2RequestHeadSubmitResult submitRequestHead(
@@ -778,7 +794,7 @@ public:
     // caller whether/how much representation remains for DATA or file output.
     [[nodiscard]] Http2ResponseHeadSubmitResult submitResponseHead(
         std::uint32_t streamId, const HttpResponse& response,
-        HttpServerBufferedResponseWritePlan writePlan);
+        HttpBufferedResponseWritePlan writePlan);
     // Submit a final generic response head without trailers and leave an eligible
     // response body open for subsequent submitData() calls. Content-Length is
     // not generated automatically; an explicit value, when present, constrains

@@ -10,16 +10,18 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/response/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
+#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
@@ -33,25 +35,32 @@ std::optional<HttpResponseFileView> HttpResponse::fileBody() const& noexcept {
     return detail::responseBody(*this).file();
 }
 
+std::uint64_t HttpResponseBodyPlan::bufferedRepresentationLength(const HttpResponse& response) const noexcept {
+    if (!statusAllowsBody() || contentSemantics() == HttpResponseContentSemantics::kConnectTunnel) {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(detail::responseBody(response).size());
+}
+
 bool HttpBufferedResponseWritePlan::matchesResponse(const HttpResponse& response) const noexcept {
     return response.status() == bodyPlan_.responseStatus() &&
-           contentLength_ == planHttpServerBufferedResponseWrite(
-                                 bodyPlan_.requestMethod(), response)
-                                 .contentLength();
+           contentLength_ == bodyPlan_.bufferedRepresentationLength(response);
 }
 
 HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
     HttpKnownMethod requestMethod, const HttpResponse& response) noexcept {
-    const auto plan = planHttpServerBufferedResponseWrite(requestMethod, response);
-    return HttpBufferedResponseWritePlan(
-        planHttpResponseBody(requestMethod, response.status()), plan.contentLength());
+    const auto bodyPlan = planHttpResponseBody(requestMethod, response.status());
+    return HttpBufferedResponseWritePlan(bodyPlan, bodyPlan.bufferedRepresentationLength(response));
 }
 
 HttpResponseBodyPlan planHttpResponseBody(
     HttpKnownMethod requestMethod, HttpStatusCode responseStatus) noexcept {
-    const auto plan = planHttpServerResponseBody(requestMethod, responseStatus);
-    return HttpResponseBodyPlan(
-        requestMethod, responseStatus, plan.statusAllowsBody(), plan.bodySuppressed());
+    const auto policy = detail::responseWritePolicy(responseStatus);
+    const auto semantics = detail::httpResponseContentSemantics(requestMethod, responseStatus);
+    return HttpResponseBodyPlan(requestMethod, responseStatus, semantics, policy.bodyAllowed(),
+        !policy.bodyAllowed() || semantics != HttpResponseContentSemantics::kWithContent,
+        policy.autoContentLengthAllowed(), policy.explicitContentLengthAllowed(),
+        policy.transferEncodingAllowed());
 }
 
 namespace {
@@ -467,7 +476,6 @@ void HttpResponse::contentRangeUnsatisfied(std::uint64_t size) {
 void HttpResponse::addVaryToken(std::string_view token) {
     detail::addVaryToken(*this, token);
 }
-
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
     setFileBody(std::move(file), size, 0, size);

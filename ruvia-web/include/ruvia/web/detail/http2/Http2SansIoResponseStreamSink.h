@@ -25,13 +25,13 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/core/Async.h"
 #include "ruvia/core/PmrString.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/core/Async.h"
 #include "ruvia/core/WorkerSignal.h"
-#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -66,8 +66,12 @@ public:
         std::pmr::memory_resource* resource, HttpKnownMethod requestMethod,
         HttpResponseCodingSelection responseCoding,
         HttpResponseCodingAvailability responseCodingAvailability) noexcept
-        : connection_(connection), streamId_(streamId), kind_(kind), writeSignal_(writeSignal),
-          streamSignal_(streamSignal), requestMethod_(requestMethod),
+        : connection_(connection),
+          streamId_(streamId),
+          kind_(kind),
+          writeSignal_(writeSignal),
+          streamSignal_(streamSignal),
+          requestMethod_(requestMethod),
           compression_(resource, responseCoding, responseCodingAvailability) {}
 
     [[nodiscard]] bool committed() const noexcept {
@@ -292,7 +296,7 @@ private:
             auto response = co_await state_.streamingHead();
             throwIfTerminated();
             compression_.prepare(requestMethod_, response, kind_);
-            const auto commitBodyPlan = httpResponseBodyPlan(requestMethod_, response.status());
+            const auto commitBodyPlan = planHttpResponseBody(requestMethod_, response.status());
             compression_.activate(commitBodyPlan);
             const auto headResult = connection_.submitStreamingResponseHead(
                 streamId_, std::move(response), kind_, trailerIntent);

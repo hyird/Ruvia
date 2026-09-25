@@ -72,6 +72,7 @@ void Http2Connection::appendResponseHeaderFrames(
 
         const std::size_t maxFrame = peerSettings_.maxFrameSize();
         std::size_t encodedBytes = 0;
+        std::size_t encodedSegments = 0;
         std::size_t plannedOffset = 0;
         bool plannedFirst = true;
         while (plannedOffset < headerBlock.size() || (plannedFirst && !tableSizeUpdate.empty())) {
@@ -83,10 +84,12 @@ void Http2Connection::appendResponseHeaderFrames(
                 throw std::length_error("HTTP/2 header output size overflow");
             }
             encodedBytes += frameBytes;
+            ++encodedSegments;
             plannedOffset += chunk;
             plannedFirst = false;
         }
         output_.reserveAdditional(encodedBytes);
+        output_.reserveSegmentsAdditional(encodedSegments);
 
         std::size_t offset = 0;
         bool first = true;
@@ -202,13 +205,16 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         stream->localSend().headPending() == nullptr || successfulConnect) {
         return Http2StreamingResponseHeadSubmitResult::makeInvalidStateFailure();
     }
+    auto preparedCommitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp2Frames,
+        stream->requestKnownMethod(), head.status(), trailerIntent);
+    if (!preparedCommitPlan.trailerIntentAllowed()) {
+        return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
+    }
     const auto controlResult = http2FinalResponseControlPlan(head);
     const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
         return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
     }
-    auto preparedCommitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp2Frames,
-        stream->requestKnownMethod(), head.status(), trailerIntent);
     auto streamHead =
         prepareResponseStreamHead(std::move(head), kind, std::move(preparedCommitPlan));
     const auto& commitPlan = streamHead.commitPlan();
@@ -330,6 +336,10 @@ Http2DataSubmitStatus Http2Connection::submitData(
         output_.reserveAdditional(immediateBytes == 0 ? kHttp2FrameHeaderBytes
                                                       : http2DataFrameEncodedBytes(immediateBytes,
                                                             peerSettings_.maxFrameSize()));
+        output_.reserveSegmentsAdditional(immediateBytes == 0
+                                              ? 1
+                                              : immediateBytes / peerSettings_.maxFrameSize() +
+                                                    (immediateBytes % peerSettings_.maxFrameSize() == 0 ? 0 : 1));
     }
     // Accepted means ownership of the WHOLE input, even when flow control below
     // can only materialize a prefix and the prepared suffix becomes pending.
@@ -388,7 +398,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
         return Http2SubmitStatus::kInvalidMessage;
     }
     const auto headPlanResult = http2ConnectResponseHeadPlan(
-        httpResponseBodyPlan(HttpKnownMethod::kConnect, response.status()));
+        planHttpResponseBody(HttpKnownMethod::kConnect, response.status()));
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;

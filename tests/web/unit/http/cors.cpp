@@ -9,8 +9,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/detail/http/HttpCors.h"
 
@@ -20,8 +20,8 @@
 namespace {
 
 using ruvia::CorsConfig;
+using ruvia::Http1ServerRequestParser;
 using ruvia::HttpResponse;
-using ruvia::detail::Http1ServerRequestParser;
 using ruvia::test::RejectingMemoryResource;
 
 void applyCorsHeaders(

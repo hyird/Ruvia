@@ -98,14 +98,14 @@ void ensurePositiveOptionalDurations(
 
 namespace ruvia::detail {
 using ::ruvia::ConfigHostRules;
-using ::ruvia::kSeparatedPortHostRules;
-using ::ruvia::isValidConfigHost;
 using ::ruvia::ensureConfigHost;
-using ::ruvia::ensurePositiveSize;
-using ::ruvia::ensurePositiveOptionalSize;
-using ::ruvia::ensureNonZeroPort;
 using ::ruvia::ensureNonZeroOptionalPort;
+using ::ruvia::ensureNonZeroPort;
 using ::ruvia::ensurePositiveDuration;
 using ::ruvia::ensurePositiveOptionalDuration;
 using ::ruvia::ensurePositiveOptionalDurations;
+using ::ruvia::ensurePositiveOptionalSize;
+using ::ruvia::ensurePositiveSize;
+using ::ruvia::isValidConfigHost;
+using ::ruvia::kSeparatedPortHostRules;
 }  // namespace ruvia::detail

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -64,6 +65,17 @@ enum class Http2OutputConsumeStatus : std::uint8_t {
     kOutOfRange,
 };
 
+enum class Http2OutputBatchStatus : std::uint8_t { kTaken,
+    kEmpty,
+    kUnaligned };
+
+struct Http2OutputBatchResult final {
+    Http2OutputBatchStatus status{Http2OutputBatchStatus::kEmpty};
+    std::size_t bytes{0};
+};
+
+using Http2DataOutputObserver = void (*)(void*, std::uint32_t, std::size_t) noexcept;
+
 // Initial-head/control submission status. kClosed is an expected race with a
 // reset peer; kInvalidState is a caller contract violation and emits no bytes.
 // kQueued/kBackpressured belong on Http2DataSubmitStatus, not here.
@@ -75,7 +87,9 @@ enum class Http2SubmitStatus : std::uint8_t {
     kPeerCapabilityUnavailable,
 };
 
-enum class Http2DataQueueState : std::uint8_t { kDrained, kQueued, kAborted };
+enum class Http2DataQueueState : std::uint8_t { kDrained,
+    kQueued,
+    kAborted };
 
 enum class Http2DataSubmitStatus : std::uint8_t {
     kAccepted,

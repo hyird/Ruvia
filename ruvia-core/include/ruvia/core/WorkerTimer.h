@@ -27,7 +27,9 @@ private:
     // any continuation it posts.
     WorkerTimerCancellation(
         detail::WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept
-        : dispatcher_(&dispatcher), slot_(slot), generation_(generation) {}
+        : dispatcher_(&dispatcher),
+          slot_(slot),
+          generation_(generation) {}
 
     detail::WorkerDispatcher* dispatcher_{nullptr};
     std::size_t slot_{0};

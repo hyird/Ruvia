@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -35,7 +35,6 @@ using ruvia::WorkerMemory;
 using ruvia::XssProtectionHeaderPolicy;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
-using ruvia::detail::HttpRequestAccess;
 
 class SecurityContextFixture final {
 public:
@@ -57,10 +56,11 @@ public:
 
 private:
     [[nodiscard]] static ruvia::HttpRequest makeRequest(RequestMemory& memory) {
-        auto request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setResource(request, memory.resource());
-        return request;
+        auto [request, error] = ruvia::makeParsedHttpRequest("GET", "/", {}, {}, memory.resource());
+        if (error) {
+            throw std::runtime_error("invalid test request");
+        }
+        return std::move(request);
     }
 
     WorkerMemory worker_;

@@ -424,9 +424,9 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, S
                 if constexpr (kPlainTcp) {
                     if (listener.redirect() == nullptr &&
                         ruvia::shouldDropInvalidCleartextHttp1Input(bufferView,
-                             failure->source() == Http1ServerRequestParseFailureSource::kRequestLine
-                                 ? Http1RequestParseFailureSource::kRequestLine
-                                 : Http1RequestParseFailureSource::kMessage)) {
+                            failure->source() == Http1ServerRequestParseFailureSource::kRequestLine
+                                ? Http1RequestParseFailureSource::kRequestLine
+                                : Http1RequestParseFailureSource::kMessage)) {
                         co_return;
                     }
                 }

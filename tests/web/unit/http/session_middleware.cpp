@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,10 +15,10 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
@@ -32,8 +33,17 @@
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
+
+ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource, std::string_view target = "/") {
+    auto [request, parseError] = ruvia::makeParsedHttpRequest("GET", target, {}, {}, resource);
+    if (parseError) {
+        throw std::logic_error("invalid session middleware test request");
+    }
+    return std::move(request);
+}
 
 // A bounded RESP peer exercises the middleware's actual asynchronous storage
 // boundary without requiring an external Redis process.
@@ -105,7 +115,7 @@ private:
 };
 
 struct SessionFixture final {
-    asio::io_context io;
+    asio::io_context& io{ruvia::test::newTestIoContext()};
     ruvia::EventLoopAttachment attachment{ruvia::attachEventLoop(io)};
     ruvia::WorkerHandle worker{attachment.loop().handle()};
     SessionStoragePeer peer{io};
@@ -118,7 +128,7 @@ struct SessionFixture final {
     ruvia::StopToken token{stop.token()};
     ruvia::WorkerMemory memory;
     ruvia::RequestMemory requestMemory{memory};
-    ruvia::HttpRequest request{ruvia::detail::HttpRequestAccess::make()};
+    ruvia::HttpRequest request{makeRequest(requestMemory.resource())};
     ruvia::Context context{ruvia::detail::ContextAccess::make(requestMemory, request,
         ruvia::detail::ContextServices(worker, token, {db, redis, http}))};
     ruvia::SessionMiddleware middleware;
@@ -150,7 +160,7 @@ struct SessionFixture final {
                 std::rethrow_exception(failure);
             }
         };
-        auto result = asio::co_spawn(io, ruvia::detail::taskAsAwaitable(execute()), asio::use_future);
+        auto result = asio::co_spawn(io, ruvia::asAwaitable(execute()), asio::use_future);
         attachment.run();
         result.get();
         server.get();
@@ -383,10 +393,7 @@ RUVIA_TEST(session_middleware_commits_before_stream_and_websocket_terminal) {
                     std::pmr::string("/session"), handler, {}, middlewares);
             }
             impl.finalize();
-            ruvia::detail::HttpRequestAccess::reset(fixture.request);
-            ruvia::detail::HttpRequestAccess::setMethod(fixture.request, "GET");
-            ruvia::detail::HttpRequestAccess::setPath(fixture.request, "/session");
-            ruvia::detail::HttpRequestAccess::setResource(fixture.request, fixture.requestMemory.resource());
+            fixture.request = makeRequest(fixture.requestMemory.resource(), "/session");
             const auto& routes = impl.routeTable();
             const auto resolution = routes.resolve(fixture.request);
             SessionHeadSink sink;

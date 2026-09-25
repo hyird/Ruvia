@@ -17,12 +17,12 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/RateLimit.h"
@@ -109,6 +109,18 @@ inline ruvia::Task<void> dummyStreamHandler(void*, ruvia::Context&) {
 
 inline std::pmr::string path(std::string_view value) {
     return std::pmr::string(value, std::pmr::get_default_resource());
+}
+
+inline ruvia::HttpRequest makeRequest(ruvia::RequestMemory& memory, std::string_view method,
+    std::string_view target, std::span<const ruvia::HttpHeaderView> headers = {},
+    std::string_view body = {}) {
+    const auto bodyBytes = std::as_bytes(std::span(body.data(), body.size()));
+    auto [request, error] = ruvia::makeParsedHttpRequest(
+        method, target, headers, bodyBytes, memory.resource());
+    if (error.has_value()) {
+        throw std::invalid_argument("invalid parsed HTTP request fixture");
+    }
+    return std::move(request);
 }
 
 inline void addRoute(
@@ -289,20 +301,16 @@ inline std::string dispatchChain(
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/chain");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::HttpRequest request = makeRequest(memory, "GET", "/chain");
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();
     auto response = future.get();
-    const auto body = ruvia::detail::responseBody(response).bytes();
+    const auto body = response.bodyBytes();
     return std::string(body.data(), body.size());
 }
 
@@ -371,11 +379,7 @@ inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/empty-stream");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::HttpRequest request = makeRequest(memory, "GET", "/empty-stream");
 
     const auto resolution = table.resolve(HttpKnownMethod::kGet, "/empty-stream");
     const auto* resolved = resolution.resolved();
@@ -391,13 +395,13 @@ inline EmptyStreamDispatchObservation dispatchEmptyStreamWith(
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(
+                auto result = co_await ruvia::asAwaitable(table.dispatchResponseStream(
                     request, *resolved, memory, writer, ruvia::test::testContextServices()));
                 observation.handled = !result.has_value();
                 if (result.has_value()) {
                     observation.buffered = true;
                     auto response = std::move(*result);
-                    const auto body = ruvia::detail::responseBody(response).bytes();
+                    const auto body = response.bodyBytes();
                     observation.bufferedBody.assign(body.data(), body.size());
                 }
             } catch (...) {
@@ -448,11 +452,7 @@ inline WebSocketDispatchObservation dispatchWebSocketWith(
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/ws-middleware");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    auto request = makeRequest(memory, "GET", "/ws-middleware");
     const auto resolution = table.resolve(HttpKnownMethod::kGet, "/ws-middleware");
     const auto* resolved = resolution.resolved();
     if (resolved == nullptr) {
@@ -466,14 +466,14 @@ inline WebSocketDispatchObservation dispatchWebSocketWith(
     const auto terminal = ruvia::detail::RouteStreamHandler(&terminalTarget, &webSocketTerminal);
     asio::io_context context(1);
     auto future = asio::co_spawn(context,
-        ruvia::detail::taskAsAwaitable(table.dispatchWebSocket(
+        ruvia::asAwaitable(table.dispatchWebSocket(
             request, *resolved, memory, terminal, ruvia::test::testContextServices())),
         asio::use_future);
     context.run();
     auto response = future.get();
     if (response.has_value()) {
         observation.buffered = true;
-        const auto body = ruvia::detail::responseBody(*response).bytes();
+        const auto body = response->bodyBytes();
         observation.bufferedBody.assign(body.data(), body.size());
     }
     return observation;
@@ -531,11 +531,7 @@ inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "HEAD");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/head-only-stream");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::HttpRequest request = makeRequest(memory, "HEAD", "/head-only-stream");
 
     const auto resolution = table.resolve(HttpKnownMethod::kHead, "/head-only-stream");
     const auto* resolved = resolution.resolved();
@@ -551,7 +547,7 @@ inline HeadOnlyDispatchObservation dispatchHeadOnlyStream(
         context,
         [&]() -> asio::awaitable<void> {
             try {
-                auto result = co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(
+                auto result = co_await ruvia::asAwaitable(table.dispatchResponseStream(
                     request, *resolved, memory, writer, ruvia::test::testContextServices()));
                 observation.handled = !result.has_value();
                 observation.buffered = result.has_value();
@@ -614,7 +610,7 @@ struct DispatchResult final {
 inline DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     DispatchResult result;
     result.status = response.status().value();
-    const auto body = ruvia::detail::responseBody(response).bytes();
+    const auto body = response.bodyBytes();
     result.body.assign(body.data(), body.size());
     const auto allow = response.header("Allow").value_or(std::string_view{});
     result.allow.assign(allow.data(), allow.size());
@@ -639,22 +635,15 @@ inline DispatchResult dispatchOneToken(RouteHandler handler, std::string_view me
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, method);
-    ruvia::detail::HttpRequestAccess::setPath(request, p);
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    if (!contentEncoding.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentEncoding);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request, ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}, slot);
-    }
-    ruvia::detail::HttpRequestAccess::setBody(request, body);
+    const std::array headers{ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}};
+    const auto headerSpan = contentEncoding.empty()
+                                ? std::span<const ruvia::HttpHeaderView>{}
+                                : std::span<const ruvia::HttpHeaderView>(headers);
+    ruvia::HttpRequest request = makeRequest(memory, method, p, headerSpan, body);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();
@@ -703,22 +692,15 @@ inline DispatchResult dispatchWithHandlersToken(RouteHandler handler,
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, method);
-    ruvia::detail::HttpRequestAccess::setPath(request, p);
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    if (!contentEncoding.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentEncoding);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request, ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}, slot);
-    }
-    ruvia::detail::HttpRequestAccess::setBody(request, body);
+    const std::array headers{ruvia::HttpHeaderView{"Content-Encoding", contentEncoding}};
+    const auto headerSpan = contentEncoding.empty()
+                                ? std::span<const ruvia::HttpHeaderView>{}
+                                : std::span<const ruvia::HttpHeaderView>(headers);
+    ruvia::HttpRequest request = makeRequest(memory, method, p, headerSpan, body);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();
@@ -755,15 +737,11 @@ inline DispatchResult dispatchOn(
     const ruvia::detail::RouteTable& table, std::string_view method, std::string_view p) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, method);
-    ruvia::detail::HttpRequestAccess::setPath(request, p);
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    ruvia::HttpRequest request = makeRequest(memory, method, p);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();
@@ -817,22 +795,15 @@ inline DispatchResult dispatchBodyRequest(RouteHandler handler, std::string_view
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/x");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-    if (!contentType.empty()) {
-        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentType);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request, ruvia::HttpHeaderView{"Content-Type", contentType}, slot);
-    }
-    ruvia::detail::HttpRequestAccess::setBody(request, body);
+    const std::array headers{ruvia::HttpHeaderView{"Content-Type", contentType}};
+    const auto headerSpan = contentType.empty()
+                                ? std::span<const ruvia::HttpHeaderView>{}
+                                : std::span<const ruvia::HttpHeaderView>(headers);
+    ruvia::HttpRequest request = makeRequest(memory, "GET", "/x", headerSpan, body);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();

@@ -10,12 +10,12 @@
 #include <utility>
 #include <vector>
 
-#include <asio/bind_executor.hpp>
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbQueryCacheState.h"
@@ -24,6 +24,7 @@
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 using namespace ruvia;
@@ -54,12 +55,9 @@ struct Child final : ChildBase {
 using Parent = ParentBase;
 
 struct RepositoryRuntime final {
-    RepositoryRuntime()
-        : dispatcher(std::make_shared<detail::WorkerDispatcher>(context, 8)),
-          worker(detail::WorkerHandleAccess::make(dispatcher)) {}
-    asio::io_context context;
-    std::shared_ptr<detail::WorkerDispatcher> dispatcher;
-    WorkerHandle worker;
+    asio::io_context& context = test::newTestIoContext();
+    EventLoopAttachment attachment = attachEventLoop(context, {.mailboxCapacity = 8});
+    WorkerHandle worker = attachment.loop().handle();
 };
 DbConfig databaseConfig() {
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -69,13 +67,13 @@ DbConfig databaseConfig() {
 #endif
 }
 void runVoid(Task<void> task) {
-    asio::io_context context;
+    auto& context = test::newTestIoContext();
+    auto attachment = attachEventLoop(context, {.mailboxCapacity = 8});
     std::exception_ptr failure;
-    detail::asyncStartTask(std::move(task), asio::bind_executor(context, [&](auto completion) {
-        if (completion.failure()) {
-            failure = completion.failure()->exception();
-        }
-    }));
+    asio::co_spawn(context, asAwaitable(std::move(task)), [&](std::exception_ptr error) {
+        failure = std::move(error);
+        context.stop();
+    });
     context.run();
     if (failure) {
         std::rethrow_exception(failure);
@@ -259,11 +257,10 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_snapshots) {
         };
         std::exception_ptr failure;
         runtime.context.restart();
-        detail::asyncStartTask(exercise(), asio::bind_executor(runtime.context, [&](auto completion) {
-            if (completion.failure()) {
-                failure = completion.failure()->exception();
-            }
-        }));
+        asio::co_spawn(runtime.context, asAwaitable(exercise()), [&](std::exception_ptr error) {
+            failure = std::move(error);
+            runtime.context.stop();
+        });
         runtime.context.run();
         if (failure) {
             std::rethrow_exception(failure);

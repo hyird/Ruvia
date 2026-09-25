@@ -14,13 +14,12 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
@@ -36,8 +35,6 @@ using ruvia::HttpResponse;
 using ruvia::HttpResponseCodingQualities;
 using ruvia::HttpResponseCodingSelection;
 using ruvia::detail::applyResponseCompression;
-using ruvia::detail::responseBody;
-
 using Compression = ruvia::CompressionConfig;
 
 class ToggleMemoryResource final : public std::pmr::memory_resource {
@@ -170,20 +167,24 @@ bool tryCompress(HttpResponse& response, Compression options,
 }
 
 template <typename Result>
-[[nodiscard]] Result runCompressionTask(asio::io_context& context, ruvia::Task<Result> task) {
+[[nodiscard]] Result runCompressionTask(
+    ruvia::EventLoopAttachment& attachment, ruvia::Task<Result> task) {
     std::optional<Result> result;
     std::exception_ptr exception;
+    auto loop = attachment.loop();
+    auto& context = loop.ioContext();
     asio::co_spawn(
         context,
-        [task = std::move(task), &result, &exception]() mutable -> asio::awaitable<void> {
+        [task = std::move(task), &context, &result, &exception]() mutable -> asio::awaitable<void> {
             try {
-                result.emplace(co_await ruvia::detail::taskAsAwaitable(std::move(task)));
+                result.emplace(co_await ruvia::asAwaitable(std::move(task)));
             } catch (...) {
                 exception = std::current_exception();
             }
+            context.stop();
         },
         asio::detached);
-    context.run();
+    attachment.run();
     if (exception != nullptr) {
         std::rethrow_exception(exception);
     }
@@ -197,8 +198,8 @@ template <typename Result>
 
 RUVIA_TEST(buffered_response_compression_uses_sync_and_bounded_offload_thresholds) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    const auto worker = attachment.loop().handle();
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 2});
     const auto coding = gzipResponseCoding();
     const auto options =
@@ -207,32 +208,32 @@ RUVIA_TEST(buffered_response_compression_uses_sync_and_bounded_offload_threshold
     auto small = responseWithBody(std::string(32 * 1024, 's'));
     const auto beforeSmall = pool.stats();
     auto smallResult =
-        runCompressionTask(io, ruvia::detail::applyResponseCompressionAsync(
-                                   coding, HttpKnownMethod::kGet, small, options, &pool, worker));
+        runCompressionTask(attachment, ruvia::detail::applyResponseCompressionAsync(
+                                           coding, HttpKnownMethod::kGet, small, options, &pool, worker));
     RUVIA_CHECK(smallResult.compressed());
     RUVIA_CHECK_EQ(pool.stats().completed, beforeSmall.completed);
-    RUVIA_CHECK_EQ(gzipDecompress(responseBody(small).bytes()), std::string(32 * 1024, 's'));
+    RUVIA_CHECK_EQ(gzipDecompress(small.bodyBytes()), std::string(32 * 1024, 's'));
 
     io.restart();
     const std::string largePlain(128 * 1024, 'l');
     auto large = responseWithBody(largePlain);
     const auto beforeLarge = pool.stats();
     auto largeResult =
-        runCompressionTask(io, ruvia::detail::applyResponseCompressionAsync(
-                                   coding, HttpKnownMethod::kGet, large, options, &pool, worker));
+        runCompressionTask(attachment, ruvia::detail::applyResponseCompressionAsync(
+                                           coding, HttpKnownMethod::kGet, large, options, &pool, worker));
     RUVIA_CHECK(largeResult.compressed());
     RUVIA_CHECK_EQ(pool.stats().completed, beforeLarge.completed + 1);
-    RUVIA_CHECK_EQ(gzipDecompress(responseBody(large).bytes()), largePlain);
+    RUVIA_CHECK_EQ(gzipDecompress(large.bodyBytes()), largePlain);
 
     io.restart();
     const std::string synchronousFallbackPlain(128 * 1024, 'f');
     auto synchronousFallback = responseWithBody(synchronousFallbackPlain);
     auto synchronousFallbackResult = runCompressionTask(
-        io, ruvia::detail::applyResponseCompressionAsync(
-                coding, HttpKnownMethod::kGet, synchronousFallback, options, nullptr, worker));
+        attachment, ruvia::detail::applyResponseCompressionAsync(
+                        coding, HttpKnownMethod::kGet, synchronousFallback, options, nullptr, worker));
     RUVIA_CHECK(synchronousFallbackResult.compressed());
     RUVIA_CHECK_EQ(
-        gzipDecompress(responseBody(synchronousFallback).bytes()), synchronousFallbackPlain);
+        gzipDecompress(synchronousFallback.bodyBytes()), synchronousFallbackPlain);
 
     pool.stop();
     pool.join();
@@ -241,8 +242,8 @@ RUVIA_TEST(buffered_response_compression_uses_sync_and_bounded_offload_threshold
 RUVIA_TEST(
     buffered_response_compression_falls_back_to_identity_when_pool_rejects_or_body_is_too_large) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8);
-    const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    const auto worker = attachment.loop().handle();
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
     pool.stop();
     pool.join();
@@ -253,11 +254,11 @@ RUVIA_TEST(
     const std::string largePlain(128 * 1024, 'q');
     auto unavailable = responseWithBody(largePlain);
     auto unavailableResult =
-        runCompressionTask(io, ruvia::detail::applyResponseCompressionAsync(coding,
-                                   HttpKnownMethod::kGet, unavailable, options, &pool, worker));
+        runCompressionTask(attachment, ruvia::detail::applyResponseCompressionAsync(coding,
+                                           HttpKnownMethod::kGet, unavailable, options, &pool, worker));
     RUVIA_CHECK(unavailableResult.notApplicable());
     RUVIA_CHECK(!unavailable.header("Content-Encoding").has_value());
-    RUVIA_CHECK_EQ(responseBody(unavailable).bytes(), std::string_view(largePlain));
+    RUVIA_CHECK_EQ(unavailable.bodyBytes(), std::string_view(largePlain));
 
     io.restart();
     const std::string oversizedPlain(65 * 1024, 'x');
@@ -265,11 +266,11 @@ RUVIA_TEST(
     const auto capped =
         Compression{.minBytes = 1024, .syncBytes = 32 * 1024, .maxBytes = 64 * 1024};
     auto oversizedResult =
-        runCompressionTask(io, ruvia::detail::applyResponseCompressionAsync(coding,
-                                   HttpKnownMethod::kGet, oversized, capped, nullptr, worker));
+        runCompressionTask(attachment, ruvia::detail::applyResponseCompressionAsync(coding,
+                                           HttpKnownMethod::kGet, oversized, capped, nullptr, worker));
     RUVIA_CHECK(oversizedResult.notApplicable());
     RUVIA_CHECK(!oversized.header("Content-Encoding").has_value());
-    RUVIA_CHECK_EQ(responseBody(oversized).bytes(), std::string_view(oversizedPlain));
+    RUVIA_CHECK_EQ(oversized.bodyBytes(), std::string_view(oversizedPlain));
 }
 
 RUVIA_TEST(compress_output_round_trips_for_each_coding) {
@@ -290,9 +291,9 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK(result.compressed());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
-        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
-        RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
-        RUVIA_CHECK_EQ(gzipDecompress(responseBody(response).bytes()), original);
+        RUVIA_CHECK(!response.bodyBytes().empty());
+        RUVIA_CHECK(response.bodyBytes().size() < original.size());  // actually shrank
+        RUVIA_CHECK_EQ(gzipDecompress(response.bodyBytes()), original);
     }
     {
         auto response = responseWithBody(original);
@@ -300,8 +301,8 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK(result.compressed());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
-        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
-        RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
+        RUVIA_CHECK(!response.bodyBytes().empty());
+        RUVIA_CHECK_EQ(brotliDecompress(response.bodyBytes()), original);
     }
     {
         auto response = responseWithBody(original);
@@ -309,8 +310,8 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpKnownMethod::kGet, response, Compression{.minBytes = 16});
         RUVIA_CHECK(result.compressed());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
-        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
-        RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
+        RUVIA_CHECK(!response.bodyBytes().empty());
+        RUVIA_CHECK_EQ(zstdDecompress(response.bodyBytes()), original);
     }
 }
 
@@ -348,7 +349,7 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
         HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
     RUVIA_CHECK(!compression.active());
     compression.activate(
-        ruvia::detail::httpResponseBodyPlan(HttpKnownMethod::kGet, response.status()));
+        ruvia::planHttpResponseBody(HttpKnownMethod::kGet, response.status()));
     RUVIA_CHECK(compression.active());
 
     std::string encoded;
@@ -381,7 +382,7 @@ RUVIA_TEST(streaming_compression_failure_is_terminal) {
     compression.prepare(
         HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
     compression.activate(
-        ruvia::detail::httpResponseBodyPlan(HttpKnownMethod::kGet, response.status()));
+        ruvia::planHttpResponseBody(HttpKnownMethod::kGet, response.status()));
     RUVIA_CHECK(compression.active());
 
     resource.failAllocations(true);
@@ -443,7 +444,7 @@ RUVIA_TEST(streaming_compression_respects_encoder_availability_at_representation
         identityFallback.prepare(
             HttpKnownMethod::kGet, identityAllowed, ruvia::detail::ResponseStreamKind::kGeneric);
         identityFallback.activate(
-            ruvia::detail::httpResponseBodyPlan(HttpKnownMethod::kGet, identityAllowed.status()));
+            ruvia::planHttpResponseBody(HttpKnownMethod::kGet, identityAllowed.status()));
         RUVIA_CHECK(!identityFallback.active());
         RUVIA_CHECK(!identityAllowed.header("Content-Encoding").has_value());
     }
@@ -535,7 +536,7 @@ RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
 }
 
 RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
         "Accept-Encoding: gzip\r\n\r\n");
@@ -560,7 +561,7 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
 }
 
 RUVIA_TEST(buffered_response_coding_folds_repeated_accept_encoding_fields) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: identity;q=0, gzip;q=0.2\r\n"
@@ -574,7 +575,7 @@ RUVIA_TEST(buffered_response_coding_folds_repeated_accept_encoding_fields) {
 }
 
 RUVIA_TEST(buffered_response_coding_is_independent_of_server_encoder_availability) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: gzip, identity;q=0\r\n\r\n");
@@ -602,7 +603,7 @@ RUVIA_TEST(buffered_response_coding_is_independent_of_server_encoder_availabilit
 // These probes deliberately throw while buffered PMR strings are growing.
 // MSVC's debug pmr::string does not complete that synthetic failure path.
 RUVIA_TEST(buffered_response_compression_failure_is_not_negotiation_miss) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: gzip, identity;q=0\r\n\r\n");
@@ -654,7 +655,7 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
         rejected = true;
     }
     RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("identity"));
+    RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("identity"));
     RUVIA_CHECK(!response.header("Content-Encoding").has_value());
     RUVIA_CHECK_EQ(response.header("Content-Length"), std::string_view("8"));
 
@@ -674,14 +675,14 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
         rejected = true;
     }
     RUVIA_CHECK(rejected);
-    RUVIA_CHECK_EQ(responseBody(withEtag).bytes(), std::string_view("identity"));
+    RUVIA_CHECK_EQ(withEtag.bodyBytes(), std::string_view("identity"));
     RUVIA_CHECK(!withEtag.header("Content-Encoding").has_value());
     RUVIA_CHECK_EQ(withEtag.header("ETag"), std::string_view("\"v1\""));
 }
 #endif  // !_MSC_VER
 
 RUVIA_TEST(buffered_response_rejects_forbidden_identity_when_policy_skips_compression) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: gzip, identity;q=0\r\n\r\n");
@@ -729,7 +730,7 @@ RUVIA_TEST(buffered_response_rejects_forbidden_identity_when_policy_skips_compre
 }
 
 RUVIA_TEST(buffered_response_defers_empty_coding_set_until_status_is_known) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET /empty HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
@@ -768,7 +769,7 @@ RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
         RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kGzip,
             HttpKnownMethod::kHead));
         const auto writePlan =
-            ruvia::detail::httpBufferedResponseWritePlan(HttpKnownMethod::kHead, response);
+            ruvia::planBufferedHttpResponseWrite(HttpKnownMethod::kHead, response);
         RUVIA_CHECK(writePlan.bodySuppressed());
         RUVIA_CHECK(!writePlan.sendBody());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
@@ -821,7 +822,7 @@ RUVIA_TEST(compress_skips_already_encoded_body) {
 }
 
 RUVIA_TEST(preencoded_response_must_be_acceptable_to_client) {
-    ruvia::detail::Http1ServerRequestParser parser;
+    ruvia::Http1ServerRequestParser parser;
     const auto parsed = parser.parseMessage(
         "GET /encoded HTTP/1.1\r\nHost: x\r\n"
         "Accept-Encoding: br, identity;q=0\r\n\r\n");
@@ -889,7 +890,7 @@ RUVIA_TEST(preencoded_response_must_be_acceptable_to_client) {
         }
         RUVIA_CHECK(stackedRejected);
 
-        ruvia::detail::Http1ServerRequestParser identityParser;
+        ruvia::Http1ServerRequestParser identityParser;
         const auto identityParsed = identityParser.parseMessage(
             "GET /encoded HTTP/1.1\r\nHost: x\r\n"
             "Accept-Encoding: identity, gzip;q=0\r\n\r\n");

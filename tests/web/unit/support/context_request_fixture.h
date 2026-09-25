@@ -1,21 +1,25 @@
 #pragma once
 
 #include <chrono>
+#include <initializer_list>
+#include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -32,8 +36,22 @@ using ruvia::HttpRequest;
 using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
-using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::RequestKnownHeader;
+
+inline HttpRequest makeRequest(std::pmr::memory_resource* resource, std::string_view target,
+    std::span<const HttpHeaderView> headers, std::string_view method = "GET") {
+    auto [request, error] = ruvia::makeParsedHttpRequest(method, target, headers, {}, resource);
+    if (error.has_value()) {
+        throw std::invalid_argument("invalid test request");
+    }
+    return std::move(request);
+}
+
+inline HttpRequest makeRequest(std::pmr::memory_resource* resource,
+    std::string_view target = "/", std::initializer_list<HttpHeaderView> headers = {},
+    std::string_view method = "GET") {
+    return makeRequest(resource, target,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()), method);
+}
 
 inline asio::awaitable<void> readHeaderValue(ruvia::Context& context, std::string& output) {
     if (const auto value = context.req().header("X-Trace")) {

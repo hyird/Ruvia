@@ -16,11 +16,11 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -43,23 +43,8 @@ using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::csrfTokensEqual;
 using ruvia::detail::generateSecureToken;
-using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::NextAccess;
-using ruvia::detail::RequestKnownHeader;
 using ruvia::detail::TrustedProxySet;
-
-// Naming a private member inside a requires-expression is an unsatisfied
-// constraint on gcc but a hard error on clang, so this can only assert the
-// private makeReady factory on gcc. The clang-portable
-// std::constructible_from check below covers the same "cannot forge" invariant
-// through the private SecureTokenReady constructor.
-#if defined(__GNUC__) && !defined(__clang__)
-
-#endif
-
-#if defined(__GNUC__) && !defined(__clang__)
-
-#endif
 
 bool isLowerHex(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
@@ -106,25 +91,28 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
     std::optional<HttpHeaderView> extraHeader = {}) {
     WorkerMemory worker;
     RequestMemory memory(worker);
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, ruvia::knownHttpMethodToken(method));
-    // The header views point into these strings, so they must outlive the context
-    // use below -- keep them at function scope, not inside the if-blocks.
+    // Header views borrow these strings; keep every backing string alive through
+    // middleware execution and request destruction.
     std::string cookie(cookieName);
     cookie.push_back('=');
     cookie.append(cookieToken.data(), cookieToken.size());
+    std::array<HttpHeaderView, 3> headers{};
+    std::size_t headerCount = 0;
     if (withCookie) {
-        HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", cookie},
-            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie));
+        headers[headerCount++] = HttpHeaderView{"Cookie", cookie};
     }
     if (withHeader) {
-        HttpRequestAccess::addHeader(request, HttpHeaderView{headerName, headerToken});
+        headers[headerCount++] = HttpHeaderView{headerName, headerToken};
     }
     if (extraHeader.has_value()) {
-        (void)HttpRequestAccess::addHeader(request, *extraHeader);
+        headers[headerCount++] = *extraHeader;
     }
-    HttpRequestAccess::setResource(request, memory.resource());
+    auto [request, parseError] = ruvia::makeParsedHttpRequest(
+        ruvia::knownHttpMethodToken(method), "/",
+        std::span<const HttpHeaderView>{headers.data(), headerCount}, {}, memory.resource());
+    if (parseError.has_value()) {
+        throw std::logic_error("test request construction failed");
+    }
     auto context = ContextAccess::make(memory, request, services);
 
     ruvia::detail::NextState::Control control;
@@ -135,7 +123,7 @@ CsrfOutcome runCsrf(ruvia::CsrfProtection& csrf, std::string_view cookieName,
         NextAccess::make(state, [](ruvia::detail::NextState) -> ruvia::Task<void> { co_return; });
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    asio::co_spawn(io, ruvia::detail::taskAsAwaitable(csrf.handle(context, next)), asio::detached);
+    asio::co_spawn(io, ruvia::asAwaitable(csrf.handle(context, next)), asio::detached);
     io.run();
 
     CsrfOutcome out;

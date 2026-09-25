@@ -11,12 +11,12 @@
 #include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
 namespace ruvia {
 namespace {
@@ -58,7 +58,6 @@ static WebSocketHandshakeValidationResult validateServerWebSocketHandshake(
     }
     return detail::validateHttp2WebSocketHandshake(*stream, request);
 }
-
 
 Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
     detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
@@ -469,10 +468,10 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
     const WebSocketHandshakeValidationResult& validation,
     Http2WebSocketServerHandshakeOptions options) {
     auto negotiation = detail::makeWebSocketServerNegotiation(request, {
-        .supportedSubprotocols = options.supportedSubprotocols,
-        .responseHeaders = options.responseHeaders,
-        .resource = impl_->resource,
-    });
+                                                                           .supportedSubprotocols = options.supportedSubprotocols,
+                                                                           .responseHeaders = options.responseHeaders,
+                                                                           .resource = impl_->resource,
+                                                                       });
     auto result = impl_->connection.submitWebSocketHandshake(
         streamId, validation, std::move(negotiation));
     if (const auto* submitted = result.submitted()) {
@@ -627,6 +626,11 @@ void Http2Connection::takeOutput(std::pmr::string& output) {
     impl_->retryDeferred();
     impl_->connection.takeOutput(output);
 }
+Http2OutputBatchResult Http2Connection::takeOutputBatch(std::size_t maxBytes,
+    std::pmr::string& output, Http2DataOutputObserver observer, void* observerContext) {
+    impl_->retryDeferred();
+    return impl_->connection.takeOutputBatch(maxBytes, output, observer, observerContext);
+}
 bool Http2Connection::wantsWrite() const noexcept {
     impl_->retryDeferred();
     return impl_->connection.wantsWrite();
@@ -675,7 +679,7 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
 
 Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
     std::uint32_t streamId, const HttpResponse& response,
-    HttpServerBufferedResponseWritePlan writePlan) {
+    HttpBufferedResponseWritePlan writePlan) {
     const auto result = impl_->connection.submitResponseHead(streamId, response, std::move(writePlan));
     if (const auto* failure = result.failure()) {
         Http2ResponseHeadSubmitError error;
@@ -708,7 +712,7 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     if (body.file().has_value()) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    const auto plan = planHttpServerBufferedResponseWrite(stream->requestKnownMethod(), response);
+    const auto plan = planBufferedHttpResponseWrite(stream->requestKnownMethod(), response);
     const auto result = impl_->connection.submitResponseHead(streamId, response, plan);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {

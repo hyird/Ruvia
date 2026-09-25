@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -12,17 +13,18 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/Bytes.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -45,19 +47,17 @@ struct ChunkSource final {
 };
 
 struct SuspendedChunkSource final {
-    explicit SuspendedChunkSource(asio::io_context& io)
-        : dispatcher(std::make_shared<ruvia::detail::WorkerDispatcher>(io, 8)),
-          worker(ruvia::detail::WorkerHandleAccess::make(dispatcher)),
-          signal(worker) {}
+    explicit SuspendedChunkSource(const ruvia::WorkerHandle& worker)
+        : signal(worker) {}
 
     Task<std::optional<std::span<const std::byte>>> read() {
+        waiting = true;
         co_await signal.wait();
         co_return std::nullopt;
     }
 
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher;
-    ruvia::WorkerHandle worker;
-    ruvia::detail::WorkerSignal signal;
+    ruvia::WorkerSignal signal;
+    bool waiting = false;
 };
 
 Task<void> completeMultipartRead(MultipartReader& reader, bool& completed) {
@@ -114,7 +114,7 @@ std::vector<CollectedPart> parseMultipart(
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(collectParts(reader, parts)), asio::use_future);
+        ctx, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
     ctx.run();
     future.get();  // propagate any parsing exception
     return parts;
@@ -156,8 +156,10 @@ RUVIA_TEST(multipart_reader_parses_parts_from_a_single_chunk) {
 }
 
 RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
-    asio::io_context io(1);
-    SuspendedChunkSource source(io);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    SuspendedChunkSource source(worker);
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
     MultipartReader reader(*bodyReader, {.boundary = ruvia::MultipartBoundary("BOUNDARY"),
@@ -176,23 +178,47 @@ RUVIA_TEST(multipart_reader_rejects_concurrent_consumers) {
         RUVIA_CHECK(coldRejected);
     }
 
-    auto first = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(completeMultipartRead(reader, firstCompleted)),
-        asio::use_future);
-    io.poll();
+    std::exception_ptr firstFailure;
+    std::exception_ptr secondFailure;
+    int completedOperations = 0;
+    const auto complete = [&] {
+        if (++completedOperations == 2) {
+            io.stop();
+        }
+    };
+    asio::co_spawn(io, ruvia::asAwaitable(completeMultipartRead(reader, firstCompleted)),
+        [&](std::exception_ptr failure) {
+            firstFailure = failure;
+            complete();
+        });
+    // Pause after the first operation suspends, without stopping its coroutine.
+    asio::post(io, [&io] { io.stop(); });
+    attachment.run();
+    RUVIA_CHECK(source.waiting);
     RUVIA_CHECK(!firstCompleted);
 
     io.restart();
-    auto second = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(rejectConcurrentMultipartRead(reader, secondRejected)),
-        asio::use_future);
-    asio::post(io, [&source] { source.signal.notify(); });
-    io.run();
-    first.get();
-    second.get();
+    asio::co_spawn(io, ruvia::asAwaitable(rejectConcurrentMultipartRead(reader, secondRejected)),
+        [&](std::exception_ptr failure) {
+            secondFailure = failure;
+            complete();
+        });
+    bool notifyOnWorker = false;
+    asio::post(io, [&source, &attachment, &notifyOnWorker] {
+        notifyOnWorker = attachment.loop().isCurrent();
+        source.signal.notify();
+    });
+    attachment.run();
+    if (firstFailure) {
+        std::rethrow_exception(firstFailure);
+    }
+    if (secondFailure) {
+        std::rethrow_exception(secondFailure);
+    }
 
     RUVIA_CHECK(firstCompleted);
     RUVIA_CHECK(secondRejected);
+    RUVIA_CHECK(notifyOnWorker);
 }
 
 RUVIA_TEST(multipart_reader_reassembles_across_chunk_boundaries) {
@@ -256,7 +282,7 @@ RUVIA_TEST(multipart_reader_drains_a_split_epilogue_before_reporting_done) {
     std::vector<CollectedPart> parts;
     asio::io_context context(1);
     auto future = asio::co_spawn(
-        context, ruvia::detail::taskAsAwaitable(collectParts(reader, parts)), asio::use_future);
+        context, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
     context.run();
     future.get();
 
@@ -433,7 +459,7 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
-        ctx, ruvia::detail::taskAsAwaitable(collectParts(reader, parts)), asio::use_future);
+        ctx, ruvia::asAwaitable(collectParts(reader, parts)), asio::use_future);
     ctx.run();
 
     bool threw = false;

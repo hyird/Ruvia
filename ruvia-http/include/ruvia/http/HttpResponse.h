@@ -24,24 +24,64 @@ namespace ruvia {
 class HttpResponse;
 class HttpResponseHeaders;
 
+enum class HttpResponseContentSemantics : std::uint8_t {
+    kInformational,
+    kProtocolSwitch,
+    kConnectTunnel,
+    kWithoutContent,
+    kWithContent,
+};
+
 class HttpResponseBodyPlan final {
 public:
-    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept { return requestMethod_; }
-    [[nodiscard]] HttpStatusCode responseStatus() const noexcept { return responseStatus_; }
-    [[nodiscard]] bool statusAllowsBody() const noexcept { return statusAllowsBody_; }
-    [[nodiscard]] bool bodySuppressed() const noexcept { return bodySuppressed_; }
+    [[nodiscard]] constexpr HttpKnownMethod requestMethod() const noexcept {
+        return requestMethod_;
+    }
+    [[nodiscard]] constexpr HttpStatusCode responseStatus() const noexcept {
+        return responseStatus_;
+    }
+    [[nodiscard]] constexpr HttpResponseContentSemantics contentSemantics() const noexcept {
+        return semantics_;
+    }
+    [[nodiscard]] constexpr bool statusAllowsBody() const noexcept {
+        return statusAllowsBody_;
+    }
+    [[nodiscard]] constexpr bool bodySuppressed() const noexcept {
+        return bodySuppressed_;
+    }
+    [[nodiscard]] constexpr bool autoContentLengthAllowed() const noexcept {
+        return autoContentLengthAllowed_;
+    }
+    [[nodiscard]] constexpr bool explicitContentLengthAllowed() const noexcept {
+        return explicitContentLengthAllowed_;
+    }
+    [[nodiscard]] constexpr bool transferEncodingAllowed() const noexcept {
+        return transferEncodingAllowed_;
+    }
+    [[nodiscard]] std::uint64_t bufferedRepresentationLength(const HttpResponse& response) const noexcept;
 
 private:
     friend HttpResponseBodyPlan planHttpResponseBody(HttpKnownMethod, HttpStatusCode) noexcept;
-    HttpResponseBodyPlan(HttpKnownMethod method, HttpStatusCode status, bool statusAllowsBody,
-        bool suppressed) noexcept
-        : requestMethod_(method), responseStatus_(status), statusAllowsBody_(statusAllowsBody),
-          bodySuppressed_(suppressed) {}
+    constexpr HttpResponseBodyPlan(HttpKnownMethod method, HttpStatusCode status, HttpResponseContentSemantics semantics,
+        bool statusAllowsBody, bool bodySuppressed, bool autoContentLengthAllowed,
+        bool explicitContentLengthAllowed, bool transferEncodingAllowed) noexcept
+        : requestMethod_(method),
+          responseStatus_(status),
+          semantics_(semantics),
+          statusAllowsBody_(statusAllowsBody),
+          bodySuppressed_(bodySuppressed),
+          autoContentLengthAllowed_(autoContentLengthAllowed),
+          explicitContentLengthAllowed_(explicitContentLengthAllowed),
+          transferEncodingAllowed_(transferEncodingAllowed) {}
 
     HttpKnownMethod requestMethod_;
     HttpStatusCode responseStatus_;
+    HttpResponseContentSemantics semantics_;
     bool statusAllowsBody_;
     bool bodySuppressed_;
+    bool autoContentLengthAllowed_;
+    bool explicitContentLengthAllowed_;
+    bool transferEncodingAllowed_;
 };
 
 [[nodiscard]] HttpResponseBodyPlan planHttpResponseBody(
@@ -49,17 +89,44 @@ private:
 
 class HttpBufferedResponseWritePlan final {
 public:
-    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept { return bodyPlan_; }
-    [[nodiscard]] std::uint64_t contentLength() const noexcept { return contentLength_; }
-    [[nodiscard]] bool bodySuppressed() const noexcept { return bodyPlan_.bodySuppressed(); }
-    [[nodiscard]] bool sendBody() const noexcept { return !bodySuppressed() && contentLength_ != 0; }
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
+        return bodyPlan_.requestMethod();
+    }
+    [[nodiscard]] HttpStatusCode responseStatus() const noexcept {
+        return bodyPlan_.responseStatus();
+    }
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
+        return bodyPlan_;
+    }
+    [[nodiscard]] std::uint64_t contentLength() const noexcept {
+        return contentLength_;
+    }
+    [[nodiscard]] bool bodySuppressed() const noexcept {
+        return bodyPlan_.bodySuppressed();
+    }
+    [[nodiscard]] bool statusAllowsBody() const noexcept {
+        return bodyPlan_.statusAllowsBody();
+    }
+    [[nodiscard]] bool autoContentLengthAllowed() const noexcept {
+        return bodyPlan_.autoContentLengthAllowed();
+    }
+    [[nodiscard]] bool explicitContentLengthAllowed() const noexcept {
+        return bodyPlan_.explicitContentLengthAllowed();
+    }
+    [[nodiscard]] bool transferEncodingAllowed() const noexcept {
+        return bodyPlan_.transferEncodingAllowed();
+    }
+    [[nodiscard]] bool sendBody() const noexcept {
+        return !bodySuppressed() && contentLength_ != 0;
+    }
     [[nodiscard]] bool matchesResponse(const HttpResponse& response) const noexcept;
 
 private:
     friend HttpBufferedResponseWritePlan planBufferedHttpResponseWrite(
         HttpKnownMethod, const HttpResponse&) noexcept;
     HttpBufferedResponseWritePlan(HttpResponseBodyPlan bodyPlan, std::uint64_t contentLength) noexcept
-        : bodyPlan_(bodyPlan), contentLength_(contentLength) {}
+        : bodyPlan_(bodyPlan),
+          contentLength_(contentLength) {}
 
     HttpResponseBodyPlan bodyPlan_;
     std::uint64_t contentLength_;

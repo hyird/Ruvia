@@ -98,7 +98,7 @@ struct BufferedCompressionAttempt final {
 HttpResponseCompressionEligibility httpResponseCompressionEligibility(
     const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod,
     const HttpResponse& response, ResponseStreamKind kind) noexcept {
-    const auto bodyPlan = planHttpServerResponseBody(requestMethod, response.status());
+    const auto bodyPlan = planHttpResponseBody(requestMethod, response.status());
     if (!bodyPlan.statusAllowsBody()) {
         return HttpResponseCompressionEligibility::kIneligible;
     }

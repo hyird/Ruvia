@@ -434,6 +434,8 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%", out));  // truncated pct-encoded
     RUVIA_CHECK(
         !parseRequestTarget(HttpKnownMethod::kGet, "/bad%2", out));  // truncated pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/?safe=1&bad=%zz", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/?bad=%2", out));
     RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/raw{brace}", out));
     RUVIA_CHECK(
         !parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/caf\xC3\xA9", 6), out));

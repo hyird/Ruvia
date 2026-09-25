@@ -577,7 +577,7 @@ RUVIA_TEST(http2_connect_server_rejection_accepts_empty_terminal_data) {
     ruvia::HttpResponse rejected({.resource = &resource});
     rejected.status(ruvia::http_status::kForbidden);
     const auto submitted = server.submitResponseHead(1, rejected,
-        ruvia::detail::httpBufferedResponseWritePlan(ruvia::HttpKnownMethod::kConnect, rejected));
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kConnect, rejected));
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK(stream->remoteReceive().connectRejectedAwaitingEndStream() != nullptr);
     server.consumeOutput(server.pendingOutput().size());

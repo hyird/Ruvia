@@ -132,6 +132,31 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     }
 }
 
+RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input, ProtocolByteLimit::unlimited(),
+        WebSocketServerProtocolOptions{WebSocketCompression::kPermessageDeflate, 6});
+    const std::string payload(200, 'x');
+
+    RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, payload, false) ==
+                WebSocketServerFrameSubmitStatus::kAccepted);
+    auto output = protocol.outputPlan().bytes();
+    RUVIA_CHECK(!output.empty());
+    if (!output.empty()) {
+        RUVIA_CHECK((static_cast<unsigned char>(output[0]) & 0x40U) == 0);
+    }
+    RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
+                WebSocketServerOutputConsumeStatus::kDrained);
+
+    RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, payload) ==
+                WebSocketServerFrameSubmitStatus::kAccepted);
+    output = protocol.outputPlan().bytes();
+    RUVIA_CHECK(!output.empty());
+    if (!output.empty()) {
+        RUVIA_CHECK((static_cast<unsigned char>(output[0]) & 0x40U) != 0);
+    }
+}
+
 RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input);

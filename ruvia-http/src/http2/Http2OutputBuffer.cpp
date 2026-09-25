@@ -6,14 +6,21 @@
 namespace ruvia::detail {
 
 void Http2OutputBuffer::take(std::pmr::string& into) {
+    const auto logicalEnd = baseOffset_ + bytes_.size();
     if (consumed_ == 0 && into.get_allocator() == bytes_.get_allocator()) {
         into.swap(bytes_);
         bytes_.clear();
+        segments_.clear();
+        segmentOffset_ = 0;
+        baseOffset_ = logicalEnd;
         return;
     }
     into.assign(bytes_.data() + consumed_, bytes_.size() - consumed_);
     bytes_.clear();
+    segments_.clear();
+    segmentOffset_ = 0;
     consumed_ = 0;
+    baseOffset_ = logicalEnd;
 }
 
 void Http2OutputBuffer::appendGoawayFrame(
