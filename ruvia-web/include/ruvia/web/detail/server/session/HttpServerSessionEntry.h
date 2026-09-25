@@ -26,7 +26,7 @@ namespace ruvia::detail {
 // Defined inline: this is a header, and a header may be included by more than
 // one translation unit. The member templates below need no such marking.
 inline Task<void> WebWorkerRuntime::handleSession(
-    HttpServerListener& listener, AcceptedConnectionLease connection) {
+    HttpServerSessionConfig& listener, AcceptedConnectionLease connection) {
     auto& socket = connection.socket();
     // Declared outside the try so the failure report below can name the peer.
     // It stays empty if the failure happened before the address was resolved.

@@ -35,6 +35,18 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
+void ingressFailed(void* object) noexcept {
+    static_cast<App*>(object)->stop();
+}
+
+bool ingressTargetAvailable(void* object) noexcept {
+    return static_cast<detail::WebWorkerRuntime*>(object)->availableForIngress();
+}
+
+void ingressTargetAccept(void* object, detail::NativeAcceptedSocketTicket&& ticket) noexcept {
+    static_cast<detail::WebWorkerRuntime*>(object)->acceptTransferredConnection(std::move(ticket));
+}
+
 void invokeStopHooks(detail::AppState& state) noexcept {
     for (auto& hook : state.onStopHooks) {
         try {
@@ -197,6 +209,21 @@ private:
                 std::move(controllers), std::move(router), std::move(worker));
         }
 
+        runtime->ingressTargets.reserve(runtime->workers.size());
+        for (auto& slot : runtime->workers) {
+            auto* target = slot.runtime.get();
+            runtime->ingressTargets.push_back({
+                .worker = &target->worker(),
+                .object = target,
+                .available = &ingressTargetAvailable,
+                .accept = &ingressTargetAccept,
+            });
+        }
+        runtime->tcpIngress = std::make_unique<detail::TcpIngressRuntime>(
+            validatedConfiguration.listeners(), runtime->ingressTargets, &owner_, &ingressFailed);
+        runtime->tcpIngress->prepare();
+        runtime->udpIngress = std::make_unique<detail::UdpIngressRuntime>(&owner_, &ingressFailed);
+
         std::lock_guard lock(state_.mutex);
         state_.runtime = std::move(runtime);
         if (!state_.lifecycle.publishRuntime() && !state_.lifecycle.stopRequested()) {
@@ -232,10 +259,13 @@ private:
 
     void startWorkers() {
         for (auto& worker : state_.runtime->workers) {
-            if (stopRequested()) {
-                return;
+            {
+                std::lock_guard lock(state_.mutex);
+                if (state_.lifecycle.stopRequested()) {
+                    return;
+                }
+                worker.runtime->launch();
             }
-            worker.runtime->launch();
         }
         for (auto& worker : state_.runtime->workers) {
             if (stopRequested()) {
@@ -243,6 +273,25 @@ private:
             }
             worker.runtime->waitUntilReady();
         }
+        {
+            // Serialize the stop decision with App::stop()'s lifecycle transition:
+            // an ingress stopped before launch must not turn a requested stop into
+            // a launch logic_error.
+            std::lock_guard lock(state_.mutex);
+            if (state_.lifecycle.stopRequested()) {
+                return;
+            }
+            state_.runtime->tcpIngress->launch();
+        }
+        state_.runtime->tcpIngress->waitUntilReady();
+        {
+            std::lock_guard lock(state_.mutex);
+            if (state_.lifecycle.stopRequested()) {
+                return;
+            }
+            state_.runtime->udpIngress->launch();
+        }
+        state_.runtime->udpIngress->waitUntilReady();
         for (auto& worker : state_.runtime->workers) {
             if (stopRequested()) {
                 return;
@@ -254,7 +303,24 @@ private:
                 return;
             }
             if (!worker.runtime->waitUntilServing()) {
+                if (stopRequested()) {
+                    return;
+                }
                 throw std::runtime_error("web worker stopped before the application began serving");
+            }
+        }
+        if (!stopRequested()) {
+            state_.runtime->tcpIngress->requestServe();
+            state_.runtime->udpIngress->requestServe();
+            const bool tcpServing = state_.runtime->tcpIngress->waitUntilServing();
+            const bool udpServing = state_.runtime->udpIngress->waitUntilServing();
+            if (!tcpServing || !udpServing) {
+                state_.runtime->tcpIngress->rethrowFailure();
+                state_.runtime->udpIngress->rethrowFailure();
+                if (stopRequested()) {
+                    return;
+                }
+                throw std::runtime_error("ingress stopped before the application began serving");
             }
         }
     }
@@ -275,6 +341,12 @@ private:
     }
 
     void stopWorkers() noexcept {
+        if (state_.runtime->tcpIngress) {
+            state_.runtime->tcpIngress->stop();
+        }
+        if (state_.runtime->udpIngress) {
+            state_.runtime->udpIngress->stop();
+        }
         for (auto& worker : state_.runtime->workers) {
             try {
                 worker.runtime->stop();
@@ -295,6 +367,23 @@ private:
 
     [[nodiscard]] std::exception_ptr joinWorkers() noexcept {
         std::exception_ptr firstFailure;
+        if (state_.runtime->tcpIngress) {
+            try {
+                state_.runtime->tcpIngress->join();
+                state_.runtime->tcpIngress->rethrowFailure();
+            } catch (...) {
+                firstFailure = std::current_exception();
+            }
+        }
+        if (state_.runtime->udpIngress) {
+            try {
+                state_.runtime->udpIngress->join();
+                state_.runtime->udpIngress->rethrowFailure();
+            } catch (...) {
+                if (firstFailure == nullptr) firstFailure = std::current_exception();
+                else ruvia::reportUnhandledFailure("UDP ingress failure", std::current_exception());
+            }
+        }
         for (auto& worker : state_.runtime->workers) {
             try {
                 worker.runtime->join();

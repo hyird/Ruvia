@@ -110,6 +110,12 @@ void App::stop() {
             return;
         }
         if (state.runtime != nullptr) {
+            if (state.runtime->tcpIngress) {
+                state.runtime->tcpIngress->stop();
+            }
+            if (state.runtime->udpIngress) {
+                state.runtime->udpIngress->stop();
+            }
             for (auto& worker : state.runtime->workers) {
                 try {
                     worker.runtime->stop();
