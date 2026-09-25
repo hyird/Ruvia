@@ -92,6 +92,7 @@ if(RUVIA_BUILD_HTTP)
         http/unit/*.cpp
         http/http1/*.cpp
         http/http2/*.cpp
+        http/http3/*.cpp
         http/websocket/*.cpp)
     list(APPEND _ruvia_http_unit_sources support/test_main.cpp)
     list(SORT _ruvia_http_unit_sources)

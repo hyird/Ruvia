@@ -176,7 +176,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 
     const auto requestedMethod = request.header("Access-Control-Request-Method");
     const bool preflight = options && !origin.empty() && requestedMethod.has_value() &&
-        !requestedMethod->empty();
+                           !requestedMethod->empty();
     if (preflight) {
         if (const auto allow = response.header("Allow"); allow.has_value() && !allow->empty()) {
             setResponseHeaderIfMissing(response, "Access-Control-Allow-Methods", *allow);

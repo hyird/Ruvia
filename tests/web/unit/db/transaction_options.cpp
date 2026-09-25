@@ -6,16 +6,16 @@
 #include <string_view>
 
 #include <asio/co_spawn.hpp>
-#include <asio/use_future.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbTransactionStart.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -140,28 +140,29 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
 #endif
     };
     for (const auto driver : drivers) {
-        asio::io_context context;
-        auto dispatcher = std::make_shared<detail::WorkerDispatcher>(context, 8);
-        auto worker = detail::WorkerHandleAccess::make(dispatcher);
+        auto& context = test::newTestIoContext();
+        auto attachment = attachEventLoop(context, {.mailboxCapacity = 8});
+        const auto worker = attachment.loop().handle();
         test::CountingMemoryResource resource;
-        detail::DbRegistry registry(context, worker, &resource, DbConfig{.driver = driver});
+        detail::DbRegistry registry(context, worker, &resource,
+            DbConfig{.driver = driver});
         detail::ScopedOperationScope scope;
         auto handle = registry.get(scope);
         StopSource cancellation;
         cancellation.requestStop();
         auto cancelled = handle.withOptions({.stopToken = cancellation.token()});
         const auto baseline = resource.liveAllocations();
-        for (int iteration = 0; iteration < 8; ++iteration) {
-            {
-                const auto cold = handle.beginTransaction({.isolation = DbTransactionIsolation::kSerializable,
-                    .accessMode = DbTransactionAccessMode::kReadOnly});
-                RUVIA_CHECK(scope.hasPendingOperations());
-            }
-            RUVIA_CHECK(!scope.hasPendingOperations());
-            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
-            bool observedCancellation = false;
-            bool observedInvalid = false;
-            auto exercise = [&]() -> Task<void> {
+        auto exercise = [&]() -> Task<void> {
+            for (int iteration = 0; iteration < 8; ++iteration) {
+                {
+                    const auto cold = handle.beginTransaction({.isolation = DbTransactionIsolation::kSerializable,
+                        .accessMode = DbTransactionAccessMode::kReadOnly});
+                    RUVIA_CHECK(scope.hasPendingOperations());
+                }
+                RUVIA_CHECK(!scope.hasPendingOperations());
+                RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+                bool observedCancellation = false;
+                bool observedInvalid = false;
                 DbTransactionOptions options{.isolation = DbTransactionIsolation::kRepeatableRead,
                     .accessMode = DbTransactionAccessMode::kReadOnly};
                 auto operation = cancelled.beginTransaction(options);
@@ -180,17 +181,24 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
                 } catch (const std::invalid_argument&) {
                     observedInvalid = true;
                 }
-            };
-            {
-                auto future = asio::co_spawn(context, detail::taskAsAwaitable(exercise()), asio::use_future);
-                context.run();
-                future.get();
+                RUVIA_CHECK(observedCancellation);
+                RUVIA_CHECK(observedInvalid);
+                RUVIA_CHECK(!scope.hasPendingOperations());
+                RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
             }
-            RUVIA_CHECK(observedCancellation);
-            RUVIA_CHECK(observedInvalid);
-            RUVIA_CHECK(!scope.hasPendingOperations());
-            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
-            context.restart();
-        }
+        };
+        std::promise<void> completion;
+        auto future = completion.get_future();
+        asio::co_spawn(context, asAwaitable(exercise()),
+            [&attachment, &completion](std::exception_ptr error) {
+                if (error) {
+                    completion.set_exception(error);
+                } else {
+                    completion.set_value();
+                }
+                attachment.stop();
+            });
+        attachment.run();
+        future.get();
     }
 }

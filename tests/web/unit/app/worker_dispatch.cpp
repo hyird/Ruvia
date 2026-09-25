@@ -6,22 +6,24 @@
 #include <utility>
 
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
 struct WorkerDispatchFixture final {
-    asio::io_context ioContext;
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher =
-        std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 1);
-    ruvia::WorkerHandle worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+    asio::io_context& ioContext = ruvia::test::newTestIoContext();
+    ruvia::EventLoopAttachment attachment =
+        ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 1});
+    ruvia::WorkerHandle worker = attachment.loop().handle();
     ruvia::WorkerMemory memory;
     ruvia::detail::WorkerCapabilities capabilities{
         ioContext, worker, memory.resource(), {}, {}};
@@ -35,7 +37,10 @@ struct WorkerDispatchFixture final {
     }
 
     void retire() {
-        dispatcher->detachContext();
+        attachment.stop();
+        // External attachments detach on their io_context; drain that terminal
+        // cleanup before checking reservations held by abandoned mailbox posts.
+        ioContext.poll();
         dispatch->retire();
         capabilities.closeNow();
         capabilities.shutdownWorkerState();
@@ -58,7 +63,7 @@ RUVIA_TEST(web_worker_context_pool_is_worker_resource) {
     });
     RUVIA_CHECK(result.accepted());
 
-    fixture.ioContext.run();
+    fixture.ioContext.poll();
 
     RUVIA_CHECK(observed == fixture.memory.resource());
     fixture.retire();
@@ -74,7 +79,7 @@ RUVIA_TEST(web_worker_dispatch_completes_started_task_and_releases_reservation) 
     });
     RUVIA_CHECK(result.accepted());
 
-    fixture.ioContext.run();
+    fixture.ioContext.poll();
 
     const auto stats = fixture.dispatch->stats();
     RUVIA_CHECK(ran.load(std::memory_order_acquire));
@@ -85,8 +90,15 @@ RUVIA_TEST(web_worker_dispatch_completes_started_task_and_releases_reservation) 
 
 RUVIA_TEST(web_worker_dispatch_reconciles_rejected_and_abandoned_posts) {
     WorkerDispatchFixture fixture;
+    bool ran = false;
 
-    const auto accepted = fixture.dispatch->handle().post(emptyTask);
+    // Run the terminal stop on the worker before its queued mailbox drain.
+    // Stopping from outside poll() defers detach behind that drain instead.
+    asio::post(fixture.ioContext, [&fixture] { fixture.attachment.stop(); });
+    const auto accepted = fixture.dispatch->handle().post([&ran](ruvia::WebWorkerContext& context) {
+        ran = true;
+        return emptyTask(context);
+    });
     RUVIA_CHECK(accepted.accepted());
     auto full = fixture.dispatch->handle().post(emptyTask);
     RUVIA_CHECK_EQ(full.status(), ruvia::PostStatus::kQueueFull);
@@ -98,7 +110,10 @@ RUVIA_TEST(web_worker_dispatch_reconciles_rejected_and_abandoned_posts) {
     RUVIA_CHECK_EQ(stopped.status(), ruvia::PostStatus::kWorkerStopping);
     RUVIA_CHECK(stopped.rejected() != nullptr);
 
+    fixture.ioContext.poll();
     fixture.retire();
+    RUVIA_CHECK(!ran);
+    RUVIA_CHECK_EQ(fixture.dispatch->stats().completed, 0U);
     RUVIA_CHECK_EQ(fixture.dispatch->stats().outstanding, 0U);
 }
 

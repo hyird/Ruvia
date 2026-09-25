@@ -654,6 +654,28 @@ RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     RUVIA_CHECK_EQ(conn.pendingOutput().size(), acceptedBytes);
 }
 
+RUVIA_TEST(http2_connection_rejects_trailers_for_contentless_statuses_before_headers) {
+    for (const auto status : {ruvia::http_status::kNoContent, ruvia::http_status::kNotModified}) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection conn(&resource);
+        handshake(conn);
+        driveGetRequest(conn, &resource);
+
+        ruvia::HttpResponse response({.resource = &resource});
+        response.status(status);
+        const auto result = conn.submitStreamingResponseHead(1, std::move(response),
+            ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kPresent);
+        RUVIA_CHECK(!responseHeadSubmitted(result));
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (result.failure() != nullptr) {
+            RUVIA_CHECK(result.failure()->error() ==
+                        ruvia::detail::Http2ResponseHeadSubmitError::kInvalidMessage);
+        }
+        RUVIA_CHECK(conn.pendingOutput().empty());
+        RUVIA_CHECK(conn.stream(1)->localSend().headPending() != nullptr);
+    }
+}
+
 RUVIA_TEST(http2_connection_reset_content_streaming_ends_on_headers) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);

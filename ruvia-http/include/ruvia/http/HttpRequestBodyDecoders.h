@@ -9,19 +9,19 @@ namespace ruvia {
 
 using detail::Http1ChunkDecodeBodyChunk;
 using detail::Http1ChunkDecodeComplete;
+using detail::Http1ChunkDecodeError;
 using detail::Http1ChunkDecodeFailure;
 using detail::Http1ChunkDecodeNeedMore;
 using detail::Http1ChunkDecodeResult;
-using detail::Http1ChunkDecodeError;
-using detail::Http1ChunkTrailerRole;
 using detail::Http1ChunkedBodyDecoder;
+using detail::Http1ChunkTrailerRole;
 using detail::TransferCodingDecodeComplete;
+using detail::TransferCodingDecodeError;
 using detail::TransferCodingDecodeNeedInput;
 using detail::TransferCodingDecodeOutput;
 using detail::TransferCodingDecodeProtocolFailure;
-using detail::TransferCodingDecodeResult;
 using detail::TransferCodingDecoder;
+using detail::TransferCodingDecodeResult;
 using detail::TransferCodingDecoderFailure;
-using detail::TransferCodingDecodeError;
 
 }  // namespace ruvia

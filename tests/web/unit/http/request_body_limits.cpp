@@ -1,3 +1,5 @@
+#include "ruvia/core/AsioTask.h"
+
 #include "context_body_decoding_fixture.h"
 
 // The product limits a web request body is decoded under.
@@ -30,7 +32,7 @@ RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
     bool rejected = false;
     asio::io_context io(1);
     auto future = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(awaitExpiredContextTextRead(operation, rejected)),
+        ruvia::asAwaitable(awaitExpiredContextTextRead(operation, rejected)),
         asio::use_future);
     io.run();
     future.get();

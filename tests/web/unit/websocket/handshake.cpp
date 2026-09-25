@@ -7,10 +7,10 @@
 #include <asio/post.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 
 #include "test_harness.h"
@@ -18,8 +18,8 @@
 
 namespace {
 
+using ruvia::Http1ServerRequestParser;
 using ruvia::HttpRequest;
-using ruvia::detail::Http1ServerRequestParser;
 
 class FailingHandshakeWriteStream final {
 public:
@@ -67,7 +67,7 @@ RUVIA_TEST(ws_handshake_writer_preserves_transport_error) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     FailingHandshakeWriteStream stream(io);
     auto result = asio::co_spawn(io,
-        ruvia::detail::taskAsAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)),
+        ruvia::asAwaitable(ruvia::detail::writeWebSocketHandshake(stream, handshake)),
         asio::use_future);
     io.run();
     RUVIA_CHECK_EQ(result.get(), std::make_error_code(std::errc::broken_pipe));

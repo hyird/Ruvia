@@ -1,3 +1,5 @@
+#include "ruvia/core/AsioTask.h"
+
 #include "routing_fixture.h"
 
 // Routing: dispatching into a route and turning failures into responses.
@@ -361,15 +363,11 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "OPTIONS");
-    ruvia::detail::HttpRequestAccess::setPath(request, "*");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    auto request = makeRequest(memory, "OPTIONS", "*");
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(ctx,
-        ruvia::detail::taskAsAwaitable(
+        ruvia::asAwaitable(
             table.dispatch(request, memory, ruvia::test::testContextServices())),
         asio::use_future);
     ctx.run();

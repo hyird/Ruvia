@@ -7,6 +7,8 @@
 #include <fstream>
 #include <memory>
 #include <memory_resource>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -23,19 +25,14 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/io/SansIoDriver.h"
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/Hpack.h"
+#include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
@@ -50,19 +47,48 @@
 
 namespace sansio_driver_test {
 
-inline ruvia::WorkerHandle testWorker(asio::io_context& io) {
-    return ruvia::detail::WorkerHandleAccess::make(
-        std::make_shared<ruvia::detail::WorkerDispatcher>(io, 64));
+using asio::ip::tcp;
+using ruvia::HpackEncoder;
+using ruvia::Http2FrameType;
+
+inline constexpr std::uint8_t kFlagEndStream = 0x1;
+inline constexpr std::uint8_t kFlagEndHeaders = 0x4;
+inline ruvia::Http2FrameHeader parseFrameHeader(std::string_view bytes) {
+    const auto parsed = ruvia::parseHttp2FrameHeader(
+        std::span<const char>(bytes.data(), bytes.size()));
+    if (!parsed) {
+        throw std::runtime_error("invalid/truncated HTTP/2 frame header in test client");
+    }
+    return *parsed;
 }
 
-using asio::ip::tcp;
-using ruvia::detail::HpackEncoder;
-using ruvia::detail::Http2Connection;
-using ruvia::detail::Http2DataSubmitStatus;
-using ruvia::detail::Http2EndStream;
-using ruvia::detail::Http2FrameType;
+inline void writeBigEndian32(char* output, std::uint32_t value) noexcept {
+    output[0] = static_cast<char>((value >> 24) & 0xffU);
+    output[1] = static_cast<char>((value >> 16) & 0xffU);
+    output[2] = static_cast<char>((value >> 8) & 0xffU);
+    output[3] = static_cast<char>(value & 0xffU);
+}
 
-constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+inline std::uint32_t readBigEndian32(const char* input) noexcept {
+    return (static_cast<std::uint32_t>(static_cast<unsigned char>(input[0])) << 24) |
+           (static_cast<std::uint32_t>(static_cast<unsigned char>(input[1])) << 16) |
+           (static_cast<std::uint32_t>(static_cast<unsigned char>(input[2])) << 8) |
+           static_cast<std::uint32_t>(static_cast<unsigned char>(input[3]));
+}
+
+inline std::uint32_t readBigEndian32(const unsigned char* input) noexcept {
+    return readBigEndian32(reinterpret_cast<const char*>(input));
+}
+
+inline std::uint32_t readBigEndian31(const char* input) noexcept {
+    return readBigEndian32(input) & 0x7fffffffU;
+}
+
+inline std::uint32_t readBigEndian31(const unsigned char* input) noexcept {
+    return readBigEndian32(input) & 0x7fffffffU;
+}
+
+constexpr std::string_view kClientPreface = ruvia::kHttp2ClientPreface;
 
 // Tear down the synthetic client's transport once it has read the complete
 // response. Uses a graceful shutdown (FIN) instead of a linger-0 abortive close
@@ -90,7 +116,7 @@ inline ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Contex
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
-    const auto waitCompletion = co_await ruvia::detail::asyncAsio(
+    const auto waitCompletion = co_await ruvia::asyncAsio(
         [&timer](auto handler) mutable { timer.async_wait(std::move(handler)); });
     (void)waitCompletion.errorCode();
     co_return ctx.text("slow");
@@ -157,7 +183,7 @@ inline ruvia::Task<ruvia::HttpResponse> terminatedBodyHandler(void* raw, ruvia::
     }
     asio::steady_timer completionDelay(*observation.io);
     completionDelay.expires_after(std::chrono::milliseconds(5));
-    (void)co_await ruvia::detail::asyncAsio([&completionDelay](auto handler) mutable {
+    (void)co_await ruvia::asyncAsio([&completionDelay](auto handler) mutable {
         completionDelay.async_wait(std::move(handler));
     });
     observation.handlerFinished = true;
@@ -176,8 +202,8 @@ constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (655
 inline ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
-    ruvia::detail::setResponseFileBody(
-        response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
+    response.fileBody(std::filesystem::path(largeFilePath()), kLargeFileBytes, 0,
+        kLargeFileBytes, {}, false);
     co_return response;
 }
 
@@ -213,20 +239,24 @@ inline std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, 
 
 inline std::string frame(
     std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
-    std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
-    ruvia::detail::http2WriteFrameHeader(bytes.data(), static_cast<std::uint32_t>(payload.size()),
-        static_cast<Http2FrameType>(type), flags, streamId);
+    std::string bytes(ruvia::kHttp2FrameHeaderBytes, '\0');
+    if (!ruvia::encodeHttp2FrameHeader(std::span<char>(bytes.data(), bytes.size()),
+            static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), flags,
+            streamId)) {
+        throw std::runtime_error("invalid HTTP/2 frame values in test client");
+    }
     bytes.append(payload);
     return bytes;
 }
 
-}  // namespace sansio_driver_test
+inline std::string windowUpdate(std::uint32_t streamId, std::uint32_t increment) {
+    std::string payload(4, '\0');
+    writeBigEndian32(payload.data(), increment & 0x7fffffffU);
+    return frame(static_cast<std::uint8_t>(ruvia::Http2FrameType::kWindowUpdate), 0,
+        streamId, payload);
+}
 
-// End-to-end proof that the generic sans-I/O driver (ruvia-core) can back a real
-// HTTP/2 server over a real socket using ONLY the Http2Connection core: a synthetic
-// client sends a GET; the pump feeds the core, the onReadable callback dispatches a
-// 200 "pong" response, and the pump flushes it back. Validates the driver contract and
-// the core's external usability with zero coroutine sessions.
+}  // namespace sansio_driver_test
 
 // End-to-end proof that REAL framework dispatch runs over the sans-I/O core: onReadable
 // builds an HttpRequest from the stream (Http2RequestBuilder), resolves it against a

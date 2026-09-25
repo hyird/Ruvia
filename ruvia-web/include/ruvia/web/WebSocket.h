@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,7 @@
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
@@ -60,6 +62,11 @@ class WebSocket final {
 public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
+    ~WebSocket() {
+        if (operationScope_.hasPendingOperations() && worker_ != nullptr && !worker_->isCurrent()) {
+            std::terminate();
+        }
+    }
 
     /// Only one read operation may be outstanding. Creating another before
     /// the current operation completes or is discarded throws std::logic_error.
@@ -154,8 +161,9 @@ private:
     using Close = Task<void> (*)(void*, WebSocketCloseOptions);
     using Abort = void (*)(void*) noexcept;
 
-    WebSocket(std::pmr::memory_resource& resource, void* target, Read read, Write write, Close close, Abort abort) noexcept
+    WebSocket(std::pmr::memory_resource& resource, const WorkerHandle* worker, void* target, Read read, Write write, Close close, Abort abort) noexcept
         : resource_(&resource),
+          worker_(worker),
           target_(target),
           read_(read),
           write_(write),
@@ -163,6 +171,9 @@ private:
           abort_(abort) {}
 
     void requireActive() const {
+        if (worker_ != nullptr && !worker_->isCurrent()) {
+            std::terminate();
+        }
         if (!operationScope_.active()) {
             throw std::logic_error("websocket lifetime has expired");
         }
@@ -172,6 +183,7 @@ private:
     ScopedOperation<void> write(WebSocketOpcode opcode, std::pmr::string&& payload, bool compress = true);
 
     std::pmr::memory_resource* resource_;
+    const WorkerHandle* worker_;
     void* target_;
     Read read_;
     Write write_;

@@ -4,11 +4,13 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload, bool compress) {
-    return writeOwned(opcode, payload, WriteOperationLease(writeActive_), compress);
+    requireCurrentWorker();
+    return writeOwned(opcode, payload, WriteOperationLease(*this), compress);
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeOwned(WebSocketOpcode opcode, std::string_view payload, WriteOperationLease writeLease, bool compress) {
+    requireCurrentWorker();
     {
         WriteOperationLease activeWrite(std::move(writeLease));
         static_cast<void>(activeWrite);
@@ -18,14 +20,16 @@ Task<void> WebSocketConnection<Transport>::writeOwned(WebSocketOpcode opcode, st
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::close(::ruvia::WebSocketCloseOptions options) {
+    requireCurrentWorker();
     if (readPhase_ == ReadPhase::kReserved) {
         throw std::logic_error("websocket close cannot overlap a pending read");
     }
-    return closeOwned(options, WriteOperationLease(writeActive_));
+    return closeOwned(options, WriteOperationLease(*this));
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::closeOwned(::ruvia::WebSocketCloseOptions options, WriteOperationLease writeLease) {
+    requireCurrentWorker();
     {
         WriteOperationLease activeWrite(std::move(writeLease));
         static_cast<void>(activeWrite);
@@ -82,15 +86,22 @@ Task<void> WebSocketConnection<Transport>::closeOwned(::ruvia::WebSocketCloseOpt
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::detachAndDrainWrites() {
+    requireCurrentWorker();
     periodicCheck_.reset();
     // Teardown first cancels the transport operation that owns a suspended
     // write, then joins that write before the connection storage disappears.
     // Application writes can outlive the handler through the public facade just
     // as heartbeat writes can outlive the scanner callback, so both phases are
-    // part of the same structured drain.
-    abortTransport();
-    while (writePhase_ != WritePhase::kIdle) {
-        co_await backgroundWriteSignal_.wait();
+    // part of the same structured drain. Force a transport abort when active
+    // I/O remains even if the protocol already committed its normal close.
+    const bool hasActiveIo = readPhase_ == ReadPhase::kActive || writePhase_ != WritePhase::kIdle;
+    abortTransport(hasActiveIo);
+    while (hasOperationsToDrain()) {
+        if (readPhase_ != ReadPhase::kIdle) {
+            co_await readerDoneSignal_.wait();
+        } else {
+            co_await backgroundWriteSignal_.wait();
+        }
     }
 }
 
@@ -123,8 +134,7 @@ Task<void> WebSocketConnection<Transport>::writeExclusive(WebSocketOpcode opcode
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeFrameNow(
     WebSocketOpcode opcode, std::string_view payload, bool compress) {
-    static_cast<void>(compress);
-    switch (protocol_.submitFrame(opcode, payload)) {
+    switch (protocol_.submitFrame(opcode, payload, compress)) {
         case WebSocketServerFrameSubmitStatus::kAccepted:
             break;
         case WebSocketServerFrameSubmitStatus::kNotOpen:
@@ -174,9 +184,10 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
 }
 
 template <typename Transport>
-void WebSocketConnection<Transport>::abortTransport() noexcept {
+void WebSocketConnection<Transport>::abortTransport(bool forceTransport) noexcept {
     livenessState_ = WebSocketLivenessIdle{};
-    if (protocol_.abort() == WebSocketServerAbortDisposition::kAbortTransport) {
+    const auto disposition = protocol_.abort();
+    if (forceTransport || disposition == WebSocketServerAbortDisposition::kAbortTransport) {
         transport_.abort();
         notifyWriteIdle();
     }

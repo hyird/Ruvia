@@ -4,8 +4,8 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/Http1ServerConnectionPlan.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 namespace ruvia {
@@ -96,7 +96,7 @@ public:
     [[nodiscard]] constexpr const Http1CloseDelimitedResponseStreamHead* closeDelimitedStream()
         const&& = delete;
 
-    [[nodiscard]] constexpr HttpServerResponseBodyPlan bodyPlan() const noexcept {
+    [[nodiscard]] constexpr HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -106,13 +106,13 @@ public:
 
 private:
     friend Http1BufferedResponsePlan http1BufferedResponsePlan(
-        HttpServerBufferedResponseWritePlan, Http1ServerConnectionPlan) noexcept;
+        HttpBufferedResponseWritePlan, Http1ServerConnectionPlan) noexcept;
     friend constexpr Http1ResponseHeadPlan http1KnownLengthResponseStreamHeadPlan(
-        HttpServerResponseBodyPlan, Http1ServerConnectionPlan, std::uint64_t) noexcept;
+        HttpResponseBodyPlan, Http1ServerConnectionPlan, std::uint64_t) noexcept;
     friend constexpr Http1ResponseHeadPlan http1ChunkedResponseStreamHeadPlan(
-        HttpServerResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
+        HttpResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
     friend constexpr Http1ResponseHeadPlan http1CloseDelimitedResponseStreamHeadPlan(
-        HttpServerResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
+        HttpResponseBodyPlan, Http1ServerConnectionPlan) noexcept;
 
     using Framing = std::variant<Http1BufferedResponseHead, Http1KnownLengthResponseStreamHead,
         Http1ChunkedResponseStreamHead, Http1CloseDelimitedResponseStreamHead>;
@@ -134,32 +134,32 @@ private:
         return Framing(Http1CloseDelimitedResponseStreamHead());
     }
 
-    constexpr Http1ResponseHeadPlan(HttpServerResponseBodyPlan bodyPlan,
+    constexpr Http1ResponseHeadPlan(HttpResponseBodyPlan bodyPlan,
         HttpProtocolVersion protocolVersion, Framing framing) noexcept
         : bodyPlan_(bodyPlan),
           protocolVersion_(protocolVersion),
           framing_(framing) {}
 
-    HttpServerResponseBodyPlan bodyPlan_;
+    HttpResponseBodyPlan bodyPlan_;
     HttpProtocolVersion protocolVersion_;
     Framing framing_;
 };
 
 [[nodiscard]] constexpr Http1ResponseHeadPlan http1KnownLengthResponseStreamHeadPlan(
-    HttpServerResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan,
+    HttpResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan,
     std::uint64_t contentLength) noexcept {
     return Http1ResponseHeadPlan(bodyPlan, connectionPlan.protocolVersion(),
         Http1ResponseHeadPlan::knownLengthStreamFraming(contentLength));
 }
 
 [[nodiscard]] constexpr Http1ResponseHeadPlan http1ChunkedResponseStreamHeadPlan(
-    HttpServerResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan) noexcept {
+    HttpResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan) noexcept {
     return Http1ResponseHeadPlan(
         bodyPlan, connectionPlan.protocolVersion(), Http1ResponseHeadPlan::chunkedStreamFraming());
 }
 
 [[nodiscard]] constexpr Http1ResponseHeadPlan http1CloseDelimitedResponseStreamHeadPlan(
-    HttpServerResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan) noexcept {
+    HttpResponseBodyPlan bodyPlan, Http1ServerConnectionPlan connectionPlan) noexcept {
     return Http1ResponseHeadPlan(bodyPlan, connectionPlan.protocolVersion(),
         Http1ResponseHeadPlan::closeDelimitedStreamFraming());
 }
@@ -169,7 +169,7 @@ private:
 // exactly once; direct fact access avoids restoring a parallel write-plan copy.
 class Http1BufferedResponsePlan final {
 public:
-    [[nodiscard]] constexpr HttpServerResponseBodyPlan bodyPlan() const noexcept {
+    [[nodiscard]] constexpr HttpResponseBodyPlan bodyPlan() const noexcept {
         return headPlan_.bodyPlan();
     }
 
@@ -192,7 +192,7 @@ public:
 
 private:
     friend Http1BufferedResponsePlan http1BufferedResponsePlan(
-        HttpServerBufferedResponseWritePlan, Http1ServerConnectionPlan) noexcept;
+        HttpBufferedResponseWritePlan, Http1ServerConnectionPlan) noexcept;
 
     explicit constexpr Http1BufferedResponsePlan(Http1ResponseHeadPlan headPlan) noexcept
         : headPlan_(headPlan) {}
@@ -204,7 +204,7 @@ static_assert(std::is_trivially_copyable_v<Http1BufferedResponsePlan>);
 static_assert(sizeof(Http1BufferedResponsePlan) == sizeof(Http1ResponseHeadPlan));
 
 [[nodiscard]] inline Http1BufferedResponsePlan http1BufferedResponsePlan(
-    HttpServerBufferedResponseWritePlan writePlan, Http1ServerConnectionPlan connectionPlan) noexcept {
+    HttpBufferedResponseWritePlan writePlan, Http1ServerConnectionPlan connectionPlan) noexcept {
     return Http1BufferedResponsePlan(
         Http1ResponseHeadPlan(writePlan.bodyPlan(), connectionPlan.protocolVersion(),
             Http1ResponseHeadPlan::bufferedFraming(writePlan.contentLength())));

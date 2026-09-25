@@ -1,10 +1,11 @@
 #pragma once
 
-#include <memory>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 
@@ -36,9 +37,9 @@ template <typename Stream, typename BindTransport>
 Task<void> runBareHttp2SansIoSessionWith(Stream& stream, const detail::RouteTable& routes,
     WorkerMemory& worker, BindTransport bindTransport, std::string_view initialBytes) {
     Http2SansIoSessionFixture fixture;
-    auto dispatcher = std::make_shared<detail::WorkerDispatcher>(
-        static_cast<asio::io_context&>(stream.get_executor().context()), 64);
-    const auto workerHandle = detail::WorkerHandleAccess::make(dispatcher);
+    auto attachment = attachEventLoop(
+        static_cast<asio::io_context&>(stream.get_executor().context()), {.mailboxCapacity = 64});
+    const auto workerHandle = attachment.loop().handle();
     auto services = bindTransport(fixture.services(workerHandle));
     co_await detail::runHttp2SansIoSession(
         stream, routes, worker, fixture.context(services), initialBytes);

@@ -142,7 +142,7 @@ private:
 [[nodiscard]] inline bool httpResponseCodingFallbackForbidden(
     const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
     const HttpResponse& response) noexcept {
-    if (!planHttpServerResponseBody(requestMethod, response.status()).statusAllowsBody()) {
+    if (!planHttpResponseBody(requestMethod, response.status()).statusAllowsBody()) {
         return false;
     }
     if (responseHasHeaderName(response, "Content-Encoding")) {

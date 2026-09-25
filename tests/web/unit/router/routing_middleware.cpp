@@ -1,3 +1,5 @@
+#include "ruvia/core/AsioTask.h"
+
 #include "routing_fixture.h"
 
 // Routing: the middleware chain around a route.
@@ -21,20 +23,12 @@ RUVIA_TEST(validated_model_binding_spans_next_and_unwinds_before_upstream_resume
 
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        auto request = ruvia::detail::HttpRequestAccess::make();
-        ruvia::detail::HttpRequestAccess::reset(request);
-        ruvia::detail::HttpRequestAccess::setMethod(request, "POST");
-        ruvia::detail::HttpRequestAccess::setPath(request, "/validated-scope");
-        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
-        const auto contentTypeSlot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
-            ruvia::detail::RequestKnownHeader::kContentType);
-        (void)ruvia::detail::HttpRequestAccess::addHeader(
-            request, ruvia::HttpHeaderView{"Content-Type", "application/json"}, contentTypeSlot);
-        ruvia::detail::HttpRequestAccess::setBody(request, R"({"value":"ok"})");
+        const std::array headers{ruvia::HttpHeaderView{"Content-Type", "application/json"}};
+        auto request = makeRequest(memory, "POST", "/validated-scope", headers, R"({"value":"ok"})");
 
         asio::io_context ioContext(1);
         auto future = asio::co_spawn(ioContext,
-            ruvia::detail::taskAsAwaitable(
+            ruvia::asAwaitable(
                 impl.routeTable().dispatch(request, memory, ruvia::test::testContextServices())),
             asio::use_future);
         ioContext.run();
@@ -154,15 +148,11 @@ RUVIA_TEST(global_middleware_prepends_to_every_route_chain) {
     const auto dispatchPath = [&table](std::string_view requestPath) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-        ruvia::detail::HttpRequestAccess::reset(request);
-        ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-        ruvia::detail::HttpRequestAccess::setPath(request, requestPath);
-        ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+        auto request = makeRequest(memory, "GET", requestPath);
 
         asio::io_context ctx(1);
         auto future = asio::co_spawn(ctx,
-            ruvia::detail::taskAsAwaitable(
+            ruvia::asAwaitable(
                 table.dispatch(request, memory, ruvia::test::testContextServices())),
             asio::use_future);
         ctx.run();
@@ -233,11 +223,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
 
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/s");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    auto request = makeRequest(memory, "GET", "/s");
 
     const auto resolution = table.resolve(HttpKnownMethod::kGet, "/s");
     const auto* resolved = resolution.resolved();
@@ -254,7 +240,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
         ctx,
         [&]() -> asio::awaitable<void> {
             try {
-                (void)co_await ruvia::detail::taskAsAwaitable(table.dispatchResponseStream(
+                (void)co_await ruvia::asAwaitable(table.dispatchResponseStream(
                     request, *resolved, memory, writer, ruvia::test::testContextServices()));
             } catch (const std::exception&) {
                 threw = true;

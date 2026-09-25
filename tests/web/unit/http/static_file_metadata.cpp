@@ -8,8 +8,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/server/file/HttpNativeFile.h"
 

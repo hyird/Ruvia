@@ -22,9 +22,9 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/web/db/DbExecResult.h"
 #include "ruvia/web/db/DbFindOptions.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
@@ -39,6 +39,7 @@
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
@@ -63,8 +64,9 @@ const ruvia::RedisRepositoryConfig kTestRedisRepositoryConfig{
 class RedisTestWorker final {
 public:
     explicit RedisTestWorker(asio::io_context& ioContext)
-        : dispatcher_(std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 64)),
-          handle_(ruvia::detail::WorkerHandleAccess::make(dispatcher_)) {}
+        : ioContext_(ioContext),
+          attachment_(ruvia::attachEventLoop(ioContext)),
+          handle_(attachment_.loop().handle()) {}
 
     RedisTestWorker(const RedisTestWorker&) = delete;
     RedisTestWorker& operator=(const RedisTestWorker&) = delete;
@@ -74,18 +76,25 @@ public:
     }
 
     void run() {
-        dispatcher_->runContext();
+        attachment_.run();
+    }
+
+    void stop() noexcept {
+        ioContext_.stop();
+        attachment_.stop();
     }
 
 private:
-    std::shared_ptr<ruvia::detail::WorkerDispatcher> dispatcher_;
+    asio::io_context& ioContext_;
+    ruvia::EventLoopAttachment attachment_;
     ruvia::WorkerHandle handle_;
 };
 
 class StalledRedisCommandServer final {
 public:
     StalledRedisCommandServer()
-        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : ioContext_(ruvia::test::newTestIoContext()),
+          acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           port_(acceptor_.local_endpoint().port()),
           commandReadFuture_(commandRead_.get_future()),
           releaseFuture_(release_.get_future()),
@@ -192,7 +201,7 @@ private:
         }
     }
 
-    asio::io_context ioContext_;
+    asio::io_context& ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::uint16_t port_;
     std::promise<void> commandRead_;
@@ -205,7 +214,8 @@ private:
 class SingleReplyRedisCommandServer final {
 public:
     SingleReplyRedisCommandServer()
-        : acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
+        : ioContext_(ruvia::test::newTestIoContext()),
+          acceptor_(ioContext_, asio::ip::tcp::endpoint(asio::ip::tcp::v4(), 0)),
           port_(acceptor_.local_endpoint().port()),
           commandReadFuture_(commandRead_.get_future()),
           thread_([this] { run(); }) {}
@@ -303,7 +313,7 @@ private:
         }
     }
 
-    asio::io_context ioContext_;
+    asio::io_context& ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::uint16_t port_;
     std::promise<void> commandRead_;
@@ -551,7 +561,7 @@ RUVIA_TEST(redis_repository_command_mappers_validate_wire_results) {
 }
 
 RUVIA_TEST(redis_repository_async_mapping_reclaims_replies_and_retains_results) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     ruvia::test::CountingMemoryResource wireResource;
     ruvia::test::CountingMemoryResource resultResource;
 
@@ -576,7 +586,7 @@ RUVIA_TEST(redis_repository_async_mapping_reclaims_replies_and_retains_results) 
     };
 
     auto result = asio::co_spawn(
-        ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+        ioContext, ruvia::asAwaitable(exercise()), asio::use_future);
     ioContext.run();
     result.get();
     RUVIA_CHECK_EQ(wireResource.liveAllocations(), std::size_t{0});
@@ -586,7 +596,7 @@ RUVIA_TEST(redis_repository_async_mapping_reclaims_replies_and_retains_results) 
 }
 
 RUVIA_TEST(redis_repository_async_mapping_reclaims_exception_frames) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     ruvia::test::CountingMemoryResource replyResource;
     const auto baseline = replyResource.liveAllocations();
 
@@ -609,14 +619,14 @@ RUVIA_TEST(redis_repository_async_mapping_reclaims_exception_frames) {
     };
 
     auto result = asio::co_spawn(
-        ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+        ioContext, ruvia::asAwaitable(exercise()), asio::use_future);
     ioContext.run();
     result.get();
     RUVIA_CHECK(replyResource.deallocationCount() > 0);
 }
 
 RUVIA_TEST(redis_repository_cold_operations_release_owned_arguments) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     const std::array definitions{redisDefinition("default")};
@@ -669,7 +679,7 @@ RUVIA_TEST(redis_repository_cold_operations_release_owned_arguments) {
 }
 
 RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     ruvia::test::TrackingResource inputResource;
@@ -699,7 +709,7 @@ RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
 
 RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
     SingleReplyRedisCommandServer server;
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     ruvia::test::TrackingResource inputResource;
@@ -747,8 +757,17 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
                 co_return 0;
             }
         };
-        auto result = asio::co_spawn(
-            ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+        std::promise<std::uint64_t> completion;
+        auto result = completion.get_future();
+        asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
+            [&worker, &completion](std::exception_ptr error, std::uint64_t value) {
+                if (error) {
+                    completion.set_exception(std::move(error));
+                } else {
+                    completion.set_value(value);
+                }
+                worker.stop();
+            });
         std::jthread runner([&worker] { worker.run(); });
         server.waitUntilCommandRead();
         const auto& args = server.arguments();
@@ -789,7 +808,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
 }
 
 RUVIA_TEST(redis_repository_pre_cancelled_operations_release_each_operation) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     const std::array definitions{redisDefinition("default")};
@@ -818,8 +837,17 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_release_each_operation) {
         }
     };
 
-    auto result = asio::co_spawn(
-        ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    std::promise<void> completion;
+    auto result = completion.get_future();
+    asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
+        [&worker, &completion](std::exception_ptr error) {
+            if (error) {
+                completion.set_exception(std::move(error));
+            } else {
+                completion.set_value();
+            }
+            worker.stop();
+        });
     worker.run();
     result.get();
     RUVIA_CHECK(operationResource.allocationCount() > 0);
@@ -827,7 +855,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_release_each_operation) {
 }
 
 RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     ruvia::test::TrackingResource inputResource;
@@ -860,8 +888,17 @@ RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
         }
         RUVIA_CHECK(cancelled);
     };
-    auto result = asio::co_spawn(
-        ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+    std::promise<void> completion;
+    auto result = completion.get_future();
+    asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
+        [&worker, &completion](std::exception_ptr error) {
+            if (error) {
+                completion.set_exception(std::move(error));
+            } else {
+                completion.set_value();
+            }
+            worker.stop();
+        });
     worker.run();
     result.get();
     RUVIA_CHECK(!inputResource.deallocatedAfterRelease());
@@ -870,7 +907,7 @@ RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
 
 RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
     StalledRedisCommandServer server;
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     ruvia::RedisConfig config;
@@ -913,8 +950,17 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
             }
             co_return ruvia::RedisError::Code::kProtocolError;
         };
-        auto result = asio::co_spawn(
-            ioContext, ruvia::detail::taskAsAwaitable(exercise()), asio::use_future);
+        std::promise<ruvia::RedisError::Code> completion;
+        auto result = completion.get_future();
+        asio::co_spawn(ioContext, ruvia::asAwaitable(exercise()),
+            [&worker, &completion](std::exception_ptr error, ruvia::RedisError::Code code) {
+                if (error) {
+                    completion.set_exception(std::move(error));
+                } else {
+                    completion.set_value(code);
+                }
+                worker.stop();
+            });
         std::jthread runner([&worker] { worker.run(); });
         server.waitUntilCommandRead();
         cancellation.requestStop();
@@ -929,7 +975,7 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
 }
 
 RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
@@ -953,7 +999,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
 }
 
 RUVIA_TEST(redis_repository_rejects_operations_after_scope_closes) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
@@ -970,7 +1016,7 @@ RUVIA_TEST(redis_repository_rejects_operations_after_scope_closes) {
 }
 
 RUVIA_TEST(redis_repository_expired_escaped_repository_releases_owned_mapping) {
-    asio::io_context ioContext;
+    auto& ioContext = ruvia::test::newTestIoContext();
     RedisTestWorker worker(ioContext);
     ruvia::test::CountingMemoryResource operationResource;
     const std::array definitions{redisDefinition("default")};

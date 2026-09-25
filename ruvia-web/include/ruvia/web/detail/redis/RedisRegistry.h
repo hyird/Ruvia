@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #include "ruvia/web/redis/RedisHandle.h"

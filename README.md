@@ -173,7 +173,7 @@ if (const auto* tls = info.tls()) {
 | Directory | CMake target | Purpose |
 | --- | --- | --- |
 | `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR memory, connection scanning, and runtime helpers. |
-| `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
+| `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, HTTP/3 varint/frame codecs, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
 | `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server and outbound-client I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
 
 Dependency direction is fixed:
@@ -2210,8 +2210,11 @@ negotiation, redirects, and content coding. Parse `Content-Encoding` with
 `ruvia::parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>`, and
 use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
-`<ruvia/http/MultipartParser.h>`. The supported protocol-driver entry points
-are `<ruvia/http/Http2Connection.h>` and
+`<ruvia/http/MultipartParser.h>`. HTTP/3 variable-length integers and opaque
+frames are available through `<ruvia/http/Http3VarInt.h>` and
+`<ruvia/http/Http3Frames.h>`; QUIC transport, QPACK, and HTTP/3 connection
+drivers are not provided. The supported protocol-driver entry points are
+`<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
 `<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,
 `<ruvia/http/Http1WebSocketClientHandshake.h>` for client handshake request
@@ -2271,8 +2274,8 @@ the external sans-I/O driver finishes using it; response-head values remain
 owned PMR results. `parseSetCookie()` likewise returns views into its input, so
 owning string temporaries are rejected at compile time.
 
-Headers below `ruvia/http/detail/` are internal component contracts used by
-Ruvia's own targets and are not a supported application API.
+Headers below `ruvia/http/detail/` are internal to `ruvia-http` and are not a
+supported application API.
 
 ## License
 

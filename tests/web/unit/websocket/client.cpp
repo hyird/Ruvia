@@ -1,6 +1,7 @@
 #include <array>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <string>
 
 #include <asio/co_spawn.hpp>
@@ -15,15 +16,17 @@
 #include <openssl/x509.h>
 
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/web/WebSocketClient.h"
 
 #include "test_harness.h"
+#include "test_io_context.h"
 
 namespace {
 
 void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
-    asio::io_context io;
+    auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     std::exception_ptr peerFailure;
@@ -38,11 +41,29 @@ void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClo
             throw std::runtime_error("missing WebSocket key");
         }
         const auto start = keyBegin + keyHeader.size();
-        ruvia::detail::WebSocketAcceptKey accept{};
-        ruvia::detail::encodeWebSocketAccept(accept, std::string_view(request).substr(start, request.find("\r\n", start) - start));
-        // The first frame can arrive in the same transport read as the upgrade.
-        const auto response = std::string("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ") +
-                              std::string(accept.data(), accept.size()) + "\r\n\r\n" + "\x82\x05hello";
+        const auto keyEnd = request.find("\r\n", start);
+        const auto key = std::string_view(request).substr(start, keyEnd - start);
+        const std::array headers{
+            ruvia::HttpHeaderView("Host", "127.0.0.1"),
+            ruvia::HttpHeaderView("Upgrade", "websocket"),
+            ruvia::HttpHeaderView("Connection", "Upgrade"),
+            ruvia::HttpHeaderView("Sec-WebSocket-Version", "13"),
+            ruvia::HttpHeaderView("Sec-WebSocket-Key", key),
+        };
+        std::pmr::monotonic_buffer_resource resource;
+        auto [parsedRequest, parseError] =
+            ruvia::makeParsedHttpRequest("GET", "/", headers, {}, &resource);
+        if (parseError) {
+            throw std::runtime_error("could not parse WebSocket request");
+        }
+        auto handshake = ruvia::makeWebSocketServerHandshake(
+            parsedRequest, {.resource = &resource});
+        // The first frame can arrive in the same transport write as the upgrade.
+        std::string response;
+        handshake.forEachResponsePart([&response](std::string_view part) {
+            response.append(part);
+        });
+        response.append("\x82\x05hello", 7);
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         std::array<unsigned char, 2> header{};
         co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
@@ -134,7 +155,7 @@ RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {
     require(SSL_CTX_use_certificate(tls.native_handle(), certificate.get()) == 1);
     require(SSL_CTX_use_PrivateKey(tls.native_handle(), key.get()) == 1);
 
-    asio::io_context io;
+    auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     bool handshakeRejected = false;

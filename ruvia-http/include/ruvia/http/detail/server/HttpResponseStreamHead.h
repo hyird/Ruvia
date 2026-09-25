@@ -69,7 +69,7 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] HttpServerResponseBodyPlan bodyPlan() const noexcept {
+    [[nodiscard]] HttpResponseBodyPlan bodyPlan() const noexcept {
         return bodyPlan_;
     }
 
@@ -81,35 +81,45 @@ public:
         return headDisposition_;
     }
 
+    [[nodiscard]] bool trailerIntentAllowed() const noexcept {
+        return !trailerIntentPresent_ ||
+               (!responseStatus().isInformational() &&
+                   responseStatus() != http_status::kNoContent &&
+                   responseStatus() != http_status::kNotModified);
+    }
+
 private:
     friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
         ResponseStreamFraming, HttpKnownMethod, HttpStatusCode, ResponseTrailerIntent) noexcept;
 
-    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpServerResponseBodyPlan bodyPlan,
+    ResponseStreamCommitPlan(ResponseStreamFraming framing, HttpResponseBodyPlan bodyPlan,
         ResponseStreamTrailerFraming trailerFraming,
-        ResponseStreamHeadDisposition headDisposition) noexcept
+        ResponseStreamHeadDisposition headDisposition, bool trailerIntentPresent) noexcept
         : framing_(framing),
           bodyPlan_(bodyPlan),
           trailerFraming_(trailerFraming),
-          headDisposition_(headDisposition) {}
+          headDisposition_(headDisposition),
+          trailerIntentPresent_(trailerIntentPresent) {}
 
     ResponseStreamFraming framing_{ResponseStreamFraming::kHttp2Frames};
-    HttpServerResponseBodyPlan bodyPlan_;
+    HttpResponseBodyPlan bodyPlan_;
     ResponseStreamTrailerFraming trailerFraming_{ResponseStreamTrailerFraming::kUnavailable};
     ResponseStreamHeadDisposition headDisposition_{ResponseStreamHeadDisposition::kMessageEnded};
+    bool trailerIntentPresent_{false};
 };
 
 [[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
     ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
-    const auto bodyPlan = planHttpServerResponseBody(requestMethod, responseStatus);
+    const auto bodyPlan = planHttpResponseBody(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
         return ResponseStreamCommitPlan(framing, bodyPlan,
             ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
             bodyPlan.bodySuppressed() ? (trailerIntent == ResponseTrailerIntent::kPresent
                                                 ? ResponseStreamHeadDisposition::kTrailersOnly
                                                 : ResponseStreamHeadDisposition::kMessageEnded)
-                                      : ResponseStreamHeadDisposition::kBodyOpen);
+                                      : ResponseStreamHeadDisposition::kBodyOpen,
+            trailerIntent == ResponseTrailerIntent::kPresent);
     }
 
     return ResponseStreamCommitPlan(framing, bodyPlan,
@@ -117,7 +127,8 @@ private:
             ? ResponseStreamTrailerFraming::kHttp1Chunked
             : ResponseStreamTrailerFraming::kUnavailable,
         bodyPlan.bodySuppressed() ? ResponseStreamHeadDisposition::kMessageEnded
-                                  : ResponseStreamHeadDisposition::kBodyOpen);
+                                  : ResponseStreamHeadDisposition::kBodyOpen,
+        trailerIntent == ResponseTrailerIntent::kPresent);
 }
 
 class ResponseStreamHead final {
@@ -151,13 +162,15 @@ private:
     if (response.status() != commitPlan.responseStatus()) {
         throw std::invalid_argument("response stream commit plan status does not match response");
     }
+    if (!commitPlan.trailerIntentAllowed()) {
+        throw std::invalid_argument("response status does not permit trailers");
+    }
     const auto framing = commitPlan.framing();
     const auto bodyPlan = commitPlan.bodyPlan();
-    const auto policy = bodyPlan.policy();
     const bool writerOwnsHttp1KnownLength =
-        framing == ResponseStreamFraming::kHttp1KnownLength && policy.autoContentLengthAllowed();
+        framing == ResponseStreamFraming::kHttp1KnownLength && bodyPlan.autoContentLengthAllowed();
     const bool writerOwnsHttp1Chunked = framing == ResponseStreamFraming::kHttp1Chunked &&
-                                        policy.transferEncodingAllowed() &&
+                                        bodyPlan.transferEncodingAllowed() &&
                                         !bodyPlan.bodySuppressed();
 
     // Keep the prepared response metadata consistent with the wire plan. The
@@ -182,7 +195,7 @@ private:
                                                                  detail::kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
         kind == ResponseStreamKind::kSse &&
-        (framing == ResponseStreamFraming::kHttp2Frames || policy.transferEncodingAllowed()) &&
+        (framing == ResponseStreamFraming::kHttp2Frames || bodyPlan.transferEncodingAllowed()) &&
         !detail::responseHasKnownHeader(response, detail::kResponseHeaderCacheControl);
     const auto additionalHeaders = static_cast<std::size_t>(needsSseContentType) +
                                    static_cast<std::size_t>(needsHttp1Chunked) +
@@ -213,11 +226,11 @@ private:
 }  // namespace ruvia
 
 namespace ruvia::detail {
-using ::ruvia::ResponseStreamFraming;
-using ::ruvia::ResponseStreamKind;
-using ::ruvia::ResponseTrailerIntent;
-using ::ruvia::ResponseStreamTrailerFraming;
-using ::ruvia::ResponseStreamHeadDisposition;
 using ::ruvia::ResponseStreamCommitPlan;
+using ::ruvia::ResponseStreamFraming;
 using ::ruvia::ResponseStreamHead;
+using ::ruvia::ResponseStreamHeadDisposition;
+using ::ruvia::ResponseStreamKind;
+using ::ruvia::ResponseStreamTrailerFraming;
+using ::ruvia::ResponseTrailerIntent;
 }  // namespace ruvia::detail

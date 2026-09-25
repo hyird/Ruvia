@@ -7,9 +7,9 @@
 #include <variant>
 
 #include "ruvia/http/HttpAcceptEncoding.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/http/HttpCors.h"
@@ -80,7 +80,7 @@ private:
 // a policy miss remains 406 while an encoder failure becomes a server error.
 class HttpBufferedResponsePreparation final {
 public:
-    [[nodiscard]] HttpServerBufferedResponseWritePlan writePlan() const noexcept {
+    [[nodiscard]] HttpBufferedResponseWritePlan writePlan() const noexcept {
         return writePlan_;
     }
 
@@ -96,7 +96,7 @@ private:
         const HttpRequest&, const HttpResponseCodingPolicy&, HttpResponse&,
         const HttpServerOptions&, const WorkerHandle&);
 
-    HttpBufferedResponsePreparation(HttpServerBufferedResponseWritePlan writePlan,
+    HttpBufferedResponsePreparation(HttpBufferedResponseWritePlan writePlan,
         HttpResponseCompressionResult compressionResult) noexcept
         : writePlan_(writePlan),
           compressionResult_(compressionResult) {}
@@ -137,7 +137,7 @@ private:
         // response status that permits content can violate it; 204/205/304
         // are representation-free and must not be rejected before the
         // handler's final status is known.
-        return planHttpServerResponseBody(request.knownMethod(), response.status()).statusAllowsBody();
+        return planHttpResponseBody(request.knownMethod(), response.status()).statusAllowsBody();
     }
     return httpResponseCodingFallbackForbidden(*selection, request.knownMethod(), response);
 }
@@ -148,7 +148,7 @@ private:
     const auto* selection = policy.selection();
     if (selection != nullptr && compressionResult.failed() &&
         selection->coding() != HttpContentCoding::kIdentity && !selection->identityAccepted() &&
-        planHttpServerResponseBody(request.knownMethod(), response.status()).statusAllowsBody()) {
+        planHttpResponseBody(request.knownMethod(), response.status()).statusAllowsBody()) {
         return HttpErrorInfo({.status = http_status::kInternalServerError,
             .code = "response_compression_failed",
             .message = "response compression failed"});
@@ -180,7 +180,7 @@ private:
         }
     }
     return HttpBufferedResponsePreparation(
-        planHttpServerBufferedResponseWrite(request.knownMethod(), response), compressionResult);
+        planBufferedHttpResponseWrite(request.knownMethod(), response), compressionResult);
 }
 
 // Runtime preparation preserves the synchronous fast path for small in-memory
@@ -203,7 +203,7 @@ private:
         }
     }
     co_return HttpBufferedResponsePreparation(
-        planHttpServerBufferedResponseWrite(request.knownMethod(), response), compressionResult);
+        planBufferedHttpResponseWrite(request.knownMethod(), response), compressionResult);
 }
 
 }  // namespace ruvia::detail

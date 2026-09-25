@@ -11,11 +11,11 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/RuntimeLifecycle.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/RuntimeLifecycle.h"
-#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"

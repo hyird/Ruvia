@@ -2,17 +2,17 @@
 
 // Stable, non-detail entry points for HTTP response serialization plans. The
 // plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
-#include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/HttpResponseTrailerSection.h"
-#include "ruvia/http/Http1ResponseHeadPlan.h"
-#include "ruvia/http/HttpResponseHeadBuffer.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
-
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <utility>
+
+#include "ruvia/http/Http1ResponseHeadPlan.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseHeadBuffer.h"
+#include "ruvia/http/HttpResponseTrailerSection.h"
+#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 namespace ruvia {
 

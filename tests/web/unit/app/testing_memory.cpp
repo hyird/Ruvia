@@ -11,7 +11,6 @@
 
 #include "ruvia/core/Timer.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/Deadline.h"
@@ -80,7 +79,7 @@ private:
         ruvia::HttpResponse response({.resource = &state.resource});
         std::pmr::string body(&state.resource);
         body.assign(256 * 1024, 'm');
-        ruvia::detail::setResponseBodyOwned(response, std::move(body));
+        response.ownedBody(std::move(body));
         co_return response;
     }
 
@@ -89,7 +88,7 @@ private:
         ruvia::HttpResponse response({.resource = &state.resource});
         std::pmr::string body(&state.resource);
         body.assign(256 * 1024, 'e');
-        ruvia::detail::setResponseBodyOwned(response, std::move(body));
+        response.ownedBody(std::move(body));
         throw std::runtime_error("testing memory failure");
         co_return response;
     }
@@ -98,7 +97,7 @@ private:
         auto& state = c.workerState<MemoryState>();
         ruvia::HttpResponse response({.resource = &state.resource});
         std::pmr::string body(256 * 1024, 'c', &state.resource);
-        ruvia::detail::setResponseBodyOwned(response, std::move(body));
+        response.ownedBody(std::move(body));
         const auto result = co_await ruvia::sleepFor(
             c.worker(), std::chrono::hours(1), c.stopToken());
         if (result != ruvia::TimerSleepResult::kStopRequested || !c.deadlineExceeded()) {

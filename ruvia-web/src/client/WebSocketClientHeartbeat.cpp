@@ -12,7 +12,6 @@
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/WorkerHandle.h"
-
 #include "ruvia/core/WorkerTimer.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"

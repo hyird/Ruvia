@@ -1,6 +1,5 @@
 #include "ruvia/web/detail/http2/Http2SansIoSessionEngine.h"
 
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -63,41 +62,14 @@ bool Http2SansIoSessionEngine::wantsWrite() const noexcept {
 }
 
 void Http2SansIoSessionEngine::takeOutput(std::pmr::string& output) {
-    constexpr std::size_t kWriterScratchBytes = kHttp2DataOutputCreditBytes;
-    const auto pending = connection_.pendingOutput();
-    auto count = std::min(pending.size(), kWriterScratchBytes);
-    // Track complete DATA frames intersecting this socket batch before core
-    // consumption removes their protocol bytes. Extend a batch to a frame boundary
-    // so the next pending view always starts at a parseable frame header.
-    for (std::size_t offset = 0; offset + 9 <= pending.size() && offset < count;) {
-        const auto* frame = reinterpret_cast<const unsigned char*>(pending.data() + offset);
-        const auto payloadBytes = (static_cast<std::size_t>(frame[0]) << 16) |
-                                  (static_cast<std::size_t>(frame[1]) << 8) |
-                                  static_cast<std::size_t>(frame[2]);
-        const auto frameBytes = std::size_t{9} + payloadBytes;
-        if (frameBytes > pending.size() - offset) {
-            break;
-        }
-        if (offset < count && offset + frameBytes > count) {
-            count = offset + frameBytes;
-        }
-        if (frame[3] == 0) {
-            const auto streamId = (static_cast<std::uint32_t>(frame[5] & 0x7f) << 24) |
-                                  (static_cast<std::uint32_t>(frame[6]) << 16) |
-                                  (static_cast<std::uint32_t>(frame[7]) << 8) |
-                                  static_cast<std::uint32_t>(frame[8]);
-            if (streamId != 0) {
-                outputBudget_.noteDataOutput(streamId, payloadBytes);
-            }
-        }
-        if (frameBytes > pending.size() - offset) {
-            break;
-        }
-        offset += frameBytes;
-    }
-    output.assign(pending.data(), count);
-    const auto consumed = connection_.consumeOutput(count);
-    if (consumed == Http2OutputConsumeStatus::kOutOfRange) {
+    // Preserve assign() semantics when the caller reuses its scratch string. The
+    // core batch operation only consumes output and invokes its observer after the
+    // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
+    output.clear();
+    const auto result = connection_.takeOutputBatch(kHttp2DataOutputCreditBytes, output, [](void* context, std::uint32_t streamId, std::size_t payloadBytes) noexcept { static_cast<Http2DataOutputBudget*>(context)->noteDataOutput(streamId, payloadBytes); }, &outputBudget_);
+    if (result.status == Http2OutputBatchStatus::kUnaligned) {
+        // This driver exclusively consumes complete batches; an unaligned cursor
+        // would mean another consumer violated that ownership contract.
         std::terminate();
     }
 }
@@ -184,13 +156,13 @@ void Http2SansIoSessionEngine::terminate(std::error_code error) noexcept {
 
 void Http2SansIoSessionEngine::resetStreamNoThrow(
     std::uint32_t streamId, Http2ErrorCode error) noexcept {
-    outputBudget_.release(streamId);
-    outputBudget_.wake();
     try {
         (void)connection_.submitReset(streamId, error);
     } catch (...) {
         terminate(std::make_error_code(std::errc::not_enough_memory));
     }
+    outputBudget_.releaseAndReconcile(streamId, connection_);
+    outputBudget_.wake();
 }
 
 std::pmr::memory_resource* Http2SansIoSessionEngine::workerResource() const noexcept {
@@ -232,12 +204,13 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         bufferedBody == nullptr ? std::string_view{} : bufferedBody->bytes());
     if (!requestBuild) {
         auto request = makeParsedHttpRequest(
-            "GET", "/", {}, {}, requestMemory.resource()).first;
+            "GET", "/", {}, {}, requestMemory.resource())
+                           .first;
         auto response = co_await routes_.handleError(request, requestMemory,
             copyHttpProtocolErrorInfo(requestMemory.resource(), requestBuild.error()),
             baseServices);
         (void)co_await bufferedResponseWriter_.write(streamId, response,
-            planHttpServerBufferedResponseWrite(requestMethod, response));
+            planBufferedHttpResponseWrite(requestMethod, response));
         co_return;
     }
 
@@ -652,7 +625,7 @@ void Http2SansIoSessionEngine::drainEvents() {
     };
     const auto onStreamClosed = [&](const auto* streamClosed) {
         const auto streamId = streamClosed->streamId();
-        outputBudget_.release(streamId);
+        outputBudget_.releaseAndReconcile(streamId, connection_);
         auto* streamRuntime = streamRuntimes_.find(streamId);
         auto* signal = streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
         if (signal != nullptr) {

@@ -4,11 +4,13 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
+    requireCurrentWorker();
     return readOwned(ReadGuard(*this));
 }
 
 template <typename Transport>
 Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::readOwned(ReadGuard readGuard) {
+    requireCurrentWorker();
     {
         ReadGuard activeRead(std::move(readGuard));
         activeRead.start();

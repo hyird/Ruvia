@@ -1,6 +1,6 @@
-#include "field_parsing_fixture.h"
-
 #include "ruvia/http/HttpFieldValues.h"
+
+#include "field_parsing_fixture.h"
 
 // A quoted-string in a field value is opaque: a delimiter inside it never splits the field.
 

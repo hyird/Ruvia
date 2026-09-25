@@ -53,8 +53,12 @@ public:
     Http2SansIoWsTransport(ruvia::Http2Connection& connection, std::uint32_t streamId,
         Http2SansIoBodyQueue& bodyQueue, Http2SansIoStreamSignal& signal, WorkerSignal& writeSignal,
         Executor executor) noexcept
-        : connection_(connection), streamId_(streamId), bodyQueue_(bodyQueue), signal_(signal),
-          writeSignal_(writeSignal), executor_(executor) {}
+        : connection_(connection),
+          streamId_(streamId),
+          bodyQueue_(bodyQueue),
+          signal_(signal),
+          writeSignal_(writeSignal),
+          executor_(executor) {}
 
     [[nodiscard]] Executor executor() const noexcept {
         return executor_;
@@ -62,8 +66,10 @@ public:
 
     [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
         for (;;) {
-            if (signal_.terminated()) {
-                co_return WsTransportReadResult::makeFailure(signal_.terminalError());
+            if (aborted_ || signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(aborted_
+                                                                 ? std::make_error_code(std::errc::operation_canceled)
+                                                                 : signal_.terminalError());
             }
             const auto receiveStatus = connection_.streamReceiveStatus(streamId_);
             if (receiveStatus == Http2StreamReceiveStatus::kClosed) {
@@ -80,8 +86,10 @@ public:
             if (receiveStatus == Http2StreamReceiveStatus::kEnded) {
                 co_return WsTransportReadResult::makeEnd();
             }
-            if (signal_.terminated()) {
-                co_return WsTransportReadResult::makeFailure(signal_.terminalError());
+            if (aborted_ || signal_.terminated()) {
+                co_return WsTransportReadResult::makeFailure(aborted_
+                                                                 ? std::make_error_code(std::errc::operation_canceled)
+                                                                 : signal_.terminalError());
             }
             co_await signal_.wait();
         }
@@ -101,13 +109,13 @@ public:
             const bool last = offset + count == bytes.size();
             const auto end = last ? terminal : Http2EndStream::kKeepOpen;
             for (;;) {
-                if (signal_.terminated()) {
-                    co_return signal_.terminalError();
+                if (aborted_ || signal_.terminated()) {
+                    co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                                       : signal_.terminalError();
                 }
                 if (chunk.empty() && end == Http2EndStream::kEndStream &&
                     connection_.hasQueuedData(streamId_)) {
-                    const auto waitResult =
-                        co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                    const auto waitResult = co_await waitForSendWindow();
                     if (waitResult.aborted() != nullptr) {
                         co_return signal_.terminated() ? signal_.terminalError()
                                                        : std::make_error_code(std::errc::connection_reset);
@@ -120,16 +128,23 @@ public:
                         if (!window) {
                             co_return std::make_error_code(std::errc::connection_reset);
                         }
+                        if (aborted_ || signal_.terminated()) {
+                            co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                                               : signal_.terminalError();
+                        }
                         if (window->available != 0) {
                             break;
                         }
                         co_await outputBudget_->waitForChange();
-                        if (signal_.terminated()) {
-                            co_return signal_.terminalError();
+                        if (aborted_ || signal_.terminated()) {
+                            co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                                               : signal_.terminalError();
                         }
                     }
-                    if (!(co_await outputBudget_->acquire(streamId_, signal_))) {
-                        co_return signal_.terminalError();
+                    if (!(co_await outputBudget_->acquire(streamId_, signal_)) || aborted_ ||
+                        signal_.terminated()) {
+                        co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                                           : signal_.terminalError();
                     }
                 }
                 const auto result = connection_.submitData(streamId_, chunk, end);
@@ -156,8 +171,7 @@ public:
                     result == Http2DataSubmitStatus::kContentLengthIncomplete) {
                     co_return std::make_error_code(std::errc::protocol_error);
                 }
-                const auto waitResult =
-                    co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                const auto waitResult = co_await waitForSendWindow();
                 if (waitResult.aborted() != nullptr) {
                     co_return signal_.terminated() ? signal_.terminalError()
                                                    : std::make_error_code(std::errc::connection_reset);
@@ -169,8 +183,7 @@ public:
             offset += count;
             submittedEmptyTerminal = bytes.empty();
             if (!bytes.empty() && offset < bytes.size()) {
-                const auto waitResult =
-                    co_await awaitHttp2SendWindow(connection_, streamId_, &signal_);
+                const auto waitResult = co_await waitForSendWindow();
                 if (waitResult.aborted() != nullptr) {
                     co_return signal_.terminated() ? signal_.terminalError()
                                                    : std::make_error_code(std::errc::connection_reset);
@@ -181,8 +194,13 @@ public:
     }
 
     void abort() noexcept {
+        if (aborted_) {
+            return;
+        }
+        aborted_ = true;
         if (outputBudget_ != nullptr) {
             outputBudget_->release(streamId_);
+            outputBudget_->wake();
         }
         try {
             (void)connection_.submitReset(streamId_, Http2ErrorCode::kCancel);
@@ -195,6 +213,19 @@ public:
     }
 
 private:
+    [[nodiscard]] Task<Http2SendWindowWaitResult> waitForSendWindow() {
+        for (;;) {
+            if (aborted_ || signal_.terminated() ||
+                connection_.streamReceiveStatus(streamId_) == Http2StreamReceiveStatus::kClosed) {
+                co_return Http2SendWindowWaitResult::makeAborted();
+            }
+            if (!connection_.hasQueuedData(streamId_)) {
+                co_return Http2SendWindowWaitResult::makeReady();
+            }
+            co_await signal_.wait();
+        }
+    }
+
     void wakeWriter() noexcept {
         writeSignal_.notify();
     }
@@ -206,6 +237,7 @@ private:
     WorkerSignal& writeSignal_;
     Http2DataOutputBudget* outputBudget_{nullptr};
     Executor executor_;
+    bool aborted_{false};
 };
 
 // Streaming request-body reader for the sans-I/O session; the BodyReader facade wraps

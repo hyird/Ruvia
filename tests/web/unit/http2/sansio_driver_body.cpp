@@ -1,3 +1,11 @@
+#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
+
+#include "http2_sansio_session_fixture.h"
 #include "sansio_driver_fixture.h"
 
 // Sans-I/O HTTP/2 driver: request and response bodies: pacing, streaming and trailers.
@@ -28,11 +36,12 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            const auto workerHandle = testWorker(io);
+            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
                     accessObservation);
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
+            co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
                 impl.routeTable(), worker,
                 fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));
         },
@@ -73,22 +82,22 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
             };
             const auto continueHead = makeHead(", 100-continue,");
             const auto unsupportedHead = makeHead("custom-feature");
-            if (!co_await writeAll(frame(0x1 /*HEADERS*/, ruvia::detail::kHttp2FlagEndHeaders, 1,
+            if (!co_await writeAll(frame(0x1 /*HEADERS*/, sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(continueHead.data(), continueHead.size()))) ||
-                !co_await writeAll(frame(0x1 /*HEADERS*/, ruvia::detail::kHttp2FlagEndHeaders, 3,
+                !co_await writeAll(frame(0x1 /*HEADERS*/, sansio_driver_test::kFlagEndHeaders, 3,
                     std::string_view(unsupportedHead.data(), unsupportedHead.size())))) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             bool contentSent = false;
             bool supportedEnded = false;
             while (!(gotContinue && gotUnsupportedFinal && supportedEnded)) {
-                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = ruvia::detail::http2ParseFrameHeader(
+                const auto header = sansio_driver_test::parseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
@@ -98,20 +107,20 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
                     (header.streamId == 1 || header.streamId == 3)) {
                     HpackCollect fields;
-                    const auto decoded = decoder.decode(payload, &fields, &HpackCollect::onHeader);
-                    RUVIA_CHECK(decoded.decoded() != nullptr);
-                    if (decoded.failure() != nullptr) {
+                    const auto decoded = decoder.decode(payload, [&fields](std::string_view name, std::string_view value) { return HpackCollect::onHeader(&fields, name, value); });
+                    RUVIA_CHECK(decoded.decoded());
+                    if (!decoded.decoded()) {
                         break;
                     }
                     if (header.streamId == 1 &&
                         fields.joined.contains(":status=100;")) {
                         gotContinue = true;
                         continueEndedStream =
-                            (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+                            (header.flags & sansio_driver_test::kFlagEndStream) != 0;
                         RUVIA_CHECK(fields.joined == ":status=100;");
                         if (!contentSent) {
                             contentSent = co_await writeAll(frame(
-                                0x0 /*DATA*/, ruvia::detail::kHttp2FlagEndStream, 1, "hello"));
+                                0x0 /*DATA*/, sansio_driver_test::kFlagEndStream, 1, "hello"));
                             if (!contentSent) {
                                 break;
                             }
@@ -126,7 +135,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
                            header.streamId == 1 && gotSupportedFinal) {
                     supportedBody.append(payload);
-                    supportedEnded = (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+                    supportedEnded = (header.flags & sansio_driver_test::kFlagEndStream) != 0;
                 }
             }
 
@@ -173,11 +182,12 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
             impl.finalize();
 
             ruvia::test::Http2SansIoSessionFixture fixture;
-            const auto workerHandle = testWorker(io);
+            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
                     accessObservation);
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
+            co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
                 impl.routeTable(), worker,
                 fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));
         },
@@ -206,7 +216,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                 HpackEncoder::encodeHeader(block, ":scheme", "http");
                 HpackEncoder::encodeHeader(block, ":authority", "localhost");
                 return frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders,
                     streamId, std::string_view(block.data(), block.size()));
             };
 
@@ -216,13 +226,13 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             while (!(gotBodyEnd && gotInvalidReset)) {
-                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = ruvia::detail::http2ParseFrameHeader(
+                const auto header = sansio_driver_test::parseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
@@ -231,13 +241,13 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                 if (header.streamId == 1 &&
                     header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     HpackCollect fields;
-                    const auto decoded = decoder.decode(payload, &fields, &HpackCollect::onHeader);
-                    RUVIA_CHECK(decoded.decoded() != nullptr);
-                    gotStatus = decoded.decoded() != nullptr &&
+                    const auto decoded = decoder.decode(payload, [&fields](std::string_view name, std::string_view value) { return HpackCollect::onHeader(&fields, name, value); });
+                    RUVIA_CHECK(decoded.decoded());
+                    gotStatus = decoded.decoded() &&
                                 fields.joined.contains(":status=207;");
                 } else if (header.streamId == 1 &&
                            header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
-                    gotBodyEnd = (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+                    gotBodyEnd = (header.flags & sansio_driver_test::kFlagEndStream) != 0;
                 } else if (header.streamId == 3 &&
                            header.type == static_cast<std::uint8_t>(Http2FrameType::kRstStream)) {
                     gotInvalidReset = true;
@@ -278,11 +288,12 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            const auto workerHandle = testWorker(io);
+            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
                     accessObservation);
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
+            co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
                 impl.routeTable(), worker,
                 fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));
         },
@@ -308,7 +319,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
             const std::string cancelPayload("\0\0\0\x08", 4);
             if (!co_await writeAll(kClientPreface) || !co_await writeAll(frame(0x4, 0, 0, {})) ||
                 !co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(block.data(), block.size()))) ||
                 !co_await writeAll(frame(0x3 /*RST_STREAM*/, 0, 1, cancelPayload))) {
                 co_return;
@@ -350,11 +361,12 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            const auto workerHandle = testWorker(io);
+            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
                     accessObservation);
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
+            co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
                 impl.routeTable(), worker,
                 fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));
         },
@@ -390,19 +402,19 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
-            ruvia::detail::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             bool sawHead = false;
             for (;;) {
-                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = ruvia::detail::http2ParseFrameHeader(
+                const auto header = sansio_driver_test::parseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
@@ -413,18 +425,18 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     HpackCollect collect;
-                    (void)decoder.decode(payload, &collect, &HpackCollect::onHeader);
+                    (void)decoder.decode(payload, [&collect](std::string_view name, std::string_view value) { return HpackCollect::onHeader(&collect, name, value); });
                     if (!sawHead) {
                         sawHead = true;
                         headFields = collect.joined;
                     } else {
                         trailerFields = collect.joined;  // the trailing HEADERS block
-                        trailerEndStream = (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+                        trailerEndStream = (header.flags & sansio_driver_test::kFlagEndStream) != 0;
                         break;
                     }
                 } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     body += payload;
-                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    if ((header.flags & sansio_driver_test::kFlagEndStream) != 0) {
                         break;
                     }
                 }
@@ -463,7 +475,7 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -500,17 +512,17 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
             for (;;) {
-                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = ruvia::detail::http2ParseFrameHeader(
+                const auto header = sansio_driver_test::parseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
@@ -521,19 +533,17 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
                 }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
                     received += payload.size();
-                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    if ((header.flags & sansio_driver_test::kFlagEndStream) != 0) {
                         sawEnd = true;
                         break;
                     }
                     if (!payload.empty()) {
                         // Grant the next window slice (connection + stream scoped).
-                        char updates[2 * (ruvia::detail::kHttp2FrameHeaderBytes + 4)];
-                        char* out = ruvia::detail::http2WriteWindowUpdate(
-                            updates, 0, static_cast<std::uint32_t>(payload.size()));
-                        out = ruvia::detail::http2WriteWindowUpdate(
-                            out, 1, static_cast<std::uint32_t>(payload.size()));
-                        if (!co_await writeAll(std::string_view(
-                                updates, static_cast<std::size_t>(out - updates)))) {
+                        const auto updates = sansio_driver_test::windowUpdate(
+                                                 0, static_cast<std::uint32_t>(payload.size())) +
+                                             sansio_driver_test::windowUpdate(
+                                                 1, static_cast<std::uint32_t>(payload.size()));
+                        if (!co_await writeAll(updates)) {
                             break;
                         }
                     }
@@ -588,7 +598,7 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -626,17 +636,17 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
             for (;;) {
-                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
                     break;
                 }
-                const auto header = ruvia::detail::http2ParseFrameHeader(
+                const auto header = sansio_driver_test::parseFrameHeader(
                     std::string_view(headerBytes, sizeof(headerBytes)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
@@ -647,18 +657,16 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
                     continue;
                 }
                 received += payload.size();
-                if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                if ((header.flags & sansio_driver_test::kFlagEndStream) != 0) {
                     sawEnd = true;
                     break;
                 }
                 if (!payload.empty()) {
-                    char updates[2 * (ruvia::detail::kHttp2FrameHeaderBytes + 4)];
-                    char* out = ruvia::detail::http2WriteWindowUpdate(
-                        updates, 0, static_cast<std::uint32_t>(payload.size()));
-                    out = ruvia::detail::http2WriteWindowUpdate(
-                        out, 1, static_cast<std::uint32_t>(payload.size()));
-                    if (!co_await writeAll(
-                            std::string_view(updates, static_cast<std::size_t>(out - updates)))) {
+                    const auto updates = sansio_driver_test::windowUpdate(
+                                             0, static_cast<std::uint32_t>(payload.size())) +
+                                         sansio_driver_test::windowUpdate(
+                                             1, static_cast<std::uint32_t>(payload.size()));
+                    if (!co_await writeAll(updates)) {
                         break;
                     }
                 }
@@ -694,7 +702,7 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -733,7 +741,7 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             // HEADERS with NO END_STREAM -> body follows in separate DATA frames.
-            if (!co_await writeAll(frame(0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+            if (!co_await writeAll(frame(0x1, sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
@@ -746,17 +754,17 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
                 co_return;  // 2 bytes
             }
             co_await yield();
-            if (!co_await writeAll(frame(0x0, ruvia::detail::kHttp2FlagEndStream, 1, {}))) {
+            if (!co_await writeAll(frame(0x0, sansio_driver_test::kFlagEndStream, 1, {}))) {
                 co_return;
             }
 
             for (;;) {
-                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                char hb[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(hb, sizeof(hb))) {
                     break;
                 }
                 const auto header =
-                    ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                    sansio_driver_test::parseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
@@ -796,7 +804,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -830,7 +838,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
             HpackEncoder::encodeHeader(headerBlock, ":path", "/echo");
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
-            if (!co_await writeAll(frame(0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+            if (!co_await writeAll(frame(0x1, sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
@@ -841,18 +849,18 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
             std::pmr::string trailerBlock(std::pmr::get_default_resource());
             HpackEncoder::encodeHeader(trailerBlock, "x-checksum", "abc");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream, 1,
+                    sansio_driver_test::kFlagEndHeaders | sansio_driver_test::kFlagEndStream, 1,
                     std::string_view(trailerBlock.data(), trailerBlock.size())))) {
                 co_return;
             }
 
             for (;;) {
-                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                char hb[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(hb, sizeof(hb))) {
                     break;
                 }
                 const auto header =
-                    ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                    sansio_driver_test::parseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
@@ -892,7 +900,7 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
+            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -928,18 +936,18 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
             HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
             HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
             if (!co_await writeAll(frame(0x1,
-                    ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    sansio_driver_test::kFlagEndStream | sansio_driver_test::kFlagEndHeaders, 1,
                     std::string_view(headerBlock.data(), headerBlock.size())))) {
                 co_return;
             }
 
             for (;;) {
-                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                char hb[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(hb, sizeof(hb))) {
                     break;
                 }
                 const auto header =
-                    ruvia::detail::http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                    sansio_driver_test::parseFrameHeader(std::string_view(hb, sizeof(hb)));
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
@@ -949,18 +957,16 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
                     continue;
                 }
                 received += payload.size();
-                if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                if ((header.flags & sansio_driver_test::kFlagEndStream) != 0) {
                     sawEnd = true;
                     break;
                 }
                 if (!payload.empty()) {
-                    char updates[2 * (ruvia::detail::kHttp2FrameHeaderBytes + 4)];
-                    char* out = ruvia::detail::http2WriteWindowUpdate(
-                        updates, 0, static_cast<std::uint32_t>(payload.size()));
-                    out = ruvia::detail::http2WriteWindowUpdate(
-                        out, 1, static_cast<std::uint32_t>(payload.size()));
-                    if (!co_await writeAll(
-                            std::string_view(updates, static_cast<std::size_t>(out - updates)))) {
+                    const auto updates = sansio_driver_test::windowUpdate(
+                                             0, static_cast<std::uint32_t>(payload.size())) +
+                                         sansio_driver_test::windowUpdate(
+                                             1, static_cast<std::uint32_t>(payload.size()));
+                    if (!co_await writeAll(updates)) {
                         break;
                     }
                 }

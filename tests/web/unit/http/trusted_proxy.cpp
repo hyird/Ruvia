@@ -7,12 +7,15 @@
 
 #include <cstddef>
 #include <initializer_list>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
@@ -27,8 +30,17 @@ using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
-using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::TrustedProxySet;
+
+HttpRequest makeRequest(RequestMemory& memory, std::initializer_list<HttpHeaderView> headers) {
+    const auto headerSpan = std::span<const HttpHeaderView>(headers.begin(), headers.size());
+    auto [request, error] = ruvia::makeParsedHttpRequest(
+        "GET", "/", headerSpan, {}, memory.resource());
+    if (error) {
+        throw std::runtime_error("invalid test request");
+    }
+    return std::move(request);
+}
 
 TrustedProxySet setOf(std::initializer_list<std::string_view> cidrs) {
     TrustedProxySet set;
@@ -134,13 +146,9 @@ RUVIA_TEST(trusted_proxy_matching_handles_long_and_scoped_address_text) {
 
 RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "https"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "203.0.113.9"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "https"}});
 
     // No trusted set at all: the default, and it must read nothing.
     const auto context = ContextAccess::make(
@@ -163,15 +171,9 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
 
 RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // 10.0.0.5 is the trusted hop and is skipped; 203.0.113.9 is the caller.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9, 10.0.0.5"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "https"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "203.0.113.9, 10.0.0.5"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "https"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -191,13 +193,8 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
 
 RUVIA_TEST(conn_info_reads_rfc7239_forwarded_when_x_headers_are_absent) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(request,
-        HttpHeaderView{"Forwarded", R"(for="[2001:db8::1]:4711";proto=https, for=10.0.0.5)"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", R"(for="[2001:db8::1]:4711";proto=https, for=10.0.0.5)"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -213,17 +210,10 @@ RUVIA_TEST(conn_info_reads_rfc7239_forwarded_when_x_headers_are_absent) {
 
 RUVIA_TEST(conn_info_prefers_proxy_written_x_headers_over_client_forwarded) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // nginx rewrites X-Forwarded-* and forwards a client Forwarded field
-    // unchanged. Believing Forwarded here would let the caller spoof ConnInfo.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "http"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"},
+                                                  HttpHeaderView{"X-Forwarded-For", "203.0.113.9"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "http"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -237,15 +227,8 @@ RUVIA_TEST(conn_info_prefers_proxy_written_x_headers_over_client_forwarded) {
 
 RUVIA_TEST(conn_info_forwarded_quoted_comma_does_not_invent_a_hop) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // RFC 7239 quoted-string may contain commas. A quote-blind split of
-    // for="_x,203.0.113.9" would invent a last hop and let it win as client.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x,203.0.113.9")"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x,203.0.113.9")"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -258,15 +241,8 @@ RUVIA_TEST(conn_info_forwarded_quoted_comma_does_not_invent_a_hop) {
 
 RUVIA_TEST(conn_info_forwarded_quoted_semicolon_stays_one_parameter) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // A quote-blind ';' split of for="_x;203.0.113.9" would drop the identifier
-    // and invent a second pair from inside the quotes.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x;203.0.113.9")"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", R"(for=10.0.0.5, for="_x;203.0.113.9")"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -279,17 +255,11 @@ RUVIA_TEST(conn_info_forwarded_quoted_semicolon_stays_one_parameter) {
 
 RUVIA_TEST(conn_info_walks_same_name_forwarding_fields_as_one_chain) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // RFC 9110 §5.2: multiple list-field lines combine. A client-injected
-    // first line must not win over the proxy-appended line that follows.
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "198.51.100.1"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "https"});
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-Proto", "http"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "198.51.100.1"},
+                                                  HttpHeaderView{"X-Forwarded-For", "203.0.113.9"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "https"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "http"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -303,15 +273,9 @@ RUVIA_TEST(conn_info_walks_same_name_forwarding_fields_as_one_chain) {
 
 RUVIA_TEST(conn_info_walks_same_name_rfc7239_fields_as_one_chain) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"});
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=http"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https"},
+                                                  HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=http"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -325,14 +289,9 @@ RUVIA_TEST(conn_info_walks_same_name_rfc7239_fields_as_one_chain) {
 
 RUVIA_TEST(conn_info_forwarded_skips_client_prepended_hops) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(request,
-        HttpHeaderView{
-            "Forwarded", R"(for=198.51.100.1;proto=https, for=203.0.113.9;proto=http)"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{
+                                                  "Forwarded", R"(for=198.51.100.1;proto=https, for=203.0.113.9;proto=http)"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -346,15 +305,8 @@ RUVIA_TEST(conn_info_forwarded_skips_client_prepended_hops) {
 
 RUVIA_TEST(conn_info_forwarded_ignores_proto_on_prepended_hops) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // The last untrusted hop omitted proto. A prepended proto=https must not
-    // become the client scheme -- that is how a caller claims TLS.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https, for=203.0.113.9"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", "for=198.51.100.1;proto=https, for=203.0.113.9"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -370,13 +322,8 @@ RUVIA_TEST(conn_info_forwarded_ignores_proto_on_prepended_hops) {
 RUVIA_TEST(conn_info_forwarded_proto_is_case_insensitive) {
     // RFC 7239 §5.4 proto tokens are ABNF strings, so "HTTPS" is "https".
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=HTTPS"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=HTTPS"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -390,16 +337,9 @@ RUVIA_TEST(conn_info_forwarded_proto_is_case_insensitive) {
 
 RUVIA_TEST(conn_info_x_forwarded_proto_is_case_insensitive_and_uses_the_last_hop) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
-    // Some TLS-terminating proxies emit uppercase HTTPS. The last token is the
-    // hop that delivered the request; a client-prepended https must not win.
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"X-Forwarded-Proto", "http, HTTPS"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "203.0.113.9"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "http, HTTPS"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -413,15 +353,9 @@ RUVIA_TEST(conn_info_x_forwarded_proto_is_case_insensitive_and_uses_the_last_hop
 
 RUVIA_TEST(conn_info_ignores_client_prepended_forwarding_hops) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"X-Forwarded-For", "198.51.100.1, 203.0.113.9"});
-    (void)HttpRequestAccess::addHeader(
-        request, HttpHeaderView{"X-Forwarded-Proto", "https, http"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "198.51.100.1, 203.0.113.9"},
+                                                  HttpHeaderView{"X-Forwarded-Proto", "https, http"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
@@ -435,13 +369,8 @@ RUVIA_TEST(conn_info_ignores_client_prepended_forwarding_hops) {
 
 RUVIA_TEST(conn_info_keeps_transport_values_for_fields_the_proxy_omitted) {
     WorkerMemory worker;
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    // Address only: the scheme must stay whatever the transport says.
-    (void)HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Forwarded-For", "203.0.113.9"});
-
     RequestMemory memory(worker);
-    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequest request = makeRequest(memory, {HttpHeaderView{"X-Forwarded-For", "203.0.113.9"}});
 
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,

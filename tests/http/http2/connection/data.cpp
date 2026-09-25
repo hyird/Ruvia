@@ -1,7 +1,8 @@
 #include <array>
 
-#include "http2_connection_fixture.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
+
+#include "http2_connection_fixture.h"
 
 // Http2Connection: inbound and outbound DATA.
 
