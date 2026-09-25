@@ -36,7 +36,8 @@ public:
         bool isData;
     };
     explicit Http2OutputBuffer(std::pmr::memory_resource* resource)
-        : bytes_(std::string_view{}, resource) {}
+        : bytes_(std::string_view{}, resource),
+          segments_(std::size_t{0}, resource) {}
 
     [[nodiscard]] std::string_view pending() const& noexcept {
         return std::string_view(bytes_).substr(consumed_);
@@ -254,7 +255,7 @@ private:
     }
 
     std::pmr::string bytes_;
-    std::pmr::vector<Segment> segments_{bytes_.get_allocator().resource()};
+    std::pmr::vector<Segment> segments_;
     std::size_t segmentOffset_{0};
     std::size_t consumed_{0};
     std::size_t baseOffset_{0};
