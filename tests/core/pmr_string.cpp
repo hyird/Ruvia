@@ -35,16 +35,17 @@ RUVIA_TEST(pmr_string_clear_returns_large_storage_and_retains_small_storage) {
     CountingResource resource;
     {
         std::pmr::string buffer(&resource);
+        const auto emptyBytes = resource.liveBytes;
         ruvia::resizePmrStringForOverwrite(buffer, 8192);
         RUVIA_CHECK_EQ(buffer.size(), std::size_t{8192});
-        RUVIA_CHECK(resource.liveBytes > 0);
+        RUVIA_CHECK(resource.liveBytes > emptyBytes);
         ruvia::clearPmrStringRetainingSmall(buffer);
         RUVIA_CHECK(buffer.empty());
-        RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+        RUVIA_CHECK_EQ(resource.liveBytes, emptyBytes);
 
         ruvia::resizePmrStringForOverwrite(buffer, 32);
         const auto retained = resource.liveBytes;
-        RUVIA_CHECK(retained > 0);
+        RUVIA_CHECK(retained > emptyBytes);
         ruvia::clearPmrStringRetainingSmall(buffer);
         RUVIA_CHECK_EQ(resource.liveBytes, retained);
     }
