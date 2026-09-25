@@ -37,7 +37,7 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> WebWorkerRuntime::handleStreamSession(HttpServerListener& listener, Stream& stream,
+Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listener, Stream& stream,
     TcpSocket& socket, ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, the keep-alive request sequence, the remote address, and the count

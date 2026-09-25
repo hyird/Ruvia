@@ -10,6 +10,8 @@
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/router/CompiledRoutePlan.h"
 #include "ruvia/web/detail/router/Router.h"
+#include "ruvia/web/detail/server/TcpIngressRuntime.h"
+#include "ruvia/web/detail/server/UdpIngressRuntime.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 namespace ruvia::detail {
@@ -37,13 +39,19 @@ struct AppRuntimeGraph final {
     explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
         : blockingPool(nullptr, PmrObjectDeleter<BlockingPool>{resource}),
           routePlan(nullptr, PmrObjectDeleter<CompiledRoutePlan>{resource}),
-          workers(resource) {}
+          workers(resource),
+          ingressTargets(resource) {}
 
     // Declared before workers so it is destroyed after suspended worker tasks.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     // Every worker-local handler table borrows this immutable lookup plan.
     CompiledRoutePlanPtr routePlan;
     std::pmr::vector<AppWorkerSlot> workers;
+    // Targets point to heap-stable worker runtimes. TcpIngressRuntime takes its
+    // own copy so moving the graph cannot invalidate the ingress target span.
+    std::pmr::vector<TcpIngressRuntime::Target> ingressTargets;
+    std::unique_ptr<TcpIngressRuntime> tcpIngress;
+    std::unique_ptr<UdpIngressRuntime> udpIngress;
 };
 
 }  // namespace ruvia::detail

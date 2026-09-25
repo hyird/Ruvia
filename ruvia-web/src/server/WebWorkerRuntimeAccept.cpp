@@ -17,9 +17,10 @@
 
 namespace ruvia::detail {
 
-Task<void> WebWorkerRuntime::superviseListener(HttpServerListener& listener) {
+Task<void> WebWorkerRuntime::superviseListener(std::size_t listenerIndex,
+    HttpServerAcceptor& acceptor, HttpServerSessionConfig& session) {
     try {
-        co_await acceptLoop(listener);
+        co_await acceptLoop(listenerIndex, acceptor, session);
         if (httpServerWorkerRunning(workerState_)) {
             throw std::runtime_error("HTTP listener stopped unexpectedly");
         }
@@ -28,11 +29,12 @@ Task<void> WebWorkerRuntime::superviseListener(HttpServerListener& listener) {
     }
 }
 
-Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
+Task<void> WebWorkerRuntime::acceptLoop(std::size_t listenerIndex,
+    HttpServerAcceptor& acceptor, HttpServerSessionConfig& session) {
     for (;;) {
         auto acceptCompletion =
-            co_await ruvia::asyncAsio<asio::ip::tcp::socket>([&listener](auto handler) mutable {
-                listener.acceptor.async_accept(std::move(handler));
+            co_await ruvia::asyncAsio<asio::ip::tcp::socket>([&acceptor](auto handler) mutable {
+                acceptor.acceptor.async_accept(std::move(handler));
             });
         const auto ec = acceptCompletion.errorCode();
         auto socket = std::move(acceptCompletion).takeResult();
@@ -54,40 +56,71 @@ Task<void> WebWorkerRuntime::acceptLoop(HttpServerListener& listener) {
             continue;
         }
 
-        if (!httpServerWorkerRunning(workerState_)) {
-            ruvia::closeSocket(socket);
-            co_return;
-        }
-        if (options_.maxConnections.has_value() &&
-            activeConnectionCount_.load(std::memory_order_relaxed) >= *options_.maxConnections) {
-            ruvia::closeSocket(socket);
-            connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
-            continue;
-        }
+        acceptSocketOnContext(listenerIndex, std::move(socket));
+    }
+}
 
+void WebWorkerRuntime::acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket) {
+    if (!httpServerWorkerRunning(workerState_)) {
+        return;
+    }
+    if (listenerIndex >= listeners_.size()) {
+        return;
+    }
+    if (options_.maxConnections.has_value() &&
+        activeConnectionCount_.load(std::memory_order_relaxed) >= *options_.maxConnections) {
+        connectionsRefused_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    try {
         ruvia::configureAcceptedSocket(socket);
-        // Starting the session is the one part of accepting that can throw
-        // (coroutine frame allocation). Letting it escape would reach
-        // asio::detached, which rethrows out of io_context::run() and fails the
-        // whole worker -- a transient allocation failure would take down the
-        // application. Treat it like the transient accept errors above: report,
-        // drop this connection, pause, and keep accepting. Destroying the
-        // unspawned lease closes the socket and returns its slot.
+        AcceptedConnectionLease connection(std::move(socket), activeConnectionCount_);
+        asio::co_spawn(ioContext_,
+            ruvia::asAwaitable(handleSession(*listeners_[listenerIndex], std::move(connection))),
+            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+    } catch (...) {
+        acceptFailures_.fetch_add(1, std::memory_order_relaxed);
+        options_.connectionFailure.invoke({}, std::current_exception());
+    }
+}
+
+void WebWorkerRuntime::acceptTransferredConnection(NativeAcceptedSocketTicket&& ticket) noexcept {
+    if (!ticket.valid()) {
+        return;
+    }
+    const auto listenerIndex = ticket.listenerIndex();
+    if (!httpServerWorkerRunning(workerState_) || listenerIndex >= listeners_.size()) {
+        return;
+    }
+
+    try {
+        TcpSocket socket(ioContext_);
+        asio::error_code error;
         try {
-            AcceptedConnectionLease connection(std::move(socket), activeConnectionCount_);
-            asio::co_spawn(ioContext_,
-                ruvia::asAwaitable(handleSession(listener, std::move(connection))),
-                asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
-            continue;
+            socket.assign(ticket.protocol(), ticket.nativeHandle(), error);
         } catch (...) {
+            // Some Asio implementations can take the handle before reporting an
+            // exception. Disarm the ticket before socket's RAII cleanup in that case.
+            if (socket.is_open() && socket.native_handle() == ticket.nativeHandle()) {
+                static_cast<void>(ticket.release());
+            }
             acceptFailures_.fetch_add(1, std::memory_order_relaxed);
-            options_.connectionFailure.invoke({}, std::current_exception());
+            return;
         }
-        static_cast<void>(
-            co_await sleepFor(workerRuntime_.handle(), std::chrono::milliseconds(50)));
-        if (!httpServerWorkerRunning(workerState_)) {
-            co_return;
+        if (error) {
+            if (socket.is_open() && socket.native_handle() == ticket.nativeHandle()) {
+                static_cast<void>(ticket.release());
+            }
+            acceptFailures_.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
+        static_cast<void>(ticket.release());  // ownership now belongs to socket.
+        acceptSocketOnContext(listenerIndex, std::move(socket));
+    } catch (...) {
+        // Includes TcpSocket construction and any unexpected accept-path failure.
+        // Until assign transfers ownership the ticket remains responsible for close.
+        acceptFailures_.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

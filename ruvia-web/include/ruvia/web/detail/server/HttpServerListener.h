@@ -93,15 +93,15 @@ struct HttpServerListenerDefinition final {
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
 using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
 
-class HttpServerListener final {
+class HttpServerSessionConfig final {
 public:
-    HttpServerListener(asio::io_context& ioContext, const HttpServerListenerDefinition& definition,
+    explicit HttpServerSessionConfig(const HttpServerListenerDefinition& definition,
         std::pmr::memory_resource* resource);
 
-    HttpServerListener(const HttpServerListener&) = delete;
-    HttpServerListener& operator=(const HttpServerListener&) = delete;
-    HttpServerListener(HttpServerListener&&) = delete;
-    HttpServerListener& operator=(HttpServerListener&&) = delete;
+    HttpServerSessionConfig(const HttpServerSessionConfig&) = delete;
+    HttpServerSessionConfig& operator=(const HttpServerSessionConfig&) = delete;
+    HttpServerSessionConfig(HttpServerSessionConfig&&) = delete;
+    HttpServerSessionConfig& operator=(HttpServerSessionConfig&&) = delete;
 
     [[nodiscard]] const HttpServerListenerDefinition::Tls* tls() const& noexcept {
         return std::get_if<HttpServerListenerDefinition::Tls>(&transport);
@@ -114,16 +114,25 @@ public:
     }
     const HttpServerListenerDefinition::RedirectHttpToHttps* redirect() const&& = delete;
 
-    asio::ip::tcp::acceptor acceptor;
-    asio::ip::tcp::endpoint endpoint;
     HttpServerListenerDefinition::Transport transport;
     std::optional<asio::ssl::context> tlsContext;
     SniContextStore sniContexts;
     SniContextLookup sniLookup;
 
-private:
-    HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext,
-        const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource);
+};
+
+class HttpServerAcceptor final {
+public:
+    HttpServerAcceptor(asio::io_context& ioContext,
+        const HttpServerListenerDefinition& definition);
+
+    HttpServerAcceptor(const HttpServerAcceptor&) = delete;
+    HttpServerAcceptor& operator=(const HttpServerAcceptor&) = delete;
+    HttpServerAcceptor(HttpServerAcceptor&&) = delete;
+    HttpServerAcceptor& operator=(HttpServerAcceptor&&) = delete;
+
+    asio::ip::tcp::acceptor acceptor;
+    asio::ip::tcp::endpoint endpoint;
 };
 
 }  // namespace ruvia::detail
