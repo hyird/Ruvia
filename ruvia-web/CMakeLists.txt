@@ -16,6 +16,9 @@ ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
 list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/(db|redis)/")
 list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
 
+list(APPEND RUVIA_WEB_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
+
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL OR RUVIA_ENABLE_REDIS)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
@@ -37,8 +40,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchemaTimescale.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp)
 endif()
 
 if(RUVIA_ENABLE_MARIADB)

@@ -46,6 +46,7 @@ enum class ProcessSignalHandlerPolicy : std::uint8_t {
 // normalized values to every worker. Optional fields disable only the policy
 // they name; optional App capabilities remain separate config-or-null calls.
 struct ServerConfig final {
+    // Business workers; the TCP and UDP ingress threads are additional.
     std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     std::size_t workerMailboxCapacity{1024};

@@ -49,17 +49,14 @@ HttpServerListenerDefinition::Transport cloneTransport(
 
 }  // namespace
 
-HttpServerListener::HttpServerListener(asio::io_context& ioContext,
+HttpServerSessionConfig::HttpServerSessionConfig(
     const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)
-    : HttpServerListener(
-          ResolvedPmrResourceTag{}, ioContext, definition, pmrResourceOrDefault(resource)) {}
+    : transport(cloneTransport(definition.transport, pmrResourceOrDefault(resource))),
+      sniContexts(pmrResourceOrDefault(resource)),
+      sniLookup(pmrResourceOrDefault(resource)) {}
 
-HttpServerListener::HttpServerListener(ResolvedPmrResourceTag, asio::io_context& ioContext,
-    const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)
-    : acceptor(ioContext),
-      endpoint(definition.endpoint),
-      transport(cloneTransport(definition.transport, resource)),
-      sniContexts(resource),
-      sniLookup(resource) {}
+HttpServerAcceptor::HttpServerAcceptor(asio::io_context& ioContext,
+    const HttpServerListenerDefinition& definition)
+    : acceptor(ioContext), endpoint(definition.endpoint) {}
 
 }  // namespace ruvia::detail

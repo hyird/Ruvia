@@ -26,6 +26,7 @@
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
+#include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
 #include "ruvia/web/detail/server/session/HttpConnectionState.h"
 
 namespace ruvia::detail {
@@ -62,11 +63,25 @@ public:
     void waitUntilReady();
     void requestServe();
     [[nodiscard]] bool waitUntilServing();
-    void stop();
+    void stop() noexcept;
     // Lifecycle owners join from outside the server worker. Reject self-join
     // before touching std::thread so behavior is deterministic across platforms.
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint(std::size_t listenerIndex = 0) const;
+    [[nodiscard]] asio::io_context::executor_type workerExecutor() noexcept {
+        return ioContext_.get_executor();
+    }
+    [[nodiscard]] asio::io_context::executor_type ingressExecutor() noexcept {
+        return ioContext_.get_executor();
+    }
+    // Lock-free admission snapshot for external ingress. A true result is advisory;
+    // the worker rechecks capacity when the transferred socket is delivered.
+    [[nodiscard]] bool availableForIngress() const noexcept;
+    // Takes ownership immediately. Returns true only when delivery was committed;
+    // otherwise closes the socket and returns false. Never throws.
+    // Called on the worker after ingress mailbox delivery. Rechecks worker state
+    // and capacity, assigns before any I/O, and consumes the ticket on every path.
+    void acceptTransferredConnection(NativeAcceptedSocketTicket&& ticket) noexcept;
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] HttpServerStats stats() const noexcept;
     [[nodiscard]] const WorkerHandle& worker() const& noexcept {
@@ -77,25 +92,34 @@ public:
 
 private:
     struct ValidatedConfigurationTag final {};
+    enum class IngressMode { kListeners, kSessionsOnly };
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
-    using ListenerPtr = std::unique_ptr<HttpServerListener, PmrObjectDeleter<HttpServerListener>>;
+    using ListenerPtr =
+        std::unique_ptr<HttpServerSessionConfig, PmrObjectDeleter<HttpServerSessionConfig>>;
+    using AcceptorPtr = std::unique_ptr<HttpServerAcceptor, PmrObjectDeleter<HttpServerAcceptor>>;
 
+    WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
+        const RouteTable& routes, WorkerCapabilityDefinitions capabilities, IngressMode ingressMode);
     WebWorkerRuntime(ValidatedConfigurationTag,
         std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
-        WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions);
+        WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions,
+        IngressMode ingressMode);
 
-    void configureAcceptor(HttpServerListener& listener);
-    void configureTlsContext(HttpServerListener& listener);
+    void configureAcceptor(HttpServerAcceptor& acceptor);
+    void configureTlsContext(HttpServerSessionConfig& session);
     void stopOnContext() noexcept;
     void failWorker(const std::exception_ptr& failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();
-    Task<void> superviseListener(HttpServerListener& listener);
-    Task<void> acceptLoop(HttpServerListener& listener);
-    Task<void> handleSession(HttpServerListener& listener, AcceptedConnectionLease connection);
+    Task<void> superviseListener(std::size_t listenerIndex, HttpServerAcceptor& acceptor,
+        HttpServerSessionConfig& session);
+    Task<void> acceptLoop(std::size_t listenerIndex, HttpServerAcceptor& acceptor,
+        HttpServerSessionConfig& session);
+    void acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket);
+    Task<void> handleSession(HttpServerSessionConfig& listener, AcceptedConnectionLease connection);
     template <typename Stream>
-    Task<void> handleStreamSession(HttpServerListener& listener, Stream& stream,
+    Task<void> handleStreamSession(HttpServerSessionConfig& listener, Stream& stream,
         asio::ip::tcp::socket& socket, ContextServices services);
     template <typename Stream>
     Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket,
@@ -108,10 +132,12 @@ private:
     const RouteTable& routes_;
     WorkerMemory memory_;
     std::pmr::vector<ListenerPtr> listeners_;
+    std::pmr::vector<AcceptorPtr> acceptors_;
     TaskScope backgroundTasks_;
     DocumentRootPtr ownedDocumentRoot_;
     std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;
+    IngressMode ingressMode_{IngressMode::kListeners};
     ruvia::ConnectionScanner connectionScanner_;
     WorkerCapabilities capabilities_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
@@ -132,6 +158,7 @@ private:
     std::thread workerThread_;
     bool prepared_{false};
     bool serveRequested_{false};
+    std::atomic<bool> ingressServing_{false};
 
     HttpServerWorkerCompletion workerCompletion_;
 };

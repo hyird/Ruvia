@@ -119,10 +119,14 @@ ruvia::app().listen({
 });
 ```
 
-`ServerConfig::workerCount` is the total Web worker count. Every worker independently
-listens on the same configured ports and owns one worker-local DB, Redis,
-outbound HTTP client, and user-state set. Enabling both transports does not
-multiply workers or data resources.
+`ServerConfig::workerCount` is the number of business workers. The runtime also
+uses one TCP ingress thread and one UDP ingress thread (in addition to any
+`BlockingPool` and signal threads). The TCP ingress alone binds all configured
+HTTP/HTTPS TCP ports and hands each accepted connection to a business worker
+once; that worker then owns the connection. Each business worker separately
+owns TLS, its router, and its capabilities, including DB, Redis, outbound HTTP
+client, and user-state set. The UDP ingress currently only runs an `io_context`:
+it has no UDP socket or protocol service. In particular, HTTP/3/QUIC is not supported.
 Policies that exist both app-wide and per route use one name and one rule: the
 narrower scope may only **tighten**. `ServerConfig::maxBufferedBodyBytes` and
 `rateLimit()` are
@@ -640,8 +644,8 @@ Web job contract:
 provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. Standalone operations can create a `StopSource`, pass its `token()` to
 channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
-thread. `App::onStart()` runs only after every worker has connected its
-worker-local capabilities and started accepting on the complete listener set.
+thread. `App::onStart()` runs only after every business worker has initialized its
+worker-local capabilities and both ingress runtimes have entered serving state.
 `App::onStop()` runs once for explicitly enabled process signal handlers, direct
 `App::stop()`, and worker failure. Both hook sets execute on the
 thread inside `App::run()`; stop callers and worker threads only request
@@ -649,8 +653,9 @@ shutdown and never run application hooks themselves.
 
 ## Blocking Work
 
-A worker is one thread serving every connection it accepted, so a handler that
-blocks — password hashing, a synchronous third-party SDK, template rendering, a
+Each business worker runs its event loop and serves connections handed to it by
+the TCP ingress, so a handler that blocks — password hashing, a synchronous
+third-party SDK, template rendering, a
 slow file — freezes all of them for as long as it blocks. `BlockingPool` is the
 offload path: a fixed set of long-lived threads with a bounded queue, started
 once by `App::run()` and shared by every worker. Offloading enqueues a task and
@@ -2212,8 +2217,10 @@ use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
 `<ruvia/http/MultipartParser.h>`. HTTP/3 variable-length integers and opaque
 frames are available through `<ruvia/http/Http3VarInt.h>` and
-`<ruvia/http/Http3Frames.h>`; QUIC transport, QPACK, and HTTP/3 connection
-drivers are not provided. The supported protocol-driver entry points are
+`<ruvia/http/Http3Frames.h>` are the currently provided HTTP/3 frame primitives;
+QUIC transport, a published QPACK API, and HTTP/3 connection drivers are not
+provided. HTTP/3/QUIC is not supported by the Web server. The supported
+protocol-driver entry points are
 `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
 `<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,

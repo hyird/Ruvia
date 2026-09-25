@@ -157,17 +157,22 @@ WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const 
 
 WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
-    : WebWorkerRuntime(
-          validateHttpServerConfiguration(listeners, std::move(options)), routes, capabilities) {}
+    : WebWorkerRuntime(validateHttpServerConfiguration(listeners, std::move(options)), routes,
+          capabilities, IngressMode::kListeners) {}
 
 WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
+    : WebWorkerRuntime(configuration, routes, capabilities, IngressMode::kSessionsOnly) {}
+
+WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
+    const RouteTable& routes, WorkerCapabilityDefinitions capabilities, IngressMode ingressMode)
     : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities,
-          configuration.options()) {}
+          configuration.options(), ingressMode) {}
 
 WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
-    WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions)
+    WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions,
+    IngressMode ingressMode)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
@@ -177,10 +182,12 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
       listeners_(memory_.resource()),
+      acceptors_(memory_.resource()),
       backgroundTasks_(workerRuntime_.handle(), {.resource = memory_.resource()}),
       ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
+      ingressMode_(ingressMode),
       connectionScanner_(workerRuntime_.handle(), makeConnectionScannerOptions(options_)),
       capabilities_(ioContext_, workerRuntime_.handle(), memory_.resource(), capabilities,
           WorkerCapabilityOptions{
@@ -200,9 +207,16 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
           [this](const std::exception_ptr& failure) { failWorker(failure); })),
       workSetPool_(memory_) {
     listeners_.reserve(listeners.size());
+    if (ingressMode_ == IngressMode::kListeners) {
+        acceptors_.reserve(listeners.size());
+    }
     for (const auto& listener : listeners) {
-        listeners_.push_back(makePmrObject<HttpServerListener>(
-            memory_.resource(), ioContext_, listener, memory_.resource()));
+        listeners_.push_back(makePmrObject<HttpServerSessionConfig>(
+            memory_.resource(), listener, memory_.resource()));
+        if (ingressMode_ == IngressMode::kListeners) {
+            acceptors_.push_back(makePmrObject<HttpServerAcceptor>(
+                memory_.resource(), ioContext_, listener));
+        }
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
         const auto* configuredRoot = options_.documentRoot.root();
@@ -258,9 +272,11 @@ void WebWorkerRuntime::prepare() {
     if (prepared_ || lifecycle_.state() != RuntimeLifecycle::State::kReady) {
         throw std::logic_error("web worker runtime can only be prepared once");
     }
-    for (const auto& listener : listeners_) {
-        configureAcceptor(*listener);
-        configureTlsContext(*listener);
+    for (std::size_t i = 0; i < listeners_.size(); ++i) {
+        if (ingressMode_ == IngressMode::kListeners) {
+            configureAcceptor(*acceptors_[i]);
+        }
+        configureTlsContext(*listeners_[i]);
     }
     prepared_ = true;
 }
@@ -277,13 +293,25 @@ void WebWorkerRuntime::launch() {
     try {
         workerThread_ = std::thread([this] { runIoContext(); });
     } catch (...) {
-        (void)lifecycle_.requestStop();
-        if (workerThread_.joinable()) {
-            workerThread_.join();
-        } else {
-            stopOnContext();
-        }
-        lifecycle_.completeStop();
+        const auto failure = std::current_exception();
+        struct UnstartedRuntimeCleanup final {
+            WebWorkerRuntime& runtime;
+
+            ~UnstartedRuntimeCleanup() {
+                for (const auto& acceptor : runtime.acceptors_) {
+                    asio::error_code ignored;
+                    acceptor->acceptor.close(ignored);
+                }
+                runtime.webWorkerDispatch_->close();
+                runtime.webWorkerDispatch_->retire();
+                runtime.workerRuntime_.close();
+                runtime.workerRuntime_.detach();
+                (void)runtime.lifecycle_.requestStop();
+                runtime.lifecycle_.completeStop();
+            }
+        } cleanup{*this};
+        (void)workerCompletion_.markStartupFailed(failure);
+        (void)workerCompletion_.recordWorkerFailure(failure);
         throw;
     }
 }
@@ -312,14 +340,17 @@ bool WebWorkerRuntime::waitUntilServing() {
     return workerCompletion_.waitForServing();
 }
 
-void WebWorkerRuntime::stop() {
+void WebWorkerRuntime::stop() noexcept {
     if (!lifecycle_.requestStop()) {
         return;
     }
 
     webWorkerDispatch_->close();
     workerRuntime_.close();
-    asio::post(ioContext_, [this] { stopOnContext(); });
+    // A lost shutdown post would leave suspended sessions and capability tasks
+    // alive while join() waits forever. Worker-owned cleanup must either be
+    // scheduled or fail as a terminal runtime contract violation.
+    workerRuntime_.deferOrTerminate([this] { stopOnContext(); });
 }
 
 void WebWorkerRuntime::join() {
@@ -337,10 +368,19 @@ void WebWorkerRuntime::join() {
 }
 
 TcpEndpoint WebWorkerRuntime::localEndpoint(std::size_t listenerIndex) const {
-    if (listenerIndex >= listeners_.size()) {
-        throw std::out_of_range("listener index is not configured on this worker");
+    if (listenerIndex >= acceptors_.size()) {
+        throw std::out_of_range("listener acceptor is not configured on this worker");
     }
-    return listeners_[listenerIndex]->endpoint;
+    return acceptors_[listenerIndex]->endpoint;
+}
+
+bool WebWorkerRuntime::availableForIngress() const noexcept {
+    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+        !ingressServing_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    return !options_.maxConnections.has_value() ||
+           activeConnectionCount_.load(std::memory_order_relaxed) < *options_.maxConnections;
 }
 
 HttpServerStats WebWorkerRuntime::stats() const noexcept {
@@ -358,7 +398,7 @@ HttpServerStats WebWorkerRuntime::stats() const noexcept {
 WebWorkerHandle WebWorkerRuntime::webWorker() const {
     return webWorkerDispatch_->handle();
 }
-void WebWorkerRuntime::configureAcceptor(HttpServerListener& listener) {
+void WebWorkerRuntime::configureAcceptor(HttpServerAcceptor& listener) {
     std::error_code ec;
 
     (void)listener.acceptor.open(listener.endpoint.protocol(), ec);
@@ -398,7 +438,7 @@ void WebWorkerRuntime::configureAcceptor(HttpServerListener& listener) {
     }
 }
 
-void WebWorkerRuntime::configureTlsContext(HttpServerListener& listener) {
+void WebWorkerRuntime::configureTlsContext(HttpServerSessionConfig& listener) {
     listener.sniContexts.clear();
     listener.sniLookup.clear();
     const auto* tls = listener.tls();
@@ -459,12 +499,13 @@ void WebWorkerRuntime::stopOnContext() noexcept {
         return;
     }
 
+    ingressServing_.store(false, std::memory_order_release);
     workerState_ = HttpServerWorkerState::kStopped;
     stopSource_.requestStop();
     webWorkerDispatch_->close();
     workerRuntime_.close();
     std::error_code ignored;
-    for (const auto& listener : listeners_) {
+    for (const auto& listener : acceptors_) {
         (void)listener->acceptor.cancel(ignored);
         ignored.clear();
         (void)listener->acceptor.close(ignored);
@@ -550,12 +591,24 @@ Task<void> WebWorkerRuntime::runWorker() {
         if (options_.documentRoot.refreshOptions() != nullptr) {
             backgroundTasks_.spawn(staticRootRefreshLoop());
         }
-        for (const auto& listener : listeners_) {
-            backgroundTasks_.spawn(superviseListener(*listener));
+        if (ingressMode_ == IngressMode::kListeners) {
+            for (std::size_t i = 0; i < listeners_.size(); ++i) {
+                backgroundTasks_.spawn(superviseListener(i, *acceptors_[i], *listeners_[i]));
+            }
         }
+        ingressServing_.store(true, std::memory_order_release);
         (void)workerCompletion_.markServing();
-        backgroundJoinStarted = true;
-        co_await backgroundTasks_.join();
+        if (ingressMode_ == IngressMode::kSessionsOnly) {
+            // A session-only worker has no accept loop to keep its owner task
+            // alive. Wait for the worker-context stop notification instead,
+            // then retire any optional background work and capabilities.
+            if (!stopToken_.stopRequested()) {
+                co_await serveSignal_.wait();
+            }
+        } else {
+            backgroundJoinStarted = true;
+            co_await backgroundTasks_.join();
+        }
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
