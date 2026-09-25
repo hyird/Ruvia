@@ -2215,11 +2215,13 @@ negotiation, redirects, and content coding. Parse `Content-Encoding` with
 `ruvia::parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>`, and
 use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
-`<ruvia/http/MultipartParser.h>`. HTTP/3 variable-length integers and opaque
-frames are available through `<ruvia/http/Http3VarInt.h>` and
-`<ruvia/http/Http3Frames.h>` are the currently provided HTTP/3 frame primitives;
-QUIC transport, a published QPACK API, and HTTP/3 connection drivers are not
-provided. HTTP/3/QUIC is not supported by the Web server. The supported
+`<ruvia/http/MultipartParser.h>`. HTTP/3 variable-length integers, opaque
+frames, and QPACK static-table, prefixed-integer, and string-literal primitives
+are available through `<ruvia/http/Http3VarInt.h>`,
+`<ruvia/http/Http3Frames.h>`, and `<ruvia/http/Http3Qpack.h>`. These primitives
+do not provide a dynamic table or complete QPACK implementation; QUIC
+transport and HTTP/3 connection drivers are not provided, and HTTP/3/QUIC is
+not supported by the Web server. The supported
 protocol-driver entry points are
 `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
