@@ -140,6 +140,9 @@ private:
 
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task);
+template <typename T>
+[[nodiscard]] ScopedOperation<T> makeScopedOperation(
+    ScopedOperationScope& scope, Task<T> task, void (*startCheck)(void*) noexcept, void* target);
 
 }  // namespace detail
 
