@@ -607,7 +607,7 @@ private:
                 }
 
                 for (std::size_t connectionIndex = 0;
-                     connectionIndex < connections.size(); ++connectionIndex) {
+                    connectionIndex < connections.size(); ++connectionIndex) {
                     auto& connection = connections[connectionIndex];
                     const auto info = server.connectionInfo(connection.id);
                     if (!info || !info->handshakeComplete || !info->h3Negotiated || info->terminated) {
@@ -921,17 +921,17 @@ ruvia::Task<void> exercisePublicHttp3GoAwayRotation(
     bool inFlightZero = false;
     try {
         ruvia::HttpClient client(attachment.loop(), ruvia::HttpClientConfig{
-                                                         .scheme = ruvia::HttpScheme::kHttps,
-                                                         .host = "127.0.0.1",
-                                                         .port = peer.port(),
-                                                         .connectionCount = 1,
-                                                         .connectTimeout = 3s,
-                                                         .requestTimeout = 8s,
-                                                         .acquireTimeout = 3s,
-                                                         .maxResponseBytes = 64,
-                                                         .protocol = ruvia::HttpClientProtocol::kHttp3Only,
-                                                         .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
-                                                     });
+                                                        .scheme = ruvia::HttpScheme::kHttps,
+                                                        .host = "127.0.0.1",
+                                                        .port = peer.port(),
+                                                        .connectionCount = 1,
+                                                        .connectTimeout = 3s,
+                                                        .requestTimeout = 8s,
+                                                        .acquireTimeout = 3s,
+                                                        .maxResponseBytes = 64,
+                                                        .protocol = ruvia::HttpClientProtocol::kHttp3Only,
+                                                        .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+                                                    });
         ClientWatchdog watchdog(io, client);
         try {
             stage = "first response";
@@ -956,11 +956,8 @@ ruvia::Task<void> exercisePublicHttp3GoAwayRotation(
             }
             stage = "peer synchronization";
             const auto worker = attachment.loop().handle();
-            const bool secondConnectionReady = co_await waitForGoAwayPeer(worker, peer,
-                [&] {
-                    return peer.acceptedConnections() >= 2 &&
-                           peer.secondRequestStream() != GoAwayRotationPeer::kUnobservedStream;
-                }, 5s);
+            const bool secondConnectionReady = co_await waitForGoAwayPeer(worker, peer, [&] { return peer.acceptedConnections() >= 2 &&
+                                                                                                     peer.secondRequestStream() != GoAwayRotationPeer::kUnobservedStream; }, 5s);
             RUVIA_CHECK(secondConnectionReady);
             RUVIA_CHECK(peer.synchronize());
             RUVIA_CHECK(peer.acceptedConnections() >= 2);
@@ -1018,17 +1015,17 @@ ruvia::Task<void> exercisePublicHttp3GoAwayReplay(
     std::size_t callerSuccesses = 0;
     try {
         ruvia::HttpClient client(attachment.loop(), ruvia::HttpClientConfig{
-                                                         .scheme = ruvia::HttpScheme::kHttps,
-                                                         .host = "127.0.0.1",
-                                                         .port = peer.port(),
-                                                         .connectionCount = 1,
-                                                         .connectTimeout = 3s,
-                                                         .requestTimeout = 8s,
-                                                         .acquireTimeout = 3s,
-                                                         .maxResponseBytes = 64,
-                                                         .protocol = ruvia::HttpClientProtocol::kHttp3Only,
-                                                         .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
-                                                     });
+                                                        .scheme = ruvia::HttpScheme::kHttps,
+                                                        .host = "127.0.0.1",
+                                                        .port = peer.port(),
+                                                        .connectionCount = 1,
+                                                        .connectTimeout = 3s,
+                                                        .requestTimeout = 8s,
+                                                        .acquireTimeout = 3s,
+                                                        .maxResponseBytes = 64,
+                                                        .protocol = ruvia::HttpClientProtocol::kHttp3Only,
+                                                        .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification,
+                                                    });
         ClientWatchdog watchdog(io, client);
         try {
             stage = "unprocessed request replay";
@@ -1046,12 +1043,9 @@ ruvia::Task<void> exercisePublicHttp3GoAwayReplay(
 
             stage = "peer replay synchronization";
             const auto worker = attachment.loop().handle();
-            const bool replayObserved = co_await waitForGoAwayPeer(worker, peer,
-                [&] {
-                    return peer.acceptedConnections() >= 2 &&
-                           peer.secondRequestStream() != GoAwayRotationPeer::kUnobservedStream &&
-                           peer.rejectionResetSent();
-                }, 5s);
+            const bool replayObserved = co_await waitForGoAwayPeer(worker, peer, [&] { return peer.acceptedConnections() >= 2 &&
+                                                                                              peer.secondRequestStream() != GoAwayRotationPeer::kUnobservedStream &&
+                                                                                              peer.rejectionResetSent(); }, 5s);
             RUVIA_CHECK(replayObserved);
             RUVIA_CHECK(peer.synchronize());
             RUVIA_CHECK_EQ(peer.firstRequestStream(), std::uint64_t{0});

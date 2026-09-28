@@ -366,10 +366,10 @@ private:
     std::atomic<bool> transportRetiredPublished_{};
     AdmissionSealed admissionSealed_{};  // server-network-owned; release-published
     std::atomic<bool> admissionSealedPublished_{};
-    bool admissionSealedTaken_{};        // worker-owned
-    DrainComplete drainComplete_{};      // worker-owned; release-published
+    bool admissionSealedTaken_{};    // worker-owned
+    DrainComplete drainComplete_{};  // worker-owned; release-published
     std::atomic<bool> drainCompletePublished_{};
-    bool drainCompleteTaken_{};           // server-network-owned
+    bool drainCompleteTaken_{};  // server-network-owned
     Identity workerFinalizedIdentity_{};
     std::atomic<bool> workerFinalizedPublished_{};
     Identity networkFinalizedIdentity_{};

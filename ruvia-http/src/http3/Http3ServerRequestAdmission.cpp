@@ -41,8 +41,8 @@ Http3ServerRequestAdmissionDecision Http3ServerRequestAdmissionPlanner::admit(
     if (streamId >= goawayId_) {
         const auto announcement = announceGoaway();
         return {.action = announcement.emitGoaway
-                             ? Http3ServerRequestAdmissionAction::kAnnounceGoaway
-                             : Http3ServerRequestAdmissionAction::kReject,
+                              ? Http3ServerRequestAdmissionAction::kAnnounceGoaway
+                              : Http3ServerRequestAdmissionAction::kReject,
             .rejection = Http3ServerRequestAdmissionRejection::kRequestLimitReached,
             .goawayId = goawayId_,
             .emitGoaway = announcement.emitGoaway};

@@ -397,8 +397,18 @@ RUVIA_TEST(worker_notification_wait_resource_reuses_fixed_slot) {
         RUVIA_CHECK_EQ(resource.outstandingAllocations(), std::size_t{0});
     }
 
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{65});
-    RUVIA_CHECK_EQ(resource.deallocationCount(), std::size_t{65});
+    auto* aligned = resource.allocate(1024, 64);
+    RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(aligned) % 64, std::uintptr_t{0});
+    resource.deallocate(aligned, 1024, 64);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        static_cast<void>(resource.allocate(1025, 64));
+    }));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        static_cast<void>(resource.allocate(1, 128));
+    }));
+
+    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{66});
+    RUVIA_CHECK_EQ(resource.deallocationCount(), std::size_t{66});
 }
 
 RUVIA_TEST(worker_notification_early_latch_cold_wait_and_repeated_reuse) {

@@ -11,10 +11,10 @@
 
 namespace {
 
+using ruvia::Http3ConnectionErrorCode;
 using ruvia::Http3StreamFrameEvent;
 using ruvia::Http3StreamFrameEventKind;
 using ruvia::Http3StreamFrames;
-using ruvia::Http3ConnectionErrorCode;
 using ruvia::Http3StreamFrameStatus;
 using ruvia::Http3StreamKind;
 

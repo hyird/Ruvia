@@ -39,7 +39,7 @@ void Http3SansIoSessionEngine::StreamDeleter::operator()(Stream* stream) const n
         return;
     }
     std::pmr::polymorphic_allocator<Stream> allocator(resource);
-    allocator.destroy(stream);
+    std::allocator_traits<decltype(allocator)>::destroy(allocator, stream);
     allocator.deallocate(stream, 1);
 }
 

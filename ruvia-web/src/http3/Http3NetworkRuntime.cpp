@@ -999,15 +999,12 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                     // FIN observation is only needed to retire this duplicate
                     // timeout-phase parser; the worker processes the real FIN.
                     try {
-                        static_cast<void>(stream.frameTracker->feed({}, true,
-                            +[](void* context, Http3StreamFrameEvent event) {
+                        static_cast<void>(stream.frameTracker->feed({}, true, +[](void* context, Http3StreamFrameEvent event) {
                                 auto& tracked = *static_cast<Stream*>(context);
                                 if (event.kind == Http3StreamFrameEventKind::kHeaders &&
                                     !event.trailers && event.endFrame) {
                                     tracked.receivePhase = Stream::ReceivePhase::kBody;
-                                }
-                            },
-                            &stream));
+                                } }, &stream));
                     } catch (...) {
                         // Observation failure does not change protocol handling.
                     }

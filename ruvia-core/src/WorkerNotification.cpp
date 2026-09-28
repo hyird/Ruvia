@@ -51,12 +51,12 @@
 namespace ruvia::detail {
 
 void* WorkerNotificationWaitResource::do_allocate(std::size_t bytes, std::size_t alignment) {
-    if (allocated_ || bytes > buffer_.size() || alignment > kMaxAlignment) {
+    if (allocated_ || bytes > kBufferSize || alignment > kMaxAlignment) {
         throw std::bad_alloc();
     }
 
-    void* candidate = buffer_.data();
-    auto space = buffer_.size();
+    void* candidate = bufferStorage_.data();
+    auto space = bufferStorage_.size();
     auto* pointer = std::align(alignment, std::max<std::size_t>(bytes, 1), candidate, space);
     if (pointer == nullptr) {
         throw std::bad_alloc();

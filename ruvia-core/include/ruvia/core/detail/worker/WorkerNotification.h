@@ -59,7 +59,7 @@ private:
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) noexcept override;
     [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
 
-    alignas(kMaxAlignment) std::array<std::byte, kBufferSize> buffer_{};
+    std::array<std::byte, kBufferSize + kMaxAlignment - 1> bufferStorage_{};
     std::size_t allocationCount_{0};
     std::size_t deallocationCount_{0};
     void* allocatedPointer_{nullptr};

@@ -117,10 +117,9 @@ RUVIA_TEST(app_http3_listener_requires_https_and_positive_handshake_timeout) {
             {.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{}});
     }));
     RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().listen({.address = "127.0.0.1", .https = 8443,
-            .http3 = ruvia::Http3ListenConfig{
-                .drainTimeout = std::chrono::milliseconds::zero(),
-            }});
+        ruvia::app().listen({.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{
+                                                                        .drainTimeout = std::chrono::milliseconds::zero(),
+                                                                    }});
     }));
 }
 

@@ -22,8 +22,8 @@
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/server/ServerNetworkRuntime.h"
 #include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
+#include "ruvia/web/detail/server/ServerNetworkRuntime.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 #include "test_harness.h"

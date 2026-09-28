@@ -19,8 +19,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/http3/Http3BufferedServerConnection.h"
-#include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/http3/Http3QuicServerTransport.h"
+#include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/http3/Http3ServerConnectionChannel.h"
 #include "ruvia/web/detail/http3/Http3StreamMailbox.h"
 #include "ruvia/web/detail/http3/Http3WorkerMailboxScheduler.h"
@@ -91,7 +91,8 @@ private:
         std::pmr::string clientCertificateSubject;
         std::uint16_t remotePort{};
         std::unique_ptr<Http3BufferedServerConnection,
-            PmrObjectDeleter<Http3BufferedServerConnection>> connection;
+            PmrObjectDeleter<Http3BufferedServerConnection>>
+            connection;
         bool reserved{};
         bool attached{};
         bool rejected{};

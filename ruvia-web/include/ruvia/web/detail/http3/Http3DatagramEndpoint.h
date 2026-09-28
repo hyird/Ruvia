@@ -8,8 +8,8 @@
 
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/web/detail/http3/Http3UdpSocket.h"
 #include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
+#include "ruvia/web/detail/http3/Http3UdpSocket.h"
 
 namespace ruvia::detail {
 

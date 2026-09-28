@@ -761,10 +761,10 @@ RUVIA_TEST(http3_connection_cannot_retire_server_parser_from_feed_callback) {
     } attempt{&server};
     const auto wire = requestWire(&resource, "POST", "/items", "payload");
     const auto result = server.feed(0, wire, true, false, [](void* opaque, const ruvia::Http3ConnectionEvent& event) {
-            auto& attempt = *static_cast<Attempt*>(opaque);
+            auto& state = *static_cast<Attempt*>(opaque);
             if (event.kind == ruvia::Http3ConnectionEventKind::kRequestHead) {
-                attempt.called = true;
-                attempt.removed = attempt.connection->retireServerRequest(event.streamId) || attempt.connection->retire();
+                state.called = true;
+                state.removed = state.connection->retireServerRequest(event.streamId) || state.connection->retire();
             } }, &attempt);
     RUVIA_CHECK(attempt.called && !attempt.removed);
     RUVIA_CHECK(result.status == ruvia::Http3ConnectionStatus::kMessageEnd);

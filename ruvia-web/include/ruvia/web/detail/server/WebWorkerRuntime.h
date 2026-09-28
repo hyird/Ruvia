@@ -100,7 +100,8 @@ public:
 
 private:
     struct ValidatedConfigurationTag final {};
-    enum class ConnectionOwnershipMode { kOwnListeners, kTransferredSessions };
+    enum class ConnectionOwnershipMode { kOwnListeners,
+        kTransferredSessions };
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
     using ListenerPtr =
         std::unique_ptr<HttpServerSessionConfig, PmrObjectDeleter<HttpServerSessionConfig>>;

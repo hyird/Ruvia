@@ -22,10 +22,10 @@
 #include <openssl/x509.h>
 
 #include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicWireOwner.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
 #include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
+#include "ruvia/web/detail/http3/Http3QuicWireOwner.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 
 #include "test_harness.h"
@@ -33,9 +33,9 @@
 namespace {
 using namespace std::chrono_literals;
 using Udp = asio::ip::udp;
-using ruvia::detail::Http3QuicWireOwner;
 using ruvia::detail::Http3QuicDatagramAddress;
 using ruvia::detail::Http3QuicDatagramBridge;
+using ruvia::detail::Http3QuicWireOwner;
 
 class FailOnAllocationResource final : public std::pmr::memory_resource {
 public:
@@ -240,7 +240,7 @@ void exerciseTimerHandlerAllocationFailure(ruvia::testing::TestContext& ruvia_ct
         bool receivedRetry{};
         const auto retryDeadline = std::chrono::steady_clock::now() + 2s;
         while (!receivedRetry && !owner.failure() &&
-            std::chrono::steady_clock::now() < retryDeadline) {
+               std::chrono::steady_clock::now() < retryDeadline) {
             asio::error_code error;
             packetSize = peer.receive_from(asio::buffer(packet), source, 0, error);
             if (!error) {
