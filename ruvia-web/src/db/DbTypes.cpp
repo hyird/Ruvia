@@ -1,8 +1,9 @@
+#include "ruvia/web/db/DbTypes.h"
+
 #include <utility>
 
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/db/DbRows.h"
-#include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
 namespace ruvia {

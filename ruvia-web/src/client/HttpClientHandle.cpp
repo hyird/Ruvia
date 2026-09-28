@@ -1,21 +1,23 @@
 #include "ruvia/web/HttpClientHandle.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/http/HttpContentCodec.h"
-#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
+#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
+#include "ruvia/web/detail/client/HttpClientResultBudget.h"
+#include "ruvia/web/detail/http3/Http3ClientConnection.h"
 
 namespace ruvia {
 namespace {
@@ -30,6 +32,7 @@ HttpClientResponse::HttpClientResponse(
           detail::pmrResourceOrDefault(resource), worker, detail::pmrResourceOrDefault(resource))),
       body_(state_) {
     state_->pool = &pool;
+    state_->resultBudgetDomain = &pool.resultBudgetDomain_;
 }
 
 HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept
@@ -37,7 +40,7 @@ HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, b
       body_(state),
       consumer_(false) {
     if (retain && state_ != nullptr) {
-        ++state_->references;
+        state_->retainReference();
     }
 }
 
@@ -74,15 +77,17 @@ void HttpClientResponse::release() noexcept {
     if (consumer_) {
         state->bodyOperationScope.close();
     }
-    if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr) {
+    if (consumer_ && state->http3Connection != nullptr) {
+        auto* connection = state->http3Connection;
+        const auto requestId = state->http3RequestId;
+        if (!state->complete && !state->abandoned) {
+            connection->abandonResponse(requestId);
+        }
+        connection->consumerReleased(requestId);
+    } else if (consumer_ && !state->complete && !state->abandoned && state->pool != nullptr) {
         state->pool->abandonResponse(*state);
     }
-    if (state->references == 0) {
-        std::terminate();
-    }
-    if (--state->references == 0) {
-        detail::destroyPmrObject(state, state->resource);
-    }
+    state->releaseReference();
 }
 
 HttpStatusCode HttpClientResponse::status() const noexcept {
@@ -98,6 +103,120 @@ std::span<const HttpHeader> HttpClientResponse::trailers() const& noexcept {
     return state_->trailers;
 }
 
+void detail::HttpClientResponseState::retainReference() noexcept {
+    if (references == std::numeric_limits<std::size_t>::max()) {
+        std::terminate();
+    }
+    ++references;
+}
+
+void detail::HttpClientResponseState::releaseReference() noexcept {
+    if (references == 0) {
+        std::terminate();
+    }
+    if (--references == 0) {
+        detail::destroyPmrObject(this, resource);
+    }
+}
+
+void detail::HttpClientResponseState::notifyProducerSpace() noexcept {
+    // A changed read policy (for example collectAll) can unblock the QUIC
+    // driver even when no body storage has been released yet.
+    http3BodyBudget.notifyProducer();
+    spaceSignal.notify();
+}
+
+bool detail::HttpClientResponseState::bindHttp3BodyBudget(
+    detail::Http3ClientBodyBudget& budget) noexcept {
+    return http3BodyBudget.attach(budget, producerBodyBytes());
+}
+
+void detail::HttpClientResponseState::releaseHttp3BodyBudget() noexcept {
+    if (http3BodyBudget.retainedBytes() != 0) {
+        std::terminate();
+    }
+    http3BodyBudget.reset();
+}
+
+bool detail::HttpClientResponseState::hasHttp3BodyBudget() const noexcept {
+    return http3BodyBudget.attached();
+}
+
+std::size_t detail::HttpClientResponseState::producerBodyBytes() const noexcept {
+    if (pending.size() > std::numeric_limits<std::size_t>::max() - buffered.size()) {
+        std::terminate();
+    }
+    return buffered.size() + pending.size();
+}
+
+std::size_t detail::HttpClientResponseState::producerBodyBudgetAvailable() const noexcept {
+    return http3BodyBudget.available();
+}
+
+bool detail::HttpClientResponseState::retainProducerBodyBytes(std::size_t bytes) noexcept {
+    return !http3BodyBudget.attached() || http3BodyBudget.tryRetain(bytes);
+}
+
+void detail::HttpClientResponseState::releaseProducerBodyBytes(std::size_t bytes) noexcept {
+    if (http3BodyBudget.attached()) {
+        http3BodyBudget.release(bytes);
+    }
+}
+
+void detail::HttpClientResponseState::reconcileProducerBodyBytes() noexcept {
+    if (!http3BodyBudget.attached()) {
+        return;
+    }
+    if (!http3BodyBudget.tryReplace(producerBodyBytes())) {
+        std::terminate();
+    }
+}
+
+bool detail::HttpClientResponseState::replaceProducerBodyBytes(std::size_t bytes) noexcept {
+    return !http3BodyBudget.attached() || http3BodyBudget.tryReplace(bytes);
+}
+
+void detail::HttpClientResponseState::discardPendingBody() noexcept {
+    {
+        std::pmr::string empty(resource);
+        pending.swap(empty);
+    }
+    reconcileProducerBodyBytes();
+    notifyProducerSpace();
+}
+
+void detail::HttpClientResponseState::discardResponseBody() noexcept {
+    {
+        std::pmr::string emptyBuffered(resource);
+        std::pmr::string emptyPending(resource);
+        buffered.swap(emptyBuffered);
+        pending.swap(emptyPending);
+    }
+    offset = 0;
+    reconcileProducerBodyBytes();
+    notifyProducerSpace();
+}
+
+void detail::HttpClientResponseState::releaseConsumedBodyPrefix() {
+    if (offset == 0) {
+        return;
+    }
+    if (offset > buffered.size()) {
+        std::terminate();
+    }
+    if (offset == buffered.size()) {
+        {
+            std::pmr::string empty(resource);
+            buffered.swap(empty);
+        }
+    } else {
+        buffered.erase(0, offset);
+    }
+    offset = 0;
+    reconcileProducerBodyBytes();
+    notifyProducerSpace();
+}
+
 void detail::HttpClientResponseState::promotePendingData() {
     auto& state = *this;
     if (state.offset != state.buffered.size() || state.pending.empty()) {
@@ -106,10 +225,11 @@ void detail::HttpClientResponseState::promotePendingData() {
     if (state.http2DataCredit && state.pool != nullptr) {
         state.pool->releaseResponseData(state);
     }
-    state.buffered.clear();
+    std::pmr::string empty(state.resource);
+    state.buffered.swap(empty);
     state.offset = 0;
     state.buffered.swap(state.pending);
-    state.spaceSignal.notify();
+    state.notifyProducerSpace();
 }
 
 bool HttpClientResponseBody::complete() const noexcept {
@@ -134,10 +254,10 @@ ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::text() 
 template <typename View>
 Task<std::optional<View>> detail::HttpClientResponseState::read() {
     auto& state = *this;
+    state.releaseConsumedBodyPrefix();
     state.incrementalRead = true;
-    while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
-        state.buffered.clear();
-        state.offset = 0;
+    while ((state.bodyDecodeRequired && !state.complete) ||
+           (state.buffered.empty() && state.pending.empty() && !state.complete)) {
         co_await state.dataSignal.wait();
     }
     promotePendingData();
@@ -149,6 +269,7 @@ Task<std::optional<View>> detail::HttpClientResponseState::read() {
             throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode),
                 "HTTP response body read failed");
         }
+        state.discardResponseBody();
         co_return std::nullopt;
     }
     const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
@@ -164,20 +285,21 @@ Task<std::optional<View>> detail::HttpClientResponseState::read() {
 template Task<std::optional<std::span<const std::byte>>> detail::HttpClientResponseState::read<std::span<const std::byte>>();
 template Task<std::optional<std::string_view>> detail::HttpClientResponseState::read<std::string_view>();
 
-ScopedOperation<std::pmr::vector<std::byte>> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
+ScopedOperation<HttpClientResponseBytes> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     return detail::makeScopedOperation(state_->bodyOperationScope, state_->readAll(maxBytes));
 }
 
-Task<std::pmr::vector<std::byte>> detail::HttpClientResponseState::readAll(std::size_t maxBytes) {
+Task<HttpClientResponseBytes> detail::HttpClientResponseState::readAll(std::size_t maxBytes) {
     auto& state = *this;
+    state.releaseConsumedBodyPrefix();
     state.collectAll = true;
     if (state.http2DataCredit && state.pool != nullptr) {
         state.pool->releaseResponseData(state);
     }
-    state.spaceSignal.notify();
+    state.notifyProducerSpace();
     while (!state.complete) {
         co_await state.dataSignal.wait();
     }
@@ -189,21 +311,33 @@ Task<std::pmr::vector<std::byte>> detail::HttpClientResponseState::readAll(std::
             static_cast<HttpClientError::Code>(*state.errorCode), "HTTP response body read failed");
     }
     const auto remaining = state.buffered.size() - state.offset;
-    const auto totalRemaining = remaining + state.pending.size();
     const auto effectiveLimit = std::min(maxBytes, state.bufferedLimit);
-    if (totalRemaining > effectiveLimit) {
+    if (state.pending.size() > effectiveLimit ||
+        remaining > effectiveLimit - state.pending.size()) {
         throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
             "HTTP response body exceeds readAll byte limit");
     }
-    std::pmr::vector<std::byte> result(state.resource);
-    result.reserve(totalRemaining);
-    const auto bufferedBytes = std::as_bytes(std::span(state.buffered.data() + state.offset, remaining));
-    const auto pendingBytes = std::as_bytes(std::span(state.pending.data(), state.pending.size()));
-    result.insert(result.end(), bufferedBytes.begin(), bufferedBytes.end());
-    result.insert(result.end(), pendingBytes.begin(), pendingBytes.end());
-    state.offset = state.buffered.size();
-    state.pending.clear();
-    co_return result;
+    const auto totalRemaining = remaining + state.pending.size();
+    if (state.resultBudgetDomain == nullptr) {
+        throw std::logic_error("HTTP client response has no result byte budget");
+    }
+    auto reservation = detail::HttpClientResultBudgetLease::tryAcquire(
+        *state.resultBudgetDomain, totalRemaining);
+    if (!reservation) {
+        throw HttpClientError(HttpClientError::Code::kResultBudgetExceeded,
+            "HTTP client retained result byte budget is exhausted");
+    }
+    HttpClientResponseBytes result(totalRemaining, std::move(*reservation));
+    if (remaining != 0) {
+        result.append(std::as_bytes(std::span(state.buffered).subspan(state.offset)));
+    }
+    if (!state.pending.empty()) {
+        result.append(std::as_bytes(std::span(state.pending)));
+    }
+    // The result uses independent thread-safe storage. Only release the
+    // worker-owned response buffers after the complete copy succeeds.
+    state.discardResponseBody();
+    co_return std::move(result);
 }
 
 ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) & {
@@ -217,9 +351,9 @@ Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output)
     auto& state = *this;
     state.incrementalRead = true;
     for (;;) {
-        while (state.offset == state.buffered.size() && state.pending.empty() && !state.complete) {
-            state.buffered.clear();
-            state.offset = 0;
+        state.releaseConsumedBodyPrefix();
+        while ((state.bodyDecodeRequired && !state.complete) ||
+               (state.buffered.empty() && state.pending.empty() && !state.complete)) {
             co_await state.dataSignal.wait();
         }
         promotePendingData();
@@ -231,6 +365,7 @@ Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output)
                 throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode),
                     "HTTP response body forwarding failed");
             }
+            state.discardResponseBody();
             co_return;
         }
         const auto count =
@@ -254,52 +389,6 @@ std::optional<std::string_view> HttpClientResponse::trailer(std::string_view nam
     return match == state_->trailers.end() ? std::nullopt
                                            : std::optional<std::string_view>(match->value());
 }
-
-namespace detail {
-
-void HttpClientPool::decodeResponseContentEncoding(HttpClientResponse& response,
-    bool contentSemanticsPresent, std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
-    if (!contentSemanticsPresent) {
-        return;
-    }
-    if (response.state_->incrementalRead) {
-        return;
-    }
-    const auto parsedCoding = parseHttpContentCodingHeaders(response.state_->headers);
-    const auto* coding = parsedCoding.coding();
-    if (coding == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kProtocolError, "unsupported HTTP response Content-Encoding");
-    }
-    if (*coding == HttpContentCoding::kIdentity) {
-        return;
-    }
-    if (!response.state_->pending.empty()) {
-        response.state_->buffered.append(response.state_->pending);
-        response.state_->pending.clear();
-    }
-    auto decoded = decodeHttpContent(*coding, response.state_->buffered,
-        {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
-    if (auto* content = decoded.decoded()) {
-        auto bytes = std::move(*content).takeBytes();
-        response.state_->buffered.swap(bytes);
-        return;
-    }
-    const auto* failure = decoded.failure();
-    if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecodedSizeExceeded) {
-        throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
-            "HTTP response exceeds configured byte limit");
-    }
-    if (failure != nullptr && failure->error() == HttpContentDecodeError::kDecoderFailure) {
-        throw HttpClientError(
-            HttpClientError::Code::kProtocolError, "HTTP response content-coding decoder failed");
-    }
-    throw HttpClientError(
-        HttpClientError::Code::kProtocolError, "invalid HTTP response Content-Encoding");
-}
-
-}  // namespace detail
 
 HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
     std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept

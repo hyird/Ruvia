@@ -6,6 +6,7 @@
 // trustworthy; the default of trusting nobody must never read it.
 
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <span>
 #include <stdexcept>
@@ -152,9 +153,11 @@ RUVIA_TEST(conn_info_ignores_forwarding_headers_from_an_untrusted_peer) {
 
     // No trusted set at all: the default, and it must read nothing.
     const auto context = ContextAccess::make(
-        memory, request, ruvia::test::testContextServices().withPlainTransport("198.51.100.7"));
+        memory, request, ruvia::test::testContextServices().withPlainTransport("198.51.100.7", 53000));
     const auto info = context.conn();
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("198.51.100.7"));
+    RUVIA_CHECK_EQ(info.remote().port(), std::uint16_t{53000});
+    RUVIA_CHECK_EQ(info.client().port(), std::uint16_t{53000});
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttp);
     RUVIA_CHECK(!info.viaTrustedProxy());
 
@@ -178,13 +181,15 @@ RUVIA_TEST(conn_info_resolves_client_from_a_trusted_peer_x_forwarded_headers) {
     const auto trusted = setOf({"10.0.0.0/8"});
     const auto context = ContextAccess::make(memory, request,
         ruvia::test::testContextServices()
-            .withPlainTransport("10.0.0.5")
+            .withPlainTransport("10.0.0.5", 53001)
             .withTrustedProxies(trusted));
     const auto info = context.conn();
 
     RUVIA_CHECK_EQ(info.client().address(), std::string_view("203.0.113.9"));
-    // remote() still reports the hop, unchanged.
+    RUVIA_CHECK_EQ(info.client().port(), std::uint16_t{0});
+    // remote() still reports the socket peer, including its port.
     RUVIA_CHECK_EQ(info.remote().address(), std::string_view("10.0.0.5"));
+    RUVIA_CHECK_EQ(info.remote().port(), std::uint16_t{53001});
     RUVIA_CHECK(info.scheme() == ruvia::HttpScheme::kHttps);
     RUVIA_CHECK(info.viaTrustedProxy());
     // The hop itself is plaintext: the end-to-end scheme is not a synonym for tls().

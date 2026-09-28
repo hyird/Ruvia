@@ -11,6 +11,7 @@ enum class HttpProtocolVersion : std::uint8_t {
     kHttp10,
     kHttp11,
     kHttp2,
+    kHttp3,
 };
 
 }  // namespace ruvia

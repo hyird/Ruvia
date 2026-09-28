@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 
 #include <initializer_list>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -15,12 +16,17 @@ HttpClientRequestStorage::HttpClientRequestStorage(
       headers_(std::initializer_list<Header>{}, method_.get_allocator().resource()),
       body_(std::string_view{}, method_.get_allocator().resource()) {}
 
-HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& other)
-    : method_(std::move(other.method_), other.method_.get_allocator()),
-      target_(std::move(other.target_), other.target_.get_allocator()),
-      headers_(std::move(other.headers_), other.headers_.get_allocator()),
-      body_(std::move(other.body_), other.body_.get_allocator()),
-      hasBody_(other.hasBody_) {}
+HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& other) noexcept
+    : method_(std::move(other.method_)),
+      target_(std::move(other.target_)),
+      headers_(std::move(other.headers_)),
+      body_(std::move(other.body_)),
+      hasBody_(std::exchange(other.hasBody_, false)) {
+    static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(body_)>);
+}
 
 HttpClientRequestStorage HttpClientRequestStorage::intoResource(
     std::pmr::memory_resource* resource) && {

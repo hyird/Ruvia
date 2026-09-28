@@ -81,7 +81,7 @@ jobs:
       GIT_CONFIG_VALUE_0: main
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.cache/vcpkg/archives
-      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
+      VCPKG_COMMIT: 617ef1c0c422737d117eda00a471ea1be5bad088
       BUILD_TYPE: Debug
     services:
       postgres:
@@ -187,7 +187,7 @@ jobs:
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
       VCPKG_DEFAULT_TRIPLET: x64-windows-static
       VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
-      VCPKG_COMMIT: 4bca8fd8654e5ba76f92661db7bfe954768ad8ef
+      VCPKG_COMMIT: 617ef1c0c422737d117eda00a471ea1be5bad088
       BUILD_TYPE: Debug
     steps:
       - name: Checkout ruvia

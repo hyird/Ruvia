@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -10,6 +11,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/HttpClientResultBudget.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
@@ -42,6 +44,7 @@ struct WorkerCapabilityOptions final {
     RouteRateLimitPresence routeRateLimits{RouteRateLimitPresence::kAbsent};
     std::size_t rateLimitCapacity{kDefaultRateLimitCapacityPerWorker};
     std::size_t maxDecodedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    HttpClientResultBudgetConfig httpClientResultBudget{};
     BlockingPool* blockingPool{nullptr};
     const Env* env{nullptr};
     const TrustedProxySet* trustedProxies{nullptr};
@@ -79,6 +82,7 @@ private:
     const WorkerHandle& worker_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    std::shared_ptr<HttpClientResultBudgetDomain> httpClientResultBudgetDomain_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;
     RateLimiter rateLimiter_;

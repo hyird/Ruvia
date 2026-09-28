@@ -128,8 +128,11 @@ void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
 }  // namespace detail
 
 WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
+    : WorkerMemory(*detail::processResource(), config) {}
+
+WorkerMemory::WorkerMemory(std::pmr::memory_resource& upstream, const MemoryPoolConfig& config)
     : config_(config),
-      resource_(detail::processResource()) {}
+      resource_(&upstream) {}
 
 std::pmr::memory_resource* WorkerMemory::resource() & noexcept {
     return &resource_;

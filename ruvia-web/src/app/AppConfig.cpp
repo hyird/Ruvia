@@ -7,10 +7,23 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/web/detail/app/EnvState.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
 
 namespace detail {
+namespace {
+
+[[nodiscard]] bool hasHttp3Listener(const AppState& state) noexcept {
+    for (const auto& listener : state.listeners) {
+        if (listener.http3.has_value()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
 
 void applyServerConfig(AppState& state, const ServerConfig& config) {
     ruvia::ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
@@ -46,8 +59,14 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
     }
     ruvia::ensurePositiveSize(
         config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
+    ruvia::ensurePositiveSize(config.httpClientResultBudget.maxRetainedBytes,
+        "HTTP client retained result byte budget must be greater than zero");
     ruvia::ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
         "memory pool config values must be greater than zero");
+    if (hasHttp3Listener(state)) {
+        validateHttp3ServerLimits(config.maxConnectionsPerWorker,
+            config.workerMailboxCapacity, config.maxRequestsPerConnection, config.workerCount);
+    }
 
     state.workerCount = config.workerCount;
     state.processSignalHandlers = config.processSignalHandlers;
@@ -63,6 +82,7 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
     state.options.maxStreamBodyBytes = config.maxStreamBodyBytes;
     state.options.maxWebSocketMessageBytes = config.maxWebSocketMessageBytes;
     state.options.memoryConfig = config.memoryPool;
+    state.options.httpClientResultBudget = config.httpClientResultBudget;
 }
 
 }  // namespace detail
@@ -100,6 +120,23 @@ App& App::listen(ListenConfig config) {
             if (!config.https.has_value() && detail::hasTlsConfiguration(config.tls)) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
+            if (config.http3.has_value() && !config.https.has_value()) {
+                throw std::invalid_argument("HTTP/3 requires an HTTPS listen port");
+            }
+            if (config.http3.has_value()) {
+                ruvia::ensurePositiveDuration(config.http3->handshakeTimeout,
+                    "HTTP/3 handshake timeout must be greater than zero");
+                ruvia::ensurePositiveDuration(config.http3->drainTimeout,
+                    "HTTP/3 drain timeout must be greater than zero");
+                if (std::chrono::duration<long double>(config.http3->drainTimeout) >
+                    std::chrono::duration<long double>(
+                        std::chrono::steady_clock::duration::max())) {
+                    throw std::invalid_argument("HTTP/3 drain timeout is not representable");
+                }
+                detail::validateHttp3ServerLimits(state.options.maxConnections,
+                    state.options.workerMailboxCapacity, state.options.maxRequestsPerConnection,
+                    state.workerCount);
+            }
 
             auto* const resource = detail::appResource();
             std::pmr::vector<detail::HttpServerListenerDefinition> replacement(resource);
@@ -115,7 +152,7 @@ App& App::listen(ListenConfig config) {
             }
             if (config.https.has_value()) {
                 replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https),
-                    detail::normalizeTlsOptions(config.tls, resource));
+                    detail::normalizeTlsOptions(config.tls, resource), config.http3);
             }
             state.listeners = std::move(replacement);
         });

@@ -14,16 +14,26 @@ namespace {
     return pmrResourceOrDefault(resource);
 }
 
+[[nodiscard]] std::pmr::memory_resource* validatedHttpClientResource(
+    std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions,
+    const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain) {
+    if (!resultBudgetDomain) {
+        throw std::invalid_argument("HTTP client result budget domain must not be null");
+    }
+    return validatedHttpClientResource(resource, definitions);
+}
+
 }  // namespace
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-    std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig)
+    std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig,
+    HttpClientResultBudgetConfig resultBudget)
     : resource_(pmrResourceOrDefault(resource)),
       pools_(resource_),
       aliasIndex_(resource_) {
     aliasIndex_.build({kDefaultCapabilityAlias});
     pools_.reserve(1);
-    add(ioContext, worker, HttpClientConfigStorage(defaultConfig, resource_));
+    add(ioContext, worker, HttpClientConfigStorage(defaultConfig, resource_), resultBudget);
 }
 
 HttpClientRequestView HttpClientRequestStorageAccess::view(
@@ -43,23 +53,46 @@ HttpClientRequestView HttpClientRequestStorageAccess::view(
 }
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-    std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions)
+    std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions,
+    HttpClientResultBudgetConfig resultBudget)
     : resource_(validatedHttpClientResource(resource, definitions)),
       pools_(resource_),
       aliasIndex_(resource_) {
     aliasIndex_.build(definitions);
     pools_.reserve(definitions.size());
     for (const auto& definition : definitions) {
-        add(ioContext, worker, HttpClientConfigStorage(definition.config, resource_));
+        add(ioContext, worker, HttpClientConfigStorage(definition.config, resource_), resultBudget);
+    }
+}
+
+HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+    std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions,
+    const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain)
+    : resource_(validatedHttpClientResource(resource, definitions, resultBudgetDomain)),
+      pools_(resource_),
+      aliasIndex_(resource_) {
+    aliasIndex_.build(definitions);
+    pools_.reserve(definitions.size());
+    for (const auto& definition : definitions) {
+        add(ioContext, worker, HttpClientConfigStorage(definition.config, resource_),
+            resultBudgetDomain);
     }
 }
 
 HttpClientRegistry::~HttpClientRegistry() = default;
 
-void HttpClientRegistry::add(
-    asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config) {
-    auto pool =
-        makePmrObject<HttpClientPool>(resource_, ioContext, worker, std::move(config), resource_);
+void HttpClientRegistry::add(asio::io_context& ioContext, const WorkerHandle& worker,
+    HttpClientConfigStorage config, HttpClientResultBudgetConfig resultBudget) {
+    auto pool = makePmrObject<HttpClientPool>(
+        resource_, ioContext, worker, std::move(config), resultBudget, resource_);
+    pools_.push_back(std::move(pool));
+}
+
+void HttpClientRegistry::add(asio::io_context& ioContext, const WorkerHandle& worker,
+    HttpClientConfigStorage config,
+    const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain) {
+    auto pool = makePmrObject<HttpClientPool>(
+        resource_, ioContext, worker, std::move(config), resultBudgetDomain, resource_);
     pools_.push_back(std::move(pool));
 }
 

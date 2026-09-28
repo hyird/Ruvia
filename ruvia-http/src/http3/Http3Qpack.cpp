@@ -48,7 +48,8 @@ constexpr std::array<Entry, 99> kStaticTable{{
     {"access-control-allow-headers", "content-type"},
     {"access-control-allow-origin", "*"},
     {"cache-control", "max-age=0"},
-    {"cache-control", "max-age=3600"},
+    {"cache-control", "max-age=2592000"},
+    {"cache-control", "max-age=604800"},
     {"cache-control", "no-cache"},
     {"cache-control", "no-store"},
     {"cache-control", "public, max-age=31536000"},
@@ -77,7 +78,6 @@ constexpr std::array<Entry, 99> kStaticTable{{
     {":status", "204"},
     {":status", "206"},
     {":status", "302"},
-    {":status", "308"},
     {":status", "400"},
     {":status", "403"},
     {":status", "421"},
@@ -243,11 +243,20 @@ std::expected<std::size_t, Http3QpackError> encodeHttp3QpackInteger(std::span<ch
 
 std::expected<std::size_t, Http3QpackError> decodeHttp3QpackString(
     std::span<const char> input, std::pmr::string& output) {
+    return decodeHttp3QpackString(input, 7, output);
+}
+
+std::expected<std::size_t, Http3QpackError> decodeHttp3QpackString(
+    std::span<const char> input, std::uint8_t prefixBits, std::pmr::string& output) {
+    if (prefixBits == 0 || prefixBits > 7) {
+        return std::unexpected(Http3QpackError::kIntegerOverflow);
+    }
     if (input.empty()) {
         return std::unexpected(Http3QpackError::kNeedMoreData);
     }
-    const bool huffman = (static_cast<std::uint8_t>(input[0]) & 0x80U) != 0;
-    const auto length = decodeHttp3QpackInteger(input, 7);
+    const bool huffman =
+        (static_cast<std::uint8_t>(input[0]) & (1U << prefixBits)) != 0;
+    const auto length = decodeHttp3QpackInteger(input, prefixBits);
     if (!length) {
         return std::unexpected(length.error());
     }

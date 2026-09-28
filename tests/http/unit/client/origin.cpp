@@ -5,7 +5,6 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpCorsFields.h"
-#include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include "test_harness.h"
@@ -14,7 +13,7 @@ namespace {
 
 using ruvia::HttpOriginView;
 using ruvia::HttpScheme;
-using ruvia::detail::makeHttpOriginAuthority;
+using ruvia::makeHttpOriginAuthority;
 using ruvia::testing::throwsOn;
 
 HttpOriginView originFor(

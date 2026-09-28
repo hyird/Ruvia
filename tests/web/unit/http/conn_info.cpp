@@ -1,4 +1,5 @@
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -52,6 +53,7 @@ RUVIA_TEST(conn_info_transport_has_one_active_alternative) {
     RUVIA_CHECK(plain.connInfo().plain() != nullptr);
     RUVIA_CHECK(plain.connInfo().tls() == nullptr);
     RUVIA_CHECK_EQ(plain.connInfo().remote().address(), std::string_view("192.0.2.10"));
+    RUVIA_CHECK_EQ(plain.connInfo().remote().port(), std::uint16_t{0});
     RUVIA_CHECK_EQ(activeTransportCount(plain.connInfo()), std::size_t{1});
 
     const auto tlsWithoutClientCertificate = plain.withTlsTransport("198.51.100.20");
@@ -83,6 +85,7 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
     RUVIA_CHECK(plainInfo.plain() != nullptr);
     RUVIA_CHECK(plainInfo.tls() == nullptr);
     RUVIA_CHECK_EQ(plainInfo.remote().address(), std::string_view("192.0.2.44"));
+    RUVIA_CHECK_EQ(plainInfo.remote().port(), std::uint16_t{0});
 
     const auto tlsContext = ContextAccess::make(memory, request,
         ruvia::test::testContextServices().withTlsTransport("198.51.100.55", "CN=request-client"));
@@ -92,4 +95,18 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
     RUVIA_CHECK_EQ(tlsInfo.remote().address(), std::string_view("198.51.100.55"));
     RUVIA_CHECK_EQ(
         tlsInfo.tls()->clientCertificateSubject(), std::string_view("CN=request-client"));
+}
+
+RUVIA_TEST(context_connection_metadata_preserves_socket_peer_port) {
+    const auto services = ruvia::test::testContextServices();
+    const auto plain = services.withPlainTransport("192.0.2.10", 49152);
+    RUVIA_CHECK_EQ(plain.connInfo().remote().port(), std::uint16_t{49152});
+    RUVIA_CHECK_EQ(plain.connInfo().client().port(), std::uint16_t{49152});
+
+    const auto tls = services.withTlsTransport("2001:db8::2", "CN=client", 44321);
+    RUVIA_CHECK_EQ(tls.connInfo().remote().address(), std::string_view("2001:db8::2"));
+    RUVIA_CHECK_EQ(tls.connInfo().remote().port(), std::uint16_t{44321});
+    RUVIA_CHECK_EQ(tls.connInfo().client().port(), std::uint16_t{44321});
+    RUVIA_CHECK_EQ(tls.connInfo().tls()->clientCertificateSubject(),
+        std::string_view("CN=client"));
 }

@@ -28,6 +28,11 @@ struct MemoryPoolConfig {
 class WorkerMemory final {
 public:
     explicit WorkerMemory(const MemoryPoolConfig& config = {});
+    // Bind an upstream once at construction (for custom allocation/accounting).
+    // It must outlive this pool and all of its borrowers. The default overload
+    // continues to use Ruvia's process resource, never the global PMR default.
+    explicit WorkerMemory(std::pmr::memory_resource& upstream,
+        const MemoryPoolConfig& config = {});
 
     WorkerMemory(const WorkerMemory&) = delete;
     WorkerMemory& operator=(const WorkerMemory&) = delete;

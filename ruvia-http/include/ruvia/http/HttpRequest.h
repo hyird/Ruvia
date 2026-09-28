@@ -23,12 +23,14 @@ enum class HttpRequestTargetForm : std::uint8_t {
     kAbsolute,
     kAuthority,
     kAsterisk,
-    // HTTP/2 carries target components as pseudo-fields rather than one
-    // request-target token, so none of the HTTP/1 wire forms applies.
+    // HTTP/2 and HTTP/3 carry target components as pseudo-fields rather than
+    // one HTTP/1 request-target token.
     kHttp2,
+    kHttp3,
 };
 
 class HttpRequest;
+class Http3ServerRequest;
 
 namespace detail {
 
@@ -127,6 +129,7 @@ public:
 
 private:
     friend struct detail::HttpRequestAccess;
+    friend class Http3ServerRequest;
 
     static constexpr std::size_t kCachedHeaderSlots = 29;
 

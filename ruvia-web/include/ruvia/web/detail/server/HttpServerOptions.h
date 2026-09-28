@@ -161,6 +161,7 @@ struct HttpServerOptions final {
     // Capacity of the explicit cross-thread queue for this Web worker.
     std::size_t workerMailboxCapacity{1024};
     MemoryPoolConfig memoryConfig{};
+    HttpClientResultBudgetConfig httpClientResultBudget{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};

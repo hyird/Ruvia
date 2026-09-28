@@ -80,7 +80,7 @@ public:
         native_ = invalidNative();
     }
 
-    [[nodiscard]] static constexpr NativeHandle invalidNative() noexcept {
+    [[nodiscard]] static NativeHandle invalidNative() noexcept {
 #if defined(_WIN32)
         return INVALID_SOCKET;
 #else

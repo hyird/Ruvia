@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -23,7 +24,10 @@ WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const Worker
     : worker_(requireWorkerCapabilitiesWorker(worker)),
       databases_(ioContext, worker_, resource, definitions.databases),
       redis_(ioContext, resource, definitions.redis, worker_),
-      httpClients_(ioContext, worker_, resource, definitions.httpClients),
+      httpClientResultBudgetDomain_(
+          std::make_shared<HttpClientResultBudgetDomain>(options.httpClientResultBudget)),
+      httpClients_(ioContext, worker_, resource, definitions.httpClients,
+          httpClientResultBudgetDomain_),
       workerStates_(resource, definitions.workerStates),
       rateLimiter_(
           options.defaultRateLimit, options.routeRateLimits, options.rateLimitCapacity, resource),

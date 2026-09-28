@@ -115,18 +115,44 @@ ruvia::app().listen({
         .certificateChainFile = "certs/server.crt",
         .privateKeyFile = "certs/server.key",
     },
+    // Explicitly bind QUIC/HTTP/3 over UDP on the HTTPS numeric port.
+    .http3 = ruvia::Http3ListenConfig{},
     .autoHttpsRedirect = true,
 });
 ```
 
 `ServerConfig::workerCount` is the number of business workers. The runtime also
-uses one TCP ingress thread and one UDP ingress thread (in addition to any
-`BlockingPool` and signal threads). The TCP ingress alone binds all configured
-HTTP/HTTPS TCP ports and hands each accepted connection to a business worker
-once; that worker then owns the connection. Each business worker separately
-owns TLS, its router, and its capabilities, including DB, Redis, outbound HTTP
-client, and user-state set. The UDP ingress currently only runs an `io_context`:
-it has no UDP socket or protocol service. In particular, HTTP/3/QUIC is not supported.
+uses one dedicated server network thread (in addition to any `BlockingPool` and
+signal threads). It binds the configured HTTP/HTTPS TCP ports and, when
+`ListenConfig::http3` is present, also serves QUIC/HTTP/3 over UDP on the HTTPS
+address and numeric port. There is no separate configurable UDP packet-rate
+limit.
+
+`ServerConfig::maxRequestsPerConnection = N` limits the cumulative number of
+admitted requests on each HTTP/1, HTTP/2, or HTTP/3 connection. The default is
+1000, and the value is not silently clamped. For HTTP/3, the fixed stream-ID
+cutoff is `4*N`. If a request stream at or above that cutoff arrives before N
+requests are admitted, the server announces `GOAWAY(4*N)` early and rejects that
+stream; request streams at or above the cutoff are rejected individually. That
+announcement does not seal admission of lower IDs: undecided requests below the
+cutoff may still be admitted until the connection reaches N admitted requests.
+At N, admission is sealed and already-admitted requests are drained.
+`Http3ListenConfig::handshakeTimeout` (default 10 seconds) bounds completion of
+the QUIC/TLS handshake for each new QUIC connection. The
+`Http3ListenConfig::drainTimeout` (default 30 seconds) limits the HTTP/3 drain
+and connection-closing phase. Request-header, request-body, and response write
+inactivity timeouts apply per stream; an expiry cancels only that stream. The
+idle timeout applies to the QUIC connection.
+
+The server HTTP/3 surface supports normal buffered controller routes, including
+request bodies and buffered byte responses. Unsupported route modes are rejected:
+CONNECT, streaming request or response routes, SSE, buffered file payloads,
+WebSocket/WebTransport over HTTP/3, 0-RTT, connection migration, server push,
+and dynamic QPACK are not advertised. Ruvia does not inject `Alt-Svc`; use an
+application header or HTTPS/SVCB deployment records when clients need discovery.
+HTTP/3 is explicit and does not alter the HTTPS TCP ALPN policy.
+Each business worker separately owns TLS, its router, and its capabilities,
+including DB, Redis, outbound HTTP client, and user-state set.
 Policies that exist both app-wide and per route use one name and one rule: the
 narrower scope may only **tighten**. `ServerConfig::maxBufferedBodyBytes` and
 `rateLimit()` are
@@ -214,7 +240,20 @@ ruvia::app().httpClient({
 
 HTTPS negotiates HTTP/2 with ALPN and falls back to HTTP/1.1 by default.
 Cleartext uses HTTP/1.1 unless `kHttp2Only` explicitly requests h2 prior
-knowledge.
+knowledge. `HttpClientProtocol::kHttp3Only` instead opens a QUIC connection over
+UDP for an HTTPS origin; it is explicit, never enters the TCP pool, and never
+silently falls back to HTTP/2 or HTTP/1.1:
+
+```cpp
+ruvia::app().httpClient({
+    .alias = "h3-api",
+    .config = {
+        .scheme = ruvia::HttpScheme::kHttps,
+        .host = "api.example.com",
+        .protocol = ruvia::HttpClientProtocol::kHttp3Only,
+    },
+});
+```
 
 Handlers use an origin-bound handle and the protocol target's existing borrowed
 `HttpClientRequestView`. The handle copies that view into reclaimable operation PMR memory
@@ -229,24 +268,29 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
         .send({.target = "/v1/data"});
     auto response = co_await std::move(operation);
     c.status(response.status());
-    co_return c.body(co_await response.body().readAll());
+    auto body = co_await response.body().readAll();
+    co_return c.body(body.bytes());
 }
 ```
 
 `HttpClientResponse` owns status, protocol version, headers, trailers, and an
 address-stable linear body state; it does not borrow from the request builder
 or caller stack. `send()` completes when the final response head is available.
-`maxResponseBytes` bounds `readAll()` and the HTTP/1 queued body window, not the
-total number of bytes that may pass through `read()` or `pipeTo()`. Responses
-with a non-identity `Content-Encoding` are decoded before `send()` completes
-because the current content decoders are whole-representation decoders. Use
+`maxResponseBytes` bounds each `readAll()` result and the HTTP/1 queued body
+window, not the total number of bytes that may pass through `read()` or
+`pipeTo()`. Responses with a non-identity `Content-Encoding` are decoded before
+`send()` completes because the current content decoders are whole-representation
+decoders. Use
 `trailers()` or `trailer()` after body completion to inspect trailing fields. On HTTP/1, a
 request timeout or explicit `StopToken`
 cancellation closes and discards that socket. On HTTP/2 it submits
 `RST_STREAM(CANCEL)` for only the affected stream, so unrelated multiplexed
 requests can continue. A connection I/O/protocol failure or `writeTimeout`
 still discards the whole broken socket, and a later request reconnects
-automatically.
+automatically. HTTP/3 cancellation resets only that request stream. A peer
+GOAWAY rejection that proves a request was not processed is retried once on a
+fresh QUIC connection under the original deadline; ambiguous requests are not
+retried.
 
 Each HTTP/1 connection processes one exchange at a time. Each HTTP/2 connection
 has a persistent reader/writer pair and multiplexes up to
@@ -257,8 +301,9 @@ peer GOAWAY `Last-Stream-ID` are known not to have been processed and are retrie
 once on a fresh connection under the original operation deadline. Ambiguous
 requests are never retried automatically.
 
-Use `HttpClientProtocol::kHttp1Only` or `kHttp2Only` when negotiation fallback
-is not acceptable. Client certificates, a custom CA file, certificate
+Use `HttpClientProtocol::kHttp1Only`, `kHttp2Only`, or `kHttp3Only` when
+negotiation fallback is not acceptable. HTTP/3 requires HTTPS; selecting it for
+a cleartext origin is rejected during configuration. Client certificates, a custom CA file, certificate
 verification policy, connect/acquire/request/write timeouts, TCP keepalive, and
 per-client connection capacity are supplied in the same `{}` configuration.
 Additional operations wait in the bounded client-local queue and fail with
@@ -275,8 +320,22 @@ coroutine operations; there are no blocking overloads or callback ownership mode
 
 Every response has one linear body reader. `read()` consumes one borrowed
 `std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
-an owning `std::pmr::vector<std::byte>` with a byte bound, and `pipeTo()`
-forwards it to a controller response stream with backpressure. Both the client
+a move-only `ruvia::HttpClientResponseBytes` with a per-response byte bound, and
+`pipeTo()` forwards them to a controller response stream with backpressure.
+`HttpClientResponseBytes` owns address-stable PMR storage backed by the
+thread-safe `std::pmr::new_delete_resource`; it survives response, client, and
+worker teardown and may be destroyed on another thread. Use its left-value
+`bytes()` span while keeping the result alive. In addition to the per-response
+limit, each client pool has a bounded retained-result byte budget (64 MiB by
+default). Standalone `HttpClient` callers may override it with the third
+`HttpClient` constructor argument, `HttpClientResultBudgetConfig{.maxRetainedBytes = ...}`.
+For App clients, `ServerConfig::httpClientResultBudget.maxRetainedBytes` sets
+one budget domain per business worker, shared by all registered aliases; worker
+domains are independent. When a budget is full, `readAll()` throws
+`kResultBudgetExceeded` and leaves the response body available for retry after
+retained results are released. HTTP/1, HTTP/2, and HTTP/3 responses use the same
+worker budget. Connection budgets, peak memory while copying, PMR pool caches,
+and OpenSSL/TLS/QUIC buffers are separate and not included. Both the client
 body reader and request `BodyReader` offer `text()` for an explicit character
 view of the next chunk, without charset conversion or UTF-8 validation (encoded
 characters may straddle chunks). Reads share one operation lane; borrowed chunks
@@ -645,18 +704,18 @@ provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. Standalone operations can create a `StopSource`, pass its `token()` to
 channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
 thread. `App::onStart()` runs only after every business worker has initialized its
-worker-local capabilities and both ingress runtimes have entered serving state.
+worker-local capabilities and the server network runtime has entered serving state.
 `App::onStop()` runs once for explicitly enabled process signal handlers, direct
 `App::stop()`, and worker failure. Both hook sets execute on the
-thread inside `App::run()`; stop callers and worker threads only request
-shutdown and never run application hooks themselves.
+thread inside `App::run()`; stop callers, worker threads, and the server network
+runtime only request shutdown and never run application hooks themselves.
 
 ## Blocking Work
 
-Each business worker runs its event loop and serves connections handed to it by
-the TCP ingress, so a handler that blocks — password hashing, a synchronous
-third-party SDK, template rendering, a
-slow file — freezes all of them for as long as it blocks. `BlockingPool` is the
+Each business worker runs its event loop and serves TCP connections dispatched
+to it by the server network runtime, so a handler that blocks — password
+hashing, a synchronous third-party SDK, template rendering, or a slow file —
+freezes all of them for as long as it blocks. `BlockingPool` is the
 offload path: a fixed set of long-lived threads with a bounded queue, started
 once by `App::run()` and shared by every worker. Offloading enqueues a task and
 wakes a waiting thread; it never spawns one per call.
@@ -794,7 +853,7 @@ upgrade routes reject before committing their response head.
 - Supported build platforms: Linux and Windows 10 or newer. Windows builds
   require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
-  Web adds OpenSSL.
+  Web adds OpenSSL 3.6.4 or newer with QUIC enabled.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 ## Build
@@ -2241,14 +2300,14 @@ negotiation, redirects, and content coding. Parse `Content-Encoding` with
 `ruvia::parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>`, and
 use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
 `ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
-`<ruvia/http/MultipartParser.h>`. HTTP/3 variable-length integers, opaque
-frames, and QPACK static-table, prefixed-integer, and string-literal primitives
-are available through `<ruvia/http/Http3VarInt.h>`,
-`<ruvia/http/Http3Frames.h>`, and `<ruvia/http/Http3Qpack.h>`. These primitives
-do not provide a dynamic table or complete QPACK implementation; QUIC
-transport and HTTP/3 connection drivers are not provided, and HTTP/3/QUIC is
-not supported by the Web server. The supported
-protocol-driver entry points are
+`<ruvia/http/MultipartParser.h>`. The HTTP/3 sans-I/O building blocks
+include varints, frames, SETTINGS, incremental request/control stream framing,
+and QPACK static/literal field sections plus zero-capacity instruction streams.
+They include the sans-I/O connection state machine in
+`<ruvia/http/Http3Connection.h>`, but no dynamic QPACK table. `ruvia::web`
+drives these primitives with OpenSSL 3.6.4 or newer to provide the explicit
+buffered-route HTTP/3 server and `HttpClientProtocol::kHttp3Only` outbound
+client described above. Other supported protocol-driver entry points are
 `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
 `<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,

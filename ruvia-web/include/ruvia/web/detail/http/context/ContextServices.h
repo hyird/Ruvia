@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -236,29 +237,33 @@ public:
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
     [[nodiscard]] ContextServices withPlainTransport(
-        std::string_view remoteAddress) const noexcept {
+        std::string_view remoteAddress, std::uint16_t remotePort = 0) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::plain(remoteAddress);
+        services.connInfo_.setRemotePort(remotePort);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withPlainTransport(std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withPlainTransport(
+        std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 0) const = delete;
 
     [[nodiscard]] ContextServices withTlsTransport(std::string_view remoteAddress,
-        std::string_view clientCertificateSubject = {}) const noexcept {
+        std::string_view clientCertificateSubject = {},
+        std::uint16_t remotePort = 0) const noexcept {
         auto services = *this;
         services.connInfo_ = ConnInfo::tls(remoteAddress, clientCertificateSubject);
+        services.connInfo_.setRemotePort(remotePort);
         return services;
     }
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::basic_string<char, Traits, Allocator>&&, std::string_view = {}) const = delete;
+    ContextServices withTlsTransport(std::basic_string<char, Traits, Allocator>&&,
+        std::string_view = {}, std::uint16_t = 0) const = delete;
 
     template <typename Traits, typename Allocator>
-    ContextServices withTlsTransport(
-        std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
+    ContextServices withTlsTransport(std::string_view,
+        std::basic_string<char, Traits, Allocator>&&, std::uint16_t = 0) const = delete;
 
 private:
     std::size_t dispatchDepth_{0};

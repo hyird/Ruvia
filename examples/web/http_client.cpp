@@ -48,7 +48,9 @@ private:
             if (const auto contentType = response.header("content-type")) {
                 c.header("content-type", *contentType);
             }
-            co_return c.body(co_await response.body().readAll());
+            // readAll() also reserves against this client pool's retained-result budget.
+            auto body = co_await response.body().readAll();
+            co_return c.body(body.bytes());
         } catch (const ruvia::HttpClientError& error) {
             const auto status = error.code() == ruvia::HttpClientError::Code::kTimeout
                                     ? ruvia::http_status::kGatewayTimeout

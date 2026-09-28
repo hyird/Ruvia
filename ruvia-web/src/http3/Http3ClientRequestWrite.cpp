@@ -1,0 +1,327 @@
+#include "ruvia/web/detail/http3/Http3ClientRequestWrite.h"
+
+#include <algorithm>
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
+#include "ruvia/http/Http3ClientRequestHead.h"
+#include "ruvia/http/Http3Frames.h"
+
+namespace ruvia::detail {
+
+using PreparedRequestWriteResult = std::expected<Http3ClientRequestWrite,
+    Http3ClientRequestWriteError>;
+static_assert(std::is_nothrow_constructible_v<PreparedRequestWriteResult, std::in_place_t,
+    Http3ClientRequestWrite::PreparedTag, std::pmr::memory_resource*, HttpClientRequestStorage&&,
+    std::pmr::string&&, std::pmr::string&&, std::pmr::vector<char>&&, Http3DataWritePlan>);
+
+struct HttpClientRequestStorageAccess final {
+    static const auto& headers(const HttpClientRequestStorage& request) noexcept {
+        return request.headers_;
+    }
+    static auto& headers(HttpClientRequestStorage& request) noexcept {
+        return request.headers_;
+    }
+    static bool hasBody(const HttpClientRequestStorage& request) noexcept {
+        return request.hasBody_;
+    }
+};
+
+Http3ClientRequestWrite::Http3ClientRequestWrite(PreparedTag,
+    std::pmr::memory_resource* resource, HttpClientRequestStorage&& request,
+    std::pmr::string&& scheme,
+    std::pmr::string&& authority, std::pmr::vector<char>&& headers,
+    Http3DataWritePlan dataPlan) noexcept
+    : workerPool_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+      request_(std::move(request)),
+      scheme_(std::move(scheme)),
+      authority_(std::move(authority)),
+      headers_(std::move(headers)),
+      dataPlan_(std::move(dataPlan)) {
+    static_assert(std::is_nothrow_move_constructible_v<decltype(request_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(scheme_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(authority_)>);
+    static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
+    static_assert(std::is_nothrow_move_constructible_v<Http3DataWritePlan>);
+    static_assert(std::is_nothrow_constructible_v<decltype(dataPlan_), Http3DataWritePlan&&>);
+}
+
+Http3ClientRequestWrite& Http3ClientRequestWrite::requireNoOutstandingSegment(
+    Http3ClientRequestWrite& other) {
+    if (other.offered_) {
+        throw std::logic_error("cannot move an HTTP/3 request cursor with an outstanding span");
+    }
+    return other;
+}
+
+Http3ClientRequestWrite::Http3ClientRequestWrite(Http3ClientRequestWrite&& other)
+    : workerPool_(requireNoOutstandingSegment(other).workerPool_),
+      request_(std::move(other.request_)),
+      scheme_(std::move(other.scheme_), workerPool_),
+      authority_(std::move(other.authority_), workerPool_),
+      headers_(std::move(other.headers_), workerPool_),
+      dataPlan_(std::move(other.dataPlan_)),
+      chunk_(other.chunk_),
+      segmentOffset_(other.segmentOffset_),
+      bodyOffset_(other.bodyOffset_),
+      state_(other.state_),
+      chunkPending_(other.chunkPending_),
+      requestTaken_(other.requestTaken_) {
+    if (chunkPending_) {
+        chunk_.payload = request_.body().substr(bodyOffset_, chunk_.payload.size());
+    }
+    other.state_ = State::kFailed;
+    other.requestTaken_ = true;
+}
+
+std::optional<HttpClientRequestStorage> Http3ClientRequestWrite::takeRequestAfterRetirement() {
+    if (requestTaken_) {
+        return std::nullopt;
+    }
+    state_ = State::kFailed;
+    offered_ = false;
+    chunkPending_ = false;
+    chunk_ = {};
+    dataPlan_.reset();
+    requestTaken_ = true;
+    return std::optional<HttpClientRequestStorage>(std::in_place, std::move(request_));
+}
+
+std::expected<Http3ClientRequestWrite, Http3ClientRequestWrite::Error>
+Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_view scheme,
+    std::string_view authority, std::pmr::memory_resource* workerPool,
+    Http3FieldSectionLimits limits) noexcept {
+    auto* resource = workerPool != nullptr ? workerPool : std::pmr::get_default_resource();
+    try {
+        std::optional<HttpClientRequestStorage> normalizedRequest;
+        const HttpClientRequestStorage* preparedRequest = &request;
+        if (request.resource() != resource) {
+            // intoResource copies when resources differ and leaves its source
+            // untouched if any normalization allocation fails.
+            normalizedRequest.emplace(std::move(request).intoResource(resource));
+            preparedRequest = &*normalizedRequest;
+        }
+
+        std::pmr::string ownedScheme(scheme, resource);
+        std::pmr::string ownedAuthority(authority, resource);
+        std::pmr::vector<Http3FieldSectionFieldView> fields(resource);
+        fields.reserve(HttpClientRequestStorageAccess::headers(*preparedRequest).size());
+        for (const auto& field : HttpClientRequestStorageAccess::headers(*preparedRequest)) {
+            fields.push_back({field.name, field.value, false});
+        }
+        const auto target = preparedRequest->target();
+        if (preparedRequest->method() == "CONNECT") {
+            // The buffered client has no tunnel lifecycle or bidirectional
+            // streaming API; a valid CONNECT head alone cannot offer one.
+            return std::unexpected(Error::kUnsupportedTunnel);
+        }
+        if (target.empty() || (target.front() != '/' && target != "*") ||
+            target.find('#') != std::string_view::npos) {
+            return std::unexpected(Error::kInvalidRequest);
+        }
+        // Request framing is method-independent (RFC 9110 section 9.3.2).
+        // HEAD suppresses response payload, not explicitly supplied request
+        // content. The caller must have established that its origin supports
+        // HEAD content; requests without supplied content remain bodyless.
+        const bool sendsBody = HttpClientRequestStorageAccess::hasBody(*preparedRequest);
+        const bool hasDeclaredLength = std::any_of(fields.begin(), fields.end(), [](const auto& field) {
+            constexpr std::string_view name = "content-length";
+            if (field.name.size() != name.size()) {
+                return false;
+            }
+            for (std::size_t i = 0; i < name.size(); ++i) {
+                const auto ch = static_cast<unsigned char>(field.name[i]);
+                if ((ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch) != name[i]) {
+                    return false;
+                }
+            }
+            return true;
+        });
+        // An explicitly declared length on a bodyless request must agree with
+        // the actual zero-byte FIN, without adding Content-Length: 0 to every
+        // GET/HEAD lacking that field.
+        const std::optional<std::uint64_t> bodyLength = sendsBody
+                                                            ? std::optional<std::uint64_t>(preparedRequest->body().size())
+                                                        : hasDeclaredLength ? std::optional<std::uint64_t>(0)
+                                                                            : std::nullopt;
+        auto encoded = encodeHttp3ClientRequestHead({preparedRequest->method(),
+                                                        ownedScheme, ownedAuthority, target, fields, bodyLength},
+            limits, resource);
+        if (!encoded) {
+            return std::unexpected(Error::kRequestEncoding);
+        }
+        if (encoded->fieldSection.size() > std::numeric_limits<std::size_t>::max() - kHttp3FrameHeaderMaxBytes) {
+            return std::unexpected(Error::kRequestEncoding);
+        }
+        std::pmr::vector<char> headers(resource);
+        headers.resize(kHttp3FrameHeaderMaxBytes + encoded->fieldSection.size());
+        auto frame = encodeHttp3FrameHeader(headers,
+            static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection.size());
+        if (!frame) {
+            return std::unexpected(Error::kRequestEncoding);
+        }
+        headers.resize(*frame + encoded->fieldSection.size());
+        std::copy(encoded->fieldSection.begin(), encoded->fieldSection.end(),
+            headers.begin() + static_cast<std::ptrdiff_t>(*frame));
+
+        Http3DataWritePlan dataPlan(encoded->bodyPlan);
+        if (normalizedRequest) {
+            // All fallible work is complete. Retire the original request only
+            // at this commit point; the cursor owns its normalized copy.
+            HttpClientRequestStorage retired(std::move(request));
+            return std::expected<Http3ClientRequestWrite, Error>(std::in_place, PreparedTag{}, resource,
+                std::move(*normalizedRequest), std::move(ownedScheme), std::move(ownedAuthority),
+                std::move(headers), std::move(dataPlan));
+        }
+        return std::expected<Http3ClientRequestWrite, Error>(std::in_place, PreparedTag{}, resource,
+            std::move(request), std::move(ownedScheme), std::move(ownedAuthority),
+            std::move(headers), std::move(dataPlan));
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(Error::kOutOfMemory);
+    } catch (...) {
+        return std::unexpected(Error::kRequestEncoding);
+    }
+}
+
+std::expected<Http3ClientRequestWrite::Segment, Http3ClientRequestWrite::Error>
+Http3ClientRequestWrite::next() noexcept {
+    if (state_ == State::kFinished || state_ == State::kFailed) {
+        return std::unexpected(Error::kInvalidState);
+    }
+    if (state_ == State::kFin) {
+        return Segment{};
+    }
+    if (state_ == State::kDataHeader && !chunkPending_) {
+        if (auto result = prepareData(); !result) {
+            return std::unexpected(result.error());
+        }
+        if (state_ == State::kFin) {
+            return Segment{};
+        }
+    }
+    const auto segment = activeSegment();
+    offered_ = !segment.empty();
+    return segment;
+}
+
+Http3ClientRequestWrite::Segment Http3ClientRequestWrite::activeSegment() const noexcept {
+    switch (state_) {
+        case State::kHeaders:
+            return Segment(headers_).subspan(segmentOffset_);
+        case State::kDataHeader:
+            return Segment(chunk_.frameHeader.data(), chunk_.frameHeaderSize).subspan(segmentOffset_);
+        case State::kDataBody:
+            return chunk_.payload.subspan(segmentOffset_);
+        default:
+            return {};
+    }
+}
+
+std::expected<void, Http3ClientRequestWrite::Error> Http3ClientRequestWrite::prepareData() noexcept {
+    if (!dataPlan_ || state_ != State::kDataHeader || chunkPending_) {
+        return std::unexpected(Error::kInvalidState);
+    }
+    const auto body = request_.body();
+    if (bodyOffset_ > body.size()) {
+        return failPlan();
+    }
+    const auto remaining = body.size() - bodyOffset_;
+    const auto size = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, kHttp3VarIntMax));
+    const bool finishing = size == remaining;
+    auto planned = dataPlan_->planChunk(body.substr(bodyOffset_, size), finishing);
+    if (!planned) {
+        return failPlan();
+    }
+    chunk_ = *planned;
+    chunkPending_ = true;
+    segmentOffset_ = 0;
+    if (!chunk_.emitsData) {
+        state_ = State::kFin;
+    }
+    return {};
+}
+
+std::expected<void, Http3ClientRequestWrite::Error>
+Http3ClientRequestWrite::acknowledge(std::size_t count) noexcept {
+    if (!offered_ || state_ == State::kFinished || state_ == State::kFailed || state_ == State::kFin) {
+        return std::unexpected(Error::kInvalidState);
+    }
+    const auto segment = activeSegment();
+    if (count > segment.size()) {
+        return std::unexpected(Error::kExcessiveAcknowledgement);
+    }
+    if (count == 0) {
+        return {};
+    }
+    segmentOffset_ += count;
+    // segment is already the unacknowledged suffix. Compare the accepted
+    // amount with that suffix, not the cumulative offset from its beginning.
+    if (count != segment.size()) {
+        return {};
+    }
+    offered_ = false;
+    segmentOffset_ = 0;
+    if (state_ == State::kHeaders) {
+        state_ = State::kDataHeader;
+    } else if (state_ == State::kDataHeader) {
+        state_ = State::kDataBody;
+    } else if (state_ == State::kDataBody) {
+        if (chunk_.finishing) {
+            state_ = State::kFin;
+        } else {
+            const auto bytes = chunk_.payload.size();
+            if (!dataPlan_->commitPayload(bytes, false)) {
+                return failPlan();
+            }
+            bodyOffset_ += bytes;
+            chunkPending_ = false;
+            state_ = State::kDataHeader;
+        }
+    } else {
+        return std::unexpected(Error::kInvalidState);
+    }
+    return {};
+}
+
+std::expected<void, Http3ClientRequestWrite::Error>
+Http3ClientRequestWrite::acknowledgeFin(bool successful) noexcept {
+    if (state_ != State::kFin || !chunkPending_ || !dataPlan_) {
+        return std::unexpected(Error::kInvalidState);
+    }
+    if (!successful) {
+        state_ = State::kFailed;
+        chunkPending_ = false;
+        return {};
+    }
+    if (!dataPlan_->commitPayload(chunk_.payload.size(), true)) {
+        return failPlan();
+    }
+    state_ = State::kFinished;
+    chunkPending_ = false;
+    return {};
+}
+
+bool Http3ClientRequestWrite::finReady() const noexcept {
+    return state_ == State::kFin;
+}
+bool Http3ClientRequestWrite::finished() const noexcept {
+    return state_ == State::kFinished;
+}
+bool Http3ClientRequestWrite::failed() const noexcept {
+    return state_ == State::kFailed;
+}
+
+HttpKnownMethod Http3ClientRequestWrite::knownMethod() const noexcept {
+    return classifyHttpMethod(request_.method());
+}
+
+std::expected<void, Http3ClientRequestWrite::Error> Http3ClientRequestWrite::failPlan() noexcept {
+    state_ = State::kFailed;
+    chunkPending_ = false;
+    return std::unexpected(Error::kDataPlan);
+}
+
+}  // namespace ruvia::detail

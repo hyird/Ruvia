@@ -81,13 +81,17 @@ struct HttpServerListenerDefinition final {
 
     using Transport = std::variant<PlainHttp, Tls, RedirectHttpToHttps>;
 
-    HttpServerListenerDefinition(
-        asio::ip::tcp::endpoint configuredEndpoint, Transport configuredTransport = PlainHttp{})
+    HttpServerListenerDefinition(asio::ip::tcp::endpoint configuredEndpoint,
+        Transport configuredTransport = PlainHttp{},
+        std::optional<Http3ListenConfig> configuredHttp3 = {})
         : endpoint(std::move(configuredEndpoint)),
-          transport(std::move(configuredTransport)) {}
+          transport(std::move(configuredTransport)),
+          http3(std::move(configuredHttp3)) {}
 
     asio::ip::tcp::endpoint endpoint;
     Transport transport;
+    // When enabled, UDP binds this TLS listener's address and numeric port.
+    std::optional<Http3ListenConfig> http3;
 };
 
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
@@ -118,7 +122,6 @@ public:
     std::optional<asio::ssl::context> tlsContext;
     SniContextStore sniContexts;
     SniContextLookup sniLookup;
-
 };
 
 class HttpServerAcceptor final {

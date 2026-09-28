@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
-#include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -20,9 +20,6 @@
 #include <asio/post.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <asio/ssl/context.hpp>
-#include <asio/ssl/error.hpp>
-#include <asio/system_error.hpp>
-#include <openssl/err.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/ConnectionScanner.h"
@@ -33,7 +30,7 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
+#include "ruvia/web/detail/server/tls/HttpServerTlsIdentity.h"
 
 namespace ruvia::detail {
 
@@ -43,8 +40,9 @@ namespace {
 
 int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength,
     const unsigned char* in, unsigned int inLength, void*) noexcept {
-    // Only h2 and http/1.1 are offered. HTTP/3 / QUIC is explicitly not supported (no "h3"
-    // token, no UDP/QUIC listener); a peer offering only h3 falls back to http/1.1 or fails ALPN.
+    // This is the TCP TLS context, so it offers only h2 and http/1.1. HTTP/3
+    // negotiates "h3" on the separately owned UDP/QUIC server network context and is
+    // never advertised through this callback.
     static constexpr unsigned char protocols[] = {
         2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols,
@@ -83,57 +81,6 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     return SSL_TLSEXT_ERR_OK;
 }
 
-int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) noexcept {
-    if (buffer == nullptr || bufferSize <= 0 || userData == nullptr) {
-        return 0;
-    }
-
-    const auto& password = *static_cast<const std::pmr::string*>(userData);
-    const auto capacity = static_cast<std::size_t>(bufferSize);
-    if (password.size() >= capacity) {
-        return 0;
-    }
-
-    std::memcpy(buffer, password.data(), password.size());
-    buffer[password.size()] = '\0';
-    return static_cast<int>(password.size());
-}
-
-[[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
-#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
-    if (ERR_SYSTEM_ERROR(error)) {
-        return asio::error_code(ERR_GET_REASON(error), asio::error::get_system_category());
-    }
-#endif
-    return asio::error_code(static_cast<int>(error), asio::error::get_ssl_category());
-}
-
-[[noreturn]] void throwTlsContextFileError(const char* operation) {
-    throw asio::system_error(translateOpenSslError(::ERR_get_error()), operation);
-}
-
-void useCertificateChainFile(asio::ssl::context& context, const std::pmr::string& filename) {
-    ::ERR_clear_error();
-    if (::SSL_CTX_use_certificate_chain_file(context.native_handle(), filename.c_str()) != 1) {
-        throwTlsContextFileError("use_certificate_chain_file");
-    }
-}
-
-void usePrivateKeyFile(asio::ssl::context& context, const std::pmr::string& filename) {
-    ::ERR_clear_error();
-    if (::SSL_CTX_use_PrivateKey_file(
-            context.native_handle(), filename.c_str(), SSL_FILETYPE_PEM) != 1) {
-        throwTlsContextFileError("use_private_key_file");
-    }
-}
-
-void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filename) {
-    ::ERR_clear_error();
-    if (::SSL_CTX_load_verify_locations(context.native_handle(), filename.c_str(), nullptr) != 1) {
-        throwTlsContextFileError("load_verify_file");
-    }
-}
-
 [[nodiscard]] ruvia::ConnectionScannerOptions makeConnectionScannerOptions(
     const HttpServerOptions& options) noexcept {
     return ruvia::ConnectionScannerOptions{.scanInterval = options.scanInterval,
@@ -158,27 +105,31 @@ WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const 
 WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
     : WebWorkerRuntime(validateHttpServerConfiguration(listeners, std::move(options)), routes,
-          capabilities, IngressMode::kListeners) {}
+          capabilities, ConnectionOwnershipMode::kOwnListeners) {}
 
 WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
-    : WebWorkerRuntime(configuration, routes, capabilities, IngressMode::kSessionsOnly) {}
+    : WebWorkerRuntime(configuration, routes, capabilities,
+          ConnectionOwnershipMode::kTransferredSessions) {}
 
 WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
-    const RouteTable& routes, WorkerCapabilityDefinitions capabilities, IngressMode ingressMode)
+    const RouteTable& routes, WorkerCapabilityDefinitions capabilities,
+    ConnectionOwnershipMode connectionOwnershipMode)
     : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities,
-          configuration.options(), ingressMode) {}
+          configuration.options(), connectionOwnershipMode) {}
 
 WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
     WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions,
-    IngressMode ingressMode)
+    ConnectionOwnershipMode connectionOwnershipMode)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
       workerRuntime_(ioContext_, validatedOptions.workerMailboxCapacity),
+      finalizeGuard_(asio::make_work_guard(ioContext_)),
       serveSignal_(workerRuntime_.handle()),
+      finalizeSignal_(workerRuntime_.handle()),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
       listeners_(memory_.resource()),
@@ -187,7 +138,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
       ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
-      ingressMode_(ingressMode),
+      connectionOwnershipMode_(connectionOwnershipMode),
       connectionScanner_(workerRuntime_.handle(), makeConnectionScannerOptions(options_)),
       capabilities_(ioContext_, workerRuntime_.handle(), memory_.resource(), capabilities,
           WorkerCapabilityOptions{
@@ -196,24 +147,40 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
                                                              : RouteRateLimitPresence::kAbsent,
               .rateLimitCapacity = options_.rateLimitCapacityPerWorker,
               .maxDecodedBodyBytes = options_.maxBufferedBodyBytes,
+              .httpClientResultBudget = options_.httpClientResultBudget,
               .blockingPool = options_.blockingPool,
               .env = options_.env,
               .trustedProxies =
                   options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies,
               .precompressedStaticFiles = options_.compression.has_value(),
           }),
+      http3Server_(nullptr, PmrObjectDeleter<Http3WorkerServer>{memory_.resource()}),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(),
           workerRuntime_.handle(), memory_.resource(), capabilities_,
           [this](const std::exception_ptr& failure) { failWorker(failure); })),
       workSetPool_(memory_) {
+    const auto http3Listener = std::ranges::find_if(listeners,
+        [](const HttpServerListenerDefinition& listener) { return listener.http3.has_value(); });
+    if (http3Listener != listeners.end()) {
+        if (!options_.maxConnections.has_value() ||
+            options_.workerMailboxCapacity > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::invalid_argument("HTTP/3 worker limits are not representable");
+        }
+        http3Server_ = makePmrObject<Http3WorkerServer>(memory_.resource(), workerRuntime_,
+            workerRuntime_.handle(), memory_, routes_, capabilities_, options_, stopToken_,
+            *options_.maxConnections,
+            static_cast<std::uint32_t>(options_.workerMailboxCapacity), activeConnectionCount_,
+            connectionsRefused_);
+    }
+
     listeners_.reserve(listeners.size());
-    if (ingressMode_ == IngressMode::kListeners) {
+    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
         acceptors_.reserve(listeners.size());
     }
     for (const auto& listener : listeners) {
         listeners_.push_back(makePmrObject<HttpServerSessionConfig>(
             memory_.resource(), listener, memory_.resource()));
-        if (ingressMode_ == IngressMode::kListeners) {
+        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
             acceptors_.push_back(makePmrObject<HttpServerAcceptor>(
                 memory_.resource(), ioContext_, listener));
         }
@@ -273,7 +240,7 @@ void WebWorkerRuntime::prepare() {
         throw std::logic_error("web worker runtime can only be prepared once");
     }
     for (std::size_t i = 0; i < listeners_.size(); ++i) {
-        if (ingressMode_ == IngressMode::kListeners) {
+        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
             configureAcceptor(*acceptors_[i]);
         }
         configureTlsContext(*listeners_[i]);
@@ -285,6 +252,7 @@ void WebWorkerRuntime::launch() {
     if (!prepared_) {
         throw std::logic_error("web worker runtime must be prepared before launch");
     }
+    std::lock_guard threadStateLock(threadStateMutex_);
     if (!lifecycle_.start()) {
         throw std::logic_error("web worker runtime cannot be launched twice");
     }
@@ -292,6 +260,7 @@ void WebWorkerRuntime::launch() {
 
     try {
         workerThread_ = std::thread([this] { runIoContext(); });
+        threadLaunched_ = true;
     } catch (...) {
         const auto failure = std::current_exception();
         struct UnstartedRuntimeCleanup final {
@@ -306,6 +275,7 @@ void WebWorkerRuntime::launch() {
                 runtime.webWorkerDispatch_->retire();
                 runtime.workerRuntime_.close();
                 runtime.workerRuntime_.detach();
+                runtime.finalizeGuard_.reset();
                 (void)runtime.lifecycle_.requestStop();
                 runtime.lifecycle_.completeStop();
             }
@@ -328,7 +298,8 @@ void WebWorkerRuntime::requestServe() {
         return;
     }
     asio::post(ioContext_, [this] {
-        if (!httpServerWorkerRunning(workerState_) || serveRequested_) {
+        if (!httpServerWorkerRunning(workerState_) || serveRequested_ ||
+            stopToken_.stopRequested()) {
             return;
         }
         serveRequested_ = true;
@@ -341,15 +312,46 @@ bool WebWorkerRuntime::waitUntilServing() {
 }
 
 void WebWorkerRuntime::stop() noexcept {
-    if (!lifecycle_.requestStop()) {
+    if (lifecycle_.state() == RuntimeLifecycle::State::kStopped) {
         return;
     }
+    stopAdmission();
+    finalizeAfterNetworkQuiesced();
+}
 
-    webWorkerDispatch_->close();
+void WebWorkerRuntime::stopAdmission() noexcept {
+    (void)lifecycle_.requestStop();
     workerRuntime_.close();
-    // A lost shutdown post would leave suspended sessions and capability tasks
-    // alive while join() waits forever. Worker-owned cleanup must either be
-    // scheduled or fail as a terminal runtime contract violation.
+
+    bool threadLaunched = false;
+    {
+        std::lock_guard lock(threadStateMutex_);
+        threadLaunched = threadLaunched_;
+    }
+    if (!threadLaunched) {
+        if (http3Server_ != nullptr) {
+            http3Server_->abandonBeforeLaunch();
+        }
+        return;
+    }
+    // This internal control remains available after dispatcher admission closes.
+    // Even calls made on the owner thread are deferred so StopToken callbacks do
+    // not run inline on App::stop()'s caller stack.
+    workerRuntime_.deferOrTerminate([this] { stopAdmissionOnContext(); });
+}
+
+void WebWorkerRuntime::finalizeAfterNetworkQuiesced() noexcept {
+    {
+        std::lock_guard lock(threadStateMutex_);
+        if (!threadLaunched_) {
+            // No worker owner exists yet; startup/prepare resources can be retired
+            // by the external lifecycle owner.
+            finalizeGuard_.reset();
+            return;
+        }
+    }
+    // Dispatcher defer remains reliable after close(): it bypasses bounded
+    // admission while still targeting the attached owner context.
     workerRuntime_.deferOrTerminate([this] { stopOnContext(); });
 }
 
@@ -357,8 +359,15 @@ void WebWorkerRuntime::join() {
     if (workerRuntime_.handle().isCurrent()) {
         throw std::logic_error("cannot join a Web worker runtime from its worker");
     }
-    if (workerThread_.joinable()) {
-        workerThread_.join();
+    std::thread joiningThread;
+    {
+        std::lock_guard lock(threadStateMutex_);
+        if (workerThread_.joinable()) {
+            joiningThread = std::move(workerThread_);
+        }
+    }
+    if (joiningThread.joinable()) {
+        joiningThread.join();
     }
     lifecycle_.completeStop();
     const auto failure = workerCompletion_.workerFailure();
@@ -374,9 +383,9 @@ TcpEndpoint WebWorkerRuntime::localEndpoint(std::size_t listenerIndex) const {
     return acceptors_[listenerIndex]->endpoint;
 }
 
-bool WebWorkerRuntime::availableForIngress() const noexcept {
+bool WebWorkerRuntime::availableForNetworkDispatch() const noexcept {
     if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
-        !ingressServing_.load(std::memory_order_acquire)) {
+        !networkServing_.load(std::memory_order_acquire)) {
         return false;
     }
     return !options_.maxConnections.has_value() ||
@@ -446,38 +455,22 @@ void WebWorkerRuntime::configureTlsContext(HttpServerSessionConfig& listener) {
         listener.tlsContext.reset();
         return;
     }
-    if (tls->identity.certificateChainFile.empty() || tls->identity.privateKeyFile.empty()) {
-        throw std::invalid_argument("TLS requires certificate chain and private key files");
-    }
-
     const auto configure = [tls](asio::ssl::context& context,
-                               const std::pmr::string& certificateChainFile,
-                               const std::pmr::string& privateKeyFile,
-                               const std::pmr::string& privateKeyPassword) {
+                               const HttpServerListenerDefinition::TlsIdentity& identity) {
         context.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                             asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
                             asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
         SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
         SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
-        if (!privateKeyPassword.empty()) {
-            SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
-            SSL_CTX_set_default_passwd_cb_userdata(
-                context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
-        }
-        useCertificateChainFile(context, certificateChainFile);
-        usePrivateKeyFile(context, privateKeyFile);
-        if (tls->clientCertificates.has_value()) {
-            loadVerifyFile(context, tls->clientCertificates->verifyFile);
-            context.set_verify_mode(httpServerTlsVerifyMode(tls->clientCertificates->requirement));
-        }
+        configureHttpServerTlsIdentity(
+            context.native_handle(), identity, tls->clientCertificates);
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
     listener.sniContexts.reserve(tls->sniIdentities.size());
     for (const auto& sni : tls->sniIdentities) {
         auto& context = listener.sniContexts.emplace_back(asio::ssl::context::tls_server);
-        configure(context, sni.identity.certificateChainFile, sni.identity.privateKeyFile,
-            sni.identity.privateKeyPassword);
+        configure(context, sni.identity);
     }
     listener.sniLookup.reserve(tls->sniIdentities.size());
     for (std::size_t i = 0; i < tls->sniIdentities.size(); ++i) {
@@ -486,24 +479,19 @@ void WebWorkerRuntime::configureTlsContext(HttpServerSessionConfig& listener) {
 
     listener.tlsContext.emplace(asio::ssl::context::tls_server);
     auto& context = *listener.tlsContext;
-    configure(context, tls->identity.certificateChainFile, tls->identity.privateKeyFile,
-        tls->identity.privateKeyPassword);
+    configure(context, tls->identity);
     if (!listener.sniLookup.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
         SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &listener.sniLookup);
     }
 }
 
-void WebWorkerRuntime::stopOnContext() noexcept {
-    if (!httpServerWorkerRunning(workerState_)) {
-        return;
-    }
-
-    ingressServing_.store(false, std::memory_order_release);
-    workerState_ = HttpServerWorkerState::kStopped;
+void WebWorkerRuntime::stopAdmissionOnContext() noexcept {
+    networkServing_.store(false, std::memory_order_release);
     stopSource_.requestStop();
     webWorkerDispatch_->close();
     workerRuntime_.close();
+
     std::error_code ignored;
     for (const auto& listener : acceptors_) {
         (void)listener->acceptor.cancel(ignored);
@@ -512,11 +500,31 @@ void WebWorkerRuntime::stopOnContext() noexcept {
         ignored.clear();
     }
     serveSignal_.notify();
-    ignored.clear();
+    if (http3Server_ != nullptr) {
+        http3Server_->requestStop();
+    }
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    capabilities_.closeNow();
     workerRuntime_.stopTimers();
+}
+
+void WebWorkerRuntime::stopOnContext() noexcept {
+    if (!httpServerWorkerRunning(workerState_)) {
+        capabilities_.closeNow();
+        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
+            finalizeSignal_.notify();
+        }
+        finalizeGuard_.reset();
+        return;
+    }
+
+    stopAdmissionOnContext();
+    capabilities_.closeNow();
+    workerState_ = HttpServerWorkerState::kStopped;
+    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
+        finalizeSignal_.notify();
+    }
+    finalizeGuard_.reset();
 }
 
 void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
@@ -526,11 +534,13 @@ void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
     // Counted after the dedupe above, so a worker failing once counts once.
     workerFailures_.fetch_add(1, std::memory_order_relaxed);
     (void)lifecycle_.requestStop();
-    // Close this worker's public dispatch endpoint before waking the App-level
-    // failure sink. Otherwise the App run thread can execute stop hooks while
-    // the failed worker still reports accepting() between requestStop() and this
-    // worker-context shutdown.
-    stopOnContext();
+    workerRuntime_.close();
+    stopAdmissionOnContext();
+    // A standalone worker has no external network producer to quiesce. App
+    // workers defer owner-thread teardown until the App has joined network.
+    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
+        stopOnContext();
+    }
     options_.workerFailure.notify(failure);
 }
 
@@ -547,16 +557,20 @@ void WebWorkerRuntime::runIoContext() noexcept {
                 workerFailed = true;
                 (void)workerCompletion_.markStartupFailed(failure);
                 failWorker(failure);
-                lifecycle_.completeStop();
-                workerState_ = HttpServerWorkerState::kStopped;
+                if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
+                    lifecycle_.completeStop();
+                    workerState_ = HttpServerWorkerState::kStopped;
+                }
             },
             [this]() noexcept { capabilities_.shutdownWorkerState(); });
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
-        lifecycle_.completeStop();
-        workerState_ = HttpServerWorkerState::kStopped;
+        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
+            lifecycle_.completeStop();
+            workerState_ = HttpServerWorkerState::kStopped;
+        }
         return;
     }
     if (workerFailed) {
@@ -577,44 +591,61 @@ Task<void> WebWorkerRuntime::runWorker() {
     try {
         connectionScanner_.start();
         co_await capabilities_.connect();
+        if (http3Server_ != nullptr && !stopToken_.stopRequested()) {
+            // Spawn first: run() is lazy but TaskScope starts it synchronously on
+            // this worker, so it can wait for install() without allocating after
+            // the scheduler becomes live.
+            backgroundTasks_.spawn(http3Server_->run());
+            if (!http3Server_->install()) {
+                throw std::runtime_error("failed to install HTTP/3 worker bridge");
+            }
+        }
         (void)workerCompletion_.markStartupReady();
 
-        while (!serveRequested_ && httpServerWorkerRunning(workerState_)) {
+        while (!serveRequested_ && httpServerWorkerRunning(workerState_) &&
+               !stopToken_.stopRequested()) {
             co_await serveSignal_.wait();
         }
-        if (!serveRequested_ || !httpServerWorkerRunning(workerState_)) {
+        if (!serveRequested_ || !httpServerWorkerRunning(workerState_) ||
+            stopToken_.stopRequested()) {
             workerCompletion_.markServingAborted();
-            co_await capabilities_.join();
-            co_return;
+        } else {
+            if (options_.documentRoot.refreshOptions() != nullptr) {
+                backgroundTasks_.spawn(staticRootRefreshLoop());
+            }
+            if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
+                for (std::size_t i = 0; i < listeners_.size(); ++i) {
+                    backgroundTasks_.spawn(superviseListener(i, *acceptors_[i]));
+                }
+            }
+            networkServing_.store(true, std::memory_order_release);
+            (void)workerCompletion_.markServing();
+            if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
+                // App workers remain alive until network has joined and the run
+                // thread sends the reliable finalization control.
+                if (!stopToken_.stopRequested()) {
+                    co_await serveSignal_.wait();
+                }
+            } else {
+                backgroundJoinStarted = true;
+                co_await backgroundTasks_.join();
+            }
         }
 
-        if (options_.documentRoot.refreshOptions() != nullptr) {
-            backgroundTasks_.spawn(staticRootRefreshLoop());
-        }
-        if (ingressMode_ == IngressMode::kListeners) {
-            for (std::size_t i = 0; i < listeners_.size(); ++i) {
-                backgroundTasks_.spawn(superviseListener(i, *acceptors_[i], *listeners_[i]));
-            }
-        }
-        ingressServing_.store(true, std::memory_order_release);
-        (void)workerCompletion_.markServing();
-        if (ingressMode_ == IngressMode::kSessionsOnly) {
-            // A session-only worker has no accept loop to keep its owner task
-            // alive. Wait for the worker-context stop notification instead,
-            // then retire any optional background work and capabilities.
-            if (!stopToken_.stopRequested()) {
-                co_await serveSignal_.wait();
-            }
-        } else {
-            backgroundJoinStarted = true;
-            co_await backgroundTasks_.join();
-        }
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
     }
-    if (!backgroundJoinStarted && backgroundTasks_.size() != 0) {
+    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
+        // Preserve the owner coroutine and worker-local capabilities until the
+        // network-quiesced barrier. Admission cancellation above may finish work,
+        // but must not join/retire its owner before phase two.
+        co_await finalizeSignal_.wait();
+    }
+    // A completed child leaves an open scope even when size() is already zero.
+    // Join exactly once regardless of whether its last completion beat stop.
+    if (!backgroundJoinStarted) {
         try {
             co_await backgroundTasks_.join();
         } catch (...) {

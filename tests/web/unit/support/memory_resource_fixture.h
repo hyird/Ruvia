@@ -8,8 +8,9 @@ namespace ruvia::test {
 
 class RejectingMemoryResource final : public std::pmr::memory_resource {
 public:
-    void rejectAllocations(bool value = true) noexcept {
+    void rejectAllocations(bool value = true, std::size_t minBytes = 0) noexcept {
         rejecting_ = value;
+        minBytes_ = minBytes;
     }
 
     [[nodiscard]] std::size_t allocationCount() const noexcept {
@@ -19,7 +20,7 @@ public:
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         ++allocationCount_;
-        if (rejecting_) {
+        if (rejecting_ && bytes >= minBytes_) {
             throw std::bad_alloc();
         }
         return std::pmr::new_delete_resource()->allocate(bytes, alignment);
@@ -34,6 +35,7 @@ private:
     }
 
     bool rejecting_{false};
+    std::size_t minBytes_{0};
     std::size_t allocationCount_{0};
 };
 

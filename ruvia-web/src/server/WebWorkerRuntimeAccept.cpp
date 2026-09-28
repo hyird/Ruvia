@@ -17,11 +17,11 @@
 
 namespace ruvia::detail {
 
-Task<void> WebWorkerRuntime::superviseListener(std::size_t listenerIndex,
-    HttpServerAcceptor& acceptor, HttpServerSessionConfig& session) {
+Task<void> WebWorkerRuntime::superviseListener(
+    std::size_t listenerIndex, HttpServerAcceptor& acceptor) {
     try {
-        co_await acceptLoop(listenerIndex, acceptor, session);
-        if (httpServerWorkerRunning(workerState_)) {
+        co_await acceptLoop(listenerIndex, acceptor);
+        if (httpServerWorkerRunning(workerState_) && !stopToken_.stopRequested()) {
             throw std::runtime_error("HTTP listener stopped unexpectedly");
         }
     } catch (...) {
@@ -29,8 +29,8 @@ Task<void> WebWorkerRuntime::superviseListener(std::size_t listenerIndex,
     }
 }
 
-Task<void> WebWorkerRuntime::acceptLoop(std::size_t listenerIndex,
-    HttpServerAcceptor& acceptor, HttpServerSessionConfig& session) {
+Task<void> WebWorkerRuntime::acceptLoop(
+    std::size_t listenerIndex, HttpServerAcceptor& acceptor) {
     for (;;) {
         auto acceptCompletion =
             co_await ruvia::asyncAsio<asio::ip::tcp::socket>([&acceptor](auto handler) mutable {
@@ -61,7 +61,8 @@ Task<void> WebWorkerRuntime::acceptLoop(std::size_t listenerIndex,
 }
 
 void WebWorkerRuntime::acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket) {
-    if (!httpServerWorkerRunning(workerState_)) {
+    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+        !httpServerWorkerRunning(workerState_)) {
         return;
     }
     if (listenerIndex >= listeners_.size()) {
@@ -90,7 +91,8 @@ void WebWorkerRuntime::acceptTransferredConnection(NativeAcceptedSocketTicket&& 
         return;
     }
     const auto listenerIndex = ticket.listenerIndex();
-    if (!httpServerWorkerRunning(workerState_) || listenerIndex >= listeners_.size()) {
+    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+        !httpServerWorkerRunning(workerState_) || listenerIndex >= listeners_.size()) {
         return;
     }
 
