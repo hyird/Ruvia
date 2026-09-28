@@ -1,5 +1,7 @@
+#include <array>
 #include <bit>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
@@ -8,8 +10,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/ConfigValidation.h"
@@ -20,6 +25,9 @@
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/tls/TlsHost.h"
 
 #include "memory_resource_fixture.h"
@@ -38,9 +46,25 @@ using ruvia::kSeparatedPortHostRules;
 using ruvia::detail::ClientPortTextBuffer;
 using ruvia::detail::clientTransportConfigView;
 using ruvia::detail::formatClientPort;
+using ruvia::detail::HttpServerListenerDefinition;
+using ruvia::detail::HttpServerOptions;
 using ruvia::detail::isValidSniHost;
 using ruvia::detail::validateClientOriginHost;
 using ruvia::detail::validateClientTransportConfig;
+using ruvia::detail::validateHttpServerConfiguration;
+using ruvia::detail::validateHttpServerListener;
+
+HttpServerListenerDefinition http3TlsListener(
+    std::uint16_t port, std::chrono::milliseconds handshakeTimeout = std::chrono::seconds(10),
+    std::chrono::milliseconds drainTimeout = std::chrono::seconds(30)) {
+    HttpServerListenerDefinition::Tls tls;
+    tls.identity.certificateChainFile = "cert.pem";
+    tls.identity.privateKeyFile = "key.pem";
+    return HttpServerListenerDefinition(
+        asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), std::move(tls),
+        ruvia::Http3ListenConfig{.handshakeTimeout = handshakeTimeout,
+            .drainTimeout = drainTimeout});
+}
 
 // Returns the invalid_argument message a call throws, or empty if it does not.
 template <typename Fn>
@@ -64,6 +88,119 @@ bool throwsInvalid(Fn&& fn) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http3_listen_config_defaults_disabled_and_accepts_designated_values) {
+    const ruvia::ListenConfig disabled{};
+    RUVIA_CHECK(!disabled.http3.has_value());
+
+    const ruvia::ListenConfig enabled{.https = 8443,
+        .http3 = ruvia::Http3ListenConfig{
+            .handshakeTimeout = std::chrono::milliseconds{25},
+            .drainTimeout = std::chrono::milliseconds{50},
+        }};
+    RUVIA_CHECK(enabled.http3.has_value());
+    RUVIA_CHECK_EQ(enabled.http3->handshakeTimeout, std::chrono::milliseconds{25});
+    RUVIA_CHECK_EQ(enabled.http3->drainTimeout, std::chrono::milliseconds{50});
+}
+
+RUVIA_TEST(app_http3_listener_requires_https_and_positive_handshake_timeout) {
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .http3 = ruvia::Http3ListenConfig{}});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen({.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{
+                                                                        .handshakeTimeout = std::chrono::milliseconds::zero(),
+                                                                    }});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen(
+            {.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{}});
+    }));
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::app().listen({.address = "127.0.0.1", .https = 8443,
+            .http3 = ruvia::Http3ListenConfig{
+                .drainTimeout = std::chrono::milliseconds::zero(),
+            }});
+    }));
+}
+
+RUVIA_TEST(http3_listener_uses_one_tls_endpoint_and_rejects_duplicates) {
+    auto listener = http3TlsListener(8443);
+    RUVIA_CHECK(std::holds_alternative<HttpServerListenerDefinition::Tls>(listener.transport));
+    RUVIA_CHECK(listener.http3.has_value());
+    RUVIA_CHECK_EQ(listener.endpoint.port(), std::uint16_t{8443});
+    RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerListener(listener); }));
+
+    const std::array single{std::move(listener)};
+    const auto validated = validateHttpServerConfiguration(single, HttpServerOptions{});
+    RUVIA_CHECK_EQ(validated.listeners().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(validated.listeners().front().endpoint.port(), std::uint16_t{8443});
+
+    const std::array duplicate{http3TlsListener(8443), http3TlsListener(9443)};
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)validateHttpServerConfiguration(duplicate, HttpServerOptions{});
+    }));
+
+    HttpServerListenerDefinition plain(asio::ip::tcp::endpoint(
+                                           asio::ip::make_address("127.0.0.1"), 8443),
+        HttpServerListenerDefinition::PlainHttp{}, ruvia::Http3ListenConfig{});
+    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerListener(plain); }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        validateHttpServerListener(http3TlsListener(8443, std::chrono::milliseconds::zero()));
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        validateHttpServerListener(http3TlsListener(
+            8443, std::chrono::seconds(10), std::chrono::milliseconds::zero()));
+    }));
+}
+
+RUVIA_TEST(http3_server_limits_bound_every_downstream_capacity) {
+    const std::array listeners{http3TlsListener(8443)};
+    const auto rejects = [&listeners](HttpServerOptions options) {
+        return throwsInvalid([&] {
+            (void)validateHttpServerConfiguration(listeners, std::move(options));
+        });
+    };
+
+    auto options = HttpServerOptions{};
+    options.maxConnections.reset();
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    options = HttpServerOptions{};
+    options.maxConnections = std::numeric_limits<std::size_t>::max();
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    options = HttpServerOptions{};
+    options.workerMailboxCapacity = std::numeric_limits<std::uint32_t>::max();
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    options = HttpServerOptions{};
+    options.maxRequestsPerConnection.reset();
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    options = HttpServerOptions{};
+    constexpr auto maxPowerOfTwo =
+        std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
+    options.maxRequestsPerConnection = maxPowerOfTwo / 2 + 1;
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    options = HttpServerOptions{};
+    options.maxRequestsPerConnection = 1000;
+    RUVIA_CHECK(!rejects(std::move(options)));
+    RUVIA_CHECK_EQ(ruvia::detail::http3WorkerTrackedStreamCapacity(1000), std::size_t{1064});
+    RUVIA_CHECK_EQ(ruvia::detail::http3TransportLifetimeStreamCapacity(1000), std::size_t{1128});
+
+    options = HttpServerOptions{};
+    options.maxRequestsPerConnection = std::numeric_limits<std::size_t>::max();
+    RUVIA_CHECK(rejects(std::move(options)));
+
+    const auto maxConnectionCapacity =
+        static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+    RUVIA_CHECK(throwsInvalid([maxConnectionCapacity] {
+        ruvia::detail::validateHttp3ServerLimits(
+            2, 1024, 1000, maxConnectionCapacity / 2 + 1);
+    }));
+}
 
 RUVIA_TEST(client_ip_classification_uses_complete_literal_views) {
     for (const std::string_view host : {"127.0.0.1", "0.0.0.0", "255.255.255.255",
@@ -317,6 +454,25 @@ RUVIA_TEST(http_client_config_rejects_overflowing_scheduler_capacity) {
         std::pmr::unsynchronized_pool_resource resource;
         (void)ruvia::detail::HttpClientConfigStorage(config, &resource);
     }));
+}
+
+RUVIA_TEST(http3_client_config_requires_https_and_bounded_response_storage) {
+    ruvia::HttpClientConfig config;
+    config.host = "example.com";
+    config.protocol = ruvia::HttpClientProtocol::kHttp3Only;
+
+    std::pmr::unsynchronized_pool_resource resource;
+    RUVIA_CHECK(!throwsInvalid(
+        [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+
+    config.scheme = ruvia::HttpScheme::kHttp;
+    RUVIA_CHECK(throwsInvalid(
+        [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+
+    config.scheme = ruvia::HttpScheme::kHttps;
+    config.maxResponseBytes = std::size_t{64} * 1024 * 1024 + 1;
+    RUVIA_CHECK(throwsInvalid(
+        [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
 }
 
 RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {

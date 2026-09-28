@@ -1,7 +1,13 @@
+#include "ruvia/http/detail/client/HttpOriginView.h"
+
+#include <array>
+#include <charconv>
 #include <stdexcept>
+#include <system_error>
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
 namespace {
@@ -35,6 +41,25 @@ HttpOriginView HttpOriginView::https(HttpOriginOptions options) {
     validateOriginHost(host);
     return HttpOriginView(
         HttpScheme::kHttps, host, resolvedOriginPort(HttpScheme::kHttps, options));
+}
+
+std::pmr::string makeHttpOriginAuthority(const HttpOriginView& origin,
+    std::pmr::memory_resource* resource) {
+    const auto host = origin.host();
+    const bool includePort = !detail::httpOriginUsesDefaultPort(origin);
+    std::pmr::string authority(detail::httpPmrResourceOrDefault(resource));
+    authority.reserve(host.size() + (includePort ? 6 : 0));
+    authority.append(host);
+    if (includePort) {
+        std::array<char, 5> portBuffer;
+        const auto [end, error] = std::to_chars(portBuffer.data(), portBuffer.data() + portBuffer.size(), origin.port());
+        if (error != std::errc{}) {
+            throw std::logic_error("HTTP origin port formatting failed");
+        }
+        authority.push_back(':');
+        authority.append(portBuffer.data(), static_cast<std::size_t>(end - portBuffer.data()));
+    }
+    return authority;
 }
 
 }  // namespace ruvia

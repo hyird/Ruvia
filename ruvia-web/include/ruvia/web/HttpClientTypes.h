@@ -21,11 +21,20 @@ enum class HttpClientProtocol : std::uint8_t {
     kNegotiate,
     kHttp1Only,
     kHttp2Only,
+    // HTTP/3 uses QUIC over UDP and never falls back to the TCP pool.
+    kHttp3Only,
 };
 
 enum class HttpClientReceivedCookiePolicy : std::uint8_t {
     kIgnore,
     kRetainAndSend,
+};
+
+// Bounds bytes retained by readAll() results: per standalone client or,
+// in an App, across all registered aliases of one business worker. This is
+// independent of per-response limits and worker-owned memory.
+struct HttpClientResultBudgetConfig final {
+    std::size_t maxRetainedBytes{std::size_t{64} * 1024 * 1024};
 };
 
 // Configuration for one HttpClient bound to one EventLoop. App registration
@@ -75,6 +84,7 @@ public:
         kResponseTooLarge,
         kQueueFull,
         kClosing,
+        kResultBudgetExceeded,
     };
 
     HttpClientError(Code code, std::string_view message)

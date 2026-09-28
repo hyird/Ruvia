@@ -62,6 +62,7 @@ if(RUVIA_BUILD_CORE)
         core/hex.cpp
         core/integer.cpp
         core/ip_address.cpp
+        core/memory_pool.cpp
         core/number_format.cpp
         core/pmr_string.cpp
         core/pool_waiter_queue.cpp
@@ -82,6 +83,9 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_channel ruvia::core SOURCES core/channel.cpp)
     ruvia_add_test(ruvia_one_shot ruvia::core SOURCES core/one_shot.cpp)
     ruvia_add_test(ruvia_worker_timer ruvia::core SOURCES core/worker_timer.cpp)
+    ruvia_add_test(ruvia_worker_notification ruvia::core TIMEOUT 60 SOURCES
+        core/worker_notification.cpp
+        support/test_main.cpp)
     ruvia_add_test(ruvia_worker_dispatch_failure ruvia::core SOURCES
         core/worker_dispatch_failure.cpp)
     ruvia_add_test(ruvia_worker_async_await ruvia::core SOURCES core/asio_await.cpp)

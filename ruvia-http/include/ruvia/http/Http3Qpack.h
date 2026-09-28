@@ -45,6 +45,9 @@ struct Http3QpackInteger final {
 // identical Huffman code table (RFC 7541 Appendix B).
 [[nodiscard]] std::expected<std::size_t, Http3QpackError> decodeHttp3QpackString(
     std::span<const char> input, std::pmr::string& output);
+// Decodes a literal using a caller-selected prefixed length (1..7 bits).
+[[nodiscard]] std::expected<std::size_t, Http3QpackError> decodeHttp3QpackString(
+    std::span<const char> input, std::uint8_t prefixBits, std::pmr::string& output);
 // Encodes a non-Huffman string literal. QPACK Huffman encoding is intentionally
 // not provided by this primitive.
 [[nodiscard]] std::expected<std::size_t, Http3QpackError> encodeHttp3QpackString(

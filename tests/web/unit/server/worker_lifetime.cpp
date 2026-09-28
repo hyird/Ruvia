@@ -23,6 +23,51 @@ ruvia::Task<void> completePost() {
 
 }  // namespace
 
+RUVIA_TEST(unstarted_worker_stop_and_join_are_safe) {
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime runtime(
+        asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes);
+
+    runtime.stop();
+    runtime.join();
+    RUVIA_CHECK(!runtime.worker().accepting());
+}
+
+RUVIA_TEST(session_only_worker_aborts_before_serve_and_finalizes) {
+    ruvia::detail::HttpServerOptions options;
+    const ruvia::detail::HttpServerListenerDefinition listener(
+        {asio::ip::address_v4::loopback(), 0});
+    auto configuration = ruvia::detail::validateHttpServerConfiguration(
+        std::span<const ruvia::detail::HttpServerListenerDefinition>(&listener, 1),
+        std::move(options));
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime runtime(configuration, routes, {});
+    runtime.prepare();
+    runtime.launch();
+    runtime.waitUntilReady();
+
+    runtime.stopAdmission();
+    runtime.finalizeAfterNetworkQuiesced();
+    runtime.join();
+    RUVIA_CHECK(!runtime.worker().accepting());
+}
+
+RUVIA_TEST(standalone_listener_worker_stops_without_app_coordination) {
+    ruvia::detail::RouteTable routes(std::pmr::get_default_resource());
+    ruvia::detail::WebWorkerRuntime runtime(
+        asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes);
+    runtime.prepare();
+    runtime.launch();
+    runtime.waitUntilReady();
+    runtime.requestServe();
+    RUVIA_CHECK(runtime.waitUntilServing());
+    RUVIA_CHECK(runtime.localEndpoint().port() != 0);
+
+    runtime.stop();
+    runtime.join();
+    RUVIA_CHECK(!runtime.worker().accepting());
+}
+
 RUVIA_TEST(session_only_worker_keeps_capability_clients_until_stop) {
     using namespace std::chrono_literals;
 

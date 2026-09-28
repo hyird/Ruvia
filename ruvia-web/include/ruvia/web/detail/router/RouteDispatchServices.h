@@ -23,7 +23,7 @@ namespace ruvia {
 // The Context a matched route runs in, carrying its captured parameters and the
 // route identity that scopes a rate limit.
 [[nodiscard]] inline Context makeRouteContext(RequestMemory& memory, const HttpRequest& request,
-    const detail::ResolvedRoute& resolved, detail::ContextServices services) noexcept {
+    const detail::ResolvedRoute& resolved, detail::ContextServices services) {
     const auto& route = resolved.route();
     const auto routeRateLimitScope = reinterpret_cast<std::uintptr_t>(&route);
     const auto values = resolved.match().values();

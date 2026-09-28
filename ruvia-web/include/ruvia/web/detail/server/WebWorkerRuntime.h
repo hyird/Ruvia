@@ -3,11 +3,13 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <span>
 #include <string_view>
 #include <thread>
 #include <vector>
 
+#include <asio/executor_work_guard.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
@@ -21,6 +23,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/WebWorker.h"
+#include "ruvia/web/detail/http3/Http3WorkerServer.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -64,6 +67,11 @@ public:
     void requestServe();
     [[nodiscard]] bool waitUntilServing();
     void stop() noexcept;
+    // App shutdown closes worker admission before joining the server network
+    // runtime, but defers worker-owned teardown until it can no longer submit
+    // callbacks. HTTP/3 also completes its bidirectional worker/network finalization ACK.
+    void stopAdmission() noexcept;
+    void finalizeAfterNetworkQuiesced() noexcept;
     // Lifecycle owners join from outside the server worker. Reject self-join
     // before touching std::thread so behavior is deterministic across platforms.
     void join();
@@ -71,15 +79,12 @@ public:
     [[nodiscard]] asio::io_context::executor_type workerExecutor() noexcept {
         return ioContext_.get_executor();
     }
-    [[nodiscard]] asio::io_context::executor_type ingressExecutor() noexcept {
-        return ioContext_.get_executor();
-    }
-    // Lock-free admission snapshot for external ingress. A true result is advisory;
-    // the worker rechecks capacity when the transferred socket is delivered.
-    [[nodiscard]] bool availableForIngress() const noexcept;
+    // Lock-free admission snapshot for the server network dispatcher. A true
+    // result is advisory; the worker rechecks capacity when the socket is delivered.
+    [[nodiscard]] bool availableForNetworkDispatch() const noexcept;
     // Takes ownership immediately. Returns true only when delivery was committed;
     // otherwise closes the socket and returns false. Never throws.
-    // Called on the worker after ingress mailbox delivery. Rechecks worker state
+    // Called on the worker after server network mailbox delivery. Rechecks worker state
     // and capacity, assigns before any I/O, and consumes the ticket on every path.
     void acceptTransferredConnection(NativeAcceptedSocketTicket&& ticket) noexcept;
     // Safe from any thread, at any point in the lifecycle.
@@ -89,33 +94,37 @@ public:
     }
     WorkerHandle worker() const&& = delete;
     [[nodiscard]] WebWorkerHandle webWorker() const;
+    [[nodiscard]] Http3WorkerServer* http3Server() noexcept {
+        return http3Server_.get();
+    }
 
 private:
     struct ValidatedConfigurationTag final {};
-    enum class IngressMode { kListeners, kSessionsOnly };
+    enum class ConnectionOwnershipMode { kOwnListeners, kTransferredSessions };
     using DocumentRootPtr = std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>>;
     using ListenerPtr =
         std::unique_ptr<HttpServerSessionConfig, PmrObjectDeleter<HttpServerSessionConfig>>;
     using AcceptorPtr = std::unique_ptr<HttpServerAcceptor, PmrObjectDeleter<HttpServerAcceptor>>;
 
     WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
-        const RouteTable& routes, WorkerCapabilityDefinitions capabilities, IngressMode ingressMode);
+        const RouteTable& routes, WorkerCapabilityDefinitions capabilities,
+        ConnectionOwnershipMode connectionOwnershipMode);
     WebWorkerRuntime(ValidatedConfigurationTag,
         std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
         WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions,
-        IngressMode ingressMode);
+        ConnectionOwnershipMode connectionOwnershipMode);
 
     void configureAcceptor(HttpServerAcceptor& acceptor);
     void configureTlsContext(HttpServerSessionConfig& session);
+    void stopAdmissionOnContext() noexcept;
     void stopOnContext() noexcept;
     void failWorker(const std::exception_ptr& failure) noexcept;
     void runIoContext() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();
-    Task<void> superviseListener(std::size_t listenerIndex, HttpServerAcceptor& acceptor,
-        HttpServerSessionConfig& session);
-    Task<void> acceptLoop(std::size_t listenerIndex, HttpServerAcceptor& acceptor,
-        HttpServerSessionConfig& session);
+    Task<void> superviseListener(
+        std::size_t listenerIndex, HttpServerAcceptor& acceptor);
+    Task<void> acceptLoop(std::size_t listenerIndex, HttpServerAcceptor& acceptor);
     void acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket);
     Task<void> handleSession(HttpServerSessionConfig& listener, AcceptedConnectionLease connection);
     template <typename Stream>
@@ -125,8 +134,12 @@ private:
     Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket,
         ContextServices services, std::string_view initialBytes = {});
     asio::io_context ioContext_;
-    WorkerRuntimeContext workerRuntime_;
+    ruvia::WorkerRuntimeContext workerRuntime_;
+    // Keeps the owner loop alive until phase-two finalization after the server
+    // network runtime has joined.
+    asio::executor_work_guard<asio::io_context::executor_type> finalizeGuard_;
     WorkerSignal serveSignal_;
+    WorkerSignal finalizeSignal_;
     StopSource stopSource_;
     StopToken stopToken_{stopSource_.token()};
     const RouteTable& routes_;
@@ -137,9 +150,10 @@ private:
     DocumentRootPtr ownedDocumentRoot_;
     std::pmr::vector<DocumentRootPtr> retiredDocumentRoots_;
     HttpServerOptions options_;
-    IngressMode ingressMode_{IngressMode::kListeners};
+    ConnectionOwnershipMode connectionOwnershipMode_{ConnectionOwnershipMode::kOwnListeners};
     ruvia::ConnectionScanner connectionScanner_;
     WorkerCapabilities capabilities_;
+    std::unique_ptr<Http3WorkerServer, PmrObjectDeleter<Http3WorkerServer>> http3Server_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     ConnectionWorkSetPool workSetPool_;
     // Atomic because stats() reads them from the caller's thread while this
@@ -156,9 +170,11 @@ private:
     RuntimeLifecycle lifecycle_;
     HttpServerWorkerState workerState_{HttpServerWorkerState::kFresh};
     std::thread workerThread_;
+    std::mutex threadStateMutex_;
+    bool threadLaunched_{false};
     bool prepared_{false};
     bool serveRequested_{false};
-    std::atomic<bool> ingressServing_{false};
+    std::atomic<bool> networkServing_{false};
 
     HttpServerWorkerCompletion workerCompletion_;
 };

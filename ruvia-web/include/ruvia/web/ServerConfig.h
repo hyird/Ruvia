@@ -30,6 +30,7 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
 #include "ruvia/web/detail/CallbackRef.h"
@@ -46,7 +47,7 @@ enum class ProcessSignalHandlerPolicy : std::uint8_t {
 // normalized values to every worker. Optional fields disable only the policy
 // they name; optional App capabilities remain separate config-or-null calls.
 struct ServerConfig final {
-    // Business workers; the TCP and UDP ingress threads are additional.
+    // Business workers; one server network thread is additional.
     std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     std::size_t workerMailboxCapacity{1024};
@@ -57,12 +58,21 @@ struct ServerConfig final {
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
+    // HTTP/3 requires a finite per-worker connection cap.
     std::optional<std::size_t> maxConnectionsPerWorker{1024};
+    // Cumulative request cap per HTTP/1, HTTP/2, or HTTP/3 connection.
+    // HTTP/3 uses fixed cutoff 4*N. A request stream ID at/above it, arriving
+    // before N admitted requests, triggers early GOAWAY; such streams are
+    // rejected individually. Undecided lower-ID requests remain admissible
+    // until N, then admission seals/drains.
+    // Default 1000; not silently clamped.
     std::optional<std::size_t> maxRequestsPerConnection{1000};
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     std::optional<std::size_t> maxStreamBodyBytes{};
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     MemoryPoolConfig memoryPool{};
+    // Shared by all registered outbound HTTP client aliases on each worker.
+    HttpClientResultBudgetConfig httpClientResultBudget{};
 };
 
 struct TrustedProxyConfig final {
@@ -103,10 +113,19 @@ struct TlsConfig final {
     std::vector<TlsSniConfig> sni{};
 };
 
-// One bind address with optional HTTP and HTTPS endpoints. App validates and
-// expands this value atomically, then gives every worker the same endpoints.
-// An omitted port disables that transport. autoHttpsRedirect turns the HTTP
-// endpoint into a redirect endpoint targeting the HTTPS port in this value.
+// HTTP/3 is an explicit UDP capability on the HTTPS listener. Presence enables
+// QUIC on the same address and numeric port as HTTPS; it never changes TCP ALPN.
+struct Http3ListenConfig final {
+    // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
+    std::chrono::milliseconds handshakeTimeout{std::chrono::seconds(10)};
+    // Maximum time to drain admitted request streams and close the connection.
+    std::chrono::milliseconds drainTimeout{std::chrono::seconds(30)};
+};
+
+// One bind address with optional HTTP and HTTPS service ports, independent of
+// the wire protocol. App validates and expands this value atomically. An
+// omitted port disables that service. autoHttpsRedirect targets the HTTPS
+// service port. HTTP/3 does not have a separate public listener port.
 struct ListenConfig final {
     // Numeric IPv4 or IPv6 bind address, normalized when App::listen consumes
     // this configuration.
@@ -114,6 +133,7 @@ struct ListenConfig final {
     std::optional<std::uint16_t> http{};
     std::optional<std::uint16_t> https{};
     TlsConfig tls{};
+    std::optional<Http3ListenConfig> http3{};
     bool autoHttpsRedirect{false};
 };
 

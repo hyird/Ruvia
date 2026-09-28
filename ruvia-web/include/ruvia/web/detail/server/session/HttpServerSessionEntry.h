@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory_resource>
 #include <system_error>
 #include <utility>
@@ -31,11 +32,13 @@ inline Task<void> WebWorkerRuntime::handleSession(
     // Declared outside the try so the failure report below can name the peer.
     // It stays empty if the failure happened before the address was resolved.
     std::pmr::string remoteAddress(memory_.allocator<char>());
+    std::uint16_t remotePort = 0;
     try {
         std::error_code remoteEc;
         const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
         if (!remoteEc) {
             ruvia::assignRemoteAddress(remoteAddress, remoteEndpoint.address());
+            remotePort = remoteEndpoint.port();
         }
         ContextServices baseServices = capabilities_.contextServices(stopToken_);
         if (listener.tls() != nullptr) {
@@ -64,7 +67,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
             std::pmr::string clientCertificate(memory_.allocator<char>());
             extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
             const auto tlsServices =
-                baseServices.withTlsTransport(remoteAddress, clientCertificate);
+                baseServices.withTlsTransport(remoteAddress, clientCertificate, remotePort);
             if (isHttp2AlpnSelected(tlsStream)) {
                 co_await handleHttp2Session(tlsStream, socket, tlsServices);
             } else {
@@ -74,7 +77,7 @@ inline Task<void> WebWorkerRuntime::handleSession(
             co_return;
         }
         co_await handleStreamSession(
-            listener, socket, socket, baseServices.withPlainTransport(remoteAddress));
+            listener, socket, socket, baseServices.withPlainTransport(remoteAddress, remotePort));
     } catch (...) {
         // Last-resort safety net: any exception that escapes the session
         // body (including bad_alloc, error-handler failures, or framework

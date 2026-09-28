@@ -25,9 +25,14 @@
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
+#include "ruvia/web/detail/client/HttpClientResultBudget.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 
 namespace ruvia::detail {
+
+class Http3ClientBodyBudget;
+class Http3ClientConnection;
+class Http3QuicClientTlsContext;
 
 struct HttpClientRequestStorageAccess final {
     [[nodiscard]] static HttpClientRequestView view(
@@ -40,9 +45,16 @@ using HttpClientOperationCancellationMailbox = WorkerCancellationMailbox<HttpCli
 class HttpClientPool final {
 public:
     HttpClientPool(asio::io_context& ioContext, const WorkerHandle& worker,
-        HttpClientConfigStorage config, std::pmr::memory_resource* resource);
+        HttpClientConfigStorage config, HttpClientResultBudgetConfig resultBudget,
+        std::pmr::memory_resource* resource);
+    HttpClientPool(asio::io_context& ioContext, const WorkerHandle& worker,
+        HttpClientConfigStorage config,
+        const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain,
+        std::pmr::memory_resource* resource);
     HttpClientPool(asio::io_context&, WorkerHandle&&, HttpClientConfigStorage,
-        std::pmr::memory_resource*) = delete;
+        HttpClientResultBudgetConfig, std::pmr::memory_resource*) = delete;
+    HttpClientPool(asio::io_context&, WorkerHandle&&, HttpClientConfigStorage,
+        const std::shared_ptr<HttpClientResultBudgetDomain>&, std::pmr::memory_resource*) = delete;
     ~HttpClientPool();
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
@@ -88,6 +100,8 @@ private:
         std::uint64_t requestId{0};
         std::uint64_t cancellationId{0};
         std::uint32_t streamId{0};
+        // Borrowed from executeHttp2 while this stack record remains registered.
+        const OperationTimeout* timeout{nullptr};
         bool complete{false};
         bool retryable{false};
 
@@ -171,6 +185,12 @@ private:
         bool active_{true};
     };
 
+    struct Http3PendingCancellation final {
+        std::uint64_t cancellationId{};
+        Http3ClientConnection* connection{};
+        std::uint64_t requestId{};
+    };
+
     struct StoredCookie final {
         StoredCookie(
             std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
@@ -235,6 +255,12 @@ private:
     [[nodiscard]] Task<void> executeHttp2(Connection& connection,
         const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
         StopToken stopToken, HttpClientResponse& response);
+    [[nodiscard]] Task<void> executeHttp3(std::size_t connectionIndex,
+        const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
+        StopToken stopToken, HttpClientResponse& response);
+    [[nodiscard]] HttpClientRequestStorage makeHttp3Request(
+        const HttpClientRequestStorage& request);
+    [[nodiscard]] Http3ClientConnection& http3Connection(std::size_t connectionIndex);
     [[nodiscard]] Task<void> write(
         Connection& connection, std::string_view bytes, const ruvia::OperationTimeout& timeout);
     [[nodiscard]] Task<std::size_t> readSome(Connection& connection, std::span<char> bytes,
@@ -244,9 +270,6 @@ private:
     void retainResponseCookies(
         const HttpClientRequestStorage& request, const HttpClientResponse& response);
     void addCookie(std::string_view name, std::string_view value);
-    static void decodeResponseContentEncoding(HttpClientResponse& response,
-        bool contentSemanticsPresent, std::size_t maxDecodedBytes,
-        std::pmr::memory_resource* resource);
     [[nodiscard]] static std::size_t cookieStorageBytes(std::string_view name,
         std::string_view value, std::string_view path, std::string_view domain) noexcept;
     [[nodiscard]] bool cookieCapacityAvailable(
@@ -268,11 +291,21 @@ private:
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
     HttpClientConfigStorage config_;
+    std::shared_ptr<HttpClientResultBudgetDomain> resultBudgetDomain_;
     asio::ssl::context tlsContext_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<HttpClientOperationCancellationMailbox> cancellationMailbox_;
     TaskScope backgroundTasks_;
+    std::unique_ptr<Http3QuicClientTlsContext, PmrObjectDeleter<Http3QuicClientTlsContext>>
+        http3Tls_;
+    std::unique_ptr<Http3ClientBodyBudget, PmrObjectDeleter<Http3ClientBodyBudget>>
+        http3BodyBudget_;
+    std::pmr::vector<
+        std::unique_ptr<Http3ClientConnection, PmrObjectDeleter<Http3ClientConnection>>>
+        http3Connections_;
+    WorkerSignal http3GenerationSignal_;
+    std::pmr::vector<Http3PendingCancellation> http3PendingCancellations_;
     std::pmr::vector<StoredCookie> cookies_;
     std::size_t requestsBuffered_{0};
     std::size_t requestsInFlight_{0};
@@ -287,13 +320,21 @@ private:
 class HttpClientRegistry final {
 public:
     HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-        std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig);
+        std::pmr::memory_resource* resource, const HttpClientConfig& defaultConfig,
+        HttpClientResultBudgetConfig resultBudget = {});
     HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-        std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions);
+        std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions,
+        HttpClientResultBudgetConfig resultBudget = {});
+    HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, std::span<const HttpClientDefinition> definitions,
+        const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain);
     HttpClientRegistry(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
-        const HttpClientConfig&) = delete;
+        const HttpClientConfig&, HttpClientResultBudgetConfig = {}) = delete;
     HttpClientRegistry(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
-        std::span<const HttpClientDefinition>) = delete;
+        std::span<const HttpClientDefinition>, HttpClientResultBudgetConfig = {}) = delete;
+    HttpClientRegistry(asio::io_context&, WorkerHandle&&, std::pmr::memory_resource*,
+        std::span<const HttpClientDefinition>,
+        const std::shared_ptr<HttpClientResultBudgetDomain>&) = delete;
     ~HttpClientRegistry();
     HttpClientRegistry(const HttpClientRegistry&) = delete;
     HttpClientRegistry& operator=(const HttpClientRegistry&) = delete;
@@ -306,8 +347,11 @@ public:
 private:
     using PoolOwner = std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>>;
 
-    void add(
-        asio::io_context& ioContext, const WorkerHandle& worker, HttpClientConfigStorage config);
+    void add(asio::io_context& ioContext, const WorkerHandle& worker,
+        HttpClientConfigStorage config, HttpClientResultBudgetConfig resultBudget);
+    void add(asio::io_context& ioContext, const WorkerHandle& worker,
+        HttpClientConfigStorage config,
+        const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain);
     std::pmr::memory_resource* resource_;
     std::pmr::vector<PoolOwner> pools_;
     NamedCapabilityIndex aliasIndex_;

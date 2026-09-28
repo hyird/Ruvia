@@ -93,6 +93,12 @@ private:
     HttpScheme scheme_;
 };
 
+// RFC 3986 authority for this origin: preserves IP-literal brackets and
+// includes the port only when it differs from the scheme's default. The
+// returned string owns its bytes in resource; the origin remains borrowed.
+[[nodiscard]] std::pmr::string makeHttpOriginAuthority(const HttpOriginView& origin,
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
 class HttpClientRequestContentView;
 
 class HttpClientRequestWithoutContent final {

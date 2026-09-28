@@ -28,8 +28,12 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     }
     if (config.protocol != HttpClientProtocol::kNegotiate &&
         config.protocol != HttpClientProtocol::kHttp1Only &&
-        config.protocol != HttpClientProtocol::kHttp2Only) {
+        config.protocol != HttpClientProtocol::kHttp2Only &&
+        config.protocol != HttpClientProtocol::kHttp3Only) {
         throw std::invalid_argument("http client protocol is invalid");
+    }
+    if (config.protocol == HttpClientProtocol::kHttp3Only && scheme != HttpScheme::kHttps) {
+        throw std::invalid_argument("HTTP/3 client requires the HTTPS scheme");
     }
     validateClientTransportConfig(clientTransportConfigView(config));
     if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&
@@ -50,6 +54,13 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
         throw std::invalid_argument(
             "HTTP client connection and HTTP/2 stream capacity is too large");
     }
+    constexpr std::size_t kHttp3ConcurrentRequestsPerConnection = 29;
+    if (config.protocol == HttpClientProtocol::kHttp3Only &&
+        config.connectionCount >
+            std::numeric_limits<std::size_t>::max() /
+                kHttp3ConcurrentRequestsPerConnection) {
+        throw std::invalid_argument("HTTP/3 client connection capacity is too large");
+    }
     ruvia::ensurePositiveSize(
         config.maxBufferedRequests, "http client buffered request limit must be greater than zero");
     ruvia::ensurePositiveSize(config.maxCookies, "http client cookie limit must be greater than zero");
@@ -57,6 +68,12 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
         config.maxCookieBytes, "http client cookie byte limit must be greater than zero");
     ruvia::ensurePositiveSize(
         config.maxResponseBytes, "http client response byte limit must be greater than zero");
+    constexpr std::size_t kMaxHttp3ResponseBytes = std::size_t{64} * 1024 * 1024;
+    if (config.protocol == HttpClientProtocol::kHttp3Only &&
+        config.maxResponseBytes > kMaxHttp3ResponseBytes) {
+        throw std::invalid_argument(
+            "HTTP/3 client response byte limit must not exceed 64 MiB");
+    }
     ruvia::ensurePositiveOptionalDurations("configured http client timeouts must be greater than zero",
         std::optional{config.connectTimeout}, config.writeTimeout, config.requestTimeout,
         config.acquireTimeout);

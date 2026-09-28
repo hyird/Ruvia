@@ -1,0 +1,54 @@
+#pragma once
+
+#include <cstddef>
+#include <memory_resource>
+#include <span>
+#include <vector>
+
+#include "ruvia/http/Http3MessageHead.h"
+#include "ruvia/http/HttpRequest.h"
+
+namespace ruvia {
+
+// Owns a decoded HTTP/3 request head and body for the lifetime of its borrowed
+// HttpRequest view. requestResource and bodyPool must outlive this owner.
+class Http3ServerRequest final {
+public:
+    // Copies all head data before returning. The body is accumulated separately
+    // and is not published through request() until finishBody().
+    Http3ServerRequest(const Http3MessageHead& callbackHead,
+        std::pmr::memory_resource* requestResource, std::pmr::memory_resource* bodyPool);
+
+    Http3ServerRequest(const Http3ServerRequest&) = delete;
+    Http3ServerRequest& operator=(const Http3ServerRequest&) = delete;
+    Http3ServerRequest(Http3ServerRequest&&) = delete;
+    Http3ServerRequest& operator=(Http3ServerRequest&&) = delete;
+
+    [[nodiscard]] const HttpRequest& request() const& noexcept {
+        return request_;
+    }
+    const HttpRequest& request() const&& = delete;
+
+    [[nodiscard]] bool bodyComplete() const noexcept {
+        return bodyComplete_;
+    }
+    [[nodiscard]] std::size_t bodyBytes() const noexcept {
+        return body_.size();
+    }
+    void appendBody(std::span<const std::byte> bytes);
+    void finishBody();
+    void abortBody() noexcept;
+
+private:
+    void buildRequest();
+
+    // request_ is destroyed before the storage its views borrow.
+    Http3MessageHead head_;
+    std::pmr::string cookies_;
+    std::pmr::vector<std::byte> body_;
+    HttpRequest request_;
+    bool bodyComplete_{false};
+    bool bodyAborted_{false};
+};
+
+}  // namespace ruvia
