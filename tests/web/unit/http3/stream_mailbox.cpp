@@ -31,7 +31,7 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (allocationCalls++ >= allowedCalls) {
+        if (bytes >= 32 && allocationCalls++ >= allowedCalls) {
             throw std::bad_alloc();
         }
         void* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
@@ -303,7 +303,14 @@ RUVIA_TEST(http3StreamMailboxCapacityArmRacesWithReturnAndStopWithoutLosingWake)
 }
 
 RUVIA_TEST(http3StreamMailboxConstructionFailureReturnsEarlierAllocations) {
-    for (std::size_t successfulCalls = 0; successfulCalls < 5; ++successfulCalls) {
+    CountingResource baseline;
+    {
+        Mailbox mailbox(2, 1, 1, &baseline);
+    }
+    RUVIA_CHECK(baseline.allocationCalls > 0);
+    RUVIA_CHECK(baseline.allocated == baseline.freed);
+    for (std::size_t successfulCalls = 0; successfulCalls < baseline.allocationCalls;
+        ++successfulCalls) {
         CountingResource memory;
         memory.allowedCalls = successfulCalls;
         RUVIA_CHECK(ruvia::testing::throwsOn([&] { Mailbox mailbox(2, 1, 1, &memory); }));

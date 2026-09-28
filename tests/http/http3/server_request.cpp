@@ -15,11 +15,24 @@
 namespace {
 
 class FailingResource final : public std::pmr::memory_resource {
+public:
+    bool reject{true};
+    std::size_t minimumRejectedBytes{64};
+    std::size_t live{};
+
 private:
-    void* do_allocate(std::size_t, std::size_t) override {
-        throw std::bad_alloc();
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject && bytes >= minimumRejectedBytes) {
+            throw std::bad_alloc();
+        }
+        auto* value = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++live;
+        return value;
     }
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
+    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
+        --live;
+        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
+    }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
@@ -237,6 +250,7 @@ RUVIA_TEST(http3_server_request_allocation_exception_propagates) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+    RUVIA_CHECK_EQ(failing.live, std::size_t{0});
 }
 
 RUVIA_TEST(http3_server_request_unstarted_owner_destruction_releases_resources) {
@@ -321,9 +335,11 @@ RUVIA_TEST(http3_server_request_abort_returns_pool_capacity_and_is_terminal) {
 RUVIA_TEST(http3_server_request_append_allocation_failure_preserves_state) {
     CountingResource requestResource;
     FailingResource bodyPool;
+    bodyPool.reject = false;
     auto head = makeGet(std::pmr::get_default_resource());
     ruvia::Http3ServerRequest owner(head, &requestResource, &bodyPool);
-    const std::array bytes{std::byte{'a'}, std::byte{'b'}};
+    bodyPool.reject = true;
+    const std::array<std::byte, 256> bytes{};
     bool threw = false;
     try {
         owner.appendBody(bytes);

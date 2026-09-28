@@ -527,10 +527,10 @@ RUVIA_TEST(client_body_result_survives_response_client_worker_and_cross_thread_d
                             co_await client.shutdown();
                         };
                         runOperation(worker, io, operation);
-                        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-                        RUVIA_CHECK(resource.allocationCount() > 0);
-                        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
                     }
+                    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+                    RUVIA_CHECK(resource.allocationCount() > 0);
+                    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
                 }
             }
         }

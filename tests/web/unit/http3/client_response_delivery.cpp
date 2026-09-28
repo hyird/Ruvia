@@ -918,7 +918,7 @@ RUVIA_TEST(http3_client_response_delivery_isolates_callback_bad_alloc_and_rolls_
                     ruvia::Http3ConnectionErrorScope::kNone);
         FakeRead failingHead{.wire = responseHead()};
         RUVIA_CHECK(driver.drive(0, failingHead).status == Driver::Status::kProgress);
-        rejecting.rejectAllocations();
+        rejecting.rejectAllocations(true, 32);
         const std::string body(64, 'x');
         FakeRead failingBody{.wire = frame(0, std::span<const char>(body.data(), body.size()))};
         RUVIA_CHECK(driver.drive(0, failingBody).status == Driver::Status::kProgress);
@@ -967,7 +967,7 @@ RUVIA_TEST(http3_client_response_delivery_connection_protocol_error_wins_after_c
         FakeRead head{.wire = responseHead()};
         RUVIA_CHECK(driver.drive(0, head).status == Driver::Status::kProgress);
 
-        rejecting.rejectAllocations();
+        rejecting.rejectAllocations(true, 32);
         const std::string body(64, 'x');
         auto wire = frame(0, std::span<const char>(body.data(), body.size()));
         appendFrame(wire, 4, {});

@@ -573,6 +573,7 @@ private:
             std::vector<Connection> connections;
             std::array<std::byte, 65536> packet{};
             std::array<char, 4096> requestBytes{};
+            bool retiredRejectedConnection = false;
             const auto watchdog = std::chrono::steady_clock::now() + 30s;
             while (!stop_.load(std::memory_order_acquire)) {
                 if (std::chrono::steady_clock::now() >= watchdog) {
@@ -783,6 +784,16 @@ private:
                             "send HTTP/3 GOAWAY test datagram");
                     }
                     bridge.completeOutbound();
+                }
+                if (rejectFirstRequestAsUnprocessed_ && rejectionResetSent() &&
+                    !retiredRejectedConnection) {
+                    // The reset datagrams are sent; release the rejected QUIC
+                    // connection before admitting the replay on a new one.
+                    if (server.retireConnectionLocally(connections.front().id) !=
+                        TestQuicServer::Error::kNone) {
+                        throw std::runtime_error("HTTP/3 GOAWAY peer rejected connection retirement failed");
+                    }
+                    retiredRejectedConnection = true;
                 }
                 {
                     std::lock_guard lock(mutex_);

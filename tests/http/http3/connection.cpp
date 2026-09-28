@@ -371,13 +371,17 @@ RUVIA_TEST(http3_connection_does_not_retain_closed_sparse_stream_ids) {
     ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource);
     const auto request = requestWire(&resource, "GET", "/sparse", "");
     const auto before = resource.allocations;
+    std::size_t retainedAfterWarmup = 0;
     for (std::uint64_t stream = 0; stream < 4000; stream += 4) {
         RUVIA_CHECK(connection.feed(stream, request, true, false, ignoreEvent, nullptr).status ==
                     ruvia::Http3ConnectionStatus::kMessageEnd);
         RUVIA_CHECK_EQ(connection.activeRequestCount(), 0U);
+        if (stream == 36) {
+            retainedAfterWarmup = resource.allocations - resource.deallocations;
+        }
     }
     const auto retained = resource.allocations - resource.deallocations;
-    RUVIA_CHECK(retained <= 2U);
+    RUVIA_CHECK(retained <= retainedAfterWarmup);
     RUVIA_CHECK(resource.allocations >= before);
 }
 

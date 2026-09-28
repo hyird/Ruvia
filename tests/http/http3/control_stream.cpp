@@ -29,10 +29,14 @@ private:
 
 RUVIA_TEST(http3_control_stream_releases_settings_storage_while_connection_remains_active) {
     CountingResource resource;
-    Http3ControlStream stream(Http3ControlRole::kServer, &resource);
-    constexpr std::array<char, 4> settings{0x4, 0x2, 0x1, 0x0};
-    RUVIA_CHECK(stream.feed(settings, false) == Http3ControlStreamStatus::kNeedMoreData);
-    RUVIA_CHECK(stream.peerSettings().has_value());
+    {
+        Http3ControlStream stream(Http3ControlRole::kServer, &resource);
+        const auto baseline = resource.outstanding;
+        constexpr std::array<char, 4> settings{0x4, 0x2, 0x1, 0x0};
+        RUVIA_CHECK(stream.feed(settings, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(stream.peerSettings().has_value());
+        RUVIA_CHECK_EQ(resource.outstanding, baseline);
+    }
     RUVIA_CHECK_EQ(resource.outstanding, std::size_t{0});
 }
 

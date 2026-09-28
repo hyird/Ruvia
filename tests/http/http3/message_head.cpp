@@ -1,6 +1,7 @@
 #include <array>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -23,11 +24,22 @@ std::expected<ruvia::Http3MessageHead, ruvia::Http3MessageHeadError> decode(
 }
 
 class FailingResource final : public std::pmr::memory_resource {
+public:
+    std::size_t live{};
+
 private:
-    void* do_allocate(std::size_t, std::size_t) override {
-        throw std::bad_alloc();
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (bytes >= 64) {
+            throw std::bad_alloc();
+        }
+        auto* value = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++live;
+        return value;
     }
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
+    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
+        --live;
+        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
+    }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
@@ -146,13 +158,16 @@ RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_reso
                                       ruvia::Http3MessageHeadError::kFieldSectionTooLarge);
 
     FailingResource resource;
+    const std::string longName(256, 'n');
+    const std::string longValue(256, 'v');
     bool threw = false;
     try {
         (void)decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"},
-                         {"long-header-name", "long-header-value"}},
+                         {longName, longValue}},
             ruvia::Http3MessageHeadKind::kRequest, &resource);
     } catch (const std::bad_alloc&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+    RUVIA_CHECK_EQ(resource.live, std::size_t{0});
 }

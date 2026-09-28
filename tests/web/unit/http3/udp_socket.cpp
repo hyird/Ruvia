@@ -287,7 +287,11 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     const auto loopback2 = asio::ip::address_v4({127, 0, 0, 2});
     Udp::socket client1(io, Udp::endpoint(loopback1, 0));
     Udp::socket client2(io, Udp::endpoint(loopback2, 0));
+#ifdef _WIN32
+    const Udp::endpoint source(loopback1, server.boundPort());
+#else
     const Udp::endpoint source(loopback2, server.boundPort());
+#endif
     const std::array<std::byte, 4> firstRequest{
         std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14}};
     const std::array<std::byte, 5> secondRequest{

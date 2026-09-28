@@ -492,8 +492,18 @@ RUVIA_TEST(network_round_robins_across_available_workers) {
 
 RUVIA_TEST(network_prepare_failure_closes_prior_listener) {
     asio::io_context context;
+#ifdef _WIN32
+    asio::ip::tcp::acceptor occupied(context);
+    occupied.open(asio::ip::tcp::v4());
+    BOOL exclusive = TRUE;
+    RUVIA_CHECK(::setsockopt(occupied.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                    reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == 0);
+    occupied.bind({asio::ip::address_v4::loopback(), 0});
+    occupied.listen();
+#else
     asio::ip::tcp::acceptor occupied(context,
         {asio::ip::address_v4::loopback(), 0});
+#endif
     const std::array listeners{
         Listener({asio::ip::address_v4::loopback(), 0}), Listener(occupied.local_endpoint())};
     const std::array<ruvia::detail::ServerNetworkRuntime::Target, 0> targets{};

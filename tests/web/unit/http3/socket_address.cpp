@@ -16,7 +16,7 @@ using Udp = asio::ip::udp;
 }  // namespace
 
 RUVIA_TEST(http3QuicSocketAddressRoundTripsIpv4AndPreservesHostOrderPort) {
-    for (const std::uint16_t port : {443, 65535}) {
+    for (const std::uint16_t port : std::array<std::uint16_t, 2>{443, 65535}) {
         const Udp::endpoint source(asio::ip::address_v4({192, 0, 2, 17}), port);
         const auto quic = ruvia::detail::toHttp3QuicDatagramAddress(source);
         RUVIA_CHECK(quic.has_value());

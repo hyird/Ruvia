@@ -30,14 +30,22 @@ class CountingResource final : public std::pmr::memory_resource {
 public:
     std::size_t allocations{};
     std::size_t returns{};
+    std::size_t bodyAllocations{};
+    std::size_t bodyReturns{};
 
 private:
     void* do_allocate(std::size_t size, std::size_t alignment) override {
         ++allocations;
+        if (size >= 512) {
+            ++bodyAllocations;
+        }
         return std::pmr::new_delete_resource()->allocate(size, alignment);
     }
     void do_deallocate(void* pointer, std::size_t size, std::size_t alignment) override {
         ++returns;
+        if (size >= 512) {
+            ++bodyReturns;
+        }
         std::pmr::new_delete_resource()->deallocate(pointer, size, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -279,16 +287,21 @@ RUVIA_TEST(http3_request_body_reader_repeated_reads_release_prior_chunk_without_
             ruvia::detail::Http3RequestBodyReader reader(worker, 1024, &resource);
             for (char digit = '0'; digit != '8'; ++digit) {
                 const std::string payload(600, digit);
-                correct = correct && reader.enqueue(payload);
+                const bool enqueued = reader.enqueue(payload);
+                correct = correct && enqueued;
+                if (!enqueued) {
+                    break;
+                }
                 auto view = co_await ruvia::asAwaitable(readBody(reader));
                 correct = correct && view.has_value() && view->size() == payload.size() &&
                     std::string_view(reinterpret_cast<const char*>(view->data()), view->size()) == payload;
-                correct = correct && resource.allocations == resource.returns + 1;
+                correct = correct && resource.bodyAllocations == resource.bodyReturns + 1;
             }
-            correct = correct && reader.finish();
+            const bool finished = reader.finish();
+            correct = correct && finished;
             auto end = co_await ruvia::asAwaitable(readBody(reader));
             correct = correct && !end.has_value();
-            correct = correct && resource.allocations == resource.returns;
+            correct = correct && resource.bodyAllocations == resource.bodyReturns;
         } catch (...) {
             failed = true;
         }
@@ -351,7 +364,7 @@ RUVIA_TEST(http3_request_body_reader_error_discards_unread_bytes_without_invalid
             } catch (const std::system_error& error) {
                 rejected = error.code() == std::make_error_code(std::errc::bad_message);
             }
-            released = resource.allocations == resource.returns;
+            released = resource.bodyAllocations == resource.bodyReturns;
         } catch (...) {
             failed = true;
         }
@@ -399,6 +412,7 @@ RUVIA_TEST(http3_request_body_reader_cold_task_does_not_allocate_body_storage) {
         auto cold = reader.read();
         (void)cold;
     }
-    RUVIA_CHECK_EQ(resource.allocations, std::size_t{0});
-    RUVIA_CHECK_EQ(resource.returns, std::size_t{0});
+    RUVIA_CHECK_EQ(resource.bodyAllocations, std::size_t{0});
+    RUVIA_CHECK_EQ(resource.bodyReturns, std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocations, resource.returns);
 }

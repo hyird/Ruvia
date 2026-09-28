@@ -25,7 +25,7 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (reject) {
+        if (reject && bytes >= 32) {
             throw std::bad_alloc();
         }
         void* const memory = std::pmr::new_delete_resource()->allocate(bytes, alignment);

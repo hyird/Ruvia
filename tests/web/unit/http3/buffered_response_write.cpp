@@ -23,7 +23,7 @@ public:
 
 private:
     void* do_allocate(std::size_t size, std::size_t alignment) override {
-        if (reject) {
+        if (reject && size >= 32) {
             throw std::bad_alloc();
         }
         ++allocations;

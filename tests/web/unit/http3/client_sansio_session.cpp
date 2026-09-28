@@ -21,6 +21,7 @@ class CountingResource final : public std::pmr::memory_resource {
 public:
     std::size_t allocations{};
     std::size_t deallocations{};
+    std::size_t bodyAllocations{};
     std::size_t liveBytes{};
     bool reject{};
 
@@ -31,6 +32,9 @@ private:
         }
         void* const data = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations;
+        if (bytes >= 1024) {
+            ++bodyAllocations;
+        }
         liveBytes += bytes;
         return data;
     }
@@ -673,10 +677,10 @@ RUVIA_TEST(http3ClientSansIoSessionTransfersCompletedBodyWithoutCopyAndReclaimsL
         RUVIA_CHECK(session.feed(0, body(payload), true).status ==
                     ruvia::detail::Http3ClientSansIoSessionStatus::kMessageEnd);
         const auto* original = session.response(0)->body.data();
-        const auto beforeTransfer = memory.allocations;
+        const auto beforeTransfer = memory.bodyAllocations;
         auto retained = session.takeBody(0);
         RUVIA_CHECK(retained && retained->data() == original);
-        RUVIA_CHECK_EQ(memory.allocations, beforeTransfer);
+        RUVIA_CHECK_EQ(memory.bodyAllocations, beforeTransfer);
         RUVIA_CHECK_EQ(session.retainedBodyBytes(), 0U);
         RUVIA_CHECK(!session.takeBody(0));
         RUVIA_CHECK(session.response(0)->headers.front().value == "owned");

@@ -18,19 +18,29 @@ public:
     std::size_t returns{};
     std::size_t attempts{};
     std::size_t failOnAttempt{};
+    std::size_t largeAllocations{};
+    std::size_t largeReturns{};
     bool reject{};
 
 private:
     void* do_allocate(std::size_t size, std::size_t alignment) override {
-        ++attempts;
-        if (reject || attempts == failOnAttempt) {
-            throw std::bad_alloc();
+        if (size >= 32) {
+            ++attempts;
+            if (reject || attempts == failOnAttempt) {
+                throw std::bad_alloc();
+            }
         }
         ++allocations;
+        if (size >= 1024) {
+            ++largeAllocations;
+        }
         return std::pmr::new_delete_resource()->allocate(size, alignment);
     }
     void do_deallocate(void* pointer, std::size_t size, std::size_t alignment) override {
         ++returns;
+        if (size >= 1024) {
+            ++largeReturns;
+        }
         std::pmr::new_delete_resource()->deallocate(pointer, size, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -118,11 +128,11 @@ RUVIA_TEST(http3ClientRequestWriteRetiredHandoffPreservesWholeRequestAndReturnsS
             }
             // The caller has now retired transport; a previous WANT span can
             // be invalidated, but all original bytes must remain replayable.
-            const auto beforeTransfer = memory.allocations;
+            const auto beforeTransfer = memory.largeAllocations;
             auto request = cursor.takeRequestAfterRetirement();
             RUVIA_CHECK(request && request->method() == method && request->target() == "/upload?q=1");
             RUVIA_CHECK(request && request->body() == body);
-            RUVIA_CHECK_EQ(memory.allocations, beforeTransfer);
+            RUVIA_CHECK_EQ(memory.largeAllocations, beforeTransfer);
             RUVIA_CHECK(!cursor.next() && !cursor.takeRequestAfterRetirement());
             auto replacement = Cursor::create(std::move(*request), "https", "example.com", &memory);
             RUVIA_CHECK(replacement.has_value());
@@ -422,13 +432,13 @@ RUVIA_TEST(http3ClientRequestWriteCreateFailureLeavesCrossResourceRequestRetryab
 
                 auto retry = Cursor::create(std::move(request), "https", "example.com", &destination);
                 RUVIA_CHECK(retry.has_value());
-                RUVIA_CHECK_EQ(source.allocations, source.returns);
+                RUVIA_CHECK_EQ(source.largeAllocations, source.largeReturns);
                 if (retry) {
                     checkEncodedBody(*retry, ruvia_ctx, expectedHead, body, bodyAddress, false);
                 }
             } else {
                 reachedSuccessfulOffset = true;
-                RUVIA_CHECK_EQ(source.allocations, source.returns);
+                RUVIA_CHECK_EQ(source.largeAllocations, source.largeReturns);
                 checkEncodedBody(*result, ruvia_ctx, expectedHead, body, bodyAddress, false);
             }
         }

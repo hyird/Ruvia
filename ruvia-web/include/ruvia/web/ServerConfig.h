@@ -48,7 +48,7 @@ enum class ProcessSignalHandlerPolicy : std::uint8_t {
 // they name; optional App capabilities remain separate config-or-null calls.
 struct ServerConfig final {
     // Business workers; one server network thread is additional.
-    std::size_t workerCount{std::max(1U, std::thread::hardware_concurrency())};
+    std::size_t workerCount{(std::max)(1U, std::thread::hardware_concurrency())};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
     std::size_t workerMailboxCapacity{1024};
     // HTTP connection inactivity; upgraded WebSockets use their route lifecycle
