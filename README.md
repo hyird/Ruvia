@@ -1823,6 +1823,32 @@ co_await socket.binary(payload, {.compress = false});
 - 解压后大小受 `ServerConfig::maxWebSocketMessageBytes` 限制。跨消息字典增加每条连接的内存占用，并可能泄露秘密与攻击者可控内容之间的长度相关性；不要混压此类内容。跳过压缩不能清除先前已经进入字典的秘密，应从首次发送起正确分类，必要时禁用整个路由的压缩。
 - sans-I/O 使用者可通过 `WebSocketServerHandshakeOptions::deflate` 协商，随后将握手结果的 `compression()` 和本端 `compressionLevel` 传给 `WebSocketConnectionOptions`；`submitFrame(..., false)` 跳过单条消息压缩。运行时 outbound client 的扩展支持仍以其自身公开能力为准。
 
+### Worker 内部请求
+
+WebSocket 等长连接入口可以使用 `Context::dispatch()` 调用已注册的普通响应路由：
+
+```cpp
+const std::array headers{
+    ruvia::HttpHeaderView{"Authorization", accessToken},
+    ruvia::HttpHeaderView{"Content-Type", "application/json"}};
+auto reply = co_await c.dispatch({
+    .method = "POST",
+    .target = "/devices/42/commands",
+    .headers = headers,
+    .body = commandJson});
+// reply.status()、reply.header()、reply.body() 属于本次调用的独立结果。
+```
+
+调用在当前 Worker 的独立请求上下文和 arena 中执行，经过目标路由的中间件、
+参数绑定、认证与校验。父请求的业务状态不会自动继承；需要的凭据应显式传入。
+连接来源信息保持不变，子请求可通过 `isSubrequest()` 识别。输入在创建操作时复制，
+结果使用 Worker 的可回收内存池，后续调用不会覆盖前一次结果。
+
+仅接受 origin-form 路径和缓冲请求/响应，不支持文件响应、SSE 或 WebSocket 升级。
+传输层头由框架生成，不接受调用方覆盖。路由请求体上限和超时仍然生效，
+`operation.stopToken` 可取消尚未完成的操作；取消不撤销已完成的业务写入。
+调用与结果必须留在所属 Worker 的生命周期内，嵌套调用最多 8 层。
+
 `Context::arena()` and `allocator()` use the request arena. For WebSocket
 and response-stream routes, that arena stays alive for the whole handler,
 including its handshake and middleware state. Destroying an arena-backed object

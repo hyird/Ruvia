@@ -177,6 +177,16 @@ public:
         return routes_;
     }
 
+    [[nodiscard]] std::size_t dispatchDepth() const noexcept {
+        return dispatchDepth_;
+    }
+    [[nodiscard]] ContextServices withSubrequest(const ConnInfo& connection, std::size_t depth) const noexcept {
+        auto services = *this;
+        services.connInfo_ = connection;
+        services.dispatchDepth_ = depth;
+        return services;
+    }
+
     // The route table is server-owned and outlives every dispatched request.
     [[nodiscard]] ContextServices withRoutes(const RouteTable& value) const noexcept {
         auto services = *this;
@@ -251,6 +261,7 @@ public:
         std::string_view, std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
+    std::size_t dispatchDepth_{0};
     [[nodiscard]] static const WorkerHandle& requireWorker(const WorkerHandle& worker) {
         if (!worker.valid()) {
             throw std::invalid_argument("context services require a valid worker");
