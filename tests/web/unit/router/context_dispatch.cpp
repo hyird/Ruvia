@@ -4,9 +4,11 @@
 
 #include "routing_fixture.h"
 
+RUVIA_MODEL(DispatchValidationRequest, RUVIA_REQUIRED_FIELD(value, ruvia::String));
+
 namespace {
 
-class DispatchAuthorization final : public ruvia::Middleware<DispatchAuthorization> {
+class DispatchAuthorization final : public ruvia::Middleware {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         if (context.req().header("Authorization") != "Bearer allowed") {
@@ -33,9 +35,11 @@ ruvia::Task<ruvia::HttpResponse> dispatchChild(void* opaque, ruvia::Context& con
     RUVIA_CHECK(context.arena() != observation.parentArena);
     RUVIA_CHECK_EQ(context.req().param("id").value(), std::string_view("42"));
     RUVIA_CHECK_EQ(context.req().query("filter").value(), std::string_view("active"));
-    const auto body = co_await context.req().json<ScopedValidationRequest>();
+    const auto body = context.req().validatedJson<DispatchValidationRequest>();
+    RUVIA_CHECK(&body.value() == &context.req().validated<DispatchValidationRequest>());
+    RUVIA_CHECK_EQ(body.raw(), std::string_view(R"({"value":"retained response"})"));
     context.header("X-Child", "complete");
-    co_return context.body(body.get<"value">()->view());
+    co_return context.body(body.value().get<"value">().view());
 }
 
 ruvia::Task<ruvia::HttpResponse> dispatchParent(void* opaque, ruvia::Context& context) {
@@ -100,7 +104,7 @@ RUVIA_TEST(context_dispatch_owns_inputs_and_runs_authorized_validated_child_on_c
     const std::array middleware{
         ruvia::detail::makeMiddlewareDescriptor<ruvia::BodyLimit<64>>(),
         ruvia::detail::makeMiddlewareDescriptor<DispatchAuthorization>(),
-        ruvia::detail::makeMiddlewareDescriptor<ScopedValidationValidator>()};
+        ruvia::detail::makeMiddlewareDescriptor<ruvia::JsonBody<DispatchValidationRequest>>()};
     impl.registerRoute(HttpKnownMethod::kPost, path("/child/:id"), RouteHandler(&observation, &dispatchChild),
         RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{}, std::span(middleware));
     impl.registerRoute(HttpKnownMethod::kGet, path("/parent"), RouteHandler(&observation, &dispatchParent),
@@ -108,11 +112,7 @@ RUVIA_TEST(context_dispatch_owns_inputs_and_runs_authorized_validated_child_on_c
     impl.finalize();
     ruvia::WorkerMemory workerMemory;
     ruvia::RequestMemory memory(workerMemory);
-    auto request = ruvia::detail::HttpRequestAccess::make();
-    ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
-    ruvia::detail::HttpRequestAccess::setPath(request, "/parent");
-    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    auto request = makeRequest(memory, "GET", "/parent");
     asio::io_context io;
     auto attachment = ruvia::attachEventLoop(io);
     const auto worker = attachment.loop().handle();
