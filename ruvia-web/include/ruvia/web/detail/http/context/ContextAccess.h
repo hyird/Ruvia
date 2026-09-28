@@ -41,6 +41,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request,
       precompressedStaticFiles_(services.precompressedStaticFiles()),
       routeRateLimitScope_(routeRateLimitScope),
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
+      dispatchDepth_(services.dispatchDepth()),
       requestStorage_(detail::makePmrObject<detail::ContextRequestStorage>(memory.resource(),
           services.requestBodySource(), services.responseOutput(), memory.resource())) {}
 

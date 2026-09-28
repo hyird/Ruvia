@@ -149,6 +149,13 @@ RequestMemory::RequestMemory(WorkerMemory& worker)
 RequestMemory::RequestMemory(WorkerMemory& worker, std::span<std::byte> initialBuffer)
     : arena_(initialBuffer.data(), initialBuffer.size(), worker.resource()) {}
 
+RequestMemory::RequestMemory(ChildArena, std::pmr::memory_resource* upstream)
+    : arena_(kRequestArenaInitialBytes, upstream) {}
+
+RequestMemory RequestMemory::fork() const& {
+    return RequestMemory(ChildArena{}, arena_.upstream_resource());
+}
+
 std::pmr::memory_resource* RequestMemory::resource() & noexcept {
     return &arena_;
 }
