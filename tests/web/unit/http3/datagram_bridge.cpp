@@ -82,8 +82,9 @@ struct BioAddressOwner final {
 std::uint16_t networkPort(std::uint16_t port) {
     if constexpr (std::endian::native == std::endian::little) {
         return std::byteswap(port);
+    } else {
+        return port;
     }
-    return port;
 }
 
 bool makeBioAddress(const Address& source, BIO_ADDR* target) {

@@ -69,8 +69,9 @@ bool validLocalDestination(const Http3QuicDatagramAddress& destination,
 std::uint16_t toNetworkPort(std::uint16_t port) noexcept {
     if constexpr (std::endian::native == std::endian::little) {
         return std::byteswap(port);
+    } else {
+        return port;
     }
-    return port;
 }
 
 std::uint16_t fromNetworkPort(std::uint16_t port) noexcept {
