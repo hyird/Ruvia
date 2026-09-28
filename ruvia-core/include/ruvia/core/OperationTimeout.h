@@ -18,6 +18,10 @@ public:
         }
     }
 
+    [[nodiscard]] std::optional<Clock::time_point> deadline() const noexcept {
+        return deadline_;
+    }
+
     [[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept {
         if (!deadline_.has_value()) {
             return std::nullopt;

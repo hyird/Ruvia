@@ -29,6 +29,57 @@ RUVIA_TEST(http3_qpack_static_table_uses_rfc_9204_indices) {
     RUVIA_CHECK(ruvia::http3QpackStaticEntry(99).error() == ruvia::Http3QpackError::kInvalidIndex);
 }
 
+RUVIA_TEST(http3_qpack_static_table_matches_rfc_9204_critical_indices) {
+    constexpr std::array<ruvia::Http3QpackStaticEntry, 9> cacheAndContentEntries{{
+        {"cache-control", "max-age=0"},
+        {"cache-control", "max-age=2592000"},
+        {"cache-control", "max-age=604800"},
+        {"cache-control", "no-cache"},
+        {"cache-control", "no-store"},
+        {"cache-control", "public, max-age=31536000"},
+        {"content-encoding", "br"},
+        {"content-encoding", "gzip"},
+        {"content-type", "application/dns-message"},
+    }};
+    for (std::size_t offset = 0; offset < cacheAndContentEntries.size(); ++offset) {
+        const auto entry = ruvia::http3QpackStaticEntry(36 + offset);
+        RUVIA_CHECK(entry.has_value());
+        if (entry) {
+            RUVIA_CHECK_EQ(entry->name, cacheAndContentEntries[offset].name);
+            RUVIA_CHECK_EQ(entry->value, cacheAndContentEntries[offset].value);
+        }
+    }
+
+    constexpr std::array<ruvia::Http3QpackStaticEntry, 11> xssStatusAndAcceptEntries{{
+        {"x-xss-protection", "1; mode=block"},
+        {":status", "100"},
+        {":status", "204"},
+        {":status", "206"},
+        {":status", "302"},
+        {":status", "400"},
+        {":status", "403"},
+        {":status", "421"},
+        {":status", "425"},
+        {":status", "500"},
+        {"accept-language", ""},
+    }};
+    for (std::size_t offset = 0; offset < xssStatusAndAcceptEntries.size(); ++offset) {
+        const auto entry = ruvia::http3QpackStaticEntry(62 + offset);
+        RUVIA_CHECK(entry.has_value());
+        if (entry) {
+            RUVIA_CHECK_EQ(entry->name, xssStatusAndAcceptEntries[offset].name);
+            RUVIA_CHECK_EQ(entry->value, xssStatusAndAcceptEntries[offset].value);
+        }
+    }
+
+    const auto last = ruvia::http3QpackStaticEntry(98);
+    RUVIA_CHECK(last.has_value());
+    if (last) {
+        RUVIA_CHECK_EQ(last->name, std::string_view("x-frame-options"));
+        RUVIA_CHECK_EQ(last->value, std::string_view("sameorigin"));
+    }
+}
+
 RUVIA_TEST(http3_qpack_prefixed_integer_round_trips_large_values) {
     constexpr std::uint64_t value = 0x123456789abcdef0ULL;
     std::array<char, 16> wire{};

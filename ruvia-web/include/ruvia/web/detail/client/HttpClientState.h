@@ -14,7 +14,8 @@ namespace ruvia::detail {
 
 class HttpClientState final : public std::enable_shared_from_this<HttpClientState> {
 public:
-    HttpClientState(EventLoop loop, const HttpClientConfig& config);
+    HttpClientState(EventLoop loop, const HttpClientConfig& config,
+        HttpClientResultBudgetConfig resultBudget);
     ~HttpClientState();
 
     HttpClientState(const HttpClientState&) = delete;

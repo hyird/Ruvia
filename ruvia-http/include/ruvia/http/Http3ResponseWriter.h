@@ -1,0 +1,105 @@
+#pragma once
+
+#include <cstddef>
+#include <expected>
+#include <memory_resource>
+#include <span>
+#include <utility>
+#include <vector>
+
+#include "ruvia/http/Http3FieldSection.h"
+#include "ruvia/http/HttpResponse.h"
+
+namespace ruvia {
+
+enum class Http3ResponseHeadError : std::uint8_t {
+    kInvalidField,
+    kForbiddenField,
+    kUnsupportedStatus,
+    kFieldSectionError,
+};
+
+struct Http3ResponseFieldSection {
+    // Owned by the supplied PMR resource; that resource must outlive this value.
+    std::pmr::vector<char> fieldSection;
+
+    // RFC 9114 field-list size from emitted names and values, not QPACK bytes.
+    [[nodiscard]] std::size_t decodedFieldSectionSize() const noexcept {
+        return decodedFieldSectionSize_;
+    }
+
+    Http3ResponseFieldSection(std::pmr::vector<char> bytes, std::size_t decodedSize)
+        : fieldSection(std::move(bytes)),
+          decodedFieldSectionSize_(decodedSize) {}
+    Http3ResponseFieldSection(const Http3ResponseFieldSection&) = delete;
+    Http3ResponseFieldSection& operator=(const Http3ResponseFieldSection&) = delete;
+    Http3ResponseFieldSection(Http3ResponseFieldSection&& other) noexcept
+        : fieldSection(std::move(other.fieldSection)),
+          decodedFieldSectionSize_(std::exchange(other.decodedFieldSectionSize_, 0)) {
+        other.fieldSection.clear();
+    }
+    Http3ResponseFieldSection& operator=(Http3ResponseFieldSection&& other) {
+        if (this != &other) {
+            if (fieldSection.get_allocator() == other.fieldSection.get_allocator()) {
+                fieldSection = std::move(other.fieldSection);
+            } else {
+                std::pmr::vector<char> replacement(fieldSection.get_allocator().resource());
+                replacement.assign(other.fieldSection.begin(), other.fieldSection.end());
+                fieldSection.swap(replacement);
+            }
+            decodedFieldSectionSize_ = std::exchange(other.decodedFieldSectionSize_, 0);
+            other.fieldSection.clear();
+        }
+        return *this;
+    }
+
+private:
+    std::size_t decodedFieldSectionSize_;
+};
+
+struct Http3ResponseHead final : Http3ResponseFieldSection {
+    HttpResponseBodyPlan bodyPlan;
+
+    Http3ResponseHead(std::pmr::vector<char> bytes, HttpResponseBodyPlan plan,
+        std::size_t decodedSize)
+        : Http3ResponseFieldSection(std::move(bytes), decodedSize),
+          bodyPlan(plan) {}
+    Http3ResponseHead(const Http3ResponseHead&) = delete;
+    Http3ResponseHead& operator=(const Http3ResponseHead&) = delete;
+    Http3ResponseHead(Http3ResponseHead&&) = default;
+    Http3ResponseHead& operator=(Http3ResponseHead&&) = default;
+};
+
+struct Http3ResponseHeadFailure final {
+    Http3ResponseHeadError kind;
+    Http3FieldSectionError fieldSectionError{Http3FieldSectionError::kInvalidPrefix};
+};
+
+// Encodes a response QPACK field section with the permanently empty dynamic
+// table. Caller fields are borrowed only for this call. The returned bytes are
+// the field section payload (not a complete HTTP/3 HEADERS frame), owned by
+// resource, and contain :status followed by ordinary response fields.
+[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    HttpStatusCode status, HttpKnownMethod requestMethod,
+    std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
+// Projects a buffered response into a QPACK field section. The body remains
+// external; the returned body plan describes whether and how DATA may be sent.
+[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    const HttpResponse& response, HttpBufferedResponseWritePlan writePlan,
+    Http3FieldSectionLimits limits = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
+// Encodes an HTTP/3 trailing HEADERS QPACK field section using the permanently
+// empty dynamic table. The returned bytes are payload only (no HEADERS frame or
+// FIN); the caller owns transmission and must keep resource alive until the
+// returned field section is destroyed. Its decoded size is the uncompressed
+// field-list size, independent of QPACK representation size.
+[[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure>
+encodeHttp3ResponseTrailers(std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
+}  // namespace ruvia

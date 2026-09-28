@@ -2,6 +2,7 @@
 #include <barrier>
 #include <memory>
 #include <semaphore>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -10,6 +11,7 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/App.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
@@ -52,6 +54,19 @@ ruvia::Task<void> emptyTask(ruvia::WebWorkerContext&) {
 }
 
 }  // namespace
+
+RUVIA_TEST(app_server_rejects_zero_http_client_result_budget) {
+    ruvia::ServerConfig config;
+    config.httpClientResultBudget.maxRetainedBytes = 0;
+
+    bool rejected = false;
+    try {
+        ruvia::app().server(config);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+}
 
 RUVIA_TEST(web_worker_context_pool_is_worker_resource) {
     WorkerDispatchFixture fixture;

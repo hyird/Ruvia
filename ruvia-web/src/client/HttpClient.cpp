@@ -18,11 +18,12 @@ EventLoop HttpClientState::requireLoop(EventLoop loop) {
     return loop;
 }
 
-HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config)
+HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config,
+    HttpClientResultBudgetConfig resultBudget)
     : loop_(requireLoop(std::move(loop))),
       worker_(loop_.handle()),
       memory_(),
-      clients_(loop_.ioContext(), worker_, memory_.resource(), config),
+      clients_(loop_.ioContext(), worker_, memory_.resource(), config, resultBudget),
       closeState_(worker_) {}
 
 HttpClientState::~HttpClientState() {
@@ -163,8 +164,10 @@ void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
 
 namespace ruvia {
 
-HttpClient::HttpClient(EventLoop loop, const HttpClientConfig& config)
-    : state_(std::make_shared<detail::HttpClientState>(std::move(loop), config)) {
+HttpClient::HttpClient(EventLoop loop, const HttpClientConfig& config,
+    HttpClientResultBudgetConfig resultBudget)
+    : state_(std::make_shared<detail::HttpClientState>(
+          std::move(loop), config, resultBudget)) {
     state_->bindStop();
 }
 

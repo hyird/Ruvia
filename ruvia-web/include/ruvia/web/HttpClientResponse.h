@@ -1,16 +1,14 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/web/HttpClientResponseBytes.h"
 
 namespace ruvia {
 
@@ -46,9 +44,9 @@ public:
 
     // Collects the unread remainder of this same stream. maxBytes is a caller
     // bound in addition to the origin's transport bound.
-    [[nodiscard]] ScopedOperation<std::pmr::vector<std::byte>> readAll(
+    [[nodiscard]] ScopedOperation<HttpClientResponseBytes> readAll(
         std::size_t maxBytes = kDefaultMaxBufferedBodyBytes) &;
-    ScopedOperation<std::pmr::vector<std::byte>> readAll(
+    ScopedOperation<HttpClientResponseBytes> readAll(
         std::size_t = kDefaultMaxBufferedBodyBytes) && = delete;
 
     // Copies this same stream into a controller response stream with natural

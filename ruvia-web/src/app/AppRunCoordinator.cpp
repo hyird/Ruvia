@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/app/AppRunCoordinator.h"
 
+#include <algorithm>
 #include <csignal>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -35,15 +37,15 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-void ingressFailed(void* object) noexcept {
+void networkFailed(void* object) noexcept {
     static_cast<App*>(object)->stop();
 }
 
-bool ingressTargetAvailable(void* object) noexcept {
-    return static_cast<detail::WebWorkerRuntime*>(object)->availableForIngress();
+bool networkTargetAvailable(void* object) noexcept {
+    return static_cast<detail::WebWorkerRuntime*>(object)->availableForNetworkDispatch();
 }
 
-void ingressTargetAccept(void* object, detail::NativeAcceptedSocketTicket&& ticket) noexcept {
+void networkTargetAccept(void* object, detail::NativeAcceptedSocketTicket&& ticket) noexcept {
     static_cast<detail::WebWorkerRuntime*>(object)->acceptTransferredConnection(std::move(ticket));
 }
 
@@ -209,20 +211,42 @@ private:
                 std::move(controllers), std::move(router), std::move(worker));
         }
 
-        runtime->ingressTargets.reserve(runtime->workers.size());
+        const bool hasHttp3 = std::ranges::any_of(validatedConfiguration.listeners(),
+            [](const detail::HttpServerListenerDefinition& listener) {
+                return listener.http3.has_value();
+            });
+        const auto& serverOptions = validatedConfiguration.options();
+        runtime->networkTargets.reserve(runtime->workers.size());
         for (auto& slot : runtime->workers) {
             auto* target = slot.runtime.get();
-            runtime->ingressTargets.push_back({
+            auto* http3Server = target->http3Server();
+            if (hasHttp3 && http3Server == nullptr) {
+                throw std::logic_error("HTTP/3 listener has no worker-side server");
+            }
+            runtime->networkTargets.push_back({
                 .worker = &target->worker(),
                 .object = target,
-                .available = &ingressTargetAvailable,
-                .accept = &ingressTargetAccept,
+                .available = &networkTargetAvailable,
+                .accept = &networkTargetAccept,
+                .http3Server = http3Server,
+                .http3MaxConnections = hasHttp3 ? *serverOptions.maxConnections : 0,
+                .http3MailboxCapacity = hasHttp3
+                                            ? static_cast<std::uint32_t>(
+                                                  serverOptions.workerMailboxCapacity)
+                                            : 0,
+                .http3MaxRequestsPerConnection =
+                    hasHttp3 ? *serverOptions.maxRequestsPerConnection : 0,
+                .http3IdleTimeout = hasHttp3 ? serverOptions.idleTimeout : std::nullopt,
+                .http3RequestHeaderTimeout =
+                    hasHttp3 ? serverOptions.requestHeaderTimeout : std::nullopt,
+                .http3RequestBodyTimeout =
+                    hasHttp3 ? serverOptions.requestBodyTimeout : std::nullopt,
+                .http3WriteTimeout = hasHttp3 ? serverOptions.writeTimeout : std::nullopt,
             });
         }
-        runtime->tcpIngress = std::make_unique<detail::TcpIngressRuntime>(
-            validatedConfiguration.listeners(), runtime->ingressTargets, &owner_, &ingressFailed);
-        runtime->tcpIngress->prepare();
-        runtime->udpIngress = std::make_unique<detail::UdpIngressRuntime>(&owner_, &ingressFailed);
+        runtime->network = std::make_unique<detail::ServerNetworkRuntime>(
+            validatedConfiguration.listeners(), runtime->networkTargets, &owner_, &networkFailed);
+        runtime->network->prepare();
 
         std::lock_guard lock(state_.mutex);
         state_.runtime = std::move(runtime);
@@ -258,6 +282,21 @@ private:
     }
 
     void startWorkers() {
+        // The server network runtime constructs fixed HTTP/3 channels and stages them on
+        // each worker before any worker is allowed to install its server loop.
+        {
+            std::lock_guard lock(state_.mutex);
+            if (state_.lifecycle.stopRequested()) {
+                return;
+            }
+            state_.runtime->network->launch();
+        }
+        state_.runtime->network->waitUntilReady();
+        state_.runtime->network->rethrowFailure();
+        if (stopRequested()) {
+            return;
+        }
+
         for (auto& worker : state_.runtime->workers) {
             {
                 std::lock_guard lock(state_.mutex);
@@ -273,25 +312,6 @@ private:
             }
             worker.runtime->waitUntilReady();
         }
-        {
-            // Serialize the stop decision with App::stop()'s lifecycle transition:
-            // an ingress stopped before launch must not turn a requested stop into
-            // a launch logic_error.
-            std::lock_guard lock(state_.mutex);
-            if (state_.lifecycle.stopRequested()) {
-                return;
-            }
-            state_.runtime->tcpIngress->launch();
-        }
-        state_.runtime->tcpIngress->waitUntilReady();
-        {
-            std::lock_guard lock(state_.mutex);
-            if (state_.lifecycle.stopRequested()) {
-                return;
-            }
-            state_.runtime->udpIngress->launch();
-        }
-        state_.runtime->udpIngress->waitUntilReady();
         for (auto& worker : state_.runtime->workers) {
             if (stopRequested()) {
                 return;
@@ -310,17 +330,13 @@ private:
             }
         }
         if (!stopRequested()) {
-            state_.runtime->tcpIngress->requestServe();
-            state_.runtime->udpIngress->requestServe();
-            const bool tcpServing = state_.runtime->tcpIngress->waitUntilServing();
-            const bool udpServing = state_.runtime->udpIngress->waitUntilServing();
-            if (!tcpServing || !udpServing) {
-                state_.runtime->tcpIngress->rethrowFailure();
-                state_.runtime->udpIngress->rethrowFailure();
+            state_.runtime->network->requestServe();
+            if (!state_.runtime->network->waitUntilServing()) {
+                state_.runtime->network->rethrowFailure();
                 if (stopRequested()) {
                     return;
                 }
-                throw std::runtime_error("ingress stopped before the application began serving");
+                throw std::runtime_error("server network runtime stopped before the application began serving");
             }
         }
     }
@@ -341,15 +357,12 @@ private:
     }
 
     void stopWorkers() noexcept {
-        if (state_.runtime->tcpIngress) {
-            state_.runtime->tcpIngress->stop();
-        }
-        if (state_.runtime->udpIngress) {
-            state_.runtime->udpIngress->stop();
+        if (state_.runtime->network) {
+            state_.runtime->network->stop();
         }
         for (auto& worker : state_.runtime->workers) {
             try {
-                worker.runtime->stop();
+                worker.runtime->stopAdmission();
             } catch (...) {
                 ruvia::reportUnhandledFailure("web worker stop", std::current_exception());
             }
@@ -367,25 +380,30 @@ private:
 
     [[nodiscard]] std::exception_ptr joinWorkers() noexcept {
         std::exception_ptr firstFailure;
-        if (state_.runtime->tcpIngress) {
+        // Server network join waits for each H3 channel's two-owner finalization
+        // and each worker H3 pump to stop touching its channels before destroying
+        // server-network-owned transport state.
+        bool networkQuiesced = state_.runtime->network == nullptr;
+        if (state_.runtime->network) {
             try {
-                state_.runtime->tcpIngress->join();
-                state_.runtime->tcpIngress->rethrowFailure();
+                state_.runtime->network->join();
+                networkQuiesced = true;
+                state_.runtime->network->rethrowFailure();
             } catch (...) {
+                if (!networkQuiesced) {
+                    // Destroying worker-owned callback state without the server network
+                    // thread barrier would leave a live producer dangling.
+                    std::terminate();
+                }
                 firstFailure = std::current_exception();
             }
         }
-        if (state_.runtime->udpIngress) {
-            try {
-                state_.runtime->udpIngress->join();
-                state_.runtime->udpIngress->rethrowFailure();
-            } catch (...) {
-                if (firstFailure == nullptr) firstFailure = std::current_exception();
-                else ruvia::reportUnhandledFailure("UDP ingress failure", std::current_exception());
-            }
+        if (!networkQuiesced) {
+            std::terminate();
         }
         for (auto& worker : state_.runtime->workers) {
             try {
+                worker.runtime->finalizeAfterNetworkQuiesced();
                 worker.runtime->join();
             } catch (...) {
                 if (firstFailure == nullptr) {

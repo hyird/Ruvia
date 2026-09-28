@@ -75,7 +75,7 @@ RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
     ruvia::detail::WebWorkerRuntime runtime(
         asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0), routes, {}, options);
     runtime.start();
-    RUVIA_CHECK(runtime.availableForIngress());
+    RUVIA_CHECK(runtime.availableForNetworkDispatch());
 
     asio::ip::tcp::acceptor source(runtime.workerExecutor(),
         asio::ip::tcp::endpoint(asio::ip::address_v4::loopback(), 0));
@@ -99,7 +99,7 @@ RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
         std::this_thread::sleep_for(1ms);
     }
     RUVIA_CHECK(runtime.stats().activeConnections == 1U);
-    RUVIA_CHECK(!runtime.availableForIngress());
+    RUVIA_CHECK(!runtime.availableForNetworkDispatch());
 
     asio::ip::tcp::socket secondClient(runtime.workerExecutor());
     secondClient.connect(source.local_endpoint());

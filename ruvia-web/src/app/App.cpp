@@ -110,15 +110,12 @@ void App::stop() {
             return;
         }
         if (state.runtime != nullptr) {
-            if (state.runtime->tcpIngress) {
-                state.runtime->tcpIngress->stop();
-            }
-            if (state.runtime->udpIngress) {
-                state.runtime->udpIngress->stop();
+            if (state.runtime->network) {
+                state.runtime->network->stop();
             }
             for (auto& worker : state.runtime->workers) {
                 try {
-                    worker.runtime->stop();
+                    worker.runtime->stopAdmission();
                 } catch (...) {
                     ruvia::reportUnhandledFailure(
                         "web worker stop request", std::current_exception());

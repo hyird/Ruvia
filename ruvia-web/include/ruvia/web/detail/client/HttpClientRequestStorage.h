@@ -18,7 +18,7 @@ public:
 
     HttpClientRequestStorage(const HttpClientRequestStorage&) = delete;
     HttpClientRequestStorage& operator=(const HttpClientRequestStorage&) = delete;
-    HttpClientRequestStorage(HttpClientRequestStorage&& other);
+    HttpClientRequestStorage(HttpClientRequestStorage&& other) noexcept;
     HttpClientRequestStorage& operator=(HttpClientRequestStorage&&) noexcept = delete;
 
     [[nodiscard]] HttpClientRequestStorage intoResource(
@@ -39,6 +39,9 @@ public:
         return body_;
     }
     [[nodiscard]] std::string_view body() const&& = delete;
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return method_.get_allocator().resource();
+    }
 
 private:
     friend struct HttpClientRequestStorageAccess;

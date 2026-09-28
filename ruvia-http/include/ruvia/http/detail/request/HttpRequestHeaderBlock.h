@@ -88,8 +88,8 @@ public:
             throw std::logic_error("request header block is full");
         }
         if (size_ == capacity_) {
-            reserve(std::min(kMaxHttpHeaderFields,
-                        std::max(std::size_t{1}, std::size_t(capacity_) * 2)),
+            reserve((std::min)(kMaxHttpHeaderFields,
+                        (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)),
                 resource_);
         }
         std::construct_at(fields_ + size_, field);

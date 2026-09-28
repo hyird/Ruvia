@@ -34,20 +34,28 @@ bool operationDeadlineTransitionsAreExclusive() {
 }
 
 bool operationTimeoutUsesOneAbsoluteDeadline() {
-    using Timeout = ruvia::detail::OperationTimeout;
+    using Timeout = ruvia::OperationTimeout;
     const Timeout unlimited(std::nullopt);
-    if (unlimited.remaining().has_value() || unlimited.expired()) {
+    if (unlimited.deadline().has_value() || unlimited.remaining().has_value() ||
+        unlimited.expired()) {
         return false;
     }
 
     const Timeout expired(std::chrono::milliseconds(0));
-    if (!expired.expired() || expired.remaining() != std::chrono::milliseconds(0)) {
+    if (!expired.deadline().has_value() || !expired.expired() ||
+        expired.remaining() != std::chrono::milliseconds(0)) {
         return false;
     }
 
     const Timeout active(std::chrono::seconds(1));
+    const auto deadline = active.deadline();
     const auto remaining = active.remaining();
-    return remaining.has_value() && remaining->count() > 0 && *remaining <= std::chrono::seconds(1);
+    if (!deadline.has_value() || !remaining.has_value() || remaining->count() <= 0 ||
+        *remaining > std::chrono::seconds(1)) {
+        return false;
+    }
+    return active.constrainedBy(std::chrono::seconds(2)).deadline() == deadline &&
+           unlimited.constrainedBy(std::chrono::seconds(2)).deadline().has_value();
 }
 
 bool positiveTimeoutRemainderDoesNotBecomeImmediate() {

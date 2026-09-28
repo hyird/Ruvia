@@ -12,8 +12,25 @@ endif()
 
 ruvia_collect_cpp_sources(RUVIA_HTTP_SOURCES src)
 add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
+    include/ruvia/http/Http3ClientRequestHead.h
+    include/ruvia/http/Http3ClientResponse.h
+    include/ruvia/http/Http3Connection.h
+    include/ruvia/http/Http3ConnectionError.h
+    include/ruvia/http/Http3ControlStream.h
+    include/ruvia/http/Http3DataWritePlan.h
+    include/ruvia/http/Http3FieldSection.h
     include/ruvia/http/Http3Frames.h
+    include/ruvia/http/Http3LocalCriticalStreams.h
+    include/ruvia/http/Http3MessageBody.h
+    include/ruvia/http/Http3MessageHead.h
+    include/ruvia/http/Http3PeerStreams.h
     include/ruvia/http/Http3Qpack.h
+    include/ruvia/http/Http3QpackStreams.h
+    include/ruvia/http/Http3ResponseWriter.h
+    include/ruvia/http/Http3ServerRequest.h
+    include/ruvia/http/Http3ServerRequestAdmission.h
+    include/ruvia/http/Http3Settings.h
+    include/ruvia/http/Http3StreamFrames.h
     include/ruvia/http/Http3VarInt.h)
 add_library(ruvia::http ALIAS ruvia-http)
 
