@@ -23,9 +23,14 @@
 
 RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
     using Phase = ruvia::ConnectionScanner::Phase;
-    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(true, 0) == Phase::kReadingInitial);
-    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(false, 0) == Phase::kIdle);
-    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(false, 1) == Phase::kReadingPayload);
+    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(true, 0, false) ==
+                Phase::kReadingInitial);
+    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(false, 0, false) == Phase::kIdle);
+    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(false, 1, false) ==
+                Phase::kReadingPayload);
+    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(false, 1, true) == Phase::kLongLived);
+    RUVIA_CHECK(ruvia::detail::http2SansIoInactivityPhase(true, 1, true) ==
+                Phase::kReadingInitial);
 }
 
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
@@ -60,6 +65,7 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotResponseHead = false;
     bool got404Status = false;
+    bool gotAltSvc = false;
     bool hpackDecodeSucceeded = true;
     bool gotResponseEnd = false;
 
@@ -69,9 +75,15 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());  // empty -> 404
-            // Test-owned defaults drive the production session's required wiring.
-            co_await ruvia::asAwaitable(
-                ruvia::test::runBarePlainHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+            // The sans-I/O unit supplies the same TLS listener response policy
+            // that HttpServerSessionEntry attaches after a real handshake.
+            co_await ruvia::asAwaitable(ruvia::test::runBareHttp2SansIoSessionWith(
+                sock, routes, worker,
+                [](ruvia::detail::ContextServices services) {
+                    return services.withTlsTransport("127.0.0.1")
+                        .withAutomaticAltSvc("h3=\":443\"; ma=86400");
+                },
+                std::string_view{}));
         },
         asio::detached);
 
@@ -129,9 +141,12 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
                     gotResponseHead = true;
                     std::string status;
                     const auto decoded = decoder.decode(payload,
-                        [&status](std::string_view name, std::string_view value) {
+                        [&status, &gotAltSvc](std::string_view name, std::string_view value) {
                             if (name == ":status") {
                                 status.assign(value);
+                            } else if (name == "alt-svc" &&
+                                       value == "h3=\":443\"; ma=86400") {
+                                gotAltSvc = true;
                             }
                             return true;
                         });
@@ -153,6 +168,7 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
     RUVIA_CHECK(gotResponseHead);
     RUVIA_CHECK(hpackDecodeSucceeded);
     RUVIA_CHECK(got404Status);
+    RUVIA_CHECK(gotAltSvc);
     RUVIA_CHECK(gotResponseEnd);
 }
 

@@ -47,7 +47,7 @@ public:
         bool (*available)(void*) noexcept {};
         // Called on the target worker after a successful post; consumes a detached ticket.
         void (*accept)(void*, NativeAcceptedSocketTicket&&) noexcept {};
-        // Present on every worker when one explicit HTTP/3 listener is configured.
+        // Present on every worker when the normalized listener enables HTTP/3.
         Http3WorkerServer* http3Server{};
         std::size_t http3MaxConnections{};
         std::uint32_t http3MailboxCapacity{};

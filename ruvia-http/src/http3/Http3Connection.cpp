@@ -93,6 +93,7 @@ struct Http3Connection::Impl final {
         std::pmr::memory_resource* resource;
         Http3ConnectionLimits limits;
         std::optional<Http3MessageBody> body;
+        bool extendedConnect{false};
         bool terminal{false};
         Http3ConnectionResult callbackResult{};
         Http3ConnectionCallback callback{nullptr};
@@ -174,18 +175,25 @@ struct Http3Connection::Impl final {
         }
         if (frame.kind == Http3StreamFrameEventKind::kData) {
             if (!frame.payload.empty()) {
-                const auto bodyResult = request.body->feed(frame.payload.size(), false);
-                if (bodyResult == Http3MessageBodyResult::kPayloadNotAllowed ||
-                    bodyResult == Http3MessageBodyResult::kContentLengthExceeded ||
-                    bodyResult == Http3MessageBodyResult::kLengthOverflow) {
-                    request.callbackResult = streamError(Http3ConnectionErrorCode::kMessageError);
-                    request.terminal = true;
-                    return;
+                if (request.extendedConnect) {
+                    const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kTunnelData,
+                        .streamId = request.streamId,
+                        .body = frame.payload};
+                    request.callback(request.callbackContext, event);
+                } else {
+                    const auto bodyResult = request.body->feed(frame.payload.size(), false);
+                    if (bodyResult == Http3MessageBodyResult::kPayloadNotAllowed ||
+                        bodyResult == Http3MessageBodyResult::kContentLengthExceeded ||
+                        bodyResult == Http3MessageBodyResult::kLengthOverflow) {
+                        request.callbackResult = streamError(Http3ConnectionErrorCode::kMessageError);
+                        request.terminal = true;
+                        return;
+                    }
+                    const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kBody,
+                        .streamId = request.streamId,
+                        .body = frame.payload};
+                    request.callback(request.callbackContext, event);
                 }
-                const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kBody,
-                    .streamId = request.streamId,
-                    .body = frame.payload};
-                request.callback(request.callbackContext, event);
             }
             if (frame.fin) {
                 finish(request);
@@ -210,7 +218,10 @@ struct Http3Connection::Impl final {
                 request.terminal = true;
                 return;
             }
-            request.body.emplace(decoded->contentLength, true);
+            request.extendedConnect = decoded->method == "CONNECT" && !decoded->protocol.empty();
+            if (!request.extendedConnect) {
+                request.body.emplace(decoded->contentLength, true);
+            }
             const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kRequestHead,
                 .streamId = request.streamId,
                 .head = &*decoded};
@@ -218,6 +229,11 @@ struct Http3Connection::Impl final {
             return;
         }
 
+        if (request.extendedConnect) {
+            request.callbackResult = streamError(Http3ConnectionErrorCode::kMessageError);
+            request.terminal = true;
+            return;
+        }
         const Http3FieldSectionLimits fieldLimits{request.limits.maxEncodedFieldSectionBytes,
             request.limits.maxFieldSectionSize, request.limits.maxFields};
         TrailerCollector collector(request.resource);
@@ -246,12 +262,14 @@ struct Http3Connection::Impl final {
         if (request.terminal) {
             return;
         }
-        const auto result = request.body->feed(0, true);
-        if (result == Http3MessageBodyResult::kContentLengthMismatch ||
-            result == Http3MessageBodyResult::kPayloadNotAllowed) {
-            request.callbackResult = streamError(Http3ConnectionErrorCode::kMessageError);
-            request.terminal = true;
-            return;
+        if (!request.extendedConnect) {
+            const auto result = request.body->feed(0, true);
+            if (result == Http3MessageBodyResult::kContentLengthMismatch ||
+                result == Http3MessageBodyResult::kPayloadNotAllowed) {
+                request.callbackResult = streamError(Http3ConnectionErrorCode::kMessageError);
+                request.terminal = true;
+                return;
+            }
         }
         request.terminal = true;
         const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kMessageEnd,

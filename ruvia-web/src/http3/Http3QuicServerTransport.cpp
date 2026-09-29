@@ -208,6 +208,14 @@ Http3QuicServerTransport::Http3QuicServerTransport(
     // its pending connection population without a bound. Fail closed.
     throw std::runtime_error("QUIC server requires an OpenSSL pending connection limit");
 #endif
+    std::uint64_t configuredIdleTimeout{};
+    if (SSL_set_feature_request_uint(listener.get(), SSL_VALUE_QUIC_IDLE_TIMEOUT,
+            idleTimeoutMilliseconds_) != 1 ||
+        SSL_get_feature_request_uint(listener.get(), SSL_VALUE_QUIC_IDLE_TIMEOUT,
+            &configuredIdleTimeout) != 1 ||
+        configuredIdleTimeout != idleTimeoutMilliseconds_) {
+        throw std::runtime_error("failed to configure OpenSSL QUIC listener idle timeout");
+    }
     BIO* const bio = bridge.releaseSslBio();
     if (bio == nullptr) {
         throw std::runtime_error("QUIC datagram bridge has no SSL-side BIO");
@@ -327,22 +335,15 @@ Http3QuicServerTransport::AcceptedBatch Http3QuicServerTransport::acceptConnecti
                 throw std::overflow_error("QUIC connection generation exhausted");
             }
             std::uint64_t requestedIdleTimeout{};
-            const bool idleAlreadyConfigured =
-                SSL_get_feature_request_uint(connection.get(), SSL_VALUE_QUIC_IDLE_TIMEOUT,
-                    &requestedIdleTimeout) == 1 &&
-                requestedIdleTimeout == idleTimeoutMilliseconds_;
-            if ((!idleAlreadyConfigured &&
-                    SSL_set_feature_request_uint(connection.get(),
-                        SSL_VALUE_QUIC_IDLE_TIMEOUT, idleTimeoutMilliseconds_) != 1) ||
+            if (SSL_get_feature_request_uint(connection.get(), SSL_VALUE_QUIC_IDLE_TIMEOUT,
+                    &requestedIdleTimeout) != 1 ||
+                requestedIdleTimeout != idleTimeoutMilliseconds_ ||
                 SSL_set_incoming_stream_policy(connection.get(),
                     SSL_INCOMING_STREAM_POLICY_ACCEPT, 0) != 1) {
-                // OpenSSL may complete a queued child's transport-parameter
-                // flight before application admission is available. Such a
-                // child can no longer honor this listener's idle-timeout
-                // contract, so reject it instead of admitting it with a
-                // silently different value. Production accepts new children
-                // after every domain drive; this path applies to overflow that
-                // remained in OpenSSL's bounded pending queue.
+                // OpenSSL must inherit the listener request before a pending
+                // child can complete its transport-parameter flight. Reject a
+                // child that does not match rather than silently admitting it
+                // with a different idle-timeout contract.
                 errors.discard();
                 if (!pendingInitialPeerPaths_.empty()) {
                     pendingInitialPeerPaths_.pop_front();

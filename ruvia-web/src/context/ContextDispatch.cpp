@@ -7,9 +7,9 @@
 #include <asio/error.hpp>
 
 #include "ruvia/http/Http1RequestParser.h"
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -19,7 +19,7 @@ namespace ruvia {
 
 std::optional<std::string_view> DispatchResponse::header(std::string_view name) const& noexcept {
     for (const auto& [key, value] : headers_) {
-        if (detail::httpAsciiEqualsIgnoreCase(key, name)) {
+        if (httpAsciiEqualsIgnoreCase(key, name)) {
             return value;
         }
     }
@@ -48,7 +48,7 @@ ScopedOperation<DispatchResponse> Context::dispatch(DispatchOptions options) {
             throw std::invalid_argument("invalid subrequest header");
         }
         for (const auto name : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "expect", "trailer"}) {
-            if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
+            if (httpAsciiEqualsIgnoreCase(header.name(), name)) {
                 throw std::invalid_argument("subrequest framing headers are owned by dispatch");
             }
         }
@@ -107,13 +107,12 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
         deadline.arm(worker_, *timeout);
     }
     auto response = rejected ? std::move(*rejected) : co_await routes_->dispatch(request, resolution, memory, services);
-    const auto& body = detail::responseBody(response);
-    if (body.file()) {
+    if (response.fileBody()) {
         throw std::logic_error("dispatch requires a buffered response");
     }
     DispatchResponse result(pool());
     result.status_ = response.status();
-    result.body_.assign(body.bytes());
+    result.body_.assign(response.bodyBytes());
     for (const auto& header : response.headers()) {
         result.headers_.emplace_back(std::pmr::string(header.name(), pool()), std::pmr::string(header.value(), pool()));
     }

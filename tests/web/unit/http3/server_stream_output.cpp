@@ -451,6 +451,7 @@ void onDecodedResponse(void* context, const ruvia::Http3ClientResponseEvent& eve
 struct ReceivedWire final {
     std::string bytes;
     bool fin{};
+    std::optional<std::uint64_t> peerResetErrorCode;
 };
 
 void readAvailable(QuicPair& pair, std::uint64_t streamId, ReceivedWire& received) {
@@ -461,6 +462,9 @@ void readAvailable(QuicPair& pair, std::uint64_t streamId, ReceivedWire& receive
             received.bytes.append(buffer.data(), read.size);
         } else if (read.status == Http3QuicStreamSet::StreamRead::Status::kFin) {
             received.fin = true;
+            return;
+        } else if (read.status == Http3QuicStreamSet::StreamRead::Status::kReset) {
+            received.peerResetErrorCode = read.peerResetErrorCode;
             return;
         } else if (read.status == Http3QuicStreamSet::StreamRead::Status::kWouldBlock) {
             return;
@@ -641,6 +645,25 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
 #endif
 }
 
+RUVIA_TEST(http3ServerStreamOutputIdlePumpDoesNotRequestContinuation) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    QuicPair pair;
+    pair.connect();
+    ruvia::WorkerMemory worker;
+    Output output(pair.server(), pair.connectionId(), worker, kEpoch, kGeneration,
+        {.maxTrackedStreams = 8, .maxDriveWorkItems = 2, .writeTimeout = std::chrono::milliseconds(5)});
+    for (unsigned turn = 0; turn < 100; ++turn) {
+        const auto result = output.drive();
+        RUVIA_CHECK_EQ(result.operations, std::size_t{0});
+        RUVIA_CHECK_EQ(result.scannedSlots, std::size_t{0});
+        RUVIA_CHECK(!result.needsReschedule);
+    }
+    RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
+#endif
+}
+
 RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
 #if OPENSSL_VERSION_NUMBER < 0x30600000L
     RUVIA_CHECK(true);
@@ -676,6 +699,29 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
                                          .id = messageId(streamId),
                                          .value = 0})
                     .status == Output::Status::kDuplicateFin);
+    RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
+#endif
+}
+
+RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutADeferredFinWithoutPendingBytes) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    QuicPair pair;
+    pair.connect();
+    const auto streamId = pair.openRequestStream(false);
+    ruvia::WorkerMemory worker;
+    Output output(pair.server(), pair.connectionId(), worker, kEpoch, kGeneration,
+        {.writeTimeout = std::chrono::milliseconds(5)});
+    RUVIA_CHECK(output.acceptControl({.kind = Http3StreamControl::Kind::kStreamFin,
+                                         .id = messageId(streamId),
+                                         .value = 1})
+                    .status == Output::Status::kFinDeferred);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const auto idle = output.drive();
+    RUVIA_CHECK_EQ(idle.timedOutStreams, std::size_t{0});
+    RUVIA_CHECK(!output.connectionRetired());
+    RUVIA_CHECK_EQ(output.pendingStreamCount(), std::size_t{0});
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
 #endif
 }
@@ -902,6 +948,54 @@ RUVIA_TEST(http3ServerStreamOutputSendsTypedPeerResetCode) {
 #endif
 }
 
+RUVIA_TEST(http3ServerStreamOutputCancellationTerminatesUnfinishedBidirectionalStream) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    QuicPair pair;
+    pair.connect();
+    const auto streamId = pair.openRequestStream(false);
+    ruvia::WorkerMemory worker;
+    Output output(pair.server(), pair.connectionId(), worker, kEpoch, kGeneration);
+    constexpr auto cancelCode = ruvia::Http3ConnectionErrorCode::kRequestCancelled;
+    const auto cancelled = output.cancelStream(streamId,
+        static_cast<std::uint64_t>(cancelCode));
+    RUVIA_CHECK(cancelled.status == Output::Status::kCancelled);
+    RUVIA_CHECK(cancelled.termination.send == Http3QuicServerTransport::Error::kNone);
+    RUVIA_CHECK(cancelled.termination.close == Http3QuicServerTransport::Error::kNone);
+
+    bool peerReceivedReset{};
+    bool peerSendStopped{};
+    std::uint64_t peerResetCode{};
+    std::array<char, 16> readBuffer{};
+    constexpr std::array<char, 0> emptyWrite{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < deadline &&
+           (!peerReceivedReset || !peerSendStopped)) {
+        pair.pump();
+        if (!peerReceivedReset) {
+            const auto read = pair.client().readStream(streamId, readBuffer);
+            if (read.status == Http3QuicClientTransport::StreamRead::Status::kReset) {
+                peerReceivedReset = true;
+                peerResetCode = read.peerResetErrorCode.value_or(0);
+            }
+        }
+        if (!peerSendStopped) {
+            const auto write = pair.client().writeStream(streamId, emptyWrite);
+            peerSendStopped =
+                write.status == Http3QuicClientTransport::StreamWrite::Status::kClosed;
+        }
+        if (!peerReceivedReset || !peerSendStopped) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    RUVIA_CHECK(peerReceivedReset);
+    RUVIA_CHECK_EQ(peerResetCode, static_cast<std::uint64_t>(cancelCode));
+    RUVIA_CHECK(peerSendStopped);
+    RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
+#endif
+}
+
 RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
 #if OPENSSL_VERSION_NUMBER < 0x30600000L
     RUVIA_CHECK(true);
@@ -928,6 +1022,7 @@ RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
 
             const auto cancelled = output.cancelStream(firstId);
             RUVIA_CHECK(cancelled.status == Output::Status::kCancelled);
+            RUVIA_CHECK(cancelled.termination.send == Http3QuicStreamSet::Error::kNone);
             RUVIA_CHECK(cancelled.termination.close == Http3QuicStreamSet::Error::kNone);
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
             RUVIA_CHECK(!output.streamInfo(firstId)->queuedBlocks);
@@ -1032,6 +1127,20 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK(!output.connectionRetired());
             RUVIA_CHECK(pair.server().connectionInfo(pair.connectionId()).has_value());
 
+            ReceivedWire timedOutPeer;
+            const auto resetDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (!timedOutPeer.peerResetErrorCode &&
+                   std::chrono::steady_clock::now() < resetDeadline) {
+                pair.pump();
+                readAvailable(pair, blockedId, timedOutPeer);
+                if (!timedOutPeer.peerResetErrorCode) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+            RUVIA_CHECK(timedOutPeer.peerResetErrorCode.has_value());
+            RUVIA_CHECK(timedOutPeer.peerResetErrorCode ==
+                        static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestCancelled));
+
             const auto siblingWire = encodeResponse("sibling survives timeout", worker.resource());
             auto siblingBlock = enqueueBlock(
                 mailbox, messageId(siblingId), siblingWire);
@@ -1084,6 +1193,35 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK_EQ(output.pendingStreamCount(), std::size_t{0});
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
             RUVIA_CHECK_EQ(mailbox.drainReturns(), std::uint32_t{0});
+
+            const auto freshId = pair.openRequestStream();
+            std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
+            const auto idleFresh = output.drive();
+            RUVIA_CHECK_EQ(idleFresh.timedOutStreams, std::size_t{0});
+            RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kOpen);
+            const auto freshWire = encodeResponse("fresh write gets a fresh deadline", worker.resource());
+            auto freshBlock = enqueueBlock(mailbox, messageId(freshId), freshWire);
+            RUVIA_CHECK(output.acceptData(freshBlock).status == Output::Status::kAccepted);
+            RUVIA_CHECK(!freshBlock);
+            RUVIA_CHECK(output.acceptControl({.kind = Http3StreamControl::Kind::kStreamFin,
+                                                 .id = messageId(freshId),
+                                                 .value = freshWire.size()})
+                            .status == Output::Status::kFinDeferred);
+            ReceivedWire freshReceived;
+            const auto freshDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (std::chrono::steady_clock::now() < freshDeadline && !freshReceived.fin) {
+                const auto turn = output.drive();
+                timedOut += turn.timedOutStreams;
+                pair.pump();
+                output.notifyTransportActivity();
+                readAvailable(pair, freshId, freshReceived);
+                (void)mailbox.drainReturns();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            RUVIA_CHECK(freshReceived.fin);
+            RUVIA_CHECK_EQ(freshReceived.bytes.size(), freshWire.size());
+            RUVIA_CHECK_EQ(timedOut, std::size_t{1});
+            RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kFinished);
             RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
         }
         RUVIA_CHECK(mailbox.stop());

@@ -5,6 +5,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <unordered_map>
 
@@ -28,6 +29,7 @@ struct Http3SansIoSessionLimits final {
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     std::size_t maxLiveStreams{32};
     std::size_t maxBufferedBytesInFlight{64 * 1024 * 1024};
+    std::size_t maxTunnelBufferedBytes{64 * 1024};
 };
 
 // Worker-affine receive-side slice of an HTTP/3 Web session. It synchronously
@@ -69,6 +71,13 @@ public:
         kReady,
         kRejected,
     };
+
+    struct TunnelReadResult final {
+        std::size_t bytes{};
+        bool ended{};
+        bool reset{};
+        bool overflow{};
+    };
     enum class Rejection : std::uint8_t {
         kNone,
         kExpectationUnsupported,
@@ -104,6 +113,12 @@ public:
     [[nodiscard]] const RouteResolution* resolution(std::uint64_t streamId) const noexcept;
     [[nodiscard]] StreamState streamState(std::uint64_t streamId) const noexcept;
     [[nodiscard]] Rejection rejection(std::uint64_t streamId) const noexcept;
+    // Worker-PMR bounded tunnel queue. Output is copied synchronously; no
+    // borrowed mailbox or parser view escapes the feed callback.
+    [[nodiscard]] TunnelReadResult readTunnelData(
+        std::uint64_t streamId, std::span<char> output) noexcept;
+    [[nodiscard]] bool tunnelInputOverflowed(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] bool tunnelReceiveEnded(std::uint64_t streamId) const noexcept;
     // Effective peer response field-section limit. nullopt means the peer has
     // not sent the setting or omitted it (RFC 9114 default: unlimited).
     [[nodiscard]] std::optional<std::uint64_t> peerMaxFieldSectionSize() const noexcept;
@@ -138,6 +153,7 @@ private:
     const Http3SansIoSessionLimits limits_;
     Http3ServerBodyBudget* bodyBudget_{nullptr};
     std::size_t bufferedBytesInFlight_{0};
+    std::size_t tunnelBytesInFlight_{0};
     std::size_t activeLeases_{0};
     Http3Connection connection_;
     std::pmr::unordered_map<std::uint64_t, StreamPtr> streams_;

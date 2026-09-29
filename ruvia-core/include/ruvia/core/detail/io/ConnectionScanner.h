@@ -154,6 +154,10 @@ public:
     void registerWorkerMaintenance(WorkerMaintenanceRegistration& registration, void* target,
         WorkerMaintenanceCheck check) noexcept;
     void registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept;
+    // Register a multiplexed stream owner without a TCP socket. Periodic
+    // product checks still run, but generic timeout scanning never closes an
+    // unrelated connection on its behalf.
+    void registerEntry(Entry& entry) noexcept;
     void unregisterEntry(Entry& entry) noexcept;
     void closeAll() noexcept;
 
@@ -172,6 +176,7 @@ private:
     void periodicCheckRemoved() noexcept;
     void removeWorkerMaintenance(WorkerMaintenanceRegistration& registration) noexcept;
     void detachWorkerMaintenance() noexcept;
+    void registerEntryImpl(Entry& entry, asio::ip::tcp::socket* socket) noexcept;
     [[nodiscard]] bool hasScanningWork() const noexcept;
     void schedule();
     void scan() noexcept;

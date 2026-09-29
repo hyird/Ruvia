@@ -118,6 +118,33 @@ std::string_view contentLengthOneHandshake() {
 
 }  // namespace
 
+RUVIA_TEST(ws_h1_handshake_preserves_application_request_headers) {
+    constexpr std::string_view raw =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Connection: keep-alive, Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Origin: https://origin.example\r\n"
+        "Authorization: Bearer credential\r\n"
+        "Cookie: sid=one; theme=dark\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+        "X-End-To-End: retained\r\n"
+        "\r\n";
+    const auto request = parseRequest(raw);
+
+    RUVIA_CHECK(request.header("Host") == "example.test");
+    RUVIA_CHECK(request.header("Origin") == "https://origin.example");
+    RUVIA_CHECK(request.header("Authorization") == "Bearer credential");
+    RUVIA_CHECK(request.header("Cookie") == "sid=one; theme=dark");
+    RUVIA_CHECK(request.header("Sec-WebSocket-Protocol") == "chat");
+    RUVIA_CHECK(request.header("Sec-WebSocket-Extensions") == "permessage-deflate");
+    RUVIA_CHECK(request.header("X-End-To-End") == "retained");
+    RUVIA_CHECK(acceptsRequest(raw));
+}
+
 RUVIA_TEST(ws_subprotocol_negotiation_prefers_server_order) {
     const auto request = offering();
     constexpr std::array<std::string_view, 2> supported{"superchat", "chat"};
@@ -345,7 +372,8 @@ RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookie
     std::string cookie = "sid=0123456789abcdef; HttpOnly";
     const std::array fields{ruvia::HttpHeaderView("Set-Cookie", cookie),
         ruvia::HttpHeaderView("Set-Cookie", "theme=dark"),
-        ruvia::HttpHeaderView("X-Request-Id", "request-1")};
+        ruvia::HttpHeaderView("X-Request-Id", "request-1"),
+        ruvia::HttpHeaderView("Alt-Svc", "h3=\":443\"; ma=86400")};
     const auto handshake = ruvia::makeWebSocketServerHandshake(request, {.responseHeaders = fields});
     cookie.assign(cookie.size(), 'x');
     std::string response;
@@ -353,6 +381,7 @@ RUVIA_TEST(ws_handshake_copies_application_headers_and_preserves_multiple_cookie
     RUVIA_CHECK(response.contains("set-cookie: sid=0123456789abcdef; HttpOnly\r\n"));
     RUVIA_CHECK(response.contains("set-cookie: theme=dark\r\n"));
     RUVIA_CHECK(response.contains("x-request-id: request-1\r\n"));
+    RUVIA_CHECK(response.contains("alt-svc: h3=\":443\"; ma=86400\r\n"));
     RUVIA_CHECK(response.ends_with("\r\n\r\n"));
 }
 

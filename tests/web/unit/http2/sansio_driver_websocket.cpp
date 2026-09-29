@@ -1,3 +1,11 @@
+#include <chrono>
+#include <utility>
+
+#include <asio/steady_timer.hpp>
+#include <asio/use_awaitable.hpp>
+
+#include "ruvia/core/ConnectionScanner.h"
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -49,6 +57,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotHandshake = false;
+    bool gotAutomaticAltSvc = false;
+    bool hpackDecodeSucceeded = true;
+    bool sawForbiddenHandshakeField = false;
     std::string echoedFrame;  // reassembled ws frame bytes from stream-1 DATA
     bool gotCloseEndStream = false;
     WebSocketOperationMemory operationMemory;
@@ -69,8 +80,22 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
-                sock, impl.routeTable(), worker, "127.0.0.1"));
+            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            const auto workerHandle = attachment.loop().handle();
+            ruvia::test::Http2SansIoSessionFixture fixture;
+            fixture.options.requestBodyTimeout = std::chrono::milliseconds(100);
+            ruvia::ConnectionScanner scanner(workerHandle,
+                {.scanInterval = std::chrono::milliseconds(5),
+                    .payloadReadTimeout = fixture.options.requestBodyTimeout});
+            ruvia::ConnectionScanner::Guard scannerGuard(
+                &scanner, fixture.scannerEntry, sock);
+            scanner.start();
+            auto services = fixture.services(workerHandle)
+                                .withTlsTransport("127.0.0.1")
+                                .withAutomaticAltSvc("h3=\":443\"; ma=86400");
+            co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker,
+                fixture.context(std::move(services)), std::string_view{}));
         },
         asio::detached);
 
@@ -128,6 +153,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             }
 
             // Wait for the 200 handshake HEADERS on stream 1.
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             ruvia::Http2FrameHeader header{};
             std::string payload;
             for (;;) {
@@ -137,9 +163,26 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
                     header.streamId == 1) {
                     gotHandshake = true;
+                    HpackCollect fields;
+                    const auto decoded = decoder.decode(payload,
+                        [&fields](std::string_view name, std::string_view value) {
+                            return HpackCollect::onHeader(&fields, name, value);
+                        });
+                    hpackDecodeSucceeded = decoded.decoded();
+                    gotAutomaticAltSvc =
+                        fields.joined.contains("alt-svc=h3=\":443\"; ma=86400;");
+                    sawForbiddenHandshakeField = fields.joined.contains("connection=") ||
+                                                 fields.joined.contains("upgrade=") ||
+                                                 fields.joined.contains("sec-websocket-accept=");
                     break;
                 }
             }
+
+            // An upgraded WebSocket is long-lived, not an HTTP request body.
+            // Its idle period exceeds requestBodyTimeout and must not kill the tunnel.
+            asio::steady_timer idleDelay(io);
+            idleDelay.expires_after(std::chrono::milliseconds(180));
+            co_await idleDelay.async_wait(asio::use_awaitable);
 
             // Repeated reads and writes must reuse operation memory while the
             // handshake and explicitly retained data stay alive.
@@ -198,6 +241,9 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
 
     io.run();
     RUVIA_CHECK(gotHandshake);
+    RUVIA_CHECK(hpackDecodeSucceeded);
+    RUVIA_CHECK(gotAutomaticAltSvc);
+    RUVIA_CHECK(!sawForbiddenHandshakeField);
     RUVIA_CHECK_EQ(echoes, messageCount);
     RUVIA_CHECK_EQ(operationMemory.messages, messageCount);
     RUVIA_CHECK(operationMemory.requestArenaStable);
@@ -430,6 +476,8 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool gotResponseHead = false;
+    bool gotBadRequest = false;
+    bool gotSupportedVersion = false;
     bool gotEndStream = false;
 
     asio::co_spawn(
@@ -488,6 +536,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
                 co_return;
             }
 
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             for (;;) {
                 char headerBytes[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
@@ -504,6 +553,20 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
                 }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
                     gotResponseHead = true;
+                    const auto decoded = decoder.decode(payload,
+                        [&gotBadRequest, &gotSupportedVersion](
+                            std::string_view name, std::string_view value) {
+                            gotBadRequest = gotBadRequest ||
+                                            (name == ":status" && value == "400");
+                            gotSupportedVersion = gotSupportedVersion ||
+                                                  (name == "sec-websocket-version" &&
+                                                      value == "13");
+                            return true;
+                        });
+                    if (!decoded.decoded()) {
+                        closeClientSocket(sock);
+                        co_return;
+                    }
                 }
                 if ((header.flags & sansio_driver_test::kFlagEndStream) != 0) {
                     gotEndStream = true;
@@ -517,6 +580,8 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
 
     io.run();
     RUVIA_CHECK(gotResponseHead);
+    RUVIA_CHECK(gotBadRequest);
+    RUVIA_CHECK(gotSupportedVersion);
     RUVIA_CHECK(gotEndStream);
 }
 

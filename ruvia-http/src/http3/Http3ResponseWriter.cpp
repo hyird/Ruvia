@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia {
@@ -257,6 +258,7 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
     std::optional<std::uint64_t> explicitLengthValue;
     std::size_t nameBytes = 0;
     std::size_t projectedCount = 1;
+    bool hasDate = false;
     for (const auto& header : headers) {
         auto name = header.name();
         const auto value = header.value();
@@ -265,6 +267,9 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
         }
         if (forbiddenField(name)) {
             return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kForbiddenField});
+        }
+        if (equalsIgnoreCase(name, "date")) {
+            hasDate = true;
         }
         if (equalsIgnoreCase(name, "content-length")) {
             ++contentLengthCount;
@@ -292,6 +297,15 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
         }
     }
 
+    const auto generatedDate = hasDate ? std::string_view{} : detail::cachedDateValue();
+    if (!generatedDate.empty()) {
+        if (projectedCount == std::numeric_limits<std::size_t>::max()) {
+            return std::unexpected(Http3ResponseHeadFailure{
+                Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kTooManyFields});
+        }
+        ++projectedCount;
+    }
     const bool synthesizeLength = contentLengthCount == 0 && writePlan.autoContentLengthAllowed();
     if (synthesizeLength) {
         if (projectedCount == std::numeric_limits<std::size_t>::max()) {
@@ -331,6 +345,9 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
     std::pmr::vector<Http3FieldSectionFieldView> projected(memory);
     lowercase.reserve(nameBytes);
     projected.reserve(projectedCount - 1);
+    if (!generatedDate.empty()) {
+        projected.push_back({"date", generatedDate, false});
+    }
     for (const auto& header : headers) {
         std::string_view name = header.name();
         auto value = header.value();

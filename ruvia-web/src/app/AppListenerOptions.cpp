@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 
+#include <array>
+#include <charconv>
 #include <filesystem>
 #include <memory_resource>
 #include <stdexcept>
@@ -49,6 +51,56 @@ bool hasTlsConfiguration(const TlsConfig& config) noexcept {
            !config.privateKeyPassword.empty() || config.clientCertificates.verifyFile.has_value() ||
            config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional ||
            !config.sni.empty();
+}
+
+std::pmr::string normalizeAltSvcAdvertisement(const AltSvcConfig& config,
+    std::optional<std::uint16_t> activeHttp3Port, std::pmr::memory_resource* resource) {
+    auto* const targetResource = pmrResourceOrDefault(resource);
+    switch (config.mode) {
+        case AltSvcMode::kDisabled:
+            return std::pmr::string(targetResource);
+        case AltSvcMode::kClear:
+            return std::pmr::string("clear", targetResource);
+        case AltSvcMode::kAutomatic:
+            break;
+        default:
+            throw std::invalid_argument("Alt-Svc mode is invalid");
+    }
+
+    if (!activeHttp3Port.has_value()) {
+        return std::pmr::string(targetResource);
+    }
+    const auto advertisedPort = config.advertisedPort.value_or(*activeHttp3Port);
+    if (advertisedPort == 0) {
+        throw std::invalid_argument("Alt-Svc advertised port must not be zero");
+    }
+    if (config.maxAge.count() < 0) {
+        throw std::invalid_argument("Alt-Svc max-age must not be negative");
+    }
+
+    std::array<char, 32> portBytes{};
+    const auto [portEnd, portError] =
+        std::to_chars(portBytes.data(), portBytes.data() + portBytes.size(), advertisedPort);
+    std::array<char, 32> maxAgeBytes{};
+    const auto [maxAgeEnd, maxAgeError] = std::to_chars(
+        maxAgeBytes.data(), maxAgeBytes.data() + maxAgeBytes.size(), config.maxAge.count());
+    if (portError != std::errc{} || maxAgeError != std::errc{}) {
+        throw std::logic_error("Alt-Svc numeric formatting failed");
+    }
+
+    std::pmr::string result(targetResource);
+    result.reserve(10 + static_cast<std::size_t>(portEnd - portBytes.data()) +
+                   static_cast<std::size_t>(maxAgeEnd - maxAgeBytes.data()) +
+                   (config.persist ? 11 : 0));
+    result.append("h3=\":");
+    result.append(portBytes.data(), static_cast<std::size_t>(portEnd - portBytes.data()));
+    result.append("\"; ma=");
+    result.append(
+        maxAgeBytes.data(), static_cast<std::size_t>(maxAgeEnd - maxAgeBytes.data()));
+    if (config.persist) {
+        result.append("; persist=1");
+    }
+    return result;
 }
 
 HttpServerListenerDefinition::Tls normalizeTlsOptions(

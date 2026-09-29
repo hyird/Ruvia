@@ -1454,6 +1454,21 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
     RUVIA_CHECK(table.size() == 21);
 }
 
+RUVIA_TEST(http2_websocket_tunnel_count_follows_stream_runtime_lifetime) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2SansIoTermination termination;
+    Http2SansIoStreamRuntimeTable table(&resource, termination);
+    auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
+    RUVIA_CHECK(runtime.selectRoute(RouteResolution{}, RequestBodyMode::kStream));
+    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{0});
+    RUVIA_CHECK(!table.markWebSocketTunnel(3));
+    RUVIA_CHECK(table.markWebSocketTunnel(1));
+    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{1});
+    RUVIA_CHECK(!table.markWebSocketTunnel(1));
+    RUVIA_CHECK(table.remove(1));
+    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{0});
+}
+
 RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});

@@ -5,6 +5,9 @@
 #include <limits>
 #include <utility>
 
+#include <asio/post.hpp>
+
+#include "ruvia/core/Async.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/router/RouteTable.h"
@@ -16,6 +19,7 @@ namespace {
 
 constexpr std::size_t kWorkerBodyBudgetBytes = std::size_t{64} * 1024 * 1024;
 constexpr std::size_t kPumpBudget = 256;
+constexpr std::size_t kMailboxPumpBudget = 64;
 
 Http3StreamMailboxCapacityNotifier mailboxCapacityNotifier(
     Http3WorkerMailboxCapacitySignal& signal) noexcept {
@@ -26,7 +30,8 @@ Http3StreamMailboxCapacityNotifier mailboxCapacityNotifier(
 
 Http3WorkerServer::Http3WorkerServer(ruvia::WorkerRuntimeContext& runtime,
     const WorkerHandle& worker, WorkerMemory& memory, const RouteTable& routes,
-    WorkerCapabilities& capabilities, const HttpServerOptions& options,
+    WorkerCapabilities& capabilities, ConnectionScanner& connectionScanner,
+    asio::any_io_executor executor, const HttpServerOptions& options,
     const StopToken& stopToken, std::size_t maxConnections,
     std::uint32_t mailboxCapacity, std::atomic<std::size_t>& activeConnections,
     std::atomic<std::size_t>& refusedConnections)
@@ -34,6 +39,8 @@ Http3WorkerServer::Http3WorkerServer(ruvia::WorkerRuntimeContext& runtime,
       memory_(memory),
       routes_(routes),
       capabilities_(capabilities),
+      connectionScanner_(connectionScanner),
+      executor_(std::move(executor)),
       options_(options),
       stopToken_(stopToken),
       activeConnections_(activeConnections),
@@ -63,6 +70,22 @@ void Http3WorkerServer::capacityWake(void* context) noexcept {
     (void)owner.notification_.notify();
 }
 
+void Http3WorkerServer::activationWake(void* context) noexcept {
+    if (context == nullptr) {
+        std::terminate();
+    }
+    auto& owner = *static_cast<Http3WorkerServer*>(context);
+    if (!owner.worker_.isCurrent()) {
+        std::terminate();
+    }
+    if (owner.notification_.notify() == ruvia::WorkerNotificationStatus::kClosed &&
+        !owner.stopping_) {
+        // An activation may only be dropped once the owning worker is already
+        // stopping and has explicitly closed its latched wake channel.
+        std::terminate();
+    }
+}
+
 bool Http3WorkerServer::stageInstall(Install link) noexcept {
     if (staged_ || link.requestMailbox == nullptr ||
         link.channels.size() != slots_.size() || link.networkWake.context == nullptr ||
@@ -87,7 +110,12 @@ bool Http3WorkerServer::install() noexcept {
         return false;
     }
     try {
-        scheduler_.emplace(worker_, maxConnections_, memory_.resource(), &capacitySignal_);
+        scheduler_.emplace(worker_, maxConnections_, memory_.resource(), &capacitySignal_,
+            Http3WorkerMailboxScheduler::kDefaultControlBurstLimit,
+            Http3WorkerMailboxWakeRef{
+                .context = this,
+                .notify = &activationWake,
+            });
     } catch (...) {
         return false;
     }
@@ -101,14 +129,16 @@ bool Http3WorkerServer::install() noexcept {
 }
 
 Task<void> Http3WorkerServer::run() {
-    if (!worker_.isCurrent() || runStarted_) {
+    if (!worker_.isCurrent() || runStarted_ || !installed_) {
         std::terminate();
     }
     runStarted_ = true;
     while (!drained_.load(std::memory_order_acquire)) {
         bool progress = false;
+        bool exhaustedPumpBudget = true;
         for (std::size_t pass = 0; pass < kPumpBudget; ++pass) {
             if (!pump()) {
+                exhaustedPumpBudget = false;
                 break;
             }
             progress = true;
@@ -130,10 +160,40 @@ Task<void> Http3WorkerServer::run() {
                 co_return;
             }
         }
+        if (exhaustedPumpBudget) {
+            // A full pump turn must yield to other worker work before retrying;
+            // bounded inner loops alone do not make this coroutine cooperative.
+            const auto yielded = co_await ruvia::asyncAsio([this](auto completion) {
+                asio::post(executor_, [completion = std::move(completion)]() mutable {
+                    completion(asio::error_code{});
+                });
+            });
+            if (yielded.errorCode()) {
+                stopping_ = true;
+            }
+            continue;
+        }
         if (!progress) {
+            switch (scheduler_->armCapacityWait().status) {
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kReady:
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kWakePending:
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kRecoveryPending:
+                    continue;
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kStopped:
+                    stopping_ = true;
+                    continue;
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kArmed:
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kNoBlockedWork:
+                    break;
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kUnavailable:
+                case Http3WorkerMailboxScheduler::CapacityArmStatus::kWrongWorker:
+                    std::terminate();
+            }
             const auto waited = co_await notification_.wait();
             if (waited == WorkerNotificationWaitStatus::kClosed) {
                 stopping_ = true;
+            } else {
+                scheduler_->notifyTransportCapacity();
             }
         }
     }
@@ -147,6 +207,15 @@ void Http3WorkerServer::requestStop() noexcept {
         return;
     }
     stopping_ = true;
+    for (auto& slot : slots_) {
+        if (slot.channel != nullptr) {
+            const auto sealed = slot.channel->stopGrantPublication();
+            if (sealed != Http3ServerConnectionChannel::Status::kPublished &&
+                sealed != Http3ServerConnectionChannel::Status::kWrongState) {
+                std::terminate();
+            }
+        }
+    }
     if (!installed_) {
         if (requestMailbox_ != nullptr) {
             (void)requestMailbox_->stop();
@@ -168,13 +237,34 @@ void Http3WorkerServer::requestStop() noexcept {
 }
 
 void Http3WorkerServer::abandonBeforeLaunch() noexcept {
-    if (installed_ || drained_.load(std::memory_order_acquire)) {
-        if (!drained_.load(std::memory_order_acquire)) {
-            std::terminate();
-        }
+    if (runStarted_) {
+        std::terminate();
+    }
+    if (drained_.load(std::memory_order_acquire)) {
         return;
     }
+    if (installed_ && !worker_.isCurrent()) {
+        std::terminate();
+    }
     stopping_ = true;
+    for (auto& slot : slots_) {
+        if (slot.channel != nullptr) {
+            const auto sealed = slot.channel->stopGrantPublication();
+            if (sealed != Http3ServerConnectionChannel::Status::kPublished &&
+                sealed != Http3ServerConnectionChannel::Status::kWrongState) {
+                std::terminate();
+            }
+        }
+    }
+    if (requestMailbox_ != nullptr) {
+        (void)requestMailbox_->stop();
+    }
+    (void)responseMailbox_.stop();
+    notification_.close();
+    // install() may already have succeeded when TaskScope::spawn fails. No run
+    // coroutine exists in this path, so discard its scheduler locally instead
+    // of leaving installed state that the destructor would consider live.
+    scheduler_.reset();
     drained_.store(true, std::memory_order_release);
 }
 
@@ -213,6 +303,7 @@ bool Http3WorkerServer::pumpChannels() noexcept {
             if (published.status == Http3ServerConnectionChannel::Status::kPublished) {
                 slot.registration = published.registration;
                 slot.identity = published.identity;
+                slot.lastIdentity = published.identity;
                 slot.reserved = true;
                 progress = true;
             }
@@ -235,10 +326,10 @@ bool Http3WorkerServer::pumpChannels() noexcept {
         }
 
         if (slot.reserved && slot.connection == nullptr && !slot.rejected &&
-            !slot.revokeAcknowledged) {
+            !slot.revokeAcknowledged && !slot.workerRetirementComplete) {
             Http3ServerConnectionChannel::Bind bind;
-            if (slot.channel->receiveBind(bind) ==
-                Http3ServerConnectionChannel::Status::kReceived) {
+            const auto bindStatus = slot.channel->receiveBind(bind);
+            if (bindStatus == Http3ServerConnectionChannel::Status::kReceived) {
                 progress = true;
                 if (bind.identity != slot.identity) {
                     std::terminate();
@@ -254,6 +345,11 @@ bool Http3WorkerServer::pumpChannels() noexcept {
                     slot.rejected = true;
                     refusedConnections_.fetch_add(1, std::memory_order_relaxed);
                 }
+            } else if (bindStatus != Http3ServerConnectionChannel::Status::kEmpty) {
+                // A committed bind must either be consumed or remain pending;
+                // silently treating WrongState as empty strands the accepted
+                // transport and prevents the attach/retirement handshake.
+                std::terminate();
             }
         }
 
@@ -315,6 +411,17 @@ bool Http3WorkerServer::pumpChannels() noexcept {
             slot.registration = {};
         }
 
+        if (!slot.reserved && stopping_ && slot.lastIdentity.epoch != 0 &&
+            !slot.workerPublicationsClosed) {
+            const auto closed = slot.channel->closeWorkerPublications(slot.lastIdentity);
+            if (closed == Http3ServerConnectionChannel::Status::kPublished) {
+                slot.workerPublicationsClosed = true;
+                progress = true;
+            } else if (closed != Http3ServerConnectionChannel::Status::kWrongState) {
+                std::terminate();
+            }
+        }
+
         Http3ServerConnectionChannel::Identity revoked;
         if (slot.reserved && slot.channel->receiveRevoke(revoked) ==
                                  Http3ServerConnectionChannel::Status::kReceived) {
@@ -335,12 +442,13 @@ bool Http3WorkerServer::pumpInput() noexcept {
         return false;
     }
     bool progress = false;
-    for (;;) {
-        bool drained = false;
+    for (std::size_t count = 0; count < kMailboxPumpBudget;) {
+        bool received = false;
         Http3StreamControl control;
-        while (requestMailbox_->tryReceiveControl(control)) {
-            drained = true;
+        if (requestMailbox_->tryReceiveControl(control)) {
+            received = true;
             progress = true;
+            ++count;
             if (auto* slot = findSlot(control.id); slot != nullptr && slot->connection != nullptr) {
                 const auto result = slot->connection->acceptControl(control);
                 if (result.connectionCloseRequired) {
@@ -350,9 +458,10 @@ bool Http3WorkerServer::pumpInput() noexcept {
             }
         }
         Http3StreamMailbox::BorrowedBlock block;
-        while (requestMailbox_->tryReceive(block)) {
-            drained = true;
+        if (count < kMailboxPumpBudget && requestMailbox_->tryReceive(block)) {
+            received = true;
             progress = true;
+            ++count;
             if (auto* slot = findSlot(block.id()); slot != nullptr && slot->connection != nullptr) {
                 const auto result = slot->connection->acceptData(block);
                 if (result.connectionCloseRequired) {
@@ -362,10 +471,14 @@ bool Http3WorkerServer::pumpInput() noexcept {
             }
             block.release();
         }
-        if (!requestMailbox_->finishDrain()) {
-            return progress || drained;
+        if (!received) {
+            break;
         }
     }
+    // If the budget was exhausted, the run loop immediately takes another
+    // bounded turn (and yields after its outer budget); queued work is not
+    // dependent on a fresh producer notification.
+    return requestMailbox_->finishDrain() || progress;
 }
 
 bool Http3WorkerServer::pumpScheduler() noexcept {
@@ -463,7 +576,7 @@ bool Http3WorkerServer::constructConnection(
             return false;
         }
         const auto maxTrackedStreams = http3WorkerTrackedStreamCapacity(maxRequests);
-        Http3BufferedServerConnectionConfig config{
+        Http3ServerConnectionConfig config{
             .epoch = bind.identity.epoch,
             .connectionGeneration = bind.identity.connectionGeneration,
             .session = {
@@ -472,8 +585,10 @@ bool Http3WorkerServer::constructConnection(
                 .maxBufferedBytesInFlight = kWorkerBodyBudgetBytes,
             },
             .maxTrackedStreams = maxTrackedStreams,
+            .connectionScanner = &connectionScanner_,
+            .executor = executor_,
         };
-        slot.connection = makePmrObject<Http3BufferedServerConnection>(memory_.resource(), routes_,
+        slot.connection = makePmrObject<Http3ServerConnection>(memory_.resource(), routes_,
             memory_, services, options_, responseMailbox_, slot.registration.activation,
             bodyBudget_, config);
         if (!scheduler_ || slot.channel->attach(*scheduler_, slot.registration, *slot.connection) !=

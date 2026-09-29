@@ -115,18 +115,22 @@ ruvia::app().listen({
         .certificateChainFile = "certs/server.crt",
         .privateKeyFile = "certs/server.key",
     },
-    // Explicitly bind QUIC/HTTP/3 over UDP on the HTTPS numeric port.
-    .http3 = ruvia::Http3ListenConfig{},
     .autoHttpsRedirect = true,
 });
 ```
 
+HTTPS automatically enables QUIC/HTTP/3 over UDP on the same address and
+numeric port; an HTTP-only listener does not enable HTTP/3 automatically. Set
+`.http3.mode = ruvia::Http3Mode::kDisabled` to opt out, or use
+`kEnabled` to require HTTP/3 explicitly; the remaining HTTP/3 fields override
+its handshake and drain timeouts. TCP listener and UDP/QUIC preparation is
+atomic: startup fails instead of serving HTTPS while advertising an unavailable
+HTTP/3 endpoint.
+
 `ServerConfig::workerCount` is the number of business workers. The runtime also
 uses one dedicated server network thread (in addition to any `BlockingPool` and
-signal threads). It binds the configured HTTP/HTTPS TCP ports and, when
-`ListenConfig::http3` is present, also serves QUIC/HTTP/3 over UDP on the HTTPS
-address and numeric port. There is no separate configurable UDP packet-rate
-limit.
+signal threads). It binds the configured HTTP/HTTPS TCP ports and the automatic
+HTTP/3 UDP endpoint. There is no separate configurable UDP packet-rate limit.
 
 `ServerConfig::maxRequestsPerConnection = N` limits the cumulative number of
 admitted requests on each HTTP/1, HTTP/2, or HTTP/3 connection. The default is
@@ -141,16 +145,26 @@ At N, admission is sealed and already-admitted requests are drained.
 the QUIC/TLS handshake for each new QUIC connection. The
 `Http3ListenConfig::drainTimeout` (default 30 seconds) limits the HTTP/3 drain
 and connection-closing phase. Request-header, request-body, and response write
-inactivity timeouts apply per stream; an expiry cancels only that stream. The
-idle timeout applies to the QUIC connection.
+inactivity timeouts apply per stream; an expiry cancels only that stream. Once
+a WebSocket CONNECT response is accepted by QUIC, request-body timeout no
+longer applies to its tunnel; write timeout applies only while output is
+pending. WebSocket heartbeat and close-handshake settings govern its liveness.
+The idle timeout applies to the QUIC connection.
 
 The server HTTP/3 surface supports normal buffered controller routes, including
-request bodies and buffered byte responses. Unsupported route modes are rejected:
-CONNECT, streaming request or response routes, SSE, buffered file payloads,
-WebSocket/WebTransport over HTTP/3, 0-RTT, connection migration, server push,
-and dynamic QPACK are not advertised. Ruvia does not inject `Alt-Svc`; use an
-application header or HTTPS/SVCB deployment records when clients need discovery.
-HTTP/3 is explicit and does not alter the HTTPS TCP ALPN policy.
+request bodies and buffered byte responses, and RFC 9220 WebSocket Extended
+CONNECT. The same WebSocket route therefore serves RFC 6455 over HTTP/1.1, RFC
+8441 over HTTP/2, and RFC 9220 over HTTP/3. Ordinary CONNECT, streaming request
+or response routes, SSE, buffered file payloads, WebTransport, 0-RTT, connection
+migration, server push, and dynamic QPACK remain unsupported.
+
+When HTTP/3 is active, TLS HTTP/1.1 and HTTP/2 responses automatically advertise
+its real port, for example `Alt-Svc: h3=":443"; ma=86400`; HTTP/3 responses do
+not repeat that field. `ListenConfig::altSvc` can disable the advertisement,
+emit `clear`, change `maxAge`/`persist`, or advertise an external port. An
+application-set `Alt-Svc` value, including explicit removal, takes precedence
+for that response. HTTP/3 does not alter the HTTPS TCP ALPN policy.
+
 Each business worker separately owns TLS, its router, and its capabilities,
 including DB, Redis, outbound HTTP client, and user-state set.
 Policies that exist both app-wide and per route use one name and one rule: the
@@ -853,19 +867,29 @@ upgrade routes reject before committing their response head.
 - Supported build platforms: Linux and Windows 10 or newer. Windows builds
   require MSVC.
 - Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
-  Web adds OpenSSL 3.6.4 or newer with QUIC enabled.
+  Web adds OpenSSL 3.6.4 or newer with QUIC enabled. The HTTP/3 server also
+  requires listener-level QUIC idle-timeout configuration; this repository's
+  vcpkg overlay provides it for OpenSSL 3.6.4. An unpatched OpenSSL 3.6.4
+  cannot reliably serve fast handshakes with Ruvia's configured timeout.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 ## Build
 
 For a standalone Ruvia build, set `VCPKG_ROOT` to the root of your vcpkg
 checkout. Ruvia automatically uses its toolchain unless
-`CMAKE_TOOLCHAIN_FILE` was set explicitly.
+`CMAKE_TOOLCHAIN_FILE` was set explicitly. Its manifest uses the repository's
+OpenSSL overlay when Web is enabled; core-only and HTTP-only builds do not
+install OpenSSL.
 
 When Ruvia is included with `FetchContent` or `add_subdirectory`, the parent
 project owns its toolchain, vcpkg manifest features, triplets, and cache-wide
 compiler policy. Select the dependencies needed by the enabled `RUVIA_*`
-options in the parent manifest. On MSVC, select the static runtime before
+options in the parent manifest. If Web/HTTP/3 is enabled, the parent must also
+select this repository's OpenSSL overlay (for example, set
+`VCPKG_OVERLAY_PORTS` to `<Ruvia source>/ruvia-web/vcpkg-overlay` before
+configuring the parent) or an OpenSSL build providing the same listener-level
+QUIC idle-timeout capability. Ruvia does not change a parent's vcpkg
+configuration. On MSVC, select the static runtime before
 creating parent targets that link Ruvia; Ruvia applies `/MT` or `/MTd` only to
 targets in its own directory tree.
 
@@ -1815,7 +1839,9 @@ target_link_libraries(my_app PRIVATE ruvia::web)
 
 Ruvia's Windows archives use the static MSVC runtime (`/MT`, or `/MTd` for
 Debug), so Windows consumers must select the same runtime before creating
-targets that link them.
+targets that link them. A consumer linking an installed Web archive must also
+use the matching OpenSSL build; the installed CMake package does not install
+or patch OpenSSL for its caller.
 
 Narrower consumers can request only core or HTTP:
 
@@ -1855,16 +1881,31 @@ Routes and schemas use these macros:
 Route tables, middleware chains, and controller instances are finalized before
 workers start.
 
-After a WebSocket upgrade, `ServerConfig::idleTimeout` no longer applies to
-that connection. Use `WebSocketRouteConfig::lifecycle.heartbeat` to configure
-idle Ping and matching-Pong deadlines; the route's `closeHandshakeTimeout`
-controls close completion independently. Without heartbeat, an idle WebSocket
-has no framework idle deadline: the application owns any required liveness
-policy. Ordinary HTTP connection timeouts remain unchanged.
+A WebSocket route uses HTTP/1.1 Upgrade with a `101` response, or Extended
+CONNECT with a `200` response on HTTP/2 and HTTP/3. HTTP/2 and HTTP/3 do not
+reuse the HTTP/1-only `Connection`, `Upgrade`, `Sec-WebSocket-Key`, or
+`Sec-WebSocket-Accept` fields. In all three versions, ordinary end-to-end fields
+such as Origin, Cookie, Authorization, selected subprotocol, extensions, and
+application response fields remain available through the same route. An unsupported
+WebSocket version receives `400` and `Sec-WebSocket-Version: 13` on all three
+HTTP versions, without HTTP/1 Upgrade fields in HTTP/2 or HTTP/3.
+
+After a WebSocket handshake, the ordinary HTTP/1 or HTTP/2 connection idle
+deadline is suspended while the WebSocket is active; HTTP/3 request-body
+inactivity timeout stops applying once its CONNECT response is accepted. The
+HTTP/3 QUIC transport idle timeout still applies to the shared connection.
+Use `WebSocketRouteConfig::lifecycle.heartbeat` to configure idle Ping and
+matching-Pong deadlines; the route's `closeHandshakeTimeout` controls close
+completion independently. For HTTP/3, `peerTransportFinTimeout` (default 5
+seconds, required to be positive) separately bounds the wait for the peer's
+QUIC FIN after the server queues its own stream FIN; expiry terminates only
+that stream. Without heartbeat, there is no additional per-WebSocket application
+idle deadline: the application owns any required liveness policy. Ordinary HTTP
+connection timeouts remain unchanged.
 
 ### WebSocket 压缩
 
-服务端 HTTP/1 Upgrade 与 HTTP/2 Extended CONNECT 均通过路由的 `deflate` 配置协商 RFC 7692 `permessage-deflate`：
+服务端 HTTP/1 Upgrade 以及 HTTP/2、HTTP/3 Extended CONNECT 均通过路由的 `deflate` 配置协商 RFC 7692 `permessage-deflate`：
 
 ```cpp
 ruvia::WebSocketRouteConfig options{
@@ -2305,9 +2346,11 @@ include varints, frames, SETTINGS, incremental request/control stream framing,
 and QPACK static/literal field sections plus zero-capacity instruction streams.
 They include the sans-I/O connection state machine in
 `<ruvia/http/Http3Connection.h>`, but no dynamic QPACK table. `ruvia::web`
-drives these primitives with OpenSSL 3.6.4 or newer to provide the explicit
-buffered-route HTTP/3 server and `HttpClientProtocol::kHttp3Only` outbound
-client described above. Other supported protocol-driver entry points are
+drives these primitives with OpenSSL 3.6.4 or newer to provide the automatic
+HTTPS HTTP/3 server and `HttpClientProtocol::kHttp3Only` outbound client
+described above. HTTP/3 Extended CONNECT WebSocket validation and response-head
+construction are exposed by `<ruvia/http/Http3WebSocketHandshake.h>`. Other
+supported protocol-driver entry points are
 `<ruvia/http/Http2Connection.h>` and
 `<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
 `<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,

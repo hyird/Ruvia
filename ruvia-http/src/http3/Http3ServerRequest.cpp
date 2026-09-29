@@ -15,6 +15,7 @@ std::pmr::memory_resource* normalizedResource(std::pmr::memory_resource* resourc
 
 void copyHead(Http3MessageHead& to, const Http3MessageHead& from) {
     to.method = from.method;
+    to.protocol = from.protocol;
     to.scheme = from.scheme;
     to.authority = from.authority;
     to.path = from.path;
@@ -38,7 +39,7 @@ Http3ServerRequest::Http3ServerRequest(const Http3MessageHead& callbackHead,
 }
 
 void Http3ServerRequest::buildRequest() {
-    const bool standardConnect = head_.method == "CONNECT";
+    const bool standardConnect = head_.method == "CONNECT" && head_.protocol.empty();
     const std::string_view target = standardConnect ? std::string_view(head_.authority)
                                                     : std::string_view(head_.path);
     const auto queryAt = standardConnect ? std::string_view::npos : target.find('?');

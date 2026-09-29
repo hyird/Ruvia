@@ -6,6 +6,9 @@
 #include <optional>
 #include <vector>
 
+#include <asio/any_io_executor.hpp>
+
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/WorkerSignal.h"
@@ -24,16 +27,19 @@ class RouteTable;
 struct HttpServerOptions;
 class Http3WorkerMailboxScheduler;
 
-struct Http3BufferedServerConnectionConfig final {
+struct Http3ServerConnectionConfig final {
     std::uint64_t epoch{};
     std::uint64_t connectionGeneration{};
     Http3SansIoSessionLimits session{};
     std::size_t maxTrackedStreams{32};
+    ConnectionScanner* connectionScanner{};
+    asio::any_io_executor executor{};
 };
 
-// Worker-affine, transport-independent owner for one buffered HTTP/3 server
-// connection. It accepts one already-routed mailbox block/control at a time;
-// it never drains or stops either shared mailbox and never waits for capacity.
+// Worker-affine, transport-independent owner for one HTTP/3 server connection.
+// Ordinary request bodies are buffered; WebSocket CONNECT streams use a bounded
+// tunnel path. It accepts one routed mailbox block/control at a time, never
+// drains or stops either shared mailbox, and never waits for capacity.
 // All borrowed owners, including ContextServices' worker/token/capability and
 // connection-metadata borrows, must outlive this object and its joined tasks.
 // Stop sources observed during publication must request stop on this worker:
@@ -43,7 +49,7 @@ struct Http3BufferedServerConnectionConfig final {
 // lease it starts; join all children before retiring either owner. Destruction
 // also requires transport intents to be handed off, physical retirement to be
 // confirmed, or full-connection retirement responsibility to be taken over.
-class Http3BufferedServerConnection final {
+class Http3ServerConnection final {
     struct RequestEntry;
     struct RejectionEntry;
     struct RequestIndexSlot;
@@ -226,22 +232,22 @@ public:
         Dispatch::PublishResult publication{};
     };
 
-    Http3BufferedServerConnection(const RouteTable& routes, WorkerMemory& worker,
+    Http3ServerConnection(const RouteTable& routes, WorkerMemory& worker,
         ContextServices services, const HttpServerOptions& options,
         Http3StreamMailbox& outbound, ActivationRef activation,
-        Http3BufferedServerConnectionConfig config = {});
+        Http3ServerConnectionConfig config = {});
     // Shares a worker-owned buffered-body budget with other connections. The
     // budget must outlive this connection and every request lease it starts.
-    Http3BufferedServerConnection(const RouteTable& routes, WorkerMemory& worker,
+    Http3ServerConnection(const RouteTable& routes, WorkerMemory& worker,
         ContextServices services, const HttpServerOptions& options,
         Http3StreamMailbox& outbound, ActivationRef activation,
         Http3ServerBodyBudget& bodyBudget,
-        Http3BufferedServerConnectionConfig config = {});
-    ~Http3BufferedServerConnection();
-    Http3BufferedServerConnection(const Http3BufferedServerConnection&) = delete;
-    Http3BufferedServerConnection& operator=(const Http3BufferedServerConnection&) = delete;
-    Http3BufferedServerConnection(Http3BufferedServerConnection&&) = delete;
-    Http3BufferedServerConnection& operator=(Http3BufferedServerConnection&&) = delete;
+        Http3ServerConnectionConfig config = {});
+    ~Http3ServerConnection();
+    Http3ServerConnection(const Http3ServerConnection&) = delete;
+    Http3ServerConnection& operator=(const Http3ServerConnection&) = delete;
+    Http3ServerConnection(Http3ServerConnection&&) = delete;
+    Http3ServerConnection& operator=(Http3ServerConnection&&) = delete;
 
     // The caller routes exactly one borrowed block/control here and releases a
     // block after return. A validated request FIN automatically starts one
@@ -303,10 +309,11 @@ public:
     // connection close taking priority over the intrusive per-stream reset
     // chain. Ack means the transport owner has
     // reliably accepted responsibility for the intent; it does not mean a peer
-    // observed the operation or that the transport has retired. A successful
-    // close ack subsumes pending resets. Ack never sends a notification; the
-    // caller owns the mailbox notify obligation from a successful reset-control
-    // send. join() alone is not transport retirement or responsibility transfer.
+    // observed the operation or that the transport has retired. A close ACK
+    // settles only its own token; every reset remains independently owed. Ack
+    // never sends a notification; the caller owns the mailbox notify obligation
+    // from a successful reset-control send. join() alone is not transport
+    // retirement or responsibility transfer.
     [[nodiscard]] std::optional<TransportIntent> peekTransportIntent() const noexcept;
     [[nodiscard]] bool ackTransportIntent(const TransportIntentToken& token) & noexcept;
     bool ackTransportIntent(const TransportIntentToken&) && = delete;
@@ -321,7 +328,7 @@ public:
 
 private:
     friend class Http3WorkerMailboxScheduler;
-    friend struct Http3BufferedServerConnectionResetIntentTestAccess;
+    friend struct Http3ServerConnectionResetIntentTestAccess;
 
     static constexpr std::size_t kNoIntentSlot = static_cast<std::size_t>(-1);
     static constexpr std::uint64_t kReservedCloseIntentSequence =
@@ -403,12 +410,19 @@ private:
         Http3ConnectionErrorCode errorCode = Http3ConnectionErrorCode::kRequestCancelled,
         ResetIntentOrigin origin = ResetIntentOrigin::kLocalCancellation) noexcept;
     void unlinkResetIntent(RequestIndexSlot& slot) noexcept;
-    void clearResetIntents() noexcept;
     void requireConnectionClose(TransportCloseReason reason,
         std::optional<Http3ConnectionErrorCode> errorCode = {}) noexcept;
     void finishEntry(RequestEntry& entry) noexcept;
     void initialize();
     [[nodiscard]] bool onWorker() const noexcept;
+    [[nodiscard]] bool attachTunnelScanner(std::uint64_t streamId,
+        ConnectionScanner::Entry& entry) noexcept;
+    void tunnelOutputReady(std::uint64_t streamId) noexcept;
+    void abortTunnel(std::uint64_t streamId) noexcept;
+    static bool attachTunnelScannerThunk(void* context, std::uint64_t streamId,
+        ConnectionScanner::Entry& entry) noexcept;
+    static void tunnelOutputReadyThunk(void* context, std::uint64_t streamId) noexcept;
+    static void abortTunnelThunk(void* context, std::uint64_t streamId) noexcept;
     [[nodiscard]] static std::size_t indexCapacity(std::size_t maxTrackedStreams);
 
     const ContextServices services_;
@@ -420,6 +434,8 @@ private:
     const std::uint64_t epoch_;
     const std::uint64_t connectionGeneration_;
     const std::size_t maxTrackedStreams_;
+    ConnectionScanner* connectionScanner_{};
+    asio::any_io_executor executor_;
     Session session_;
     Input input_;
     TaskScope tasks_;

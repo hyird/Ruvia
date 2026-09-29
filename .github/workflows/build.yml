@@ -7,6 +7,7 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
@@ -24,6 +25,7 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
       - "cmake/**"
       - "ruvia-core/**"
       - "ruvia-http/**"
@@ -132,7 +134,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ruvia-web/vcpkg-overlay/**', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-gcc13-${{ env.VCPKG_COMMIT }}-
 
@@ -200,7 +202,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'triplets/**', 'CMakeLists.txt') }}
+          key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ruvia-web/vcpkg-overlay/**', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-msvc-x64-windows-static-${{ env.VCPKG_COMMIT }}-
 
