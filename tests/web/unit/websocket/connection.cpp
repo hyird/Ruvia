@@ -33,17 +33,17 @@ using asio::ip::tcp;
 using ruvia::ConnectionScanner;
 using ruvia::WebSocketCompression;
 using ruvia::WebSocketOpcode;
+using ruvia::WebSocketServerTransportDisposition;
 using ruvia::detail::SocketWebSocketConnection;
 using ruvia::detail::WebSocketConnection;
 using ruvia::detail::WebSocketSocketTransport;
-using ruvia::detail::WsTransportDisposition;
 
 struct RecordingTransportState final {
     bool aborted{false};
     std::size_t writes{0};
     std::error_code readError;
     std::string lastNonEmptyBytes;
-    WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
+    WebSocketServerTransportDisposition lastDisposition{WebSocketServerTransportDisposition::kKeepOpen};
     bool suspendNextRead{false};
     bool suspendNextWrite{false};
     std::function<void()> completeRead;
@@ -77,7 +77,7 @@ public:
     }
 
     [[nodiscard]] ruvia::Task<std::error_code> writeBytes(
-        std::string_view bytes, WsTransportDisposition disposition) {
+        std::string_view bytes, WebSocketServerTransportDisposition disposition) {
         ++state_->writes;
         if (!bytes.empty()) {
             state_->lastNonEmptyBytes.assign(bytes);
@@ -328,7 +328,7 @@ RUVIA_TEST(websocket_session_finish_maps_chain_failure_to_1011) {
         const auto low = static_cast<unsigned char>(state.lastNonEmptyBytes[3]);
         RUVIA_CHECK_EQ(static_cast<std::uint16_t>((high << 8U) | low), std::uint16_t{1011});
     }
-    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kEndTransport);
+    RUVIA_CHECK(state.lastDisposition == WebSocketServerTransportDisposition::kEndTransport);
     RUVIA_CHECK(!state.aborted);
 }
 
@@ -355,7 +355,7 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     });
     (void)io.poll();
     RUVIA_CHECK_EQ(state.writes, std::size_t{1});
-    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kKeepOpen);
+    RUVIA_CHECK(state.lastDisposition == WebSocketServerTransportDisposition::kKeepOpen);
 
     // No Pong arrived and its deadline elapsed. The callback can only abort its
     // own transport; it cannot ask Core to close the scanner's owning socket.
@@ -518,7 +518,7 @@ RUVIA_TEST(websocket_close_guard_rejects_write_until_close_flush_commits) {
     runUntilReady(io, closing);
     closing.get();
     RUVIA_CHECK_EQ(state.writes, std::size_t{2});
-    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kEndTransport);
+    RUVIA_CHECK(state.lastDisposition == WebSocketServerTransportDisposition::kEndTransport);
 }
 
 RUVIA_TEST(websocket_teardown_aborts_and_joins_suspended_application_write) {

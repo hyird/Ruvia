@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/WebSocketProtocol.h"
+
 namespace ruvia::detail {
 
 template <typename Transport>
@@ -44,7 +46,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::readOwned(
             }
 
             if (const auto* message = event->message()) {
-                co_return WebSocketMessageAccess::make(message->opcode(), message->payload());
+                co_return WebSocketMessage::borrow(message->opcode(), message->payload());
             }
             if (event->ping() != nullptr) {
                 co_await flushProtocolOutputExclusive();
