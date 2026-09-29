@@ -36,7 +36,12 @@ class RedisPeer final {
 public:
     enum class Mode { kNormal,
         kCoalescedPings,
-        kHugeArray };
+        kCoalescedArrays,
+        kHugeArray,
+        kNestedArrays,
+        kDeepArrays,
+        kValidNestedArray,
+        kRejectThenPing };
 
     explicit RedisPeer(Mode mode = Mode::kNormal)
         : mode_(mode),
@@ -89,6 +94,22 @@ private:
 
     asio::awaitable<void> serve() {
         co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+        try {
+            co_await serveConnection();
+        } catch (const std::system_error&) {
+            if (mode_ != Mode::kRejectThenPing) {
+                throw;
+            }
+        }
+        if (mode_ == Mode::kRejectThenPing) {
+            firstConnection_ = false;
+            socket_ = asio::ip::tcp::socket(io_);
+            co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+            co_await serveConnection();
+        }
+    }
+
+    asio::awaitable<void> serveConnection() {
         for (;;) {
             const auto header = co_await line();
             const auto count = std::stoi(header.substr(1));
@@ -112,14 +133,32 @@ private:
                 continue;
             }
             std::string reply;
-            if (mode_ == Mode::kCoalescedPings && args.front() == "PING") {
+            if ((mode_ == Mode::kCoalescedPings || mode_ == Mode::kCoalescedArrays) &&
+                args.front() == "PING") {
                 if (co_await line() != "*1" || co_await line() != "$4" ||
                     co_await line() != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
-                reply = "+PONG\r\n+PONG\r\n";
-            } else if (mode_ == Mode::kHugeArray && args.front() == "PING") {
+                reply = mode_ == Mode::kCoalescedArrays
+                            ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
+                            : "+PONG\r\n+PONG\r\n";
+            } else if ((mode_ == Mode::kHugeArray ||
+                           (mode_ == Mode::kRejectThenPing && firstConnection_)) &&
+                       args.front() == "PING") {
                 reply = "*1048576\r\n";
+            } else if (mode_ == Mode::kNestedArrays && args.front() == "PING") {
+                for (int index = 0; index < 100; ++index) {
+                    reply.append("*300\r\n");
+                }
+            } else if (mode_ == Mode::kDeepArrays && args.front() == "PING") {
+                for (int index = 0; index < 5; ++index) {
+                    reply.append("*1\r\n");
+                }
+            } else if (mode_ == Mode::kValidNestedArray && args.front() == "PING") {
+                for (int index = 0; index < 4; ++index) {
+                    reply.append("*1\r\n");
+                }
+                reply.append("+PONG\r\n");
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
             } else if (args.front() == "GET") {
@@ -137,6 +176,7 @@ private:
     }
 
     Mode mode_;
+    bool firstConnection_{true};
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
@@ -196,15 +236,21 @@ ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::Test
 }
 
 ruvia::Task<void> checkCoalescedReplies(ruvia::RedisClient& client,
-    ruvia::testing::TestContext& ruvia_ctx) {
+    ruvia::testing::TestContext& ruvia_ctx, bool arrays = false) {
     co_await client.connect();
     auto pipeline = client.pipeline();
     pipeline.command("PING").command("PING");
     bool accepted = false;
     try {
         const auto replies = co_await std::move(pipeline).exec();
-        accepted = replies.size() == 2 && replies[0].string() == "PONG" &&
-                   replies[1].string() == "PONG";
+        accepted = replies.size() == 2;
+        if (accepted && arrays) {
+            accepted = replies[0].kind() == ruvia::RedisValue::Kind::kArray &&
+                       replies[1].kind() == ruvia::RedisValue::Kind::kArray &&
+                       replies[0].array().size() == 3 && replies[1].array().size() == 3;
+        } else if (accepted) {
+            accepted = replies[0].string() == "PONG" && replies[1].string() == "PONG";
+        }
     } catch (const ruvia::RedisError&) {
     }
     RUVIA_CHECK(accepted);
@@ -234,6 +280,39 @@ ruvia::Task<void> checkHugeDeclaredArray(ruvia::RedisClient& client,
         rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
     }
     RUVIA_CHECK(rejected);
+    co_await client.shutdown();
+}
+
+ruvia::Task<void> checkNestedArrayAtDepthLimit(ruvia::RedisClient& client,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    co_await client.connect();
+    const std::string_view command[]{"PING"};
+    const auto reply = co_await client.command(std::span<const std::string_view>(command));
+    const ruvia::RedisValue* value = &reply;
+    bool valid = true;
+    for (int index = 0; index < 4; ++index) {
+        if (value->kind() != ruvia::RedisValue::Kind::kArray || value->array().size() != 1) {
+            valid = false;
+            break;
+        }
+        value = &value->array()[0];
+    }
+    RUVIA_CHECK(valid && value->kind() == ruvia::RedisValue::Kind::kString &&
+                value->string() == "PONG");
+    co_await client.shutdown();
+}
+
+ruvia::Task<void> checkReconnectAfterBudgetRejection(ruvia::RedisClient& client,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    co_await client.connect();
+    bool rejected = false;
+    try {
+        co_await client.ping();
+    } catch (const ruvia::RedisError& error) {
+        rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
+    }
+    RUVIA_CHECK(rejected);
+    co_await client.ping();
     co_await client.shutdown();
 }
 
@@ -346,6 +425,17 @@ RUVIA_TEST(redis_pipeline_reply_limit_counts_each_reply_not_the_tcp_batch) {
     pool.join();
 }
 
+RUVIA_TEST(redis_pipeline_array_element_budget_resets_for_each_reply) {
+    RedisPeer peer(RedisPeer::Mode::kCoalescedArrays);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxReplyBytes = 13;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkCoalescedReplies(client, ruvia_ctx, true)).get();
+    pool.join();
+}
+
 RUVIA_TEST(redis_client_reply_limit_still_rejects_oversized_single_reply) {
     RedisPeer peer;
     ruvia::EventLoopPool pool({.loopCount = 1});
@@ -365,6 +455,50 @@ RUVIA_TEST(redis_reply_budget_rejects_impossible_declared_array_before_its_eleme
     ruvia::RedisClient client(pool.loop(0), config);
     pool.start();
     pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_reply_budget_rejects_aggregate_nested_array_declarations) {
+    RedisPeer peer(RedisPeer::Mode::kNestedArrays);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxReplyBytes = 1024;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_reply_depth_rejects_incomplete_nested_array) {
+    RedisPeer peer(RedisPeer::Mode::kDeepArrays);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxArrayDepth = 4;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_reply_array_at_the_depth_limit_is_accepted) {
+    RedisPeer peer(RedisPeer::Mode::kValidNestedArray);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxArrayDepth = 4;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkNestedArrayAtDepthLimit(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_reader_budget_rebinds_after_protocol_failure_and_reconnect) {
+    RedisPeer peer(RedisPeer::Mode::kRejectThenPing);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxReplyBytes = 1024;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkReconnectAfterBudgetRejection(client, ruvia_ctx)).get();
     pool.join();
 }
 

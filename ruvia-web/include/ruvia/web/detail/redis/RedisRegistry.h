@@ -74,6 +74,12 @@ struct RedisReaderDeleter final {
     void operator()(redisReader* reader) const noexcept;
 };
 
+struct RedisReaderBudget;
+struct RedisReaderBudgetDeleter final {
+    std::pmr::memory_resource* resource{nullptr};
+    void operator()(RedisReaderBudget* budget) const noexcept;
+};
+
 class RedisPool;
 using RedisOperationCancellationMailbox = WorkerCancellationMailbox<RedisPool>;
 
@@ -133,6 +139,7 @@ private:
         asio::ip::tcp::resolver resolver;
         std::pmr::string writeBuffer;
         std::array<char, kRedisReadBufferBytes> readBuffer;
+        std::unique_ptr<RedisReaderBudget, RedisReaderBudgetDeleter> readerBudget;
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
         bool connected{false};

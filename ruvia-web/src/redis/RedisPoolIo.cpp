@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <limits>
 #include <memory>
 #include <system_error>
 #include <utility>
@@ -19,6 +20,68 @@
 #include "ruvia/web/redis/Redis.h"
 
 namespace ruvia::detail {
+
+struct RedisReaderBudget final {
+    enum class Rejection : std::uint8_t { kNone,
+        kElements,
+        kDepth };
+
+    RedisReaderBudget(redisReader& reader, std::optional<std::size_t> maxReplyBytes,
+        std::size_t maxDepth) noexcept
+        : functions(*reader.fn),
+          originalCreateArray(functions.createArray),
+          maximumElements(maxReplyBytes.has_value()
+                              ? *maxReplyBytes / 3
+                              : std::numeric_limits<std::size_t>::max()),
+          remainingElements(maximumElements),
+          maxDepth(maxDepth) {
+        functions.createArray = &RedisReaderBudget::createArray;
+        bind(reader);
+    }
+
+    void bind(redisReader& reader) noexcept {
+        reader.fn = &functions;
+        reader.privdata = this;
+    }
+
+    void reset() noexcept {
+        remainingElements = maximumElements;
+        rejection = Rejection::kNone;
+    }
+
+    static void* createArray(const redisReadTask* task, std::size_t elements) noexcept {
+        auto& budget = *static_cast<RedisReaderBudget*>(task->privdata);
+        if (budget.maxDepth != 0) {
+            std::size_t depth = 0;
+            for (auto* parent = task; parent != nullptr; parent = parent->parent) {
+                if (++depth > budget.maxDepth) {
+                    budget.rejection = Rejection::kDepth;
+                    return nullptr;
+                }
+            }
+        }
+        if (elements > budget.remainingElements) {
+            budget.rejection = Rejection::kElements;
+            return nullptr;
+        }
+        auto* reply = budget.originalCreateArray(task, elements);
+        if (reply != nullptr) {
+            budget.remainingElements -= elements;
+        }
+        return reply;
+    }
+
+    redisReplyObjectFunctions functions;
+    void* (*originalCreateArray)(const redisReadTask*, std::size_t);
+    std::size_t maximumElements;
+    std::size_t remainingElements;
+    std::size_t maxDepth;
+    Rejection rejection{Rejection::kNone};
+};
+
+void RedisReaderBudgetDeleter::operator()(RedisReaderBudget* budget) const noexcept {
+    destroyPmrObject(budget, resource);
+}
 
 void RedisPool::close(Connection& connection) noexcept {
     std::error_code ignored;
@@ -38,9 +101,17 @@ void RedisPool::configureSocket(Connection& connection) noexcept {
 void RedisPool::ensureReader(Connection& connection) {
     if (connection.reader == nullptr) {
         connection.reader.reset(redisReaderCreate());
+        if (connection.reader != nullptr && connection.readerBudget != nullptr) {
+            connection.readerBudget->bind(*connection.reader);
+        }
     }
     if (connection.reader == nullptr) {
         throw RedisError(RedisError::Code::kProtocolError, "failed to create redis reader");
+    }
+    if (connection.readerBudget == nullptr) {
+        connection.readerBudget.get_deleter().resource = resource_;
+        connection.readerBudget.reset(constructPmrObject<RedisReaderBudget>(
+            resource_, *connection.reader, config_.maxReplyBytes, config_.maxArrayDepth));
     }
     if (config_.maxReplyBytes.has_value()) {
         // Even a short array header can otherwise reserve billions of reply
@@ -50,6 +121,7 @@ void RedisPool::ensureReader(Connection& connection) {
         connection.reader->maxelements = static_cast<long long>(
             std::min(elements, static_cast<std::size_t>(REDIS_READER_MAX_ARRAY_ELEMENTS)));
     }
+    connection.readerBudget->reset();
     connection.replyBytes = 0;
 }
 
@@ -134,8 +206,17 @@ Task<RedisValue> RedisPool::readReply(
         void* rawReply = nullptr;
         const auto readerStatus = redisReaderGetReply(connection.reader.get(), &rawReply);
         if (readerStatus != REDIS_OK) {
-            throw RedisError(
-                RedisError::Code::kProtocolError, hiredisReaderError(*connection.reader));
+            switch (connection.readerBudget->rejection) {
+                case RedisReaderBudget::Rejection::kElements:
+                    throw RedisError(RedisError::Code::kProtocolError,
+                        "redis reply exceeds configured element limit");
+                case RedisReaderBudget::Rejection::kDepth:
+                    throw RedisError(RedisError::Code::kProtocolError,
+                        "redis array nesting is too deep");
+                case RedisReaderBudget::Rejection::kNone:
+                    throw RedisError(
+                        RedisError::Code::kProtocolError, hiredisReaderError(*connection.reader));
+            }
         }
         std::unique_ptr<redisReply, decltype(&freeReplyObject)> reply(
             static_cast<redisReply*>(rawReply), freeReplyObject);
