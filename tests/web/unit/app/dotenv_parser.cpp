@@ -4,6 +4,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
@@ -63,6 +64,41 @@ RUVIA_TEST(dotenv_rejects_line_without_equals) {
     }
     std::filesystem::remove(path);
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(dotenv_existing_unreadable_file_is_not_treated_as_missing) {
+    const auto path = writeTempEnv("ruvia_dotenv_unreadable.env", "SECRET=value\n");
+    std::error_code error;
+    std::filesystem::permissions(
+        path, std::filesystem::perms::none, std::filesystem::perm_options::replace, error);
+    if (error) {
+        std::filesystem::remove(path);
+        return;  // Some platforms cannot enforce file permission bits.
+    }
+    const bool unreadable = !std::ifstream(path);
+    bool parserThrew = false;
+    bool loaderThrew = false;
+    if (unreadable) {
+        try {
+            (void)readDotenvEntries(path);
+        } catch (const std::runtime_error&) {
+            parserThrew = true;
+        }
+        ruvia::Env env;
+        try {
+            (void)ruvia::detail::loadEnvFromFile(env, path, {});
+        } catch (const std::runtime_error&) {
+            loaderThrew = true;
+        }
+    }
+    std::filesystem::permissions(path,
+        std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace);
+    std::filesystem::remove(path);
+    if (unreadable) {
+        RUVIA_CHECK(parserThrew);
+        RUVIA_CHECK(loaderThrew);
+    }
 }
 
 RUVIA_TEST(dotenv_missing_file_is_empty) {

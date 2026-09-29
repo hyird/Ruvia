@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <iosfwd>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -51,6 +52,8 @@ struct DotenvEntry final {
     std::pmr::string value{appResource()};
 };
 
+[[nodiscard]] std::pmr::vector<DotenvEntry> readDotenvEntries(
+    std::istream& input, const std::filesystem::path& path);
 [[nodiscard]] std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenvExecutableDirectory();
 DotenvResult loadEnvFromExecutableDirectory(Env& env, DotenvOptions options);
