@@ -1,11 +1,15 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
-#include <variant>
+#include <memory>
+#include <memory_resource>
+#include <optional>
 
 #include "ruvia/core/PoolLeaseReleaseStatus.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
+#include "ruvia/core/WorkerHandle.h"
 
 namespace ruvia {
 
@@ -48,34 +52,39 @@ private:
     std::size_t index_;
 };
 
-class PoolLeaseScheduler final : public detail::PoolLeaseScheduler {
+// Single-worker owner of pool slot leases and their asynchronous wait queue.
+// The worker handle, when supplied, is borrowed and must outlive this owner.
+class PoolLeaseScheduler final {
 public:
-    using detail::PoolLeaseScheduler::PoolLeaseScheduler;
+    explicit PoolLeaseScheduler(std::size_t poolSize,
+        std::pmr::memory_resource* resource = nullptr);
+    PoolLeaseScheduler(std::size_t poolSize, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource = nullptr);
+    PoolLeaseScheduler(std::size_t, WorkerHandle&&, std::pmr::memory_resource* = nullptr) = delete;
+    PoolLeaseScheduler(std::size_t, const WorkerHandle&&,
+        std::pmr::memory_resource* = nullptr) = delete;
+
+    PoolLeaseScheduler(const PoolLeaseScheduler&) = delete;
+    PoolLeaseScheduler& operator=(const PoolLeaseScheduler&) = delete;
+    PoolLeaseScheduler(PoolLeaseScheduler&&) = delete;
+    PoolLeaseScheduler& operator=(PoolLeaseScheduler&&) = delete;
+    ~PoolLeaseScheduler();
 
     [[nodiscard]] Task<PoolWaiterResult> acquire(
-        std::optional<std::chrono::milliseconds> timeout) {
-        return convert(detail::PoolLeaseScheduler::acquire(timeout));
-    }
+        std::optional<std::chrono::milliseconds> timeout);
     [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout,
-        StopToken stopToken, const WorkerHandle& worker) {
-        return convert(detail::PoolLeaseScheduler::acquire(timeout, stopToken, worker));
-    }
+        StopToken stopToken, const WorkerHandle& worker);
     Task<PoolWaiterResult> acquire(
         std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
 
+    [[nodiscard]] PoolLeaseReleaseStatus release(std::size_t slot) noexcept;
+    [[nodiscard]] bool close() noexcept;
+    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] bool closing() const noexcept;
+
 private:
-    static Task<PoolWaiterResult> convert(Task<detail::PoolWaiterResult> task) {
-        const auto& result = co_await std::move(task);
-        if (const auto* acquired = result.acquired()) {
-            co_return PoolWaiterResult::makeAcquired(acquired->index());
-        }
-        if (result.timedOut()) {
-            co_return PoolWaiterResult::makeTimedOut();
-        }
-        if (result.closed()) {
-            co_return PoolWaiterResult::makeClosed();
-        }
-        co_return PoolWaiterResult::makeCancelled();
-    }
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
+
 }  // namespace ruvia
