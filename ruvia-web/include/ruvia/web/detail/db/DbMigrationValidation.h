@@ -109,7 +109,8 @@ namespace ruvia::detail {
         return skipSqlLineComment(sql, index + 2);
     }
     if (sql[index] == '/' && index + 1 < sql.size() && sql[index + 1] == '*') {
-        return skipSqlBlockComment(sql, index);
+        return driver == DbDriver::kPostgreSql ? skipPostgreSqlBlockComment(sql, index)
+                                               : skipSqlBlockComment(sql, index);
     }
     return index;
 }
