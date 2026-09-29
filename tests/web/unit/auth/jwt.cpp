@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -342,6 +343,32 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
     lenient.leeway = std::chrono::seconds{7200};
     const auto futurePayload = verifyJwt(tokenFuture, lenient);
     RUVIA_CHECK_EQ(futurePayload.subject(), std::string_view("user-1"));
+}
+
+RUVIA_TEST(jwt_not_before_delay_never_starts_before_the_requested_time) {
+    using Clock = std::chrono::system_clock;
+    using namespace std::chrono;
+
+    auto before = Clock::now();
+    while (before - floor<seconds>(before) < milliseconds(150) ||
+           before - floor<seconds>(before) > milliseconds(750)) {
+        std::this_thread::sleep_for(milliseconds(10));
+        before = Clock::now();
+    }
+    auto options = signOptions(kSecret);
+    options.notBeforeDelay = seconds(1);
+    const auto token = sign(options);
+    const auto after = Clock::now();
+    const auto payload = decodeJwtUnverified(token);
+    RUVIA_CHECK(payload.notBefore().has_value());
+    RUVIA_CHECK(*payload.notBefore() >= before + seconds(1));
+    RUVIA_CHECK(*payload.notBefore() < after + seconds(2));
+
+    options.notBeforeDelay = seconds(0);
+    const auto immediate = sign(options);
+    const auto immediatePayload = decodeJwtUnverified(immediate);
+    RUVIA_CHECK(immediatePayload.notBefore().has_value());
+    RUVIA_CHECK(*immediatePayload.notBefore() <= Clock::now());
 }
 
 RUVIA_TEST(jwt_time_options_reject_negative_offsets) {

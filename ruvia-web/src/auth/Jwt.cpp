@@ -1,6 +1,7 @@
 #include "ruvia/web/auth/Jwt.h"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 #include "ruvia/web/detail/auth/JwtPrimitives.h"
@@ -104,8 +105,13 @@ std::pmr::string jwtSign(const JwtSignOptions& options) {
             detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.expiresIn)));
     }
     if (options.notBeforeDelay.has_value()) {
-        detail::jwtAppendJsonMember(payload, first, "nbf",
-            detail::jwtEpochSeconds(detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
+        const auto requested = detail::jwtTimeWithOffset(now, *options.notBeforeDelay);
+        const auto notBeforeSeconds = options.notBeforeDelay->count() == 0
+                                          ? detail::jwtEpochSeconds(requested)
+                                          : std::chrono::ceil<std::chrono::seconds>(
+                                                requested.time_since_epoch())
+                                                .count();
+        detail::jwtAppendJsonMember(payload, first, "nbf", notBeforeSeconds);
     }
     for (const auto& claim : options.claims) {
         detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());
