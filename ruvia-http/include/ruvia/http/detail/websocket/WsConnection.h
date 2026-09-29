@@ -87,8 +87,9 @@ private:
         kLocalCloseQueued,
         kAwaitingPeerClose,
         // A peer Close was received (or the connection failed) and the final
-        // local Close bytes still need to be flushed before transport end.
-        kFinalCloseQueued,
+        // queued output still needs to be flushed before transport end. It may
+        // be a Pong queued for an earlier Ping, not another Close.
+        kFinalOutputQueued,
         kTransportEndReady,
         kClosed,
     };

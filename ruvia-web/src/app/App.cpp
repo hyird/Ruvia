@@ -3,8 +3,6 @@
 #include <string_view>
 #include <vector>
 
-#include <asio/ip/address_v4.hpp>
-
 #include "ruvia/core/FailureReport.h"
 #include "ruvia/core/WorkerSelection.h"
 #include "ruvia/web/detail/app/AppRunCoordinator.h"
@@ -16,7 +14,6 @@ namespace ruvia::detail {
 AppState::AppState()
     : runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{appResource()}) {
     applyServerConfig(*this, ServerConfig{});
-    listeners.emplace_back(asio::ip::tcp::endpoint(asio::ip::address_v4::any(), 8080));
 }
 
 AppState::~AppState() = default;

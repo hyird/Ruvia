@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <variant>
 
 #include "ruvia/http/WebSocketProtocol.h"
@@ -27,19 +30,36 @@ class WebSocketLivenessIdle final {};
 // soon as the transport accepts the bytes and before the write coroutine is
 // resumed, so the in-flight state must be visible to the reader without
 // starting the timeout prematurely.
-class WebSocketSendingPing final {};
+class WebSocketSendingPing final {
+public:
+    explicit WebSocketSendingPing(std::uint64_t challenge) noexcept
+        : challenge_(challenge) {}
+
+    [[nodiscard]] std::uint64_t challenge() const noexcept {
+        return challenge_;
+    }
+
+private:
+    std::uint64_t challenge_;
+};
 
 class WebSocketAwaitingPong final {
 public:
-    explicit WebSocketAwaitingPong(std::int64_t sentAtMs) noexcept
-        : sentAtMs_(sentAtMs) {}
+    explicit WebSocketAwaitingPong(std::int64_t sentAtMs, std::uint64_t challenge) noexcept
+        : sentAtMs_(sentAtMs),
+          challenge_(challenge) {}
 
     [[nodiscard]] std::int64_t sentAtMs() const noexcept {
         return sentAtMs_;
     }
 
+    [[nodiscard]] std::uint64_t challenge() const noexcept {
+        return challenge_;
+    }
+
 private:
     std::int64_t sentAtMs_;
+    std::uint64_t challenge_;
 };
 
 class WebSocketAwaitingPeerClose final {
@@ -57,6 +77,28 @@ private:
 
 using WebSocketLivenessState = std::variant<WebSocketLivenessIdle, WebSocketSendingPing,
     WebSocketAwaitingPong, WebSocketAwaitingPeerClose>;
+
+[[nodiscard]] inline std::array<char, 8> webSocketHeartbeatPayload(std::uint64_t challenge) noexcept {
+    std::array<char, 8> payload{};
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        payload[i] = static_cast<char>(challenge >> ((payload.size() - 1 - i) * 8));
+    }
+    return payload;
+}
+
+[[nodiscard]] inline bool webSocketHeartbeatPongMatches(
+    const WebSocketLivenessState& state, std::string_view payload) noexcept {
+    std::uint64_t challenge;
+    if (const auto* sending = std::get_if<WebSocketSendingPing>(&state)) {
+        challenge = sending->challenge();
+    } else if (const auto* awaiting = std::get_if<WebSocketAwaitingPong>(&state)) {
+        challenge = awaiting->challenge();
+    } else {
+        return false;
+    }
+    const auto expected = webSocketHeartbeatPayload(challenge);
+    return payload == std::string_view(expected.data(), expected.size());
+}
 
 [[nodiscard]] inline WebSocketLivenessDecision webSocketLivenessDecision(
     const WebSocketLifecycleOptions& options, WebSocketLivenessMode livenessMode,

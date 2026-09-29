@@ -48,6 +48,21 @@ RUVIA_TEST(auto_https_redirect_uses_host_without_request_port) {
     RUVIA_CHECK_EQ(ipv6.header("Location").value_or(std::string_view{}),
         std::string_view("https://[2001:db8::1]/"));
 
+    const auto emptyQuery = makeAutoHttpsRedirectResponse(
+        makeRequest(memory, "example.com", "/x?"), memory, 443);
+    RUVIA_CHECK_EQ(emptyQuery.header("Location").value_or(std::string_view{}),
+        std::string_view("https://example.com/x?"));
+
+    const auto encodedQuestion = makeAutoHttpsRedirectResponse(
+        makeRequest(memory, "example.com", "/x%3F"), memory, 443);
+    RUVIA_CHECK_EQ(encodedQuestion.header("Location").value_or(std::string_view{}),
+        std::string_view("https://example.com/x%3F"));
+
+    const auto absoluteEmptyQuery = makeAutoHttpsRedirectResponse(
+        makeRequest(memory, "example.com:80", "http://example.com/x?"), memory, 443);
+    RUVIA_CHECK_EQ(absoluteEmptyQuery.header("Location").value_or(std::string_view{}),
+        std::string_view("https://example.com/x?"));
+
     const auto customPort = makeAutoHttpsRedirectResponse(
         makeRequest(memory, "example.com", "/app"), memory, 8443);
     RUVIA_CHECK_EQ(customPort.header("Location").value_or(std::string_view{}),

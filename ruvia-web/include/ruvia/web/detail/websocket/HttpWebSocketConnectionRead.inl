@@ -53,7 +53,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::readOwned(
                 continue;
             }
             if (event->pong() != nullptr) {
-                if (std::holds_alternative<WebSocketSendingPing>(livenessState_) || std::holds_alternative<WebSocketAwaitingPong>(livenessState_)) {
+                if (webSocketHeartbeatPongMatches(livenessState_, event->pong()->payload())) {
                     livenessState_ = WebSocketLivenessIdle{};
                 }
                 continue;

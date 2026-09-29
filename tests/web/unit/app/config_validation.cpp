@@ -21,6 +21,7 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
+#include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
@@ -91,6 +92,19 @@ bool throwsInvalid(Fn&& fn) {
 }
 
 }  // namespace
+
+RUVIA_TEST(app_state_has_no_implicit_listener) {
+    const ruvia::detail::AppState state;
+    RUVIA_CHECK(state.listeners.empty());
+}
+
+RUVIA_TEST(server_configuration_rejects_empty_listeners) {
+    RUVIA_CHECK_EQ(caughtMessage([] {
+        (void)validateHttpServerConfiguration(
+            std::span<const HttpServerListenerDefinition>{}, HttpServerOptions{});
+    }),
+        std::string("HTTP server worker requires at least one listener"));
+}
 
 RUVIA_TEST(http3_listen_config_defaults_to_automatic_and_accepts_designated_values) {
     const ruvia::ListenConfig defaults{};
