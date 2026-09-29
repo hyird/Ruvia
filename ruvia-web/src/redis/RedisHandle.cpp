@@ -1,3 +1,4 @@
+#include <chrono>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
@@ -237,10 +238,10 @@ ScopedOperation<bool> RedisHandle::expire(std::string_view key, std::chrono::sec
 ScopedOperation<bool> RedisHandle::expireAt(
     std::string_view key, std::chrono::system_clock::time_point expiresAt) const {
     requireActive();
-    auto value = detail::redisSecondsString(
-        std::chrono::floor<std::chrono::seconds>(expiresAt.time_since_epoch()), resource_);
+    auto value = detail::redisMillisecondsString(
+        std::chrono::ceil<std::chrono::milliseconds>(expiresAt.time_since_epoch()), resource_);
     return scoped(detail::executeRedisIntegerBool(executor(),
-        detail::ownRedisArgs({"EXPIREAT", key, std::string_view(value)}, resource_), resource_));
+        detail::ownRedisArgs({"PEXPIREAT", key, std::string_view(value)}, resource_), resource_));
 }
 
 ScopedOperation<bool> RedisHandle::persist(std::string_view key) const {
