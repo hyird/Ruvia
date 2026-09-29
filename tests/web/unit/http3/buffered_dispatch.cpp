@@ -2056,8 +2056,11 @@ RUVIA_TEST(http3BufferedDispatchBoundsTunnelInputAcrossWorkerAndReleasesEveryRes
         RUVIA_CHECK(fixture.session.cancelRequest(12));
     }
     {
-        Fixture fixture(workerHandle, upstream, 1, 1, 1, 128, 128);
-        const std::string allocationFailurePayload(80, 'a');
+        // Exceed every implementation's worker pool size class so the upstream
+        // rejection cannot be satisfied from a cached block on MSVC.
+        constexpr std::size_t tunnelLimit = 512 * 1024;
+        Fixture fixture(workerHandle, upstream, 1, 1, 1, tunnelLimit, tunnelLimit);
+        const std::string allocationFailurePayload(256 * 1024, 'a');
         feedWebSocketRequest(fixture, 16);
         fixture.allocations.reject = true;
         feedRawTunnelData(fixture, 16, allocationFailurePayload);

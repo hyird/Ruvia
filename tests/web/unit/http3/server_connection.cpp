@@ -2773,12 +2773,16 @@ RUVIA_TEST(http3NetworkTunnelBodyTimeoutWaitsForAcceptedHandshakeBarrier) {
                     Access::TunnelResult::kAccepted);
         RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{1});
         const auto deallocationsBeforeReset = resetResource.deallocationCount();
+        const auto liveAllocationsBeforeReset = resetResource.liveAllocations();
         Access::noteInputReset(resetConnection, 20);
         Access::completeInputTerminal(resetConnection, 20);
         RUVIA_CHECK(resetStream.inputTerminal);
         RUVIA_CHECK(resetStream.inputReset);
         RUVIA_CHECK(!resetStream.frameTracker);
-        RUVIA_CHECK_EQ(resetResource.deallocationCount(), deallocationsBeforeReset + 1);
+        // The tracker can own more than one PMR allocation on MSVC; verify
+        // actual release rather than assuming its object is the only block.
+        RUVIA_CHECK(resetResource.deallocationCount() > deallocationsBeforeReset);
+        RUVIA_CHECK(resetResource.liveAllocations() < liveAllocationsBeforeReset);
         RUVIA_CHECK(!resetStream.bodyTimeoutApplies());
         RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{0});
         RUVIA_CHECK(Access::acceptTunnelEstablished(

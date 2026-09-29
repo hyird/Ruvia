@@ -1198,11 +1198,14 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
             const auto idleFresh = output.drive();
             RUVIA_CHECK_EQ(idleFresh.timedOutStreams, std::size_t{0});
-            RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kOpen);
+            // Opening a QUIC stream does not register it with the response writer.
+            // An idle, unregistered stream must not inherit the old stream's deadline.
+            RUVIA_CHECK(!output.streamInfo(freshId));
             const auto freshWire = encodeResponse("fresh write gets a fresh deadline", worker.resource());
             auto freshBlock = enqueueBlock(mailbox, messageId(freshId), freshWire);
             RUVIA_CHECK(output.acceptData(freshBlock).status == Output::Status::kAccepted);
             RUVIA_CHECK(!freshBlock);
+            RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kOpen);
             RUVIA_CHECK(output.acceptControl({.kind = Http3StreamControl::Kind::kStreamFin,
                                                  .id = messageId(freshId),
                                                  .value = freshWire.size()})
