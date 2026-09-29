@@ -206,16 +206,8 @@ void stripUtf8Bom(std::string_view& line) noexcept {
 
 }  // namespace
 
-std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& path) {
-    std::ifstream input(path);
-    if (!input) {
-        std::error_code error;
-        if (std::filesystem::exists(path, error) || error) {
-            throw std::runtime_error("failed to read dotenv file: " + path.string());
-        }
-        return {};
-    }
-
+std::pmr::vector<DotenvEntry> readDotenvEntries(
+    std::istream& input, const std::filesystem::path& path) {
     std::pmr::vector<DotenvEntry> entries(appResource());
     std::pmr::string line(appResource());
     std::size_t lineNumber = 0;
@@ -241,6 +233,18 @@ std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& pat
     }
 
     return entries;
+}
+
+std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& path) {
+    std::ifstream input(path);
+    if (!input) {
+        std::error_code error;
+        if (std::filesystem::exists(path, error) || error) {
+            throw std::runtime_error("failed to read dotenv file: " + path.string());
+        }
+        return {};
+    }
+    return readDotenvEntries(input, path);
 }
 
 }  // namespace ruvia::detail

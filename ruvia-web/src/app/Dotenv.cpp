@@ -90,7 +90,8 @@ DotenvResult detail::loadEnvFromFile(
         options.missingFile != DotenvMissingFilePolicy::kRequire) {
         throw std::invalid_argument("dotenv missing file policy is invalid");
     }
-    if (std::ifstream probe(path); !probe) {
+    std::ifstream input(path);
+    if (!input) {
         std::error_code error;
         if (std::filesystem::exists(path, error) || error) {
             throw std::runtime_error("failed to read dotenv file: " + path.string());
@@ -101,7 +102,7 @@ DotenvResult detail::loadEnvFromFile(
         return detail::DotenvResultAccess::make(false);
     }
 
-    const auto entries = detail::readDotenvEntries(path);
+    const auto entries = detail::readDotenvEntries(input, path);
     auto result = detail::DotenvResultAccess::make(true);
     auto& state = detail::EnvAccess::state(env);
 
