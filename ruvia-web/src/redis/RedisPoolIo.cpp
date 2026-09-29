@@ -121,15 +121,30 @@ Task<RedisValue> RedisPool::readReply(
     Connection& connection, const ruvia::OperationTimeout& timeout, std::pmr::memory_resource* resource) {
     ensureReader(connection);
     for (;;) {
+        const auto unreadBefore = connection.reader->len - connection.reader->pos;
         void* rawReply = nullptr;
         const auto readerStatus = redisReaderGetReply(connection.reader.get(), &rawReply);
         if (readerStatus != REDIS_OK) {
             throw RedisError(
                 RedisError::Code::kProtocolError, hiredisReaderError(*connection.reader));
         }
-        if (rawReply != nullptr) {
-            std::unique_ptr<redisReply, decltype(&freeReplyObject)> reply(
-                static_cast<redisReply*>(rawReply), freeReplyObject);
+        std::unique_ptr<redisReply, decltype(&freeReplyObject)> reply(
+            static_cast<redisReply*>(rawReply), freeReplyObject);
+        const auto unreadAfter = connection.reader->len - connection.reader->pos;
+        const auto consumed = unreadBefore - unreadAfter;
+        // One socket read can contain multiple replies. Only the bytes parsed for
+        // this reply count against its limit; if incomplete, any unread bytes
+        // still belong to it and must also stay within the limit.
+        if (config_.maxReplyBytes.has_value()) {
+            const auto limit = *config_.maxReplyBytes;
+            if (consumed > limit || connection.replyBytes > limit - consumed ||
+                (!reply && unreadAfter > limit - (connection.replyBytes + consumed))) {
+                throw RedisError(
+                    RedisError::Code::kProtocolError, "redis reply exceeds configured limit");
+            }
+        }
+        connection.replyBytes += consumed;
+        if (reply) {
             connection.replyBytes = 0;
             co_return hiredisReplyToValue(
                 *reply, 0, config_.maxArrayDepth, detail::pmrResourceOrDefault(resource));
@@ -145,13 +160,6 @@ Task<RedisValue> RedisPool::readReply(
             }
             throw RedisError(RedisError::Code::kIoError, readEc.message());
         }
-        if (config_.maxReplyBytes.has_value() &&
-            (bytesRead > *config_.maxReplyBytes ||
-                connection.replyBytes > *config_.maxReplyBytes - bytesRead)) {
-            throw RedisError(
-                RedisError::Code::kProtocolError, "redis reply exceeds configured limit");
-        }
-        connection.replyBytes += bytesRead;
         if (redisReaderFeed(connection.reader.get(), connection.readBuffer.data(), bytesRead) !=
             REDIS_OK) {
             throw RedisError(
