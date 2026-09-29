@@ -299,6 +299,28 @@ RUVIA_TEST(http3_connection_delivers_trailers_synchronously_and_finishes_the_mes
     RUVIA_CHECK_EQ(captured.ended.size(), 1U);
 }
 
+RUVIA_TEST(http3_connection_rejects_forbidden_request_trailer_fields) {
+    std::pmr::monotonic_buffer_resource resource;
+    for (const auto field : {ruvia::Http3FieldSectionFieldView{"authorization", "Bearer secret"},
+             ruvia::Http3FieldSectionFieldView{"content-type", "application/json"}}) {
+        ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource);
+        Captured captured;
+        const auto initial = requestWire(&resource, "POST", "/trailers", "");
+        RUVIA_CHECK(connection.feed(0, initial, false, false, capture, &captured).status ==
+                    ruvia::Http3ConnectionStatus::kNeedMoreData);
+        const std::array fields{field};
+        const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
+        std::array<char, 16> prefix{};
+        const auto prefixSize = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
+        std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(*prefixSize));
+        wire.insert(wire.end(), section->begin(), section->end());
+        const auto result = connection.feed(0, wire, true, false, capture, &captured);
+        RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream);
+        RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
+        RUVIA_CHECK(captured.trailers.empty());
+    }
+}
+
 RUVIA_TEST(http3_connection_maps_qpack_critical_stream_errors_to_connection_scope) {
     std::pmr::monotonic_buffer_resource resource;
     Captured captured;

@@ -4,9 +4,14 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia {
 namespace {
@@ -139,6 +144,7 @@ struct DecodeState final {
     bool hostSeen{false};
     bool callbackRejected{false};
     std::pmr::string host;
+    bool contentTypeSeen{false};
     bool contentLengthSeen{false};
     std::uint64_t contentLength{0};
 };
@@ -241,8 +247,33 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         state.host.assign(field.value);
         state.hostSeen = true;
     }
-    if (field.name == "origin" && state.kind == Http3MessageHeadKind::kRequest &&
-        !detail::isValidHttpOriginFieldValue(field.value)) {
+    if (state.kind == Http3MessageHeadKind::kRequest) {
+        if ((field.name == "origin" && !detail::isValidHttpOriginFieldValue(field.value)) ||
+            (field.name == "access-control-request-method" &&
+                !detail::isValidHttpCorsRequestMethod(field.value)) ||
+            (field.name == "access-control-request-headers" &&
+                !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
+            (field.name == "expect" &&
+                !detail::isValidReceivedHttpExpectFieldValue(field.value))) {
+            return fail(state);
+        }
+    }
+    if (field.name == "content-type") {
+        if (state.contentTypeSeen || !isValidHttpContentTypeFieldValue(field.value)) {
+            return fail(state);
+        }
+        state.contentTypeSeen = true;
+    } else if (field.name == "content-encoding" &&
+               !detail::isValidHttpContentEncodingFieldValue(
+                   field.value, detail::HttpFieldListRole::kRecipient)) {
+        return fail(state);
+    }
+    if (field.name == "trailer" &&
+        !(state.kind == Http3MessageHeadKind::kRequest
+                ? detail::isValidHttpRequestTrailerFieldValue(
+                      field.value, detail::HttpFieldListRole::kRecipient)
+                : detail::isValidHttpResponseTrailerFieldValue(
+                      field.value, detail::HttpFieldListRole::kRecipient))) {
         return fail(state);
     }
     if (field.name == "content-length") {

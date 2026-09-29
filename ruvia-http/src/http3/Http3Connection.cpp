@@ -1,6 +1,5 @@
 #include "ruvia/http/Http3Connection.h"
 
-#include <algorithm>
 #include <memory_resource>
 #include <stdexcept>
 #include <unordered_map>
@@ -14,6 +13,7 @@
 #include "ruvia/http/Http3StreamFrames.h"
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 
 namespace ruvia {
 namespace {
@@ -69,14 +69,16 @@ Http3ConnectionErrorCode mapControlError(Http3ControlStreamStatus status) noexce
 }
 
 bool isValidTrailer(Http3FieldSectionFieldView field) {
-    const bool uppercaseName = std::any_of(field.name.begin(), field.name.end(), [](unsigned char ch) {
-        return ch >= 'A' && ch <= 'Z';
-    });
-    return !field.name.empty() && !uppercaseName && field.name.front() != ':' &&
-           isValidHttpHeaderName(field.name) && isValidHttpHeaderValue(field.value) &&
-           field.name != "content-length" && field.name != "transfer-encoding" && field.name != "host" &&
-           field.name != "trailer" && field.name != "connection" && field.name != "keep-alive" &&
-           field.name != "proxy-connection" && field.name != "upgrade";
+    if (field.name.empty() || field.name.front() == ':' || !isValidHttpHeaderName(field.name) ||
+        !isValidHttpHeaderValue(field.value) || detail::isForbiddenHttpRequestTrailerName(field.name)) {
+        return false;
+    }
+    for (const unsigned char ch : field.name) {
+        if (ch >= 'A' && ch <= 'Z') {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace

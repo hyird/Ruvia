@@ -25,7 +25,8 @@
 
 namespace {
 
-void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClose) {
+void checkPeerExchange(ruvia::testing::TestContext& ruvia_ctx, bool replyClose,
+    bool truncatedFrame = false) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
@@ -63,8 +64,16 @@ void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClo
         handshake.forEachResponsePart([&response](std::string_view part) {
             response.append(part);
         });
-        response.append("\x82\x05hello", 7);
+        if (truncatedFrame) {
+            response.append("\x81\x05hi", 4);
+        } else {
+            response.append("\x82\x05hello", 7);
+        }
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        if (truncatedFrame) {
+            socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+            co_return;
+        }
         std::array<unsigned char, 2> header{};
         co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
         sawClose = header[0] == 0x88 && (header[1] & 0x80) != 0;
@@ -79,6 +88,7 @@ void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClo
     asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peerFailure = failure; });
     bool succeeded = false;
     bool protocolError = false;
+    bool returnedEof = false;
     const auto runClient = [&]() -> ruvia::Task<void> {
         ruvia::WebSocketClient client(attachment.loop(), {.scheme = ruvia::WebSocketScheme::kWs,
                                                              .host = "127.0.0.1",
@@ -87,12 +97,16 @@ void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClo
         try {
             co_await client.connect();
             const auto greeting = co_await client.read();
-            RUVIA_CHECK(greeting.has_value());
-            if (greeting) {
-                RUVIA_CHECK_EQ(greeting->payload(), std::string_view("hello"));
+            if (truncatedFrame) {
+                returnedEof = !greeting.has_value();
+            } else {
+                RUVIA_CHECK(greeting.has_value());
+                if (greeting) {
+                    RUVIA_CHECK_EQ(greeting->payload(), std::string_view("hello"));
+                }
+                co_await client.close({});
+                succeeded = true;
             }
-            co_await client.close({});
-            succeeded = true;
         } catch (const ruvia::WebSocketClientError& error) {
             protocolError = error.code() == ruvia::WebSocketClientError::Code::kProtocolError;
             if (!protocolError) {
@@ -114,16 +128,25 @@ void checkExchangeAndClose(ruvia::testing::TestContext& ruvia_ctx, bool replyClo
     if (peerFailure) {
         std::rethrow_exception(peerFailure);
     }
-    RUVIA_CHECK(sawClose);
-    RUVIA_CHECK_EQ(succeeded, replyClose);
-    RUVIA_CHECK_EQ(protocolError, !replyClose);
+    if (truncatedFrame) {
+        RUVIA_CHECK(!returnedEof);
+        RUVIA_CHECK(protocolError);
+    } else {
+        RUVIA_CHECK(sawClose);
+        RUVIA_CHECK_EQ(succeeded, replyClose);
+        RUVIA_CHECK_EQ(protocolError, !replyClose);
+    }
 }
 
 }  // namespace
 
 RUVIA_TEST(websocket_client_close_requires_peer_close) {
-    checkExchangeAndClose(ruvia_ctx, false);
-    checkExchangeAndClose(ruvia_ctx, true);
+    checkPeerExchange(ruvia_ctx, false);
+    checkPeerExchange(ruvia_ctx, true);
+}
+
+RUVIA_TEST(websocket_client_read_rejects_eof_during_incomplete_frame) {
+    checkPeerExchange(ruvia_ctx, false, true);
 }
 
 RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {

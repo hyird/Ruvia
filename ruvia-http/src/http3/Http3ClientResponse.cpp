@@ -1,13 +1,11 @@
 #include "ruvia/http/Http3ClientResponse.h"
 
-#include <algorithm>
 #include <limits>
 #include <stdexcept>
-#include <string_view>
 
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3StreamFrames.h"
-#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia {
 namespace {
@@ -29,12 +27,7 @@ bool validTrailer(Http3FieldSectionFieldView field) noexcept {
             return false;
         }
     }
-    if (!isValidHttpHeaderName(field.name) || !isValidHttpHeaderValue(field.value)) {
-        return false;
-    }
-    constexpr std::string_view forbidden[] = {"content-length", "host", "transfer-encoding", "te",
-        "trailer", "connection", "keep-alive", "proxy-connection", "upgrade"};
-    return std::find(std::begin(forbidden), std::end(forbidden), field.name) == std::end(forbidden);
+    return detail::responseTrailerFieldValid(field.name, field.value);
 }
 
 }  // namespace
