@@ -30,6 +30,7 @@ HttpServerListenerDefinition::Tls cloneTls(
         sni.host = configured.host;
         sni.identity = cloneTlsIdentity(configured.identity, resource);
     }
+    result.altSvc = source.altSvc;
     return result;
 }
 

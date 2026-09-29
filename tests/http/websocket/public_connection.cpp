@@ -1,6 +1,5 @@
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 
 #include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/http/WebSocketServerProtocol.h"
@@ -9,9 +8,6 @@
 
 namespace {
 using namespace ruvia;
-
-static_assert(!std::is_same_v<WebSocketServerProtocol, detail::WsConnection>);
-static_assert(!std::is_same_v<WebSocketServerEvent, detail::WsEvent>);
 
 struct MaskSource {
     unsigned calls{0};

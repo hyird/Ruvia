@@ -11,6 +11,7 @@ namespace {
 
 constexpr std::uint8_t kCapacityData = 1;
 constexpr std::uint8_t kCapacityControl = 2;
+constexpr std::uint8_t kCapacityIntent = 4;
 
 }  // namespace
 
@@ -48,11 +49,13 @@ void Http3WorkerMailboxCapacitySignal::notifyThunk(void* context) noexcept {
 
 Http3WorkerMailboxScheduler::Http3WorkerMailboxScheduler(const WorkerHandle& worker,
     std::size_t maxConnections, std::pmr::memory_resource* resource,
-    Http3WorkerMailboxCapacitySignal* capacitySignal, std::size_t controlBurstLimit)
+    Http3WorkerMailboxCapacitySignal* capacitySignal, std::size_t controlBurstLimit,
+    Http3WorkerMailboxWakeRef workerWake)
     : worker_(worker),
       maxConnections_(maxConnections),
       capacitySignal_(capacitySignal),
       controlBurstLimit_(controlBurstLimit),
+      workerWake_(workerWake),
       slots_(resource == nullptr ? std::pmr::get_default_resource() : resource),
       freeSlots_(resource == nullptr ? std::pmr::get_default_resource() : resource) {
     if (!worker_.valid() || !worker_.isCurrent()) {
@@ -60,6 +63,9 @@ Http3WorkerMailboxScheduler::Http3WorkerMailboxScheduler(const WorkerHandle& wor
     }
     if (maxConnections_ == 0 || controlBurstLimit_ == 0) {
         throw std::invalid_argument("HTTP/3 scheduler limits must be positive");
+    }
+    if ((workerWake_.context == nullptr) != (workerWake_.notify == nullptr)) {
+        throw std::invalid_argument("HTTP/3 scheduler worker wake target is incomplete");
     }
     if (capacitySignal_ != nullptr) {
         consumedCapacityGeneration_ = capacitySignal_->consume();
@@ -261,7 +267,16 @@ Http3WorkerMailboxScheduler::StepResult Http3WorkerMailboxScheduler::step() noex
             break;
         }
         case Lane::kIntent: {
-            auto* slot = popFront(QueueId::kIntentRunnable);
+            Slot* slot = nullptr;
+            if ((capacityPassLanes_ & kCapacityIntent) != 0 &&
+                hasRecoverable(QueueId::kIntentBlocked)) {
+                slot = popFront(QueueId::kIntentBlocked);
+                if (slot != nullptr) {
+                    slot->parkedIntent.reset();
+                }
+            } else {
+                slot = popFront(QueueId::kIntentRunnable);
+            }
             result = slot == nullptr ? StepResult{.kind = StepKind::kReconciled}
                                      : stepIntent(*slot);
             break;
@@ -326,6 +341,15 @@ bool Http3WorkerMailboxScheduler::bindMailbox(Mailbox& mailbox) noexcept {
     return true;
 }
 
+void Http3WorkerMailboxScheduler::notifyTransportCapacity() noexcept {
+    if (!onWorker()) {
+        return;
+    }
+    if (queues_[queueIndex(QueueId::kIntentBlocked)].head != nullptr) {
+        startCapacityPass(kCapacityIntent);
+    }
+}
+
 Http3WorkerMailboxScheduler::CapacityArmResult
 Http3WorkerMailboxScheduler::armCapacityWait() noexcept {
     if (!onWorker()) {
@@ -347,11 +371,12 @@ Http3WorkerMailboxScheduler::armCapacityWait() noexcept {
     if (queues_[queueIndex(QueueId::kDataBlocked)].head != nullptr) {
         lanes |= kCapacityData;
     }
-    if (queues_[queueIndex(QueueId::kControlBlocked)].head != nullptr ||
-        queues_[queueIndex(QueueId::kIntentBlocked)].head != nullptr) {
+    if (queues_[queueIndex(QueueId::kControlBlocked)].head != nullptr) {
         lanes |= kCapacityControl;
     }
     if (lanes == 0) {
+        capacityWaitArmed_ = false;
+        armedCapacityLanes_ = 0;
         return {.status = CapacityArmStatus::kNoBlockedWork};
     }
     const auto interest = lanes == (kCapacityData | kCapacityControl)
@@ -533,6 +558,7 @@ void Http3WorkerMailboxScheduler::syncSlot(
         std::terminate();
     }
     const bool active = slot.state == SlotState::kActive;
+    const bool acceptsIntents = active || slot.state == SlotState::kRetiring;
     setLinked(slot, QueueId::kDataRunnable, active && activation.work.runnable.data);
     setLinked(slot, QueueId::kControlRunnable, active && activation.work.runnable.control);
     setLinked(slot, QueueId::kLocalRunnable, active && activation.work.runnable.local);
@@ -543,23 +569,21 @@ void Http3WorkerMailboxScheduler::syncSlot(
         setLinked(slot, QueueId::kIntentBlocked, false);
         slot.parkedIntent.reset();
     }
-    if (slot.offeredIntent && !sameIntent(activation.transportIntent, slot.offeredIntent)) {
-        slot.offeredIntent.reset();
-    }
     if (!activation.transportIntent) {
         setLinked(slot, QueueId::kIntentRunnable, false);
         setLinked(slot, QueueId::kIntentBlocked, false);
-        slot.offeredIntent.reset();
         slot.parkedIntent.reset();
+    } else if (slot.offeredIntent) {
+        // The exact token already published to the channel remains owed even if
+        // connection-close or a merged reset becomes the current queue head.
+        setLinked(slot, QueueId::kIntentRunnable, false);
+        setLinked(slot, QueueId::kIntentBlocked, false);
     } else if (slot.parkedIntent && *slot.parkedIntent == *activation.transportIntent) {
         setLinked(slot, QueueId::kIntentRunnable, false);
-        setLinked(slot, QueueId::kIntentBlocked, true);
-    } else if (slot.offeredIntent && *slot.offeredIntent == *activation.transportIntent) {
-        setLinked(slot, QueueId::kIntentRunnable, false);
+        setLinked(slot, QueueId::kIntentBlocked, acceptsIntents);
     } else {
-        slot.offeredIntent.reset();
         setLinked(slot, QueueId::kIntentBlocked, false);
-        setLinked(slot, QueueId::kIntentRunnable, true);
+        setLinked(slot, QueueId::kIntentRunnable, acceptsIntents);
     }
 }
 
@@ -585,7 +609,11 @@ void Http3WorkerMailboxScheduler::receiveActivation(Slot& slot, std::uint64_t ep
     const auto& work = activation.work;
     if (work.runnable.data || work.runnable.control || work.runnable.local ||
         activation.transportIntent) {
+        const bool alreadyPending = localWakePending_;
         localWakePending_ = true;
+        if (!alreadyPending && workerWake_.valid()) {
+            workerWake_.notify(workerWake_.context);
+        }
     }
 }
 
@@ -631,9 +659,12 @@ void Http3WorkerMailboxScheduler::normalizeCapacityPass() noexcept {
         capacityPassLanes_ &= static_cast<std::uint8_t>(~kCapacityData);
     }
     if ((capacityPassLanes_ & kCapacityControl) != 0 &&
-        !hasRecoverable(QueueId::kControlBlocked) &&
-        !hasRecoverable(QueueId::kIntentBlocked)) {
+        !hasRecoverable(QueueId::kControlBlocked)) {
         capacityPassLanes_ &= static_cast<std::uint8_t>(~kCapacityControl);
+    }
+    if ((capacityPassLanes_ & kCapacityIntent) != 0 &&
+        !hasRecoverable(QueueId::kIntentBlocked)) {
+        capacityPassLanes_ &= static_cast<std::uint8_t>(~kCapacityIntent);
     }
 }
 
@@ -655,12 +686,13 @@ bool Http3WorkerMailboxScheduler::hasLaneWork(Lane lane) noexcept {
         case Lane::kControl:
             return queues_[queueIndex(QueueId::kControlRunnable)].head != nullptr ||
                    (((capacityPassLanes_ & kCapacityControl) != 0) &&
-                       (hasRecoverable(QueueId::kControlBlocked) ||
-                           hasRecoverable(QueueId::kIntentBlocked)));
+                       hasRecoverable(QueueId::kControlBlocked));
         case Lane::kLocal:
             return queues_[queueIndex(QueueId::kLocalRunnable)].head != nullptr;
         case Lane::kIntent:
-            return queues_[queueIndex(QueueId::kIntentRunnable)].head != nullptr;
+            return queues_[queueIndex(QueueId::kIntentRunnable)].head != nullptr ||
+                   (((capacityPassLanes_ & kCapacityIntent) != 0) &&
+                       hasRecoverable(QueueId::kIntentBlocked));
     }
     return false;
 }
@@ -734,26 +766,12 @@ Http3WorkerMailboxScheduler::stepIntent(Slot& slot) noexcept {
 
 Http3WorkerMailboxScheduler::Slot*
 Http3WorkerMailboxScheduler::selectRecoveryControl(bool& isIntent) noexcept {
-    const bool controlReady = hasRecoverable(QueueId::kControlBlocked);
-    const bool intentReady = hasRecoverable(QueueId::kIntentBlocked);
-    if (!controlReady && !intentReady) {
+    isIntent = false;
+    if (!hasRecoverable(QueueId::kControlBlocked)) {
         capacityPassLanes_ &= static_cast<std::uint8_t>(~kCapacityControl);
-        isIntent = false;
         return nullptr;
     }
-    if (intentReady && controlReady) {
-        isIntent = preferIntentRecovery_;
-        preferIntentRecovery_ = !preferIntentRecovery_;
-    } else {
-        isIntent = intentReady;
-    }
-    auto* slot = popFront(isIntent ? QueueId::kIntentBlocked : QueueId::kControlBlocked);
-    if (slot != nullptr && isIntent) {
-        // The connection activation snapshot remains authoritative; keep the
-        // exact blocked token until this slot receives its recovery turn.
-        slot->links[queueIndex(QueueId::kIntentBlocked)].blockedGeneration = 0;
-    }
-    return slot;
+    return popFront(QueueId::kControlBlocked);
 }
 
 void Http3WorkerMailboxScheduler::clearSlot(Slot& slot) noexcept {

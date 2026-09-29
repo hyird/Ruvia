@@ -113,13 +113,38 @@ struct TlsConfig final {
     std::vector<TlsSniConfig> sni{};
 };
 
-// HTTP/3 is an explicit UDP capability on the HTTPS listener. Presence enables
-// QUIC on the same address and numeric port as HTTPS; it never changes TCP ALPN.
+enum class Http3Mode : std::uint8_t {
+    kAutomatic,
+    kEnabled,
+    kDisabled,
+};
+
+// HTTP/3 is an optional UDP capability on the HTTPS listener. Automatic mode
+// enables QUIC when HTTPS is configured; it never changes TCP ALPN.
 struct Http3ListenConfig final {
+    Http3Mode mode{Http3Mode::kAutomatic};
     // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
     std::chrono::milliseconds handshakeTimeout{std::chrono::seconds(10)};
     // Maximum time to drain admitted request streams and close the connection.
     std::chrono::milliseconds drainTimeout{std::chrono::seconds(30)};
+};
+
+enum class AltSvcMode : std::uint8_t {
+    kAutomatic,
+    kDisabled,
+    kClear,
+};
+
+// HTTPS responses advertise an active HTTP/3 listener by default. Applications
+// can still replace or remove Alt-Svc on an individual response. Clear mode
+// emits the RFC 7838 cache-clearing value even when HTTP/3 is disabled.
+struct AltSvcConfig final {
+    AltSvcMode mode{AltSvcMode::kAutomatic};
+    std::chrono::seconds maxAge{std::chrono::hours(24)};
+    bool persist{false};
+    // Defaults to the HTTPS/UDP listener port. This override is for deployments
+    // whose externally advertised port differs from the local bind port.
+    std::optional<std::uint16_t> advertisedPort{};
 };
 
 // One bind address with optional HTTP and HTTPS service ports, independent of
@@ -133,7 +158,8 @@ struct ListenConfig final {
     std::optional<std::uint16_t> http{};
     std::optional<std::uint16_t> https{};
     TlsConfig tls{};
-    std::optional<Http3ListenConfig> http3{};
+    Http3ListenConfig http3{};
+    AltSvcConfig altSvc{};
     bool autoHttpsRedirect{false};
 };
 

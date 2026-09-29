@@ -43,7 +43,11 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request,
       maxDecodedBodyBytes_(services.maxDecodedBodyBytes()),
       dispatchDepth_(services.dispatchDepth()),
       requestStorage_(detail::makePmrObject<detail::ContextRequestStorage>(memory.resource(),
-          services.requestBodySource(), services.responseOutput(), memory.resource())) {}
+          services.requestBodySource(), services.responseOutput(), memory.resource())) {
+    if (!services.automaticAltSvc().empty()) {
+        setStableResponseHeader("Alt-Svc", services.automaticAltSvc());
+    }
+}
 
 }  // namespace ruvia
 

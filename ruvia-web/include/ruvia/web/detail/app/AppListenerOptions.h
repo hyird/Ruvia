@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <memory_resource>
+#include <optional>
+#include <string>
 #include <string_view>
 
 #include <asio/ip/address.hpp>
@@ -20,6 +23,12 @@ namespace detail {
 // configuration is validated here exactly once.
 [[nodiscard]] HttpServerListenerDefinition::Tls normalizeTlsOptions(
     const TlsConfig& config, std::pmr::memory_resource* resource);
+
+// Returns the complete Alt-Svc field value for TCP/TLS responses. An empty
+// result disables automatic injection. activeHttp3Port is absent when this
+// listener does not serve HTTP/3.
+[[nodiscard]] std::pmr::string normalizeAltSvcAdvertisement(const AltSvcConfig& config,
+    std::optional<std::uint16_t> activeHttp3Port, std::pmr::memory_resource* resource);
 
 }  // namespace detail
 }  // namespace ruvia

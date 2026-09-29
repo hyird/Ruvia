@@ -138,12 +138,115 @@ RUVIA_TEST(http3_message_head_checks_origin_authority_connect_and_te_direction) 
     const auto tunnel = decode({{":method", "CONNECT"}, {":authority", "example.test:443"}},
         Http3MessageHeadKind::kRequest);
     RUVIA_CHECK(tunnel.has_value());
+    if (tunnel) {
+        RUVIA_CHECK(tunnel->protocol.empty());
+    }
     const auto missingPort = decode({{":method", "CONNECT"}, {":authority", "example.test"}},
         Http3MessageHeadKind::kRequest);
     RUVIA_CHECK(!missingPort && missingPort.error() == ruvia::Http3MessageHeadError::kMessageError);
     const auto responseTe = decode({{":status", "200"}, {"te", "trailers"}},
         Http3MessageHeadKind::kResponse);
     RUVIA_CHECK(!responseTe && responseTe.error() == ruvia::Http3MessageHeadError::kMessageError);
+}
+
+RUVIA_TEST(http3_message_head_validates_extended_connect_pseudo_fields) {
+    using ruvia::Http3MessageHeadKind;
+    const auto websocket = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                      {":scheme", "https"}, {":authority", "example.test"},
+                                      {":path", "/socket?room=one"}, {"x-end-to-end", "retained"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(websocket.has_value());
+    if (websocket) {
+        RUVIA_CHECK_EQ(websocket->method, "CONNECT");
+        RUVIA_CHECK_EQ(websocket->protocol, "websocket");
+        RUVIA_CHECK_EQ(websocket->path, "/socket?room=one");
+        RUVIA_CHECK_EQ(websocket->headers.size(), 1U);
+        RUVIA_CHECK_EQ(websocket->headers[0].name, "x-end-to-end");
+    }
+
+    const auto extendedHostMismatch = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                                 {":scheme", "https"}, {":authority", "one.test"},
+                                                 {":path", "/socket"}, {"host", "two.test"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!extendedHostMismatch);
+    if (!extendedHostMismatch) {
+        RUVIA_CHECK(extendedHostMismatch.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+
+    const auto missingProtocol = decode({{":method", "CONNECT"}, {":scheme", "https"},
+                                            {":authority", "example.test"}, {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!missingProtocol);
+    const auto missingScheme = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                          {":authority", "example.test"}, {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!missingScheme);
+    const auto missingAuthority = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                             {":scheme", "https"}, {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!missingAuthority);
+    const auto missingPath = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                        {":scheme", "https"}, {":authority", "example.test"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!missingPath);
+
+    const auto protocolBeforeMethod = decode({{":protocol", "websocket"}, {":method", "CONNECT"},
+                                                 {":scheme", "https"}, {":authority", "example.test"},
+                                                 {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    // RFC 9114 requires pseudo-fields to precede ordinary fields, but does not
+    // impose an order among the pseudo-fields themselves.
+    RUVIA_CHECK(protocolBeforeMethod.has_value());
+    const auto protocolAfterRegular = decode({{":method", "CONNECT"}, {"x", "y"},
+                                                 {":protocol", "websocket"}, {":scheme", "https"},
+                                                 {":authority", "example.test"}, {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!protocolAfterRegular);
+    const auto duplicateProtocol = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                              {":protocol", "websocket"}, {":scheme", "https"},
+                                              {":authority", "example.test"}, {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!duplicateProtocol);
+    const auto invalidProtocol = decode({{":method", "CONNECT"}, {":protocol", "web socket"},
+                                            {":scheme", "https"}, {":authority", "example.test"},
+                                            {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!invalidProtocol);
+    const auto protocolOnGet = decode({{":method", "GET"}, {":protocol", "websocket"},
+                                          {":scheme", "https"}, {":authority", "example.test"},
+                                          {":path", "/socket"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!protocolOnGet);
+    if (!protocolOnGet) {
+        RUVIA_CHECK(protocolOnGet.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+}
+
+RUVIA_TEST(http3_message_head_validates_origin_and_rejects_every_duplicate_host) {
+    using ruvia::Http3MessageHeadKind;
+    const auto valid = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                  {":scheme", "https"}, {":authority", "example.test"},
+                                  {":path", "/socket"}, {"origin", "https://example.test"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(valid.has_value());
+
+    const auto opaque = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                   {":scheme", "https"}, {":authority", "example.test"},
+                                   {":path", "/socket"}, {"origin", "null"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(opaque.has_value());
+
+    const auto invalidOrigin = decode({{":method", "CONNECT"}, {":protocol", "websocket"},
+                                          {":scheme", "https"}, {":authority", "example.test"},
+                                          {":path", "/socket"}, {"origin", "https://example.test/path"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!invalidOrigin);
+
+    const auto duplicateHost = decode({{":method", "GET"}, {":scheme", "https"},
+                                          {":authority", "example.test"}, {":path", "/"},
+                                          {"host", "example.test"}, {"host", "example.test"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!duplicateHost);
 }
 
 RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_resource_exceptions) {

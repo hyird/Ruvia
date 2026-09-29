@@ -66,8 +66,10 @@ inline Task<void> WebWorkerRuntime::handleSession(
             }
             std::pmr::string clientCertificate(memory_.allocator<char>());
             extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
-            const auto tlsServices =
-                baseServices.withTlsTransport(remoteAddress, clientCertificate, remotePort);
+            const auto tlsServices = baseServices
+                                         .withTlsTransport(
+                                             remoteAddress, clientCertificate, remotePort)
+                                         .withAutomaticAltSvc(listener.tls()->altSvc);
             if (isHttp2AlpnSelected(tlsStream)) {
                 co_await handleHttp2Session(tlsStream, socket, tlsServices);
             } else {

@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <stdexcept>
@@ -17,7 +19,8 @@ namespace ruvia::detail {
 struct Http3SansIoSessionEngine::Stream final {
     Stream(WorkerMemory& worker, std::uint64_t streamId)
         : id(streamId),
-          memory(worker) {}
+          memory(worker),
+          tunnelInput(worker.resource()) {}
 
     const std::uint64_t id;
     // RequestMemory must outlive the head, request and body that use its arena.
@@ -27,6 +30,13 @@ struct Http3SansIoSessionEngine::Stream final {
     StreamState state{StreamState::kReceiving};
     Rejection rejection{Rejection::kNone};
     std::size_t bodyLimit{};
+    std::pmr::string tunnelInput;
+    std::size_t tunnelInputReadOffset{};
+    std::size_t tunnelBufferedBytes{};
+    bool extendedConnect{};
+    bool tunnelInputOverflow{};
+    bool tunnelReceiveEnded{};
+    bool tunnelReset{};
     bool pendingFinish{false};
     bool receiveEnded{false};
     bool leased{false};
@@ -51,7 +61,7 @@ Http3SansIoSessionEngine::Http3SansIoSessionEngine(const RouteTable& routes,
       connection_(Http3PeerRole::kServer, worker.resource()),
       streams_(worker.resource()) {
     if (limits_.maxBufferedBodyBytes == 0 || limits_.maxLiveStreams == 0 ||
-        limits_.maxBufferedBytesInFlight == 0) {
+        limits_.maxBufferedBytesInFlight == 0 || limits_.maxTunnelBufferedBytes == 0) {
         throw std::invalid_argument("HTTP/3 session limits must be greater than zero");
     }
 }
@@ -68,8 +78,9 @@ Http3SansIoSessionEngine::~Http3SansIoSessionEngine() {
     }
     if (bodyBudget_ != nullptr) {
         streams_.clear();
-        bodyBudget_->release(bufferedBytesInFlight_);
+        bodyBudget_->release(bufferedBytesInFlight_ + tunnelBytesInFlight_);
         bufferedBytesInFlight_ = 0;
+        tunnelBytesInFlight_ = 0;
     }
 }
 
@@ -174,6 +185,9 @@ void Http3SansIoSessionEngine::onConnectionEvent(void* context,
 
 void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
     if (event.kind == Http3ConnectionEventKind::kReset) {
+        if (const auto found = streams_.find(event.streamId); found != streams_.end()) {
+            found->second->tunnelReset = true;
+        }
         releaseStream(event.streamId);
         return;
     }
@@ -196,7 +210,8 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
         stream->request.emplace(*event.head, stream->memory.resource(),
             stream->memory.upstreamResource());
         const auto& request = stream->request->request();
-        stream->resolution = routes_.resolve(request);
+        stream->extendedConnect = !stream->request->extendedConnectProtocol().empty();
+        stream->resolution = routes_.resolve(stream->request->routeMethod(), request.path());
         stream->bodyLimit = requestBodyByteLimit(RequestBodyMode::kBuffered,
             std::nullopt, limits_.maxBufferedBodyBytes)
                                 .readCeiling();
@@ -204,6 +219,16 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
         if (request.header("expect").has_value()) {
             stream->state = StreamState::kRejected;
             stream->rejection = Rejection::kExpectationUnsupported;
+        } else if (stream->extendedConnect) {
+            const auto* resolved = stream->resolution.resolved();
+            if (request.knownMethod() != HttpKnownMethod::kConnect ||
+                stream->request->routeMethod() != HttpKnownMethod::kGet || resolved == nullptr ||
+                resolved->route().endpoint().webSocket() == nullptr) {
+                stream->state = StreamState::kRejected;
+                stream->rejection = Rejection::kConnectUnsupported;
+            } else {
+                stream->state = StreamState::kReady;
+            }
         } else if (request.knownMethod() == HttpKnownMethod::kConnect) {
             stream->state = StreamState::kRejected;
             stream->rejection = Rejection::kConnectUnsupported;
@@ -227,7 +252,8 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
                 }
             }
         }
-        if (stream->state != StreamState::kRejected && event.head->contentLength.has_value() &&
+        if (stream->state != StreamState::kRejected && !stream->extendedConnect &&
+            event.head->contentLength.has_value() &&
             *event.head->contentLength > stream->bodyLimit) {
             stream->state = StreamState::kRejected;
             stream->rejection = Rejection::kBodyTooLarge;
@@ -282,13 +308,54 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
             // Trailers are deliberately ignored; they cannot mutate the already
             // copied initial request head or its route selection.
             return;
+        case Http3ConnectionEventKind::kTunnelData: {
+            if (!stream.extendedConnect || stream.tunnelInputOverflow ||
+                stream.tunnelReceiveEnded) {
+                return;
+            }
+            const auto queued = stream.tunnelBufferedBytes;
+            if (queued > limits_.maxTunnelBufferedBytes ||
+                event.body.size() > limits_.maxTunnelBufferedBytes - queued ||
+                bufferedBytesInFlight_ > limits_.maxBufferedBytesInFlight ||
+                tunnelBytesInFlight_ >
+                    limits_.maxBufferedBytesInFlight - bufferedBytesInFlight_ ||
+                event.body.size() > limits_.maxBufferedBytesInFlight -
+                                        bufferedBytesInFlight_ - tunnelBytesInFlight_) {
+                stream.tunnelInputOverflow = true;
+                return;
+            }
+            if (bodyBudget_ != nullptr && !bodyBudget_->tryReserve(event.body.size())) {
+                stream.tunnelInputOverflow = true;
+                return;
+            }
+            try {
+                if (stream.tunnelInputReadOffset != 0 &&
+                    stream.tunnelInput.capacity() - stream.tunnelInput.size() < event.body.size()) {
+                    stream.tunnelInput.erase(0, stream.tunnelInputReadOffset);
+                    stream.tunnelInputReadOffset = 0;
+                }
+                stream.tunnelInput.append(event.body.data(), event.body.size());
+            } catch (...) {
+                if (bodyBudget_ != nullptr) {
+                    bodyBudget_->release(event.body.size());
+                }
+                stream.tunnelInputOverflow = true;
+                return;
+            }
+            stream.tunnelBufferedBytes += event.body.size();
+            tunnelBytesInFlight_ += event.body.size();
+            return;
+        }
         case Http3ConnectionEventKind::kMessageEnd:
             stream.receiveEnded = true;
-            stream.pendingFinish = stream.state == StreamState::kReceiving;
+            if (stream.extendedConnect) {
+                stream.tunnelReceiveEnded = true;
+            } else {
+                stream.pendingFinish = stream.state == StreamState::kReceiving;
+            }
             return;
         case Http3ConnectionEventKind::kInformationalHead:
         case Http3ConnectionEventKind::kFinalHead:
-        case Http3ConnectionEventKind::kTunnelData:
         case Http3ConnectionEventKind::kRequestHead:
         case Http3ConnectionEventKind::kReset:
             return;
@@ -318,6 +385,48 @@ Http3SansIoSessionEngine::Rejection Http3SansIoSessionEngine::rejection(
     std::uint64_t streamId) const noexcept {
     const auto found = streams_.find(streamId);
     return found == streams_.end() ? Rejection::kNone : found->second->rejection;
+}
+
+Http3SansIoSessionEngine::TunnelReadResult Http3SansIoSessionEngine::readTunnelData(
+    std::uint64_t streamId, std::span<char> output) noexcept {
+    const auto found = streams_.find(streamId);
+    if (found == streams_.end()) {
+        return {.reset = true};
+    }
+    auto& stream = *found->second;
+    const auto available = stream.tunnelInput.size() - stream.tunnelInputReadOffset;
+    const auto count = (std::min)(available, output.size());
+    if (count != 0) {
+        std::memcpy(output.data(), stream.tunnelInput.data() + stream.tunnelInputReadOffset, count);
+        stream.tunnelInputReadOffset += count;
+        if (count > stream.tunnelBufferedBytes || count > tunnelBytesInFlight_) {
+            std::terminate();
+        }
+        stream.tunnelBufferedBytes -= count;
+        tunnelBytesInFlight_ -= count;
+        if (bodyBudget_ != nullptr) {
+            bodyBudget_->release(count);
+        }
+        if (stream.tunnelInputReadOffset == stream.tunnelInput.size()) {
+            stream.tunnelInput.clear();
+            stream.tunnelInputReadOffset = 0;
+        }
+    }
+    return {.bytes = count,
+        .ended = stream.tunnelReceiveEnded,
+        .reset = stream.tunnelReset,
+        .overflow = stream.tunnelInputOverflow};
+}
+
+bool Http3SansIoSessionEngine::tunnelInputOverflowed(std::uint64_t streamId) const noexcept {
+    const auto found = streams_.find(streamId);
+    return found != streams_.end() && found->second->tunnelInputOverflow;
+}
+
+bool Http3SansIoSessionEngine::tunnelReceiveEnded(std::uint64_t streamId) const noexcept {
+    const auto found = streams_.find(streamId);
+    return found == streams_.end() || found->second->tunnelReceiveEnded ||
+           found->second->tunnelReset;
 }
 
 std::optional<std::uint64_t>
@@ -352,6 +461,13 @@ void Http3SansIoSessionEngine::releaseStream(std::uint64_t streamId) noexcept {
         if (bodyBudget_ != nullptr) {
             bodyBudget_->release(bytes);
         }
+    }
+    if (found->second->tunnelBufferedBytes > tunnelBytesInFlight_) {
+        std::terminate();
+    }
+    tunnelBytesInFlight_ -= found->second->tunnelBufferedBytes;
+    if (bodyBudget_ != nullptr) {
+        bodyBudget_->release(found->second->tunnelBufferedBytes);
     }
     streams_.erase(found);
 }

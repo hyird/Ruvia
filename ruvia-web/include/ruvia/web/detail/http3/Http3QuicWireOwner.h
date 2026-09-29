@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
@@ -78,6 +79,10 @@ public:
     // pollStop() reports complete.
     void start();
     void requestStop() noexcept;
+    // NetworkRuntime uses this gate when it must retire connections and channels
+    // after a fatal socket stop but before destroying the QUIC transport.
+    void deferTransportRetirement() noexcept;
+    void releaseTransportRetirement() noexcept;
     // Requests another bounded owner-thread turn after a worker/channel wake.
     void requestDrive() noexcept;
 
@@ -91,6 +96,14 @@ public:
     }
     [[nodiscard]] bool outboundQuiescent() const noexcept {
         return endpoint_.outboundQuiescent();
+    }
+    [[nodiscard]] bool socketIoQuiescent() const noexcept {
+        requireOwnerThread();
+        return endpoint_.socketDone() && !endpoint_.sendInFlight();
+    }
+    [[nodiscard]] bool consumeTransportActivity() noexcept {
+        requireOwnerThread();
+        return std::exchange(transportActivity_, false);
     }
     [[nodiscard]] std::size_t timerExpirations() const noexcept;
     [[nodiscard]] std::exception_ptr failure() const noexcept;
@@ -192,6 +205,8 @@ private:
     bool timerHandlersRetired_{true};
     bool transportDestroyed_{true};
     bool bridgeLeaseReleased_{true};
+    bool transportRetirementReleased_{true};
+    bool transportActivity_{};
 };
 
 }  // namespace ruvia::detail

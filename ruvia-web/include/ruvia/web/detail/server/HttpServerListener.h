@@ -66,11 +66,15 @@ struct HttpServerListenerDefinition final {
 
         Tls(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
             : identity(ResolvedPmrResourceTag{}, resource),
-              sniIdentities(resource) {}
+              sniIdentities(resource),
+              altSvc(resource) {}
 
         TlsIdentity identity;
         std::optional<TlsClientCertificatePolicy> clientCertificates;
         std::pmr::vector<SniIdentity> sniIdentities;
+        // Empty disables automatic injection. Otherwise this complete field
+        // value is borrowed by every TCP/TLS request Context on this listener.
+        std::pmr::string altSvc;
     };
 
     struct PlainHttp final {};

@@ -31,7 +31,8 @@ Http3ServerConnectionChannel::reserveAndPublishGrant(
     if (workerOwnerBound_.load(std::memory_order_acquire) && !onWorkerOwner()) {
         return {.status = Status::kWrongOwner};
     }
-    if (workerPublicationsClosed_.load(std::memory_order_acquire) ||
+    if (workerStopping_.load(std::memory_order_acquire) ||
+        workerPublicationsClosed_.load(std::memory_order_acquire) ||
         lifecycle_.load(std::memory_order_acquire) != Lifecycle::kVacant) {
         return {.status = Status::kWrongState};
     }
@@ -64,6 +65,7 @@ Http3ServerConnectionChannel::reserveAndPublishGrant(
     transportRetiredTaken_ = false;
     networkFinalizedTaken_ = false;
     closingGeneration_ = false;
+    attachSucceeded_.store(false, std::memory_order_relaxed);
     hasLastResetSequence_ = false;
     lastResetSequence_ = 0;
     closeIntentAckTaken_ = false;
@@ -81,6 +83,24 @@ Http3ServerConnectionChannel::reserveAndPublishGrant(
     return {.status = Status::kPublished,
         .identity = identity,
         .registration = *registration};
+}
+
+Http3ServerConnectionChannel::Status
+Http3ServerConnectionChannel::stopGrantPublication() noexcept {
+    if (workerOwnerBound_.load(std::memory_order_acquire)) {
+        if (!onWorkerOwner()) {
+            return Status::kWrongOwner;
+        }
+    } else {
+        workerOwner_ = std::this_thread::get_id();
+        workerOwnerBound_.store(true, std::memory_order_release);
+    }
+    if (workerStopping_.exchange(true, std::memory_order_acq_rel)) {
+        return Status::kWrongState;
+    }
+    beginNotification();
+    notifyNetworkBorrowed();
+    return Status::kPublished;
 }
 
 Http3ServerConnectionChannel::Status
@@ -259,6 +279,7 @@ Http3ServerConnectionChannel::attach(Http3WorkerMailboxScheduler& scheduler,
     if (!scheduler.attach(registration.token, connection)) {
         return Status::kUnavailable;
     }
+    attachSucceeded_.store(true, std::memory_order_release);
     beginNotification();
     attachResult_ = AttachAck{.identity = identity_};
     attachResultPublished_.store(true, std::memory_order_release);
@@ -332,7 +353,14 @@ Http3ServerConnectionChannel::publishIntent(Identity identity,
     if (!matches(identity) || !intentMatchesIdentity(intent, identity)) {
         return Status::kStale;
     }
-    if (!isAttached() || closingGeneration_) {
+    const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
+    // attach() is worker-affine and only sets this after scheduler.attach()
+    // succeeds. Permit both close and reset intents while its AttachAck awaits
+    // network consumption; otherwise the next scheduler turn can terminate on
+    // a valid intent in this short publication window.
+    const bool attachAckPending = lifecycle == Lifecycle::kBinding &&
+                                  attachSucceeded_.load(std::memory_order_acquire);
+    if ((!isAttached() && !attachAckPending) || closingGeneration_) {
         return Status::kWrongState;
     }
 
@@ -423,7 +451,7 @@ Http3ServerConnectionChannel::receiveIntent(TransportIntent& intent) noexcept {
 
 Http3ServerConnectionChannel::Status
 Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
-    const TransportIntentToken& token) noexcept {
+    const TransportIntentToken& token, IntentSettlement settlement) noexcept {
     if (!onNetworkOwner()) {
         return Status::kWrongOwner;
     }
@@ -437,6 +465,10 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         token.id.connectionGeneration != identity.connectionGeneration) {
         return Status::kStale;
     }
+    if (settlement == IntentSettlement::kTransportRetiredSuperseded &&
+        !transportRetired(identity)) {
+        return Status::kWrongState;
+    }
 
     if (token.kind == Connection::TransportIntentKind::kConnectionClose) {
         if (!closeIntentPublished_.load(std::memory_order_acquire) || !closeIntentReceived_ ||
@@ -445,13 +477,8 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
             return Status::kStale;
         }
         beginNotification();
-        closeIntentAck_ = {.identity = identity, .token = token};
+        closeIntentAck_ = {.identity = identity, .token = token, .settlement = settlement};
         closeIntentAckPublished_.store(true, std::memory_order_release);
-        clearPendingIntents();
-        IntentMessage discarded;
-        while (workerToNetworkControl_.tryRead(discarded)) {
-            workerToNetworkControl_.releaseRead();
-        }
         notifyWorkerBorrowed();
         return Status::kPublished;
     }
@@ -469,7 +496,9 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         return Status::kFull;
     }
     beginNotification();
-    const TransportIntentAck acknowledgement{.identity = identity, .token = token};
+    const TransportIntentAck acknowledgement{.identity = identity,
+        .token = token,
+        .settlement = settlement};
     if (!networkToWorkerControl_.tryPublish(acknowledgement)) {
         std::terminate();
     }
@@ -497,7 +526,6 @@ Http3ServerConnectionChannel::receiveIntentAck(
                              closeIntent_.intent.token == acknowledgement.token;
         closeIntentAckTaken_ = true;
         if (current) {
-            clearOutstandingIntents();
             closeIntentAckPublished_.store(false, std::memory_order_release);
             closeIntentPublished_.store(false, std::memory_order_release);
             beginNotification();
@@ -829,7 +857,8 @@ bool Http3ServerConnectionChannel::readyToRearm() const noexcept {
     }
     const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
     const bool revoked = lifecycle == Lifecycle::kRevoked;
-    return (revoked || ((lifecycle == Lifecycle::kAttached || lifecycle == Lifecycle::kRejected) &&
+    return !workerStopping_.load(std::memory_order_acquire) &&
+           (revoked || ((lifecycle == Lifecycle::kAttached || lifecycle == Lifecycle::kRejected) &&
                            terminalRecordsComplete())) &&
            workerPublicationsClosed_.load(std::memory_order_acquire) &&
            networkPublicationsClosed_.load(std::memory_order_acquire) && allControlEmpty() &&
@@ -976,18 +1005,6 @@ bool Http3ServerConnectionChannel::pendingIntentsEmpty() const noexcept {
 bool Http3ServerConnectionChannel::outstandingIntentsEmpty() const noexcept {
     return std::none_of(outstandingIntents_.begin(), outstandingIntents_.end(),
         [](const OutstandingIntent& entry) { return entry.occupied; });
-}
-
-void Http3ServerConnectionChannel::clearPendingIntents() noexcept {
-    for (auto& entry : pendingIntents_) {
-        entry = {};
-    }
-}
-
-void Http3ServerConnectionChannel::clearOutstandingIntents() noexcept {
-    for (auto& entry : outstandingIntents_) {
-        entry = {};
-    }
 }
 
 Http3ServerConnectionChannel::Identity

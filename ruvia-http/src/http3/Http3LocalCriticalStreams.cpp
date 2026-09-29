@@ -16,7 +16,7 @@ Http3LocalCriticalStreams::create(const Http3Settings& settings) noexcept {
     if (!streamType) {
         return std::unexpected(Http3LocalCriticalStreamsError::kSettingsEncodingError);
     }
-    std::array<char, 3 * 2 * kHttp3VarIntMaxBytes> settingsPayload{};
+    std::array<char, 4 * 2 * kHttp3VarIntMaxBytes> settingsPayload{};
     const auto settingsSize = encodeHttp3Settings(settingsPayload, settings);
     if (!settingsSize) {
         return std::unexpected(Http3LocalCriticalStreamsError::kSettingsEncodingError);

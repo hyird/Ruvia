@@ -184,6 +184,15 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     RUVIA_CHECK(valid.finalizeRemoteConnectHead());
     RUVIA_CHECK(acceptsWebSocketHandshake(valid, request));
 
+    for (const auto forbidden : {std::string_view("Sec-WebSocket-Key: key-is-h1-only\r\n"),
+             std::string_view("Sec-WebSocket-Accept: accept-is-h1-only\r\n")}) {
+        std::string raw =
+            "GET /ws HTTP/1.1\r\nHost: example.test\r\nSec-WebSocket-Version: 13\r\n";
+        raw.append(forbidden);
+        raw.append("\r\n");
+        RUVIA_CHECK(rejectsWebSocketHandshake(valid, parseRequest(raw)));
+    }
+
     // The complete HTTP/2 field section must be decoded before the helper can
     // validate WebSocket-specific request headers. A synthetically pending
     // CONNECT is not yet a complete opening handshake.
@@ -314,7 +323,8 @@ RUVIA_TEST(websocket_h2_handshake_encodes_owned_cookies_and_application_date) {
     std::string cookie = "sid=0123456789abcdef; HttpOnly";
     const std::array fields{ruvia::HttpHeaderView("Set-Cookie", cookie),
         ruvia::HttpHeaderView("Set-Cookie", "theme=dark"),
-        ruvia::HttpHeaderView("Date", "Wed, 21 Oct 2015 07:28:00 GMT")};
+        ruvia::HttpHeaderView("Date", "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ruvia::HttpHeaderView("Alt-Svc", "h3=\":443\"; ma=86400")};
     const auto negotiation = makeWebSocketServerNegotiation(requestWithVersion(), {.responseHeaders = fields});
     cookie.assign(cookie.size(), 'x');
     std::pmr::string block(std::pmr::get_default_resource());
@@ -327,7 +337,8 @@ RUVIA_TEST(websocket_h2_handshake_encodes_owned_cookies_and_application_date) {
     RUVIA_CHECK(hasHeader(decoded, "set-cookie", "sid=0123456789abcdef; HttpOnly"));
     RUVIA_CHECK(hasHeader(decoded, "set-cookie", "theme=dark"));
     RUVIA_CHECK(hasHeader(decoded, "date", "Wed, 21 Oct 2015 07:28:00 GMT"));
-    RUVIA_CHECK_EQ(decoded.headers.size(), std::size_t{4});
+    RUVIA_CHECK(hasHeader(decoded, "alt-svc", "h3=\":443\"; ma=86400"));
+    RUVIA_CHECK_EQ(decoded.headers.size(), std::size_t{5});
     RUVIA_CHECK(!hasHeaderName(decoded, "connection"));
     RUVIA_CHECK(!hasHeaderName(decoded, "upgrade"));
 }

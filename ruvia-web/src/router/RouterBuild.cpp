@@ -140,6 +140,8 @@ void detail::RouteTable::captureRouteIdentities() {
                 identity.webSocketCloseTimeoutMs =
                     webSocket.lifecycle().closeHandshakeTimeout->count();
             }
+            identity.webSocketPeerTransportFinTimeoutMs =
+                webSocket.lifecycle().peerTransportFinTimeout.count();
         }
 
         identity.middlewareInvokes.reserve(route.middlewareCount());
@@ -212,6 +214,8 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
             const auto closeTimeoutMs = webSocket.lifecycle().closeHandshakeTimeout.has_value()
                                             ? webSocket.lifecycle().closeHandshakeTimeout->count()
                                             : std::int64_t{-1};
+            const auto peerTransportFinTimeoutMs =
+                webSocket.lifecycle().peerTransportFinTimeout.count();
             endpointMatches =
                 identity.endpointKind == CompiledRoutePlan::EndpointKind::kWebSocket &&
                 identity.streamInvoke == webSocket.handler().invoke() &&
@@ -220,6 +224,7 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
                 identity.webSocketPingIntervalMs == pingIntervalMs &&
                 identity.webSocketPongTimeoutMs == pongTimeoutMs &&
                 identity.webSocketCloseTimeoutMs == closeTimeoutMs &&
+                identity.webSocketPeerTransportFinTimeoutMs == peerTransportFinTimeoutMs &&
                 identity.webSocketDeflateEnabled == webSocket.deflate().enabled &&
                 identity.webSocketCompressionLevel == webSocket.deflate().compressionLevel &&
                 identity.webSocketContextTakeover == webSocket.deflate().contextTakeover;

@@ -171,6 +171,8 @@ RUVIA_TEST(http3_server_request_adapts_pseudo_fields_cookies_and_host) {
         RUVIA_CHECK_EQ(request.target(), "/items?a=1");
         RUVIA_CHECK_EQ(request.path(), "/items");
         RUVIA_CHECK_EQ(request.queryString(), "a=1");
+        RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "");
+        RUVIA_CHECK(owner.routeMethod() == ruvia::HttpKnownMethod::kGet);
         RUVIA_CHECK_EQ(request.scheme(), "https");
         RUVIA_CHECK_EQ(request.authority(), "example.test");
         RUVIA_CHECK_EQ(request.header("cookie").value(), "a=1; b=2");
@@ -202,6 +204,79 @@ RUVIA_TEST(http3_server_request_adapts_standard_connect_authority_target) {
     RUVIA_CHECK_EQ(owner.request().path(), "");
     RUVIA_CHECK_EQ(owner.request().queryString(), "");
     RUVIA_CHECK(owner.request().knownMethod() == ruvia::HttpKnownMethod::kConnect);
+    RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "");
+    RUVIA_CHECK(owner.routeMethod() == ruvia::HttpKnownMethod::kConnect);
+}
+
+RUVIA_TEST(http3_server_request_preserves_extended_connect_wire_method_and_selects_websocket_route) {
+    CountingResource resource;
+    const std::array fields{
+        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+        ruvia::Http3FieldSectionFieldView{":protocol", "websocket"},
+        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+        ruvia::Http3FieldSectionFieldView{":path", "/socket?channel=42"},
+        ruvia::Http3FieldSectionFieldView{"host", "example.test"},
+        ruvia::Http3FieldSectionFieldView{"x-preserved", "yes"},
+        ruvia::Http3FieldSectionFieldView{"origin", "https://example.test"},
+        ruvia::Http3FieldSectionFieldView{"authorization", "Bearer opaque"},
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", "13"},
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-protocol", "chat, superchat"},
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-extensions", "permessage-deflate"},
+        ruvia::Http3FieldSectionFieldView{"cookie", "a=1"},
+        ruvia::Http3FieldSectionFieldView{"cookie", "b=2"},
+    };
+    const auto section = ruvia::encodeHttp3FieldSection(fields, std::pmr::get_default_resource());
+    RUVIA_CHECK(section.has_value());
+    if (!section) {
+        return;
+    }
+    const auto head = ruvia::decodeHttp3MessageHead(*section,
+        ruvia::Http3MessageHeadKind::kRequest, &resource);
+    RUVIA_CHECK(head.has_value());
+    if (!head) {
+        return;
+    }
+
+    ruvia::Http3ServerRequest owner(*head, &resource, &resource);
+    owner.finishBody();
+    const auto& request = owner.request();
+    RUVIA_CHECK_EQ(request.method(), "CONNECT");
+    RUVIA_CHECK(request.knownMethod() == ruvia::HttpKnownMethod::kConnect);
+    RUVIA_CHECK_EQ(owner.extendedConnectProtocol(), "websocket");
+    RUVIA_CHECK(owner.routeMethod() == ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK_EQ(request.target(), "/socket?channel=42");
+    RUVIA_CHECK_EQ(request.path(), "/socket");
+    RUVIA_CHECK_EQ(request.queryString(), "channel=42");
+    RUVIA_CHECK_EQ(request.headers().size(), 8U);
+    RUVIA_CHECK_EQ(request.header("host").value(), "example.test");
+    RUVIA_CHECK_EQ(request.header("x-preserved").value(), "yes");
+    RUVIA_CHECK_EQ(request.header("origin").value(), "https://example.test");
+    RUVIA_CHECK_EQ(request.header("authorization").value(), "Bearer opaque");
+    RUVIA_CHECK_EQ(request.header("sec-websocket-version").value(), "13");
+    RUVIA_CHECK_EQ(request.header("sec-websocket-protocol").value(), "chat, superchat");
+    RUVIA_CHECK_EQ(
+        request.header("sec-websocket-extensions").value(), "permessage-deflate");
+    RUVIA_CHECK_EQ(request.header("cookie").value(), "a=1; b=2");
+
+    const std::array otherProtocolFields{
+        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+        ruvia::Http3FieldSectionFieldView{":protocol", "other-protocol"},
+        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+        ruvia::Http3FieldSectionFieldView{":path", "/tunnel"},
+    };
+    const auto otherSection = ruvia::encodeHttp3FieldSection(
+        otherProtocolFields, std::pmr::get_default_resource());
+    const auto otherHead = ruvia::decodeHttp3MessageHead(*otherSection,
+        ruvia::Http3MessageHeadKind::kRequest, &resource);
+    RUVIA_CHECK(otherHead.has_value());
+    if (otherHead) {
+        ruvia::Http3ServerRequest other(*otherHead, &resource, &resource);
+        RUVIA_CHECK_EQ(other.extendedConnectProtocol(), "other-protocol");
+        RUVIA_CHECK(other.routeMethod() == ruvia::HttpKnownMethod::kConnect);
+        RUVIA_CHECK_EQ(other.request().method(), "CONNECT");
+    }
 }
 
 RUVIA_TEST(http3_server_request_repeated_lifetimes_return_allocations) {
