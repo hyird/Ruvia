@@ -94,6 +94,11 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
         DbMigration{{.id = "001", .sql = "/* no statement */\n-- still none\n;"}}};
     RUVIA_CHECK(
         throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commentOnlySql, 1)); }));
+    const DbMigration nestedCommentOnlySql[] = {DbMigration{{.id = "001",
+        .sql = "/* outer /* inner */ still comment */"}}};
+    RUVIA_CHECK(throwsOn([&] {
+        validateMigrationList(std::span<const DbMigration>(nestedCommentOnlySql, 1));
+    }));
     // An id longer than the 190-byte schema column is rejected.
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {DbMigration{{.id = longId, .sql = "SQL"}}};
@@ -158,6 +163,12 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
         DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); /* one; statement */"}}};
     RUVIA_CHECK(!throwsOn(
         [&] { validateMigrationList(std::span<const DbMigration>(trailingBlockComment, 1)); }));
+    const DbMigration trailingNestedBlockComment[] = {DbMigration{{.id = "001",
+        .sql = "SELECT 1; /* outer /* nested */ still comment */"}}};
+    RUVIA_CHECK(!throwsOn([&] {
+        validateMigrationList(
+            std::span<const DbMigration>(trailingNestedBlockComment, 1), DbDriver::kPostgreSql);
+    }));
 
     // A ';' that is data -- inside a default value, a quoted identifier or a
     // comment -- is not a statement separator.
@@ -179,6 +190,14 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
     const DbMigration tagged[] = {DbMigration{{.id = "001",
         .sql = "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tagged, 1)); }));
+
+    // Dollar signs belong to an unquoted PostgreSQL identifier when the
+    // would-be opening tag is adjacent to the identifier's first byte.
+    const DbMigration identifierTags[] = {DbMigration{{.id = "001",
+        .sql = "SELECT 1 AS foo$tag$; SELECT 2 AS bar$tag$;"}}};
+    RUVIA_CHECK(throwsOn([&] {
+        validateMigrationList(std::span<const DbMigration>(identifierTags, 1), DbDriver::kPostgreSql);
+    }));
 
     // PostgreSQL ordinary strings and quoted identifiers do not use a
     // backslash to escape the closing delimiter. These are therefore two
