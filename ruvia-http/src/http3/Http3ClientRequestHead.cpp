@@ -12,6 +12,8 @@
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -173,7 +175,9 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
             (equalIgnoreCase(field.name, "access-control-request-method") &&
                 !detail::isValidHttpCorsRequestMethod(field.value)) ||
             (equalIgnoreCase(field.name, "access-control-request-headers") &&
-                !detail::isValidHttpCorsRequestHeaderNames(field.value))) {
+                !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
+            (equalIgnoreCase(field.name, "expect") &&
+                !detail::isValidHttpExpectFieldValue(field.value))) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         // RFC 9110 section 9.3.8: never generate known credential/cookie
@@ -205,6 +209,11 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
         } else if (equalIgnoreCase(field.name, "content-encoding") &&
                    !detail::isValidHttpContentEncodingFieldValue(
                        field.value, detail::HttpFieldListRole::kSender)) {
+            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+        }
+        if (equalIgnoreCase(field.name, "trailer") &&
+            !detail::isValidHttpRequestTrailerFieldValue(
+                field.value, detail::HttpFieldListRole::kSender)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         if (equalIgnoreCase(field.name, "content-length")) {

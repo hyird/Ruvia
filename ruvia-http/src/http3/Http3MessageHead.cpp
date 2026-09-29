@@ -8,7 +8,10 @@
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia {
 namespace {
@@ -249,7 +252,9 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
             (field.name == "access-control-request-method" &&
                 !detail::isValidHttpCorsRequestMethod(field.value)) ||
             (field.name == "access-control-request-headers" &&
-                !detail::isValidHttpCorsRequestHeaderNames(field.value))) {
+                !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
+            (field.name == "expect" &&
+                !detail::isValidReceivedHttpExpectFieldValue(field.value))) {
             return fail(state);
         }
     }
@@ -261,6 +266,14 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     } else if (field.name == "content-encoding" &&
                !detail::isValidHttpContentEncodingFieldValue(
                    field.value, detail::HttpFieldListRole::kRecipient)) {
+        return fail(state);
+    }
+    if (field.name == "trailer" &&
+        !(state.kind == Http3MessageHeadKind::kRequest
+                ? detail::isValidHttpRequestTrailerFieldValue(
+                      field.value, detail::HttpFieldListRole::kRecipient)
+                : detail::isValidHttpResponseTrailerFieldValue(
+                      field.value, detail::HttpFieldListRole::kRecipient))) {
         return fail(state);
     }
     if (field.name == "content-length") {

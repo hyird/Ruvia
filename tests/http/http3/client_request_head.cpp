@@ -166,6 +166,22 @@ RUVIA_TEST(http3_client_request_head_rejects_malformed_representation_fields) {
     RUVIA_CHECK(!duplicate && duplicate.error().kind == Http3ClientRequestHeadError::kInvalidField);
 }
 
+RUVIA_TEST(http3_client_request_head_rejects_forbidden_declared_trailer_names) {
+    const std::array forbidden{Http3FieldSectionFieldView{"Trailer", "Content-Length"}};
+    const auto request = encode("POST", "/", forbidden);
+    RUVIA_CHECK(!request && request.error().kind == Http3ClientRequestHeadError::kInvalidField);
+    const std::array valid{Http3FieldSectionFieldView{"Trailer", "x-checksum"}};
+    RUVIA_CHECK(encode("POST", "/", valid).has_value());
+}
+
+RUVIA_TEST(http3_client_request_head_rejects_malformed_expectation) {
+    const std::array malformed{Http3FieldSectionFieldView{"Expect", "foo?bar"}};
+    const auto request = encode("POST", "/", malformed);
+    RUVIA_CHECK(!request && request.error().kind == Http3ClientRequestHeadError::kInvalidField);
+    const std::array valid{Http3FieldSectionFieldView{"Expect", "foo=bar"}};
+    RUVIA_CHECK(encode("POST", "/", valid).has_value());
+}
+
 RUVIA_TEST(http3_client_request_head_enforces_limits_and_releases_resource_allocations) {
     CountingResource resource;
     auto failed = encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/"},

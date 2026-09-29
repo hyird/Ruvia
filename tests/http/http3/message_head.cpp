@@ -308,6 +308,35 @@ RUVIA_TEST(http3_message_head_rejects_malformed_representation_fields) {
     }
 }
 
+RUVIA_TEST(http3_message_head_rejects_forbidden_declared_trailer_names) {
+    const auto request = decode({{":method", "POST"}, {":scheme", "https"},
+                                    {":authority", "example.test"}, {":path", "/"},
+                                    {"trailer", "Content-Length"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    const auto response = decode({{":status", "200"}, {"trailer", "Content-Length"}},
+        ruvia::Http3MessageHeadKind::kResponse);
+    RUVIA_CHECK(!response && response.error() == ruvia::Http3MessageHeadError::kMessageError);
+    const auto valid = decode({{":method", "POST"}, {":scheme", "https"},
+                                  {":authority", "example.test"}, {":path", "/"},
+                                  {"trailer", "x-checksum"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(valid.has_value());
+}
+
+RUVIA_TEST(http3_message_head_rejects_malformed_expectation) {
+    const auto request = decode({{":method", "POST"}, {":scheme", "https"},
+                                    {":authority", "example.test"}, {":path", "/"},
+                                    {"expect", "foo?bar"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    const auto valid = decode({{":method", "POST"}, {":scheme", "https"},
+                                  {":authority", "example.test"}, {":path", "/"},
+                                  {"expect", "100-continue"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(valid.has_value());
+}
+
 RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_resource_exceptions) {
     const auto oversized = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"}},
         ruvia::Http3MessageHeadKind::kRequest, std::pmr::get_default_resource(), {40, 16});
