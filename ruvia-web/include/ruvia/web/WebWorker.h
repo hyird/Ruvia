@@ -16,7 +16,6 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/integration/BlockingCapability.h"
-#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerStateCapability.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -31,6 +30,7 @@ namespace ruvia {
 
 namespace detail {
 class WebWorkerDispatch;
+class WorkerClientRegistryView;
 class WorkerStateRegistry;
 }  // namespace detail
 
@@ -66,16 +66,18 @@ private:
     friend class detail::WebWorkerDispatch;
 
     WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
-        detail::WorkerClientRegistryView clientRegistries,
+        const detail::WorkerClientRegistryView& clientRegistries,
         const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
         const StopToken& stopToken) noexcept;
-    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*, detail::WorkerClientRegistryView,
-        const detail::WorkerStateRegistry*, BlockingPool*, const StopToken&) = delete;
+    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*,
+        const detail::WorkerClientRegistryView&, const detail::WorkerStateRegistry*, BlockingPool*,
+        const StopToken&) = delete;
     WebWorkerContext(const WorkerHandle&, std::pmr::memory_resource*,
-        detail::WorkerClientRegistryView, const detail::WorkerStateRegistry*, BlockingPool*,
+        const detail::WorkerClientRegistryView&, const detail::WorkerStateRegistry*, BlockingPool*,
         StopToken&&) = delete;
-    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*, detail::WorkerClientRegistryView,
-        const detail::WorkerStateRegistry*, BlockingPool*, StopToken&&) = delete;
+    WebWorkerContext(WorkerHandle&&, std::pmr::memory_resource*,
+        const detail::WorkerClientRegistryView&, const detail::WorkerStateRegistry*, BlockingPool*,
+        StopToken&&) = delete;
 
     [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
     friend class detail::BlockingCapability<WebWorkerContext>;
@@ -89,11 +91,13 @@ private:
     }
 
     // WebWorkerDispatch owns these stable values until every posted task has
-    // completed. Contexts borrow them so starting a task does not copy endpoint
-    // or cancellation-state ownership on the worker thread.
+    // completed. In particular, clientRegistries_ borrows its view; retire()
+    // detaches that view only after activeStarted_ reaches zero. Contexts borrow
+    // them so starting a task does not copy endpoint or cancellation-state
+    // ownership on the worker thread.
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
-    detail::WorkerClientRegistryView clientRegistries_;
+    const detail::WorkerClientRegistryView& clientRegistries_;
     const detail::WorkerStateRegistry* workerStates_;
     BlockingPool* blockingPool_;
     const StopToken& stopToken_;

@@ -1,9 +1,11 @@
-#include "ruvia/core/detail/io/IpAddress.h"
+#include "ruvia/core/IpAddress.h"
 
 #include <array>
 #include <cstring>
 #include <memory_resource>
 #include <string>
+
+#include "ruvia/core/detail/io/IpAddress.h"
 
 namespace ruvia::detail {
 
@@ -31,3 +33,11 @@ std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_vie
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+std::expected<asio::ip::address, std::error_code> parseIpAddress(std::string_view text) {
+    return detail::parseIpAddress(text);
+}
+
+}  // namespace ruvia

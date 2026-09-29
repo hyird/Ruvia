@@ -11,8 +11,6 @@
 #include "ruvia/http/Http1ServerConnectionPlan.h"
 #include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpParseError.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
 namespace ruvia {
 
@@ -172,6 +170,8 @@ inline Http1RequestParseResult Http1RequestParseResultAccess::failure(
 
 class Http1ServerRequestParseState final {
 public:
+    Http1ServerRequestParseState() noexcept;
+
     [[nodiscard]] const Http1ServerNeedRequestHead* needRequestHead() const& noexcept {
         return std::get_if<Http1ServerNeedRequestHead>(&progress_);
     }
@@ -197,7 +197,7 @@ public:
     }
     [[nodiscard]] const Http1ServerRequestParseFailure* failure() const&& = delete;
 
-    HttpRequest request{detail::HttpRequestAccess::make()};
+    HttpRequest request;
     Http1RequestBodyPlan bodyPlan{Http1RequestBodyPlan(HttpRequestExpectations{})};
     Http1ServerConnectionPlan connectionPlan{Http1ServerConnectionPlan::http11Close()};
 

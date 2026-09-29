@@ -55,21 +55,17 @@ void RedisPool::ConnectionGuard::discard() noexcept {
 Task<std::size_t> RedisPool::acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     const auto result = co_await scheduler_.acquire(
         timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), worker_);
-    if (result.timedOut() != nullptr) {
-        throw RedisError(RedisError::Code::kTimeout, "redis connection pool acquire timed out");
+    switch (result.status()) {
+        case PoolWaiterResult::Status::kAcquired:
+            co_return result.index();
+        case PoolWaiterResult::Status::kTimedOut:
+            throw RedisError(RedisError::Code::kTimeout, "redis connection pool acquire timed out");
+        case PoolWaiterResult::Status::kCancelled:
+            throw RedisError(RedisError::Code::kCancelled, "redis operation cancelled");
+        case PoolWaiterResult::Status::kClosed:
+            throw RedisError(RedisError::Code::kClosing, "redis pool is closing");
     }
-    if (result.cancelled() != nullptr) {
-        throw RedisError(RedisError::Code::kCancelled, "redis operation cancelled");
-    }
-    if (result.closed() != nullptr) {
-        throw RedisError(RedisError::Code::kClosing, "redis pool is closing");
-    }
-
-    const auto* acquired = result.acquired();
-    if (acquired == nullptr) {
-        std::terminate();
-    }
-    co_return acquired->index();
+    std::terminate();
 }
 
 void RedisPool::release(std::size_t index) noexcept {

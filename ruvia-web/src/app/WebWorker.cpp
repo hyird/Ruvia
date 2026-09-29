@@ -11,12 +11,13 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
+#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 
 namespace ruvia {
 
 WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_resource* resource,
-    detail::WorkerClientRegistryView clientRegistries,
+    const detail::WorkerClientRegistryView& clientRegistries,
     const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
     const StopToken& stopToken) noexcept
     : worker_(worker),

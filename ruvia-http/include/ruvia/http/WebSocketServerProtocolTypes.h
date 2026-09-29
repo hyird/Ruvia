@@ -56,6 +56,7 @@ public:
 
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     constexpr WebSocketServerMessageEvent(WebSocketOpcode opcode, std::string_view payload) noexcept
         : opcode_(opcode),
           payload_(payload) {}
@@ -71,6 +72,7 @@ public:
 
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     explicit constexpr WebSocketServerPingEvent(std::string_view payload) noexcept
         : payload_(payload) {}
     std::string_view payload_;
@@ -84,6 +86,7 @@ public:
 
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     explicit constexpr WebSocketServerPongEvent(std::string_view payload) noexcept
         : payload_(payload) {}
     std::string_view payload_;
@@ -102,6 +105,7 @@ public:
 
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     constexpr WebSocketServerCloseEvent(std::uint16_t closeCode, std::string_view reason) noexcept
         : closeCode_(closeCode),
           reason_(reason) {}
@@ -117,6 +121,7 @@ public:
 
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     explicit constexpr WebSocketServerProtocolErrorEvent(std::uint16_t closeCode) noexcept
         : closeCode_(closeCode) {}
     std::uint16_t closeCode_;
@@ -125,6 +130,7 @@ private:
 class WebSocketServerTransportEndEvent final {
 private:
     friend class detail::WsEvent;
+    friend class WebSocketServerProtocol;
     constexpr WebSocketServerTransportEndEvent() noexcept = default;
 };
 

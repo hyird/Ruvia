@@ -14,7 +14,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
@@ -28,7 +28,7 @@ struct PeriodicProbe final {
 };
 
 struct PeriodicResetProbe final {
-    ruvia::detail::ConnectionScanner::PeriodicCheckRegistration* registration;
+    ruvia::ConnectionScanner::PeriodicCheckRegistration* registration;
     std::size_t ticks{0};
 
     static void tick(void* target, std::int64_t) noexcept {
@@ -47,7 +47,7 @@ struct WorkerMaintenanceProbe final {
 };
 
 struct WorkerMaintenanceResetProbe final {
-    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration* registration;
+    ruvia::ConnectionScanner::WorkerMaintenanceRegistration* registration;
     std::size_t ticks{0};
 
     static void check(void* target) noexcept {
@@ -79,13 +79,13 @@ int main() {
     auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 16);
     auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     try {
-        ruvia::detail::ConnectionScanner invalid(ruvia::WorkerHandle{}, {});
+        ruvia::ConnectionScanner invalid(ruvia::WorkerHandle{}, {});
         return 100;
     } catch (const std::invalid_argument&) {
     }
-    const auto rejects = [&worker](ruvia::detail::ConnectionScannerOptions options) {
+    const auto rejects = [&worker](ruvia::ConnectionScannerOptions options) {
         try {
-            ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
+            ruvia::ConnectionScanner scanner(worker, std::move(options));
             return false;
         } catch (const std::invalid_argument&) {
             return true;
@@ -93,35 +93,35 @@ int main() {
     };
 
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.idleTimeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 1;
         }
     }
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.initialReadTimeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 2;
         }
     }
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.payloadReadTimeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 3;
         }
     }
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.writeTimeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 4;
         }
     }
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.scanInterval = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 5;
@@ -132,14 +132,14 @@ int main() {
     // but it must not poison the lifecycle state and suppress a later valid
     // on-worker retry.
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.scanInterval = std::chrono::milliseconds(1);
-        ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
+        ruvia::ConnectionScanner scanner(worker, std::move(options));
         if (scanner.worker().id() != worker.id()) {
             return 101;
         }
         WorkerMaintenanceProbe retryProbe;
-        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration retryRegistration;
+        ruvia::ConnectionScanner::WorkerMaintenanceRegistration retryRegistration;
         scanner.registerWorkerMaintenance(
             retryRegistration, &retryProbe, &WorkerMaintenanceProbe::check);
         bool offWorkerRejected = false;
@@ -164,13 +164,13 @@ int main() {
     }
 
     asio::ip::tcp::socket socket(ioContext);
-    ruvia::detail::ConnectionScanner::Entry firstEntry;
-    ruvia::detail::ConnectionScanner::Entry secondEntry;
-    std::optional<ruvia::detail::ConnectionScanner::Guard> firstGuard;
-    std::optional<ruvia::detail::ConnectionScanner::Guard> secondGuard;
+    ruvia::ConnectionScanner::Entry firstEntry;
+    ruvia::ConnectionScanner::Entry secondEntry;
+    std::optional<ruvia::ConnectionScanner::Guard> firstGuard;
+    std::optional<ruvia::ConnectionScanner::Guard> secondGuard;
 
     {
-        ruvia::detail::ConnectionScanner scanner(worker, ruvia::detail::ConnectionScannerOptions{});
+        ruvia::ConnectionScanner scanner(worker, ruvia::ConnectionScannerOptions{});
         firstGuard.emplace(&scanner, firstEntry, socket);
         secondGuard.emplace(&scanner, secondEntry, socket);
     }
@@ -178,9 +178,9 @@ int main() {
     // Scanner teardown must invalidate every coarse timestamp pointer and
     // detach every intrusive entry before longer-lived guards are destroyed.
     firstEntry.touch();
-    firstEntry.setPhase(ruvia::detail::ConnectionScanner::Phase::kReadingInitial);
+    firstEntry.setPhase(ruvia::ConnectionScanner::Phase::kReadingInitial);
     secondEntry.touch();
-    secondEntry.setPhase(ruvia::detail::ConnectionScanner::Phase::kWriting);
+    secondEntry.setPhase(ruvia::ConnectionScanner::Phase::kWriting);
     firstGuard.reset();
     secondGuard.reset();
 
@@ -190,20 +190,20 @@ int main() {
     // the ninth stream.
     ioContext.restart();
     {
-        auto options = ruvia::detail::ConnectionScannerOptions{};
+        auto options = ruvia::ConnectionScannerOptions{};
         options.scanInterval = std::chrono::milliseconds(1);
-        ruvia::detail::ConnectionScanner scanner(worker, std::move(options));
-        ruvia::detail::ConnectionScanner::Entry entry;
-        ruvia::detail::ConnectionScanner::Guard guard(&scanner, entry, socket);
+        ruvia::ConnectionScanner scanner(worker, std::move(options));
+        ruvia::ConnectionScanner::Entry entry;
+        ruvia::ConnectionScanner::Guard guard(&scanner, entry, socket);
         std::array<PeriodicProbe, 12> probes{};
-        std::array<ruvia::detail::ConnectionScanner::PeriodicCheckRegistration, 12> registrations{};
+        std::array<ruvia::ConnectionScanner::PeriodicCheckRegistration, 12> registrations{};
         PeriodicResetProbe resetProbe{&registrations[11]};
-        ruvia::detail::ConnectionScanner::PeriodicCheckRegistration resetRegistration;
+        ruvia::ConnectionScanner::PeriodicCheckRegistration resetRegistration;
         std::array<WorkerMaintenanceProbe, 8> workerProbes{};
-        std::array<ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration, 8>
+        std::array<ruvia::ConnectionScanner::WorkerMaintenanceRegistration, 8>
             workerRegistrations{};
         WorkerMaintenanceResetProbe workerResetProbe{&workerRegistrations[7]};
-        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration workerResetRegistration;
+        ruvia::ConnectionScanner::WorkerMaintenanceRegistration workerResetRegistration;
         if (dispatcher->post([&] {
                 // start() initially has no work. Registrations added afterward
                 // must become visible without any coarse timeout being enabled.
@@ -219,7 +219,7 @@ int main() {
                 }
                 scanner.registerWorkerMaintenance(workerResetRegistration, &workerResetProbe,
                     &WorkerMaintenanceResetProbe::check);
-                entry.setPhase(ruvia::detail::ConnectionScanner::Phase::kLongLived);
+                entry.setPhase(ruvia::ConnectionScanner::Phase::kLongLived);
             }) != ruvia::PostStatus::kAccepted) {
             return 6;
         }
@@ -256,7 +256,7 @@ int main() {
     // scanner timeouts. Periodic liveness checks must still run on idle sessions.
     ioContext.restart();
     {
-        using Scanner = ruvia::detail::ConnectionScanner;
+        using Scanner = ruvia::ConnectionScanner;
         Scanner scanner(worker, {.scanInterval = std::chrono::milliseconds(1),
                                     .idleTimeout = std::chrono::milliseconds(1),
                                     .initialReadTimeout = std::chrono::milliseconds(1),
@@ -307,10 +307,10 @@ int main() {
 
     // Entry teardown invalidates registrations that happen to outlive it;
     // their own RAII reset must then be harmless.
-    ruvia::detail::ConnectionScanner::PeriodicCheckRegistration registration;
+    ruvia::ConnectionScanner::PeriodicCheckRegistration registration;
     PeriodicProbe probe;
     {
-        ruvia::detail::ConnectionScanner::Entry entry;
+        ruvia::ConnectionScanner::Entry entry;
         entry.registerPeriodicCheck(registration, &probe, &PeriodicProbe::tick);
     }
     registration.reset();
@@ -323,10 +323,10 @@ int main() {
         asio::io_context scannerIo;
         auto scannerDispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(scannerIo, 16);
         auto scannerWorker = ruvia::detail::WorkerHandleAccess::make(scannerDispatcher);
-        auto scanner = std::make_unique<ruvia::detail::ConnectionScanner>(scannerWorker,
-            ruvia::detail::ConnectionScannerOptions{.scanInterval = std::chrono::milliseconds(1)});
+        auto scanner = std::make_unique<ruvia::ConnectionScanner>(scannerWorker,
+            ruvia::ConnectionScannerOptions{.scanInterval = std::chrono::milliseconds(1)});
         BlockingMaintenanceProbe blockingProbe;
-        ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration maintenance;
+        ruvia::ConnectionScanner::WorkerMaintenanceRegistration maintenance;
         scanner->registerWorkerMaintenance(
             maintenance, &blockingProbe, &BlockingMaintenanceProbe::check);
         if (scannerDispatcher->post([&scanner] { scanner->start(); }) !=
@@ -372,10 +372,10 @@ int main() {
     }
 
     // Scanner teardown likewise invalidates startup-owned maintenance nodes.
-    ruvia::detail::ConnectionScanner::WorkerMaintenanceRegistration maintenanceRegistration;
+    ruvia::ConnectionScanner::WorkerMaintenanceRegistration maintenanceRegistration;
     WorkerMaintenanceProbe maintenanceProbe;
     {
-        ruvia::detail::ConnectionScanner scanner(worker, ruvia::detail::ConnectionScannerOptions{});
+        ruvia::ConnectionScanner scanner(worker, ruvia::ConnectionScannerOptions{});
         scanner.registerWorkerMaintenance(
             maintenanceRegistration, &maintenanceProbe, &WorkerMaintenanceProbe::check);
     }

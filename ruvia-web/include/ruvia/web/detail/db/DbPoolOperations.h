@@ -141,18 +141,20 @@ Task<std::size_t> acquireDbSlot(Pool& pool, ruvia::OperationTimeout timeout, Sto
     const auto acquireTimeout = timeout.constrainedBy(pool.config_.acquireTimeout).remaining();
     const auto result =
         co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken), pool.worker_);
-    if (const auto* acquired = result.acquired()) {
-        co_return acquired->index();
+    switch (result.status()) {
+        case PoolWaiterResult::Status::kAcquired:
+            co_return result.index();
+        case PoolWaiterResult::Status::kTimedOut:
+            throw DbError(DbError::Code::kTimeout, pool.config_.driver,
+                "database connection pool acquire timed out");
+        case PoolWaiterResult::Status::kCancelled:
+            throw DbError(
+                DbError::Code::kCancelled, pool.config_.driver, "database operation cancelled");
+        case PoolWaiterResult::Status::kClosed:
+            throw DbError(
+                DbError::Code::kClosing, pool.config_.driver, "database client is closing");
     }
-    if (result.timedOut() != nullptr) {
-        throw DbError(DbError::Code::kTimeout, pool.config_.driver,
-            "database connection pool acquire timed out");
-    }
-    if (result.cancelled() != nullptr) {
-        throw DbError(
-            DbError::Code::kCancelled, pool.config_.driver, "database operation cancelled");
-    }
-    throw DbError(DbError::Code::kClosing, pool.config_.driver, "database client is closing");
+    std::terminate();
 }
 
 template <typename Pool>

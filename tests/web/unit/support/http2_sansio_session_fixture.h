@@ -5,6 +5,7 @@
 
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
@@ -26,7 +27,7 @@ public:
     }
 
     detail::HttpServerOptions options;
-    detail::ConnectionScanner::Entry scannerEntry;
+    ConnectionScanner::Entry scannerEntry;
     detail::HttpServerWorkerState workerState{detail::HttpServerWorkerState::kRunning};
 
 private:

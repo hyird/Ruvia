@@ -3,7 +3,6 @@
 #include <cstdint>
 
 #include "ruvia/http/Http1RequestConnectionPlan.h"
-#include "ruvia/http/detail/field/HttpConnectionFields.h"
 
 namespace ruvia {
 

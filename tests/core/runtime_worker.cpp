@@ -16,10 +16,12 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
+#include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
@@ -55,6 +57,27 @@ public:
 private:
     MailboxDestructorState* state_;
 };
+
+bool testWorkerRuntimeContextOwnsStableDetachedEndpoint() {
+    asio::io_context context;
+    std::optional<ruvia::WorkerHandle> escapedHandle;
+    {
+        ruvia::WorkerRuntimeContext runtime(context, 8);
+        const auto* handleAddress = &runtime.handle();
+        if (&runtime.ioContext() != &context || handleAddress != &runtime.handle() ||
+            !runtime.handle().valid()) {
+            return false;
+        }
+        escapedHandle.emplace(runtime.handle());
+        runtime.detach();
+        if (runtime.handle().valid() || escapedHandle->valid()) {
+            return false;
+        }
+    }
+    asio::post(context, [] {});
+    context.run();
+    return escapedHandle && !escapedHandle->valid();
+}
 
 bool testMailboxCallableDestructionCanInspectWorker() {
     asio::io_context context;
@@ -991,6 +1014,8 @@ int main() {
     };
     return run("post_outcome_invariants_and_empty_callbacks",
                testPostOutcomeInvariantsAndEmptyCallbacks) &&
+                   run("worker_runtime_context_owns_stable_detached_endpoint",
+                       testWorkerRuntimeContextOwnsStableDetachedEndpoint) &&
                    run("mailbox_callable_destruction_can_inspect_worker",
                        testMailboxCallableDestructionCanInspectWorker) &&
                    run("mailbox_factory_rollback_and_detach",

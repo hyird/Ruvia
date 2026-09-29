@@ -260,20 +260,18 @@ std::uint16_t HttpClientPool::port() const noexcept {
 Task<std::size_t> HttpClientPool::acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     auto result = co_await scheduler_.acquire(
         timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), worker_);
-    if (result.timedOut()) {
-        throw HttpClientError(
-            HttpClientError::Code::kTimeout, "http client connection pool acquire timed out");
+    switch (result.status()) {
+        case ruvia::PoolWaiterResult::Status::kAcquired:
+            co_return result.index();
+        case ruvia::PoolWaiterResult::Status::kTimedOut:
+            throw HttpClientError(
+                HttpClientError::Code::kTimeout, "http client connection pool acquire timed out");
+        case ruvia::PoolWaiterResult::Status::kCancelled:
+            throw HttpClientError(HttpClientError::Code::kCancelled, "http client request cancelled");
+        case ruvia::PoolWaiterResult::Status::kClosed:
+            throw HttpClientError(HttpClientError::Code::kClosing, "http client pool is closing");
     }
-    if (result.cancelled()) {
-        throw HttpClientError(HttpClientError::Code::kCancelled, "http client request cancelled");
-    }
-    if (result.closed()) {
-        throw HttpClientError(HttpClientError::Code::kClosing, "http client pool is closing");
-    }
-    if (!result.acquired()) {
-        std::terminate();
-    }
-    co_return result.acquired()->index();
+    std::terminate();
 }
 
 void HttpClientPool::release(std::size_t index) noexcept {
@@ -473,18 +471,21 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     auto& runtime = *connection.http2Runtime;
     auto acquired =
         co_await runtime.connectScheduler.acquire(acquireTimeout.remaining(), stopToken, worker_);
-    if (acquired.timedOut()) {
-        throw HttpClientError(
-            HttpClientError::Code::kTimeout, "HTTP client connect wait timed out");
+    switch (acquired.status()) {
+        case ruvia::PoolWaiterResult::Status::kAcquired:
+            break;
+        case ruvia::PoolWaiterResult::Status::kTimedOut:
+            throw HttpClientError(
+                HttpClientError::Code::kTimeout, "HTTP client connect wait timed out");
+        case ruvia::PoolWaiterResult::Status::kCancelled:
+            throw HttpClientError(
+                HttpClientError::Code::kCancelled, "HTTP client connect wait cancelled");
+        case ruvia::PoolWaiterResult::Status::kClosed:
+            throw HttpClientError(HttpClientError::Code::kClosing, "HTTP client pool is closing");
+        default:
+            std::terminate();
     }
-    if (acquired.cancelled()) {
-        throw HttpClientError(
-            HttpClientError::Code::kCancelled, "HTTP client connect wait cancelled");
-    }
-    if (!acquired.acquired()) {
-        throw HttpClientError(HttpClientError::Code::kClosing, "HTTP client pool is closing");
-    }
-    const auto connectSlot = acquired.acquired()->index();
+    const auto connectSlot = acquired.index();
     struct ConnectLease final {
         PoolLeaseScheduler& scheduler;
         std::size_t slot;
@@ -993,19 +994,22 @@ Task<void> HttpClientPool::executeRequestInto(
                     ++requestsInFlight_;
                     h1Operation.buffered = false;
                 }
-                if (h1Acquired.timedOut()) {
-                    throw HttpClientError(
-                        HttpClientError::Code::kTimeout, "HTTP/1 connection acquire timed out");
+                switch (h1Acquired.status()) {
+                    case ruvia::PoolWaiterResult::Status::kAcquired:
+                        break;
+                    case ruvia::PoolWaiterResult::Status::kTimedOut:
+                        throw HttpClientError(HttpClientError::Code::kTimeout,
+                            "HTTP/1 connection acquire timed out");
+                    case ruvia::PoolWaiterResult::Status::kCancelled:
+                        throw HttpClientError(
+                            HttpClientError::Code::kCancelled, "HTTP/1 request cancelled");
+                    case ruvia::PoolWaiterResult::Status::kClosed:
+                        throw HttpClientError(
+                            HttpClientError::Code::kClosing, "HTTP client pool is closing");
+                    default:
+                        std::terminate();
                 }
-                if (h1Acquired.cancelled()) {
-                    throw HttpClientError(
-                        HttpClientError::Code::kCancelled, "HTTP/1 request cancelled");
-                }
-                if (!h1Acquired.acquired()) {
-                    throw HttpClientError(
-                        HttpClientError::Code::kClosing, "HTTP client pool is closing");
-                }
-                const auto h1Slot = h1Acquired.acquired()->index();
+                const auto h1Slot = h1Acquired.index();
                 struct H1Release final {
                     PoolLeaseScheduler& scheduler;
                     std::size_t slot;
