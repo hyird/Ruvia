@@ -1,7 +1,9 @@
 #include <chrono>
 #include <coroutine>
+#include <cstddef>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 
 #include <asio/co_spawn.hpp>
@@ -9,11 +11,36 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
+#include "ruvia/core/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/pool/PoolLeaseScheduler.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 
 namespace {
+
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    std::size_t allocations{};
+    std::size_t deallocations{};
+    std::size_t liveBlocks{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        void* const block = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++allocations;
+        ++liveBlocks;
+        return block;
+    }
+
+    void do_deallocate(void* block, std::size_t bytes, std::size_t alignment) override {
+        ++deallocations;
+        --liveBlocks;
+        std::pmr::new_delete_resource()->deallocate(block, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 class AcquireProbeTask final {
 public:
@@ -60,65 +87,65 @@ private:
 };
 
 ruvia::Task<void> exerciseLeaseAndClose(
-    ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
+    ruvia::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     {
         auto discardedColdAcquire = scheduler.acquire(std::nullopt);
         static_cast<void>(discardedColdAcquire);
     }
     const auto first = co_await scheduler.acquire(std::nullopt);
-    const auto* firstLease = first.acquired();
-    if (firstLease == nullptr) {
+    if (!first.acquired()) {
         co_return;
     }
-    const auto index = firstLease->index();
-    if (scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kReleased ||
-        scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kAlreadyReleased ||
-        scheduler.release(index + 1) != ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot) {
+    const auto index = first.index();
+    if (scheduler.release(index) != ruvia::PoolLeaseReleaseStatus::kReleased ||
+        scheduler.release(index) != ruvia::PoolLeaseReleaseStatus::kAlreadyReleased ||
+        scheduler.release(index + 1) != ruvia::PoolLeaseReleaseStatus::kInvalidSlot) {
         co_return;
     }
 
     const auto reacquired = co_await scheduler.acquire(std::nullopt);
-    if (reacquired.acquired() == nullptr || reacquired.acquired()->index() != index) {
+    if (!reacquired.acquired() || reacquired.index() != index) {
         co_return;
     }
 
-    auto handoffStatus = ruvia::detail::PoolLeaseReleaseStatus::kInvalidSlot;
+    auto handoffStatus = ruvia::PoolLeaseReleaseStatus::kInvalidSlot;
     asio::post(ioContext,
         [&scheduler, &handoffStatus, index] { handoffStatus = scheduler.release(index); });
     const auto handedOff = co_await scheduler.acquire(std::nullopt);
-    if (handedOff.acquired() == nullptr || handedOff.acquired()->index() != index) {
+    if (!handedOff.acquired() || handedOff.index() != index) {
         co_return;
     }
 
     asio::post(ioContext, [&scheduler] { (void)scheduler.close(); });
     const auto waitingAtClose = co_await scheduler.acquire(std::nullopt);
-    if (handoffStatus != ruvia::detail::PoolLeaseReleaseStatus::kTransferredToWaiter ||
-        waitingAtClose.closed() == nullptr || !scheduler.closing() || scheduler.close()) {
+    if (handoffStatus != ruvia::PoolLeaseReleaseStatus::kTransferredToWaiter ||
+        waitingAtClose.status() != ruvia::PoolWaiterResult::Status::kClosed ||
+        !scheduler.closing() || scheduler.close()) {
         co_return;
     }
-    if (scheduler.release(index) != ruvia::detail::PoolLeaseReleaseStatus::kReleased) {
+    if (scheduler.release(index) != ruvia::PoolLeaseReleaseStatus::kReleased) {
         co_return;
     }
     const auto afterClose = co_await scheduler.acquire(std::nullopt);
-    success = afterClose.closed() != nullptr;
+    success = afterClose.status() == ruvia::PoolWaiterResult::Status::kClosed;
 }
 
 ruvia::Task<void> exerciseAcquireTimeout(
-    ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
+    ruvia::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     asio::post(ioContext,
         [&scheduler] { scheduler.scanDeadlines(std::chrono::steady_clock::time_point::max()); });
     const auto result = co_await scheduler.acquire(std::chrono::milliseconds(1));
-    success = result.timedOut() != nullptr;
+    success = result.status() == ruvia::PoolWaiterResult::Status::kTimedOut;
 }
 
 ruvia::Task<void> exerciseWorkerBoundAcquireTimeout(
-    ruvia::detail::PoolLeaseScheduler& scheduler, bool& success) {
+    ruvia::PoolLeaseScheduler& scheduler, bool& success) {
     const auto result = co_await scheduler.acquire(std::chrono::milliseconds(1));
-    success = result.timedOut() != nullptr;
+    success = result.status() == ruvia::PoolWaiterResult::Status::kTimedOut;
 }
 
 ruvia::Task<void> exerciseSaturatedAcquireTimeout(
-    ruvia::detail::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
+    ruvia::PoolLeaseScheduler& scheduler, asio::io_context& ioContext, bool& success) {
     asio::post(ioContext, [&scheduler] {
         scheduler.scanDeadlines(std::chrono::steady_clock::now());
         (void)scheduler.close();
@@ -127,10 +154,10 @@ ruvia::Task<void> exerciseSaturatedAcquireTimeout(
     // A maximum positive timeout is effectively unbounded. Direct deadline
     // addition used to wrap it into the past, making the deadline scan win
     // with a false timeout instead of the subsequent close notification.
-    success = result.closed() != nullptr;
+    success = result.status() == ruvia::PoolWaiterResult::Status::kClosed;
 }
 
-ruvia::Task<void> exerciseAcquireCancellation(ruvia::detail::PoolLeaseScheduler& scheduler,
+ruvia::Task<void> exerciseAcquireCancellation(ruvia::PoolLeaseScheduler& scheduler,
     asio::io_context& ioContext, const ruvia::WorkerHandle& worker, bool& success) {
     ruvia::StopSource source;
     asio::post(ioContext, [&scheduler, &source] {
@@ -140,21 +167,75 @@ ruvia::Task<void> exerciseAcquireCancellation(ruvia::detail::PoolLeaseScheduler&
     const auto result = co_await scheduler.acquire(std::nullopt, source.token(), worker);
     // Cancellation is committed before requestStop() returns. A same-stack
     // close must not replace it with kClosed while resumption is deferred.
-    success = result.cancelled() != nullptr;
+    success = result.status() == ruvia::PoolWaiterResult::Status::kCancelled;
+}
+
+ruvia::Task<void> exercisePmrLifecycle(ruvia::PoolLeaseScheduler& scheduler,
+    asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
+    CountingMemoryResource& resource, std::size_t baselineBlocks,
+    ruvia::PoolWaiterResult& retainedResult, bool& success) {
+    for (std::size_t i = 0; i < 32; ++i) {
+        {
+            auto discardedColdAcquire = scheduler.acquire(std::nullopt);
+            static_cast<void>(discardedColdAcquire);
+        }
+        if (resource.liveBlocks != baselineBlocks) {
+            co_return;
+        }
+    }
+
+    const auto held = co_await scheduler.acquire(std::nullopt);
+    if (!held.acquired()) {
+        co_return;
+    }
+    for (std::size_t i = 0; i < 32; ++i) {
+        if (scheduler.release(held.index()) != ruvia::PoolLeaseReleaseStatus::kReleased) {
+            co_return;
+        }
+        const auto acquired = co_await scheduler.acquire(std::nullopt);
+        if (!acquired.acquired() || acquired.index() != held.index() ||
+            resource.liveBlocks != baselineBlocks) {
+            co_return;
+        }
+        retainedResult = acquired;
+    }
+
+    for (std::size_t i = 0; i < 32; ++i) {
+        asio::post(ioContext, [&scheduler] {
+            scheduler.scanDeadlines(std::chrono::steady_clock::time_point::max());
+        });
+        const auto timedOut = co_await scheduler.acquire(std::chrono::milliseconds(1));
+        if (timedOut.status() != ruvia::PoolWaiterResult::Status::kTimedOut ||
+            resource.liveBlocks != baselineBlocks) {
+            co_return;
+        }
+
+        ruvia::StopSource source;
+        asio::post(ioContext, [&source] { source.requestStop(); });
+        const auto cancelled = co_await scheduler.acquire(std::nullopt, source.token(), worker);
+        if (cancelled.status() != ruvia::PoolWaiterResult::Status::kCancelled ||
+            resource.liveBlocks != baselineBlocks) {
+            co_return;
+        }
+    }
+
+    success = scheduler.release(held.index()) == ruvia::PoolLeaseReleaseStatus::kReleased &&
+              resource.liveBlocks == baselineBlocks && retainedResult.acquired() &&
+              retainedResult.index() == held.index();
 }
 
 AcquireProbeTask observeAcquireClosedAfterStaleCancellation(
-    ruvia::detail::PoolLeaseScheduler& scheduler, ruvia::StopToken stopToken,
+    ruvia::PoolLeaseScheduler& scheduler, ruvia::StopToken stopToken,
     const ruvia::WorkerHandle& worker, bool& closed) {
     const auto result = co_await scheduler.acquire(std::nullopt, std::move(stopToken), worker);
-    closed = result.closed() != nullptr;
+    closed = result.status() == ruvia::PoolWaiterResult::Status::kClosed;
 }
 
 bool exerciseCompletedAcquireIgnoresStalePostedCancellation(
     asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
     bool closed = false;
     {
-        ruvia::detail::PoolLeaseScheduler scheduler(0);
+        ruvia::PoolLeaseScheduler scheduler(0);
         ruvia::StopSource source;
         auto probe =
             observeAcquireClosedAfterStaleCancellation(scheduler, source.token(), worker, closed);
@@ -187,13 +268,13 @@ bool exerciseCompletedAcquireIgnoresStalePostedCancellation(
 
 int main() {
     asio::io_context ioContext;
-    ruvia::detail::PoolLeaseScheduler leaseScheduler(1);
-    ruvia::detail::PoolLeaseScheduler timeoutScheduler(0);
-    ruvia::detail::PoolLeaseScheduler saturatedTimeoutScheduler(0);
-    ruvia::detail::PoolLeaseScheduler cancellationScheduler(0);
+    ruvia::PoolLeaseScheduler leaseScheduler(1);
+    ruvia::PoolLeaseScheduler timeoutScheduler(0);
+    ruvia::PoolLeaseScheduler saturatedTimeoutScheduler(0);
+    ruvia::PoolLeaseScheduler cancellationScheduler(0);
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 4);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
-    ruvia::detail::PoolLeaseScheduler workerTimeoutScheduler(0, worker);
+    ruvia::PoolLeaseScheduler workerTimeoutScheduler(0, worker);
     bool leaseSuccess = false;
     bool timeoutSuccess = false;
     bool workerTimeoutSuccess = false;
@@ -222,9 +303,27 @@ int main() {
     ioContext.run();
     const bool staleCancellationSuccess =
         exerciseCompletedAcquireIgnoresStalePostedCancellation(ioContext, worker);
+
+    CountingMemoryResource resource;
+    bool pmrLifecycleSuccess = false;
+    ruvia::PoolWaiterResult retainedResult = ruvia::PoolWaiterResult::makeClosed();
+    {
+        ruvia::PoolLeaseScheduler scheduler(1, worker, &resource);
+        const auto baselineBlocks = resource.liveBlocks;
+        ioContext.restart();
+        asio::co_spawn(ioContext,
+            ruvia::detail::taskAsAwaitable(exercisePmrLifecycle(scheduler, ioContext, worker,
+                resource, baselineBlocks, retainedResult, pmrLifecycleSuccess)),
+            asio::detached);
+        ioContext.run();
+        pmrLifecycleSuccess = pmrLifecycleSuccess && resource.liveBlocks == baselineBlocks;
+    }
+    pmrLifecycleSuccess = pmrLifecycleSuccess && resource.liveBlocks == 0 &&
+                          resource.allocations == resource.deallocations;
+
     dispatcher->close();
     return leaseSuccess && timeoutSuccess && workerTimeoutSuccess && saturatedTimeoutSuccess &&
-                   cancellationSuccess && staleCancellationSuccess
+                   cancellationSuccess && staleCancellationSuccess && pmrLifecycleSuccess
                ? 0
                : 1;
 }

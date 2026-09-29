@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -23,10 +24,12 @@ struct MaskSource {
 class CountingResource final : public std::pmr::memory_resource {
 public:
     std::size_t liveBytes{0};
+    std::size_t allocations{0};
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++allocations;
         liveBytes += bytes;
         return allocation;
     }
@@ -126,6 +129,70 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     if (ping && ping->ping()) {
         RUVIA_CHECK_EQ(ping->ping()->payload(), "p");
     }
+}
+
+RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
+    CountingResource memory;
+    std::pmr::string input(&memory);
+    input.reserve(1024);
+    const auto bytesBeforeProtocol = memory.liveBytes;
+    {
+        WebSocketServerProtocol protocol(input);
+        MaskSource mask;
+        auto sender = client(mask);
+        for (int i = 0; i < 32; ++i) {
+            RUVIA_CHECK(sender.submitFrame(WebSocketOpcode::kText, "payload") ==
+                        WebSocketFrameSubmitStatus::kAccepted);
+            const std::string wire(sender.outputPlan().bytes());
+            RUVIA_CHECK(sender.consumeOutput(wire.size()) == WebSocketOutputConsumeStatus::kDrained);
+            input.append(wire);
+            const auto allocationsBeforePoll = memory.allocations;
+            auto event = protocol.poll();
+            RUVIA_CHECK(event && event->message());
+            RUVIA_CHECK_EQ(memory.allocations, allocationsBeforePoll);
+            if (event && event->message()) {
+                RUVIA_CHECK_EQ(event->message()->payload(), "payload");
+                const auto payloadAddress = reinterpret_cast<std::uintptr_t>(
+                    event->message()->payload().data());
+                const auto inputAddress = reinterpret_cast<std::uintptr_t>(input.data());
+                RUVIA_CHECK(payloadAddress >= inputAddress);
+                RUVIA_CHECK(payloadAddress + event->message()->payload().size() <=
+                            inputAddress + input.size());
+            }
+        }
+        RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "out") ==
+                    WebSocketServerFrameSubmitStatus::kAccepted);
+        auto pending = protocol.outputPlan().bytes();
+        RUVIA_CHECK(protocol.consumeOutput(pending.size()) ==
+                    WebSocketServerOutputConsumeStatus::kDrained);
+        const auto liveBeforeSubmit = memory.liveBytes;
+        for (int i = 0; i < 32; ++i) {
+            RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "out") ==
+                        WebSocketServerFrameSubmitStatus::kAccepted);
+            pending = protocol.outputPlan().bytes();
+            RUVIA_CHECK(protocol.consumeOutput(pending.size()) ==
+                        WebSocketServerOutputConsumeStatus::kDrained);
+        }
+        // PMR implementations may allocate a transient container proxy on each
+        // submit; those allocations must not remain live after output drains.
+        RUVIA_CHECK_EQ(memory.liveBytes, liveBeforeSubmit);
+        protocol.notifyTransportEof();
+        auto end = protocol.poll();
+        RUVIA_CHECK(end && end->kind() == WebSocketServerEventKind::kTransportEnd);
+        protocol.commitTransportEnd();
+        RUVIA_CHECK(protocol.abort() == WebSocketServerAbortDisposition::kNoTransportAction);
+    }
+    RUVIA_CHECK_EQ(memory.liveBytes, bytesBeforeProtocol);
+}
+
+RUVIA_TEST(ws_public_server_protocol_reports_protocol_error_as_public_value) {
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input);
+    // A server-side connection must reject an unmasked client frame.
+    input.append("\x81\x01x", 3);
+    auto error = protocol.poll();
+    RUVIA_CHECK(error && error->kind() == WebSocketServerEventKind::kProtocolError);
+    RUVIA_CHECK(error && error->protocolError() && error->protocolError()->closeCode() == 1002);
 }
 
 RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {

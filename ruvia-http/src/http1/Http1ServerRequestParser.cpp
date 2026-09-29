@@ -24,6 +24,9 @@ using ruvia::detail::singletonRequestHeaderBit;
 
 }  // namespace
 
+Http1ServerRequestParseState::Http1ServerRequestParseState() noexcept
+    : request(HttpRequestAccess::make()) {}
+
 void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     std::size_t headerSearchOffset, Http1ServerRequestParseState& state,
     std::pmr::memory_resource* resource) {

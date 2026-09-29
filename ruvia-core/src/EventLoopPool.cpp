@@ -14,9 +14,10 @@
 #include <asio/executor_work_guard.hpp>
 
 #include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/util/FailureReport.h"
-#include "ruvia/core/detail/worker/WorkerRuntimeContext.h"
+#include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/detail/worker/WorkerSelection.h"
 
 namespace ruvia {
