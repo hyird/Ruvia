@@ -45,17 +45,22 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
         path = "/";
     }
 
+    // The raw target retains the distinction between an absent query and an
+    // empty query ("/x" versus "/x?"); queryString() alone cannot express it.
+    const bool hasQuery = request.target().contains('?');
     std::pmr::string location(memory.allocator<char>());
     location.reserve(std::string_view("https://").size() + host.size() +
                      (httpsPort == 443 ? 0U : 6U) + path.size() +
-                     (request.queryString().empty() ? 0U : 1U + request.queryString().size()));
+                     (hasQuery ? 1U + request.queryString().size() : 0U));
     location.append("https://");
     location.append(host.data(), host.size());
     appendHttpsPort(location, httpsPort);
     location.append(path.data(), path.size());
-    if (!request.queryString().empty()) {
+    if (hasQuery) {
         location.push_back('?');
-        location.append(request.queryString().data(), request.queryString().size());
+        if (!request.queryString().empty()) {
+            location.append(request.queryString().data(), request.queryString().size());
+        }
     }
 
     response.header("Location", location);
