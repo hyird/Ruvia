@@ -209,6 +209,7 @@ private:
     bool closeActive_{false};
     WritePhase writePhase_{WritePhase::kIdle};
     WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
+    std::uint64_t heartbeatSequence_{0};
     std::int64_t lastActiveMs_{0};
     bool connectInFlight_{false};
     bool heartbeatInFlight_{false};

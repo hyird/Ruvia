@@ -26,7 +26,7 @@ void WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
             break;
     }
 
-    livenessState_ = WebSocketSendingPing{};
+    livenessState_ = WebSocketSendingPing(++heartbeatSequence_);
     writePhase_ = WritePhase::kHeartbeat;
     try {
         asio::co_spawn(transport_.executor(), ruvia::asAwaitable(writeHeartbeatPing()),
@@ -42,14 +42,20 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
     WriteGuard writeGuard(*this, WritePhase::kHeartbeat, WriteClaim::kAdopt);
     try {
-        co_await writeFrameNow(WebSocketOpcode::kPing, {});
+        const auto* sending = std::get_if<WebSocketSendingPing>(&livenessState_);
+        if (sending == nullptr) {
+            co_return;
+        }
+        const auto challenge = sending->challenge();
+        const auto payload = webSocketHeartbeatPayload(challenge);
+        co_await writeFrameNow(WebSocketOpcode::kPing, std::string_view(payload.data(), payload.size()));
         // Ordinary I/O shares the scanner activity timestamp and may update it
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.
         const auto pingSentAtMs = webSocketSteadyNowMs();
         if (protocol_.livenessMode() == WebSocketLivenessMode::kOpen &&
             std::holds_alternative<WebSocketSendingPing>(livenessState_)) {
-            livenessState_ = WebSocketAwaitingPong(pingSentAtMs);
+            livenessState_ = WebSocketAwaitingPong(pingSentAtMs, challenge);
         }
     } catch (...) {
         abortTransport();

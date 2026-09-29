@@ -368,6 +368,86 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     RUVIA_CHECK(state.aborted);
 }
 
+RUVIA_TEST(websocket_heartbeat_ignores_unmatched_pong_until_timeout) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    ruvia::WebSocketLifecycleOptions lifecycle;
+    lifecycle.heartbeat = {
+        .pingInterval = std::chrono::milliseconds(1),
+        .pongTimeout = std::chrono::milliseconds(1),
+    };
+    const auto incoming = maskedFrame(0xA, "wrong") + maskedFrame(0x1, "ok");
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
+        scannerEntry, lifecycle, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), incoming);
+
+    asio::post(io, [&connection] {
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10);
+    });
+    (void)io.poll();
+    RUVIA_CHECK_EQ(state.writes, std::size_t{1});
+    RUVIA_CHECK_EQ(state.lastNonEmptyBytes.size(), std::size_t{10});
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(state.lastNonEmptyBytes[0]), 0x89U);
+
+    auto reader = asio::co_spawn(io, [&]() -> asio::awaitable<std::optional<ruvia::WebSocketMessage>> { co_return co_await ruvia::asAwaitable(connection.read()); }, asio::use_future);
+    io.restart();
+    runUntilReady(io, reader);
+    const auto message = reader.get();
+    RUVIA_CHECK(message && message->payload() == "ok");
+
+    io.restart();
+    const auto timeoutNow = ruvia::detail::webSocketSteadyNowMs() + 2;
+    asio::post(io, [&connection, timeoutNow] {
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, timeoutNow);
+    });
+    (void)io.poll();
+    RUVIA_CHECK(state.aborted);
+}
+
+RUVIA_TEST(websocket_heartbeat_matching_pong_satisfies_ping) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto workerHandle = attachment.loop().handle();
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    ruvia::WebSocketLifecycleOptions lifecycle;
+    lifecycle.heartbeat = {
+        .pingInterval = std::chrono::milliseconds(1),
+        .pongTimeout = std::chrono::milliseconds(1),
+    };
+    const auto pingPayload = ruvia::detail::webSocketHeartbeatPayload(1);
+    const auto incoming = maskedFrame(0xA, {pingPayload.data(), pingPayload.size()}) +
+                          maskedFrame(0x1, "ok");
+    WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
+        scannerEntry, lifecycle, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), incoming);
+
+    asio::post(io, [&connection] {
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10);
+    });
+    (void)io.poll();
+    RUVIA_CHECK_EQ(state.writes, std::size_t{1});
+    RUVIA_CHECK_EQ(std::string_view(state.lastNonEmptyBytes).substr(2),
+        std::string_view(pingPayload.data(), pingPayload.size()));
+
+    auto reader = asio::co_spawn(io, [&]() -> asio::awaitable<std::optional<ruvia::WebSocketMessage>> { co_return co_await ruvia::asAwaitable(connection.read()); }, asio::use_future);
+    io.restart();
+    runUntilReady(io, reader);
+    const auto message = reader.get();
+    RUVIA_CHECK(message && message->payload() == "ok");
+
+    io.restart();
+    const auto timeoutNow = ruvia::detail::webSocketSteadyNowMs() + 2;
+    asio::post(io, [&connection, timeoutNow] {
+        WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, timeoutNow);
+    });
+    (void)io.poll();
+    RUVIA_CHECK(!state.aborted);
+}
+
 RUVIA_TEST(websocket_close_timeout_starts_after_close_write_commits) {
     asio::io_context& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
