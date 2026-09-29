@@ -225,7 +225,11 @@ namespace ruvia::detail {
     if (hasPostgreSqlEscapeStringPrefix(sql, index)) {
         return skipSqlQuotedRun(sql, index + 1, '\'', true);
     }
-    if (sql[index] == '$') {
+    // In PostgreSQL an unquoted identifier may contain '$'. A would-be
+    // delimiter immediately after an identifier byte is part of that name,
+    // not the start of a dollar-quoted string.
+    if (sql[index] == '$' &&
+        (index == 0 || !isPostgreSqlIdentifierContinue(sql[index - 1]))) {
         const auto next = skipPostgreSqlDollarQuotedAtom(sql, index);
         if (next != index + 1) {
             return next;

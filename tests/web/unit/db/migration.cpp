@@ -180,6 +180,14 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
         .sql = "DO $schema$ BEGIN EXECUTE $body$ SELECT 1; SELECT 2 $body$; END $schema$;"}}};
     RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tagged, 1)); }));
 
+    // Dollar signs belong to an unquoted PostgreSQL identifier when the
+    // would-be opening tag is adjacent to the identifier's first byte.
+    const DbMigration identifierTags[] = {DbMigration{{.id = "001",
+        .sql = "SELECT 1 AS foo$tag$; SELECT 2 AS bar$tag$;"}}};
+    RUVIA_CHECK(throwsOn([&] {
+        validateMigrationList(std::span<const DbMigration>(identifierTags, 1), DbDriver::kPostgreSql);
+    }));
+
     // PostgreSQL ordinary strings and quoted identifiers do not use a
     // backslash to escape the closing delimiter. These are therefore two
     // statements to PostgreSQL even though MariaDB-style scanning used to
