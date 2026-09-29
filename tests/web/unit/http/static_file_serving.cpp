@@ -1427,6 +1427,86 @@ RUVIA_TEST(static_file_conditional_request_serving) {
     fs::remove_all(dir);
 }
 
+RUVIA_TEST(static_file_stale_index_rejects_conditional_response) {
+#if defined(__unix__) || defined(_WIN32)
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::detail::ContextAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_stale_conditional_dir";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const auto path = dir / "data.txt";
+    constexpr std::string_view oldContents = "old-static-data";
+    constexpr std::string_view newContents = "new-static-data";
+    static_assert(oldContents.size() == newContents.size());
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << oldContents;
+    }
+    ruvia::StaticRootOptions options;
+    options.fileTypes =
+        ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll};
+    ruvia::StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::string_view method, std::string_view headerName = {},
+                           std::string_view headerValue = {}) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod(method);
+        if (!headerName.empty()) {
+            request.addHeader(HttpHeaderView{headerName, headerValue});
+        }
+        auto context = ContextAccess::make(memory, request, ruvia::test::testContextServices());
+        const auto response =
+            context.staticFile(root, {.relativePath = "data.txt", .contentType = "text/plain"});
+        return std::pair(response.status(), std::string(response.header("ETag").value_or("")));
+    };
+
+    const auto [initialStatus, oldEtag] = serve("GET");
+    RUVIA_CHECK_EQ(initialStatus, ruvia::http_status::kOk);
+    RUVIA_CHECK(!oldEtag.empty());
+    RUVIA_CHECK_EQ(serve("GET", "If-None-Match", oldEtag).first,
+        ruvia::http_status::kNotModified);
+
+    std::error_code error;
+    const auto before = ruvia::detail::snapshotResponseFile(path.c_str(), error);
+    RUVIA_CHECK(!error);
+    bool identityChanged = false;
+    for (int attempt = 0; attempt < 20 && !identityChanged; ++attempt) {
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output << newContents;
+        }
+        const auto after = ruvia::detail::snapshotResponseFile(path.c_str(), error);
+        RUVIA_CHECK(!error);
+        identityChanged = !error && after.identity != before.identity;
+        if (!identityChanged) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    RUVIA_CHECK(identityChanged);
+    if (identityChanged) {
+        const auto expectStaleRejected = [&](std::string_view method, std::string_view headerName,
+                                             std::string_view headerValue) {
+            bool failedClosed = false;
+            try {
+                (void)serve(method, headerName, headerValue);
+            } catch (const ruvia::HttpError& httpError) {
+                failedClosed = httpError.info().status() == ruvia::http_status::kInternalServerError;
+            }
+            RUVIA_CHECK(failedClosed);
+        };
+        expectStaleRejected("GET", "If-None-Match", oldEtag);
+        expectStaleRejected("HEAD", {}, {});
+        expectStaleRejected("GET", "Range", "bytes=999999-");
+        expectStaleRejected("POST", "If-Match", "\"different\"");
+    }
+    fs::remove_all(dir);
+#endif
+}
+
 RUVIA_TEST(static_file_selects_precompressed_representation_atomically) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;

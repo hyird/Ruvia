@@ -55,6 +55,19 @@ public:
         return identity_;
     }
 
+    void validateCurrent(std::uint64_t size) const {
+        if (!identity_.requiresValidation()) {
+            return;
+        }
+        std::error_code ec;
+        const auto snapshot = detail::snapshotResponseFile(path_.c_str(), ec);
+        if (ec || snapshot.identity != identity_ || snapshot.size != size) {
+            throw HttpError({.status = ruvia::http_status::kInternalServerError,
+                .code = "static_file_changed",
+                .message = "static file changed since its index was built"});
+        }
+    }
+
     void setBody(
         HttpResponse& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
         const auto identity = identity_;
@@ -109,6 +122,12 @@ public:
         return detail::ResponseFileIdentity::unchecked();
     }
 
+    void validateCurrent(std::uint64_t size) const {
+        if (const auto* path = std::get_if<FileResponsePath>(&value_)) {
+            path->validateCurrent(size);
+        }
+    }
+
     void setBody(HttpResponse& response, std::pmr::memory_resource* resource, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length) {
         if (auto* path = std::get_if<FileResponsePath>(&value_)) {
@@ -156,6 +175,7 @@ struct FileResponseSource final {
     std::string_view precomputedLastModified;
     HttpContentCoding contentCoding{HttpContentCoding::kIdentity};
     bool negotiatesEncoding{false};
+    bool validateIndexedFileForBodylessResponse{false};
 };
 
 template <typename ApplyResponseState>
@@ -245,7 +265,17 @@ template <typename ApplyResponseState>
     auto setFullFileBody = [&](HttpResponse& response) {
         source.body.setFullBody(response, context.arena(), source.size);
     };
+    // Body writes validate the indexed identity when opening the file. Responses
+    // without file bytes (HEAD, 304, 412, 416) need that check here instead.
+    bool indexedFileValidated = false;
+    auto validateIndexedFileForBodylessResponse = [&] {
+        if (source.validateIndexedFileForBodylessResponse && !indexedFileValidated) {
+            source.body.validateCurrent(source.size);
+            indexedFileValidated = true;
+        }
+    };
     auto makeHeaderOnlyResponse = [&](std::optional<HttpStatusCode> statusCode) {
+        validateIndexedFileForBodylessResponse();
         HttpResponse response({.resource = context.arena()});
         addFileHeaders(response);
         applyFileResponseState(response, statusCode);
@@ -261,17 +291,24 @@ template <typename ApplyResponseState>
 
     const auto method = request.knownMethod();
     const auto methodPlan = httpConditionalMethodPlan(method);
+    if (method == HttpKnownMethod::kHead) {
+        validateIndexedFileForBodylessResponse();
+    }
     const auto conditional = httpConditionalHeaders(request);
     // Response validator generation is optional, but request preconditions are
     // method semantics. In particular, If-Match / If-None-Match "*" test the
     // existence of this current representation without needing an ETag, and
     // date conditions can use the file metadata without emitting Last-Modified.
     if (methodPlan.evaluatesPreconditions) {
-        const auto etagConditions = httpEtagPreconditions(request, etag);
-        if (etagConditions.ifMatch.present && !etagConditions.ifMatch.matches()) {
+        const auto rejectPrecondition = [&] {
+            validateIndexedFileForBodylessResponse();
             throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
                 .code = "precondition_failed",
                 .message = "file precondition failed"});
+        };
+        const auto etagConditions = httpEtagPreconditions(request, etag);
+        if (etagConditions.ifMatch.present && !etagConditions.ifMatch.matches()) {
+            rejectPrecondition();
         }
         // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
         // is absent -- a present If-Match takes precedence and the (weaker) date
@@ -280,18 +317,14 @@ template <typename ApplyResponseState>
         // empty list is still a present field and must take precedence over the date.
         if (!etagConditions.ifMatch.present && !lastModified.empty() && !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
-            throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
-                .code = "precondition_failed",
-                .message = "file precondition failed"});
+            rejectPrecondition();
         }
 
         if (etagConditions.ifNoneMatch.matches()) {
             if (methodPlan.usesNotModifiedResponse) {
                 return makeHeaderOnlyResponse(http_status::kNotModified);
             }
-            throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
-                .code = "precondition_failed",
-                .message = "file precondition failed"});
+            rejectPrecondition();
         }
 
         if (methodPlan.evaluatesIfModifiedSince && !etagConditions.ifNoneMatch.present &&
@@ -326,6 +359,7 @@ template <typename ApplyResponseState>
             return makeFullFileResponse(std::nullopt);
         }
         if (rangeResolution.unsatisfiable()) {
+            validateIndexedFileForBodylessResponse();
             HttpResponse response({.resource = context.arena()});
             response.contentRangeUnsatisfied(source.size);
             addFileHeaders(response);
@@ -478,6 +512,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
             .contentCoding = served->contentCoding(),
             // staticFile negotiates the representation by Accept-Encoding.
             .negotiatesEncoding = true,
+            .validateIndexedFileForBodylessResponse = memoryVariant == nullptr,
         },
         applyState);
 }
