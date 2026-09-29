@@ -49,7 +49,8 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
             if (count == 0) {
                 state->requireProtocol().notifyTransportEof();
                 state->closeOnWorker(AbortReason::kNone);
-                co_return std::nullopt;
+                throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
+                    "WebSocket transport ended before peer Close");
             }
             (void)state->requireProtocol().feed(std::string_view(bytes.data(), count));
             continue;
