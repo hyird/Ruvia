@@ -239,6 +239,37 @@ RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
                 WebSocketServerTransportDisposition::kEndTransport);
 }
 
+RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input);
+    RUVIA_CHECK(protocol.submitClose(1000, "done") ==
+                WebSocketServerCloseSubmitStatus::kAccepted);
+    auto output = protocol.outputPlan().bytes();
+    RUVIA_CHECK(!output.empty());
+    RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
+                WebSocketServerOutputConsumeStatus::kDrained);
+
+    // Masked client Ping("p") followed by an empty masked Close.
+    input.append(
+        "\x89\x81\x01\x02\x03\x04q"
+        "\x88\x80\x05\x06\x07\x08",
+        13);
+    const auto ping = protocol.poll();
+    RUVIA_CHECK(ping && ping->kind() == WebSocketServerEventKind::kPing);
+    RUVIA_CHECK(ping && ping->ping() && ping->ping()->payload() == "p");
+    const auto close = protocol.poll();
+    RUVIA_CHECK(close && close->kind() == WebSocketServerEventKind::kClose);
+
+    const auto plan = protocol.outputPlan();
+    RUVIA_CHECK_EQ(plan.bytes(), std::string_view("\x8a\x01p", 3));
+    RUVIA_CHECK(plan.disposition() ==
+                WebSocketServerTransportDisposition::kEndTransport);
+    RUVIA_CHECK(protocol.consumeOutput(plan.bytes().size()) ==
+                WebSocketServerOutputConsumeStatus::kDrained);
+    protocol.commitTransportEnd();
+    RUVIA_CHECK(protocol.livenessMode() == WebSocketLivenessMode::kInactive);
+}
+
 RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
     MaskSource source;
     auto sender = client(source);

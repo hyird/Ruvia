@@ -44,7 +44,7 @@ WsOutputPlan WsConnection::outputPlan() const& noexcept {
     }
     const auto bytes =
         std::string_view(outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
-    const auto disposition = closePhase_ == ClosePhase::kFinalCloseQueued
+    const auto disposition = closePhase_ == ClosePhase::kFinalOutputQueued
                                  ? WsTransportDisposition::kEndTransport
                                  : WsTransportDisposition::kKeepOpen;
     return WsOutputPlan(bytes, disposition);
@@ -64,7 +64,7 @@ WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
     outOffset_ = 0;
     if (closePhase_ == ClosePhase::kLocalCloseQueued) {
         closePhase_ = ClosePhase::kAwaitingPeerClose;
-    } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
+    } else if (closePhase_ == ClosePhase::kFinalOutputQueued) {
         closePhase_ = ClosePhase::kTransportEndReady;
     }
     return WsOutputConsumeStatus::kDrained;
@@ -98,7 +98,7 @@ WebSocketLivenessMode WsConnection::livenessMode() const noexcept {
         case ClosePhase::kLocalCloseQueued:
         case ClosePhase::kAwaitingPeerClose:
             return WebSocketLivenessMode::kAwaitingPeerClose;
-        case ClosePhase::kFinalCloseQueued:
+        case ClosePhase::kFinalOutputQueued:
         case ClosePhase::kTransportEndReady:
         case ClosePhase::kClosed:
             return WebSocketLivenessMode::kInactive;
@@ -154,21 +154,23 @@ void WsConnection::fail(std::uint16_t code, std::string_view reason) {
             return;
         }
         appendFrame(WebSocketOpcode::kClose, encoded->bytes());
-        closePhase_ = ClosePhase::kFinalCloseQueued;
+        closePhase_ = ClosePhase::kFinalOutputQueued;
         return;
     }
     if (closePhase_ == ClosePhase::kLocalCloseQueued) {
-        closePhase_ = ClosePhase::kFinalCloseQueued;
+        closePhase_ = ClosePhase::kFinalOutputQueued;
     } else if (closePhase_ == ClosePhase::kAwaitingPeerClose) {
-        closePhase_ = ClosePhase::kTransportEndReady;
+        closePhase_ = outOffset_ < outBuffer_.size() ? ClosePhase::kFinalOutputQueued
+                                                     : ClosePhase::kTransportEndReady;
     }
 }
 
 void WsConnection::receivePeerClose() noexcept {
     if (closePhase_ == ClosePhase::kLocalCloseQueued) {
-        closePhase_ = ClosePhase::kFinalCloseQueued;
+        closePhase_ = ClosePhase::kFinalOutputQueued;
     } else if (closePhase_ == ClosePhase::kAwaitingPeerClose) {
-        closePhase_ = ClosePhase::kTransportEndReady;
+        closePhase_ = outOffset_ < outBuffer_.size() ? ClosePhase::kFinalOutputQueued
+                                                     : ClosePhase::kTransportEndReady;
     }
 }
 
@@ -250,7 +252,7 @@ std::optional<WsEvent> WsConnection::poll() & {
 
 std::optional<WsEvent> WsConnection::pollImpl() & {
     inboundInflated_.clear();
-    if (closePhase_ == ClosePhase::kFinalCloseQueued ||
+    if (closePhase_ == ClosePhase::kFinalOutputQueued ||
         closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
         return WsEvent::makeTransportEnd();
     }
@@ -299,7 +301,7 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
                 const auto reason = payload.size() > 2 ? payload.substr(2) : std::string_view{};
                 if (closePhase_ == ClosePhase::kOpen) {
                     appendFrame(WebSocketOpcode::kClose, payload);
-                    closePhase_ = ClosePhase::kFinalCloseQueued;
+                    closePhase_ = ClosePhase::kFinalOutputQueued;
                 } else {
                     receivePeerClose();
                 }
