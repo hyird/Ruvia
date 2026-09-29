@@ -51,6 +51,13 @@ WsOutputPlan WsConnection::outputPlan() const& noexcept {
 }
 
 WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
+    // EOF/abort makes unsent bytes unreachable without clearing their storage:
+    // an async write may still borrow it. A zero-byte transport-end write has
+    // no output left to consume, regardless of those discarded backing bytes.
+    if (n == 0 &&
+        (closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed)) {
+        return WsOutputConsumeStatus::kDrained;
+    }
     const auto remaining = outBuffer_.size() - outOffset_;
     if (n > remaining) {
         return WsOutputConsumeStatus::kOutOfRange;

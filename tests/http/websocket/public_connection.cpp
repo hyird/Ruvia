@@ -239,6 +239,26 @@ RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
                 WebSocketServerTransportDisposition::kEndTransport);
 }
 
+RUVIA_TEST(ws_public_server_eof_discards_pending_output_before_transport_end) {
+    std::pmr::string input;
+    WebSocketServerProtocol protocol(input);
+    RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "unsent") ==
+                WebSocketServerFrameSubmitStatus::kAccepted);
+    const auto output = protocol.outputPlan().bytes();
+    RUVIA_CHECK(output.size() > 1);
+    RUVIA_CHECK(protocol.consumeOutput(1) == WebSocketServerOutputConsumeStatus::kPending);
+
+    protocol.notifyTransportEof();
+    const auto end = protocol.outputPlan();
+    RUVIA_CHECK(end.bytes().empty());
+    RUVIA_CHECK(end.disposition() == WebSocketServerTransportDisposition::kEndTransport);
+    // The driver can finish its direction without consuming bytes discarded by EOF.
+    RUVIA_CHECK(protocol.consumeOutput(end.bytes().size()) ==
+                WebSocketServerOutputConsumeStatus::kDrained);
+    protocol.commitTransportEnd();
+    RUVIA_CHECK(protocol.abort() == WebSocketServerAbortDisposition::kNoTransportAction);
+}
+
 RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input);
