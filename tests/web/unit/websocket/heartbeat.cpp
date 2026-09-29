@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
@@ -66,16 +67,29 @@ RUVIA_TEST(ws_heartbeat_sends_ping_when_idle) {
 
 RUVIA_TEST(ws_heartbeat_pong_timeout) {
     // Awaiting a pong past the pong timeout -> timeout.
-    RUVIA_CHECK(decide(options(1000, 500), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000),
+    RUVIA_CHECK(decide(options(1000, 500), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000, 1),
                     false, 0, 1600) == WebSocketLivenessDecision::kAbortTransport);
     // Still within the pong timeout -> idle.
-    RUVIA_CHECK(decide(options(1000, 500), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000),
+    RUVIA_CHECK(decide(options(1000, 500), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000, 1),
                     false, 0, 1400) == WebSocketLivenessDecision::kIdle);
     // Omitting pongTimeout uses the ping interval as the pong timeout.
-    RUVIA_CHECK(decide(options(1000, 0), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000), false,
+    RUVIA_CHECK(decide(options(1000, 0), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000, 1), false,
                     0, 2200) == WebSocketLivenessDecision::kAbortTransport);
-    RUVIA_CHECK(decide(options(1000, 0), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000), false,
+    RUVIA_CHECK(decide(options(1000, 0), WebSocketLivenessMode::kOpen, WebSocketAwaitingPong(1000, 1), false,
                     0, 1500) == WebSocketLivenessDecision::kIdle);
+}
+
+RUVIA_TEST(ws_heartbeat_matches_only_the_current_ping_payload) {
+    const auto first = ruvia::detail::webSocketHeartbeatPayload(1);
+    const auto second = ruvia::detail::webSocketHeartbeatPayload(2);
+    const std::string_view firstView(first.data(), first.size());
+    const std::string_view secondView(second.data(), second.size());
+    RUVIA_CHECK(firstView != secondView);
+    RUVIA_CHECK(ruvia::detail::webSocketHeartbeatPongMatches(WebSocketSendingPing(1), firstView));
+    RUVIA_CHECK(ruvia::detail::webSocketHeartbeatPongMatches(WebSocketAwaitingPong(1000, 1), firstView));
+    RUVIA_CHECK(!ruvia::detail::webSocketHeartbeatPongMatches(WebSocketAwaitingPong(1000, 2), firstView));
+    RUVIA_CHECK(!ruvia::detail::webSocketHeartbeatPongMatches(WebSocketAwaitingPong(1000, 1), {}));
+    RUVIA_CHECK(!ruvia::detail::webSocketHeartbeatPongMatches(WebSocketLivenessIdle{}, secondView));
 }
 
 RUVIA_TEST(ws_liveness_bounds_local_close_handshake) {
@@ -90,8 +104,8 @@ RUVIA_TEST(ws_liveness_bounds_local_close_handshake) {
 }
 
 RUVIA_TEST(ws_liveness_state_makes_pong_and_close_waits_exclusive) {
-    const WebSocketLivenessState sending = WebSocketSendingPing{};
-    const WebSocketLivenessState pong = WebSocketAwaitingPong(1000);
+    const WebSocketLivenessState sending = WebSocketSendingPing(1);
+    const WebSocketLivenessState pong = WebSocketAwaitingPong(1000, 1);
     const WebSocketLivenessState close = WebSocketAwaitingPeerClose(2000);
     RUVIA_CHECK(std::holds_alternative<WebSocketSendingPing>(sending));
     RUVIA_CHECK(!std::holds_alternative<WebSocketAwaitingPong>(sending));

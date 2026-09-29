@@ -101,8 +101,11 @@ Public configuration types are ordinary C++ aggregates. Configure them with
 designated initializers. Passing a config to an optional App feature enables or
 replaces it, and passing `nullptr` disables it.
 
-`listen()` configures a numeric IPv4 or IPv6 bind address and its optional HTTP
-and HTTPS ports as one value. The address is validated and normalized when the
+Call `listen()` explicitly before `run()`; the App does not create a default
+listener or choose a default port. Calling `run()` without a listener throws
+`std::invalid_argument`, and you can configure a listener and retry. `listen()`
+configures a numeric IPv4 or IPv6 bind address and its optional HTTP and HTTPS
+ports as one value. The address is validated and normalized when the
 configuration is supplied. An omitted port is disabled, and automatic
 HTTP-to-HTTPS redirect is enabled in that same value:
 
@@ -2016,8 +2019,8 @@ decides the status, and an error handler that itself throws still yields a
 deterministic 500. A failure past the response's point of no return cannot become
 a response — the head is already on the wire — so it is reported instead:
 `App::onConnectionFailure` receives the exception with the peer address, and
-without a listener it is written to stderr rather than dropped with the
-connection. `App::httpStats()` sums the same events across every worker as
+without a registered callback it is written to stderr rather than dropped with
+the connection. `App::httpStats()` sums the same events across every worker as
 counters — active and shed connections, connection failures, transient accept
 failures, worker failures, document-root refresh failures — so a deployment can
 be monitored by polling instead of by installing callbacks.

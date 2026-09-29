@@ -57,12 +57,9 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
         if (const auto* message = event->message()) {
             co_return WebSocketMessage::borrow(message->opcode(), message->payload());
         }
-        if (event->pong() != nullptr) {
-            const bool awaitingPong =
-                std::holds_alternative<WebSocketSendingPing>(state->livenessState_) ||
-                std::holds_alternative<WebSocketAwaitingPong>(state->livenessState_);
-            state->livenessState_ = WebSocketLivenessIdle{};
-            if (awaitingPong) {
+        if (const auto* pong = event->pong()) {
+            if (webSocketHeartbeatPongMatches(state->livenessState_, pong->payload())) {
+                state->livenessState_ = WebSocketLivenessIdle{};
                 state->touchActivity();
             }
             continue;

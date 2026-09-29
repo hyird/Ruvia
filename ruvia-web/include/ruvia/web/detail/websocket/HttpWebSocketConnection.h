@@ -241,6 +241,7 @@ private:
     bool writeActive_{false};
     ReadPhase readPhase_{ReadPhase::kIdle};
     WebSocketLivenessState livenessState_{WebSocketLivenessIdle{}};
+    std::uint64_t heartbeatSequence_{0};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
     ruvia::ConnectionScanner::PeriodicCheckRegistration periodicCheck_;

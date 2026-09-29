@@ -85,7 +85,7 @@ void WebSocketClientState::heartbeatTimerFired() noexcept {
             break;
     }
 
-    livenessState_ = WebSocketSendingPing{};
+    livenessState_ = WebSocketSendingPing(++heartbeatSequence_);
     writePhase_ = WritePhase::kHeartbeat;
     heartbeatInFlight_ = true;
     try {
@@ -104,17 +104,23 @@ Task<void> WebSocketClientState::heartbeatOwned(std::shared_ptr<WebSocketClientS
         WriteGuard writeGuard(*state, WritePhase::kHeartbeat, WriteClaim::kAdopt);
         try {
             state->requireOpen();
-            const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing, {});
-            if (submitted != WebSocketFrameSubmitStatus::kAccepted) {
-                throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
-                    "failed to submit WebSocket client heartbeat");
-            }
-            co_await state->flushOutput();
-            const auto pingSentAtMs = webSocketSteadyNowMs();
-            if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen &&
-                std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
-                state->livenessState_ = WebSocketAwaitingPong(pingSentAtMs);
-                state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
+            const auto* sending = std::get_if<WebSocketSendingPing>(&state->livenessState_);
+            if (sending != nullptr) {
+                const auto challenge = sending->challenge();
+                const auto payload = webSocketHeartbeatPayload(challenge);
+                const auto submitted = state->requireProtocol().submitFrame(WebSocketOpcode::kPing,
+                    std::string_view(payload.data(), payload.size()));
+                if (submitted != WebSocketFrameSubmitStatus::kAccepted) {
+                    throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
+                        "failed to submit WebSocket client heartbeat");
+                }
+                co_await state->flushOutput();
+                const auto pingSentAtMs = webSocketSteadyNowMs();
+                if (state->phase_.load(std::memory_order_acquire) == Phase::kOpen &&
+                    std::holds_alternative<WebSocketSendingPing>(state->livenessState_)) {
+                    state->livenessState_ = WebSocketAwaitingPong(pingSentAtMs, challenge);
+                    state->armHeartbeatTimer(*state->config_.heartbeat.pongTimeout);
+                }
             }
         } catch (...) {
             if (state->phase_.load(std::memory_order_acquire) != Phase::kClosed) {
