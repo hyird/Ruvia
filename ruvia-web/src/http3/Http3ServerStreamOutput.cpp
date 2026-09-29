@@ -217,9 +217,9 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(
         (slot->info.finalWireBytes && newReceived > *slot->info.finalWireBytes)) {
         return failConnection(Status::kFinalSizeError);
     }
-    if (!slot->lastWriteActivity) {
-        slot->lastWriteActivity = Http3QuicServerTransport::Clock::now();
-    }
+    // A newly queued block is the first real pending output (or new write
+    // activity); a deferred FIN alone must not start the timeout clock.
+    slot->lastWriteActivity = Http3QuicServerTransport::Clock::now();
 
     const auto nodeIndex = freeNode_;
     auto& node = nodes_[nodeIndex];
@@ -312,6 +312,8 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
         case Http3StreamControl::Kind::kWritable:
             notifyTransportActivity();
             return {.status = Status::kWritable};
+        case Http3StreamControl::Kind::kTunnelEstablished:
+            return {.status = Status::kInvalidInput};
         case Http3StreamControl::Kind::kStreamFin:
             if (control.value > kHttp3VarIntMax || control.value < slot->info.receivedWireBytes) {
                 return failConnection(Status::kFinalSizeError);
@@ -324,7 +326,8 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
             }
             slot->info.finalWireBytes = control.value;
             slot->info.state = StreamState::kFinPending;
-            if (!slot->lastWriteActivity) {
+            if (control.value == slot->info.acceptedWireBytes &&
+                slot->info.queuedWireBytes == 0 && slot->head == kNoNode) {
                 slot->lastWriteActivity = Http3QuicServerTransport::Clock::now();
             }
             requestScan();
@@ -397,6 +400,7 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
 
         if (writeTimedOut(slot, Http3QuicServerTransport::Clock::now())) {
             result.lastStreamId = slot.info.streamId;
+            slot.info.timedOut = true;
             ++result.operations;
             const bool retired = retireStream(slot, StreamState::kCancelled,
                 static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
@@ -682,8 +686,12 @@ bool Http3ServerStreamOutput::retireStream(StreamSlot& slot, StreamState termina
     slot.info.state = StreamState::kStopping;
     slot.info.termination = transport_.terminateBidirectionalStream(
         connectionId_, slot.info.streamId, errorCode);
-    if (slot.info.termination.close == TransportError::kNone ||
-        slot.info.termination.close == TransportError::kNoStream) {
+    const auto directionRetired = [](TransportError error) noexcept {
+        return error == TransportError::kNone || error == TransportError::kClosed ||
+               error == TransportError::kNoStream;
+    };
+    if (directionRetired(slot.info.termination.send) &&
+        directionRetired(slot.info.termination.close)) {
         slot.info.state = terminalState;
         releaseStreamQueue(slot);
         requestScan();
@@ -825,8 +833,12 @@ bool Http3ServerStreamOutput::finishStream(StreamSlot& slot, TransportError& err
 
 bool Http3ServerStreamOutput::writeTimedOut(const StreamSlot& slot,
     Http3QuicServerTransport::Clock::time_point now) const noexcept {
-    if (!writeTimeout_ || !slot.lastWriteActivity || slot.info.sendFinAccepted ||
-        now < *slot.lastWriteActivity) {
+    const bool outputPending = slot.head != kNoNode ||
+                               (slot.info.finalWireBytes &&
+                                   slot.info.queuedWireBytes == 0 &&
+                                   slot.info.acceptedWireBytes == *slot.info.finalWireBytes);
+    if (!writeTimeout_ || !slot.lastWriteActivity || !outputPending ||
+        slot.info.sendFinAccepted || now < *slot.lastWriteActivity) {
         return false;
     }
     return std::chrono::duration_cast<std::chrono::milliseconds>(

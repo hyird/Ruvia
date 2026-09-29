@@ -6,9 +6,9 @@
 
 namespace ruvia::detail {
 
-// Worker-affine accounting shared by buffered HTTP/3 server requests across
-// connections. It counts body bytes, not vector capacity, pool cache, TLS, or
-// other QUIC memory. The owner is borrowed without synchronization and must
+// Worker-affine accounting shared by buffered HTTP/3 request bodies and tunnel
+// input across connections. It counts queued body bytes, not vector capacity,
+// pool cache, TLS, or other QUIC memory. The owner is borrowed without synchronization and must
 // outlive every session and request lease that can return a reservation.
 class Http3ServerBodyBudget final {
 public:

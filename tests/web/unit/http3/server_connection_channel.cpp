@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <semaphore>
@@ -17,7 +18,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallbackRef.h"
-#include "ruvia/web/detail/http3/Http3BufferedServerConnection.h"
+#include "ruvia/web/detail/http3/Http3ServerConnection.h"
 #include "ruvia/web/detail/http3/Http3ServerConnectionChannel.h"
 #include "ruvia/web/detail/http3/Http3WorkerMailboxScheduler.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -29,7 +30,7 @@
 namespace {
 
 using Channel = ruvia::detail::Http3ServerConnectionChannel;
-using Connection = ruvia::detail::Http3BufferedServerConnection;
+using Connection = ruvia::detail::Http3ServerConnection;
 using Scheduler = ruvia::detail::Http3WorkerMailboxScheduler;
 using Status = Channel::Status;
 
@@ -304,10 +305,11 @@ struct ChannelFixture final {
         }
     }
 
-    void bindAndAttach() {
+    void bindAndAttach(bool publishCloseBeforeNetworkAck = false) {
         Channel::Bind bind;
         Status bindStatus{};
         Status attachStatus{};
+        Status closePublicationStatus{Status::kWrongState};
         worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
             bindStatus = channel.receiveBind(bind);
             if (bindStatus != Status::kReceived || bind.identity != grant.identity) {
@@ -316,7 +318,7 @@ struct ChannelFixture final {
             runtime.connection.emplace(runtime.routes.implementation.routeTable(),
                 runtime.workerMemory, runtime.services, runtime.options, runtime.outbound,
                 grant.registration.activation,
-                ruvia::detail::Http3BufferedServerConnectionConfig{
+                ruvia::detail::Http3ServerConnectionConfig{
                     .epoch = grant.identity.epoch,
                     .connectionGeneration = grant.identity.connectionGeneration,
                     .maxTrackedStreams = 8});
@@ -324,18 +326,30 @@ struct ChannelFixture final {
             if (attachStatus != Status::kPublished) {
                 throw std::runtime_error("real HTTP/3 scheduler attach failed");
             }
+            if (publishCloseBeforeNetworkAck) {
+                if (!runtime.connection->requestStop()) {
+                    throw std::runtime_error("HTTP/3 connection did not enter stop");
+                }
+                const auto pending = runtime.connection->peekTransportIntent();
+                if (!pending || pending->token.kind !=
+                                    Connection::TransportIntentKind::kConnectionClose) {
+                    throw std::runtime_error("HTTP/3 close intent was not recorded after attach");
+                }
+                closePublicationStatus = channel.publishIntent(grant.identity, *pending);
+            }
             co_return;
         });
-        if (bindStatus != Status::kReceived || attachStatus != Status::kPublished) {
+        if (bindStatus != Status::kReceived || attachStatus != Status::kPublished ||
+            (publishCloseBeforeNetworkAck && closePublicationStatus != Status::kPublished)) {
             throw std::runtime_error("HTTP/3 channel Bind/attach did not complete");
         }
     }
 
-    void finishAttached() {
+    void finishAttached(bool closeAlreadyPublished = false) {
         Connection::TransportIntent closeIntent;
         worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
             auto& connection = *runtime.connection;
-            if (!connection.requestStop()) {
+            if (!closeAlreadyPublished && !connection.requestStop()) {
                 throw std::runtime_error("HTTP/3 connection did not enter stop");
             }
             const auto pending = connection.peekTransportIntent();
@@ -343,7 +357,8 @@ struct ChannelFixture final {
                 throw std::runtime_error("HTTP/3 connection close intent was not recorded");
             }
             closeIntent = *pending;
-            if (channel.publishIntent(grant.identity, closeIntent) != Status::kPublished ||
+            if ((!closeAlreadyPublished &&
+                    channel.publishIntent(grant.identity, closeIntent) != Status::kPublished) ||
                 !connection.ackTransportIntent(closeIntent.token) ||
                 !scheduler.beginRetirement(grant.registration.token)) {
                 throw std::runtime_error("HTTP/3 close intent/retirement handoff failed");
@@ -373,6 +388,36 @@ struct ChannelFixture final {
         });
         if (closeAckStatus != Status::kReceived || closeAck.token != closeIntent.token) {
             throw std::runtime_error("worker did not receive the exact close-intent ACK");
+        }
+        std::array<Connection::TransportIntentToken, Channel::kControlCapacity> resetTokens{};
+        std::size_t resetCount = 0;
+        for (;;) {
+            Connection::TransportIntent reset;
+            const auto status = channel.receiveIntent(reset);
+            if (status == Status::kEmpty) {
+                break;
+            }
+            if (status != Status::kReceived || resetCount == resetTokens.size() ||
+                reset.token.kind != Connection::TransportIntentKind::kStreamReset ||
+                channel.acknowledgeIntentAfterHandoff(grant.identity, reset.token) !=
+                    Status::kPublished) {
+                throw std::runtime_error("queued reset did not receive exact network handoff");
+            }
+            resetTokens[resetCount++] = reset.token;
+        }
+        std::array<Status, Channel::kControlCapacity> resetAckStatuses{};
+        std::array<Channel::TransportIntentAck, Channel::kControlCapacity> resetAcks{};
+        worker.call([&](Scheduler&, Runtime&) {
+            for (std::size_t i = 0; i < resetCount; ++i) {
+                resetAckStatuses[i] = channel.receiveIntentAck(resetAcks[i]);
+            }
+        });
+        for (std::size_t i = 0; i < resetCount; ++i) {
+            if (resetAckStatuses[i] != Status::kReceived ||
+                resetAcks[i].token != resetTokens[i] ||
+                resetAcks[i].settlement != Channel::IntentSettlement::kExecutedHandoff) {
+                throw std::runtime_error("worker did not receive exact reset-token ACK");
+            }
         }
         Status lateReset{};
         Status repeatedClose{};
@@ -532,6 +577,32 @@ void acknowledgeFinalization(ChannelFixture& fixture) {
 
 }  // namespace
 
+RUVIA_TEST(http3ServerConnectionChannelPublishesCloseDuringAttachAckWindow) {
+    CountingResource memory;
+    {
+        ChannelFixture fixture(memory);
+        fixture.publishGrant(41, 9);
+
+        fixture.transport.queueAccept();
+        fixture.acceptAndCommit();
+        const auto networkNotificationsBeforeAttach = fixture.networkWake.calls.load(
+            std::memory_order_relaxed);
+        fixture.bindAndAttach(true);
+        RUVIA_CHECK(fixture.networkWake.calls.load(std::memory_order_relaxed) >=
+                    networkNotificationsBeforeAttach + 2U);
+
+        Channel::AttachResult attachResult{std::in_place_type<Channel::AttachAck>};
+        RUVIA_CHECK(fixture.channel.receiveAttachResult(attachResult) == Status::kReceived);
+        RUVIA_CHECK(std::holds_alternative<Channel::AttachAck>(attachResult));
+        RUVIA_CHECK(std::get<Channel::AttachAck>(attachResult).identity == fixture.grant.identity);
+        fixture.finishAttached(true);
+        acknowledgeFinalization(fixture);
+        RUVIA_CHECK(fixture.channel.readyToDestroy());
+    }
+    RUVIA_CHECK_EQ(memory.allocated, memory.freed);
+    RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
+}
+
 RUVIA_TEST(http3ServerConnectionChannelRetainsGrantUntilAcceptedAndRequiresRealAttach) {
     CountingResource memory;
     {
@@ -618,6 +689,18 @@ RUVIA_TEST(http3ServerConnectionChannelRetainsGrantUntilAcceptedAndRequiresRealA
         RUVIA_CHECK(bindStatus == Status::kReceived);
         RUVIA_CHECK(bind.identity == fixture.grant.identity);
         RUVIA_CHECK(rejectStatus == Status::kPublished);
+        Status rejectedIntentStatus{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            Connection::TransportIntent rejectedClose;
+            rejectedClose.token = {.kind = Connection::TransportIntentKind::kConnectionClose,
+                .id = {.epoch = fixture.grant.identity.epoch,
+                    .connectionGeneration = fixture.grant.identity.connectionGeneration,
+                    .streamId = 0},
+                .sequence = std::numeric_limits<std::uint64_t>::max()};
+            rejectedIntentStatus = fixture.channel.publishIntent(
+                fixture.grant.identity, rejectedClose);
+        });
+        RUVIA_CHECK(rejectedIntentStatus == Status::kWrongState);
         RUVIA_CHECK(fixture.channel.receiveAttachResult(attachResult) == Status::kReceived);
         RUVIA_CHECK(std::holds_alternative<Channel::AttachRejected>(attachResult));
         RUVIA_CHECK(std::get<Channel::AttachRejected>(attachResult).reason ==
@@ -629,13 +712,148 @@ RUVIA_TEST(http3ServerConnectionChannelRetainsGrantUntilAcceptedAndRequiresRealA
         acknowledgeFinalization(fixture);
         RUVIA_CHECK(fixture.channel.readyToDestroy());
         RUVIA_CHECK(fixture.channel.rearm() == Status::kPublished);
+        Status stopAdmission{};
         Status idleWorkerClose{};
-        fixture.worker.call([&](Scheduler&, Runtime&) {
+        Channel::GrantPublication stoppedGrant;
+        fixture.worker.call([&](Scheduler& scheduler, Runtime&) {
+            stopAdmission = fixture.channel.stopGrantPublication();
             idleWorkerClose = fixture.channel.closeWorkerPublications(fixture.grant.identity);
+            stoppedGrant = fixture.channel.reserveAndPublishGrant(scheduler, 43, 1);
         });
+        RUVIA_CHECK(stopAdmission == Status::kPublished);
         RUVIA_CHECK(idleWorkerClose == Status::kPublished);
+        RUVIA_CHECK(stoppedGrant.status == Status::kWrongState);
         RUVIA_CHECK(fixture.channel.closeNetworkPublications(fixture.grant.identity) ==
                     Status::kPublished);
+        RUVIA_CHECK(fixture.channel.readyToDestroy());
+    }
+    RUVIA_CHECK_EQ(memory.allocated, memory.freed);
+    RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
+}
+
+RUVIA_TEST(http3ServerConnectionChannelSettlesRetiredIntentWithExactDispositionAndRetry) {
+    CountingResource memory;
+    {
+        ChannelFixture fixture(memory);
+        fixture.publishGrant(72, 17);
+        fixture.transport.queueAccept();
+        fixture.acceptAndCommit();
+        fixture.bindAndAttach();
+        Channel::AttachResult attached{std::in_place_type<Channel::AttachAck>};
+        RUVIA_CHECK(fixture.channel.receiveAttachResult(attached) == Status::kReceived);
+        RUVIA_CHECK(std::holds_alternative<Channel::AttachAck>(attached));
+
+        std::array<Channel::TransportIntent, 3> resets{
+            resetIntent(fixture.grant.identity, 4, 11,
+                ruvia::Http3ConnectionErrorCode::kRequestCancelled),
+            resetIntent(fixture.grant.identity, 8, 22,
+                ruvia::Http3ConnectionErrorCode::kRequestCancelled),
+            resetIntent(fixture.grant.identity, 12, 33,
+                ruvia::Http3ConnectionErrorCode::kRequestCancelled),
+        };
+        std::array<Status, 2> published{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            published[0] = fixture.channel.publishIntent(fixture.grant.identity, resets[0]);
+            published[1] = fixture.channel.publishIntent(fixture.grant.identity, resets[1]);
+        });
+        RUVIA_CHECK(published[0] == Status::kPublished);
+        RUVIA_CHECK(published[1] == Status::kPublished);
+        Channel::TransportIntent taken[2];
+        RUVIA_CHECK(fixture.channel.receiveIntent(taken[0]) == Status::kReceived);
+        RUVIA_CHECK(fixture.channel.receiveIntent(taken[1]) == Status::kReceived);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(
+                        fixture.grant.identity, resets[0].token,
+                        Channel::IntentSettlement::kExecutedHandoff) == Status::kPublished);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(
+                        fixture.grant.identity, resets[1].token,
+                        Channel::IntentSettlement::kExecutedHandoff) == Status::kPublished);
+
+        Status lastPublished{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            lastPublished = fixture.channel.publishIntent(fixture.grant.identity, resets[2]);
+        });
+        RUVIA_CHECK(lastPublished == Status::kPublished);
+        fixture.retireTransport();
+        Channel::TransportIntent late;
+        RUVIA_CHECK(fixture.channel.receiveIntent(late) == Status::kReceived);
+        RUVIA_CHECK(late.token == resets[2].token);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(
+                        fixture.grant.identity, late.token,
+                        Channel::IntentSettlement::kTransportRetiredSuperseded) == Status::kFull);
+
+        Status retirementReceived{};
+        std::array<Status, 2> earlyAckStatuses{};
+        std::array<Channel::TransportIntentAck, 2> earlyAcks{};
+        fixture.worker.callTask([&](Scheduler&, Runtime& runtime) -> ruvia::Task<void> {
+            Channel::TransportRetired retired;
+            retirementReceived = fixture.channel.receiveTransportRetired(retired);
+            if (retirementReceived != Status::kReceived || retired.identity != fixture.grant.identity ||
+                !runtime.connection->confirmTransportRetired({.epoch = fixture.grant.identity.epoch,
+                    .connectionGeneration = fixture.grant.identity.connectionGeneration})) {
+                throw std::runtime_error("retired channel did not confirm its owner");
+            }
+            co_return;
+        });
+        RUVIA_CHECK(retirementReceived == Status::kReceived);
+
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            earlyAckStatuses[0] = fixture.channel.receiveIntentAck(earlyAcks[0]);
+            earlyAckStatuses[1] = fixture.channel.receiveIntentAck(earlyAcks[1]);
+        });
+        RUVIA_CHECK(earlyAckStatuses[0] == Status::kReceived);
+        RUVIA_CHECK(earlyAckStatuses[1] == Status::kReceived);
+        RUVIA_CHECK(earlyAcks[0].settlement == Channel::IntentSettlement::kExecutedHandoff);
+        RUVIA_CHECK(earlyAcks[1].settlement == Channel::IntentSettlement::kExecutedHandoff);
+
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(
+                        fixture.grant.identity, late.token,
+                        Channel::IntentSettlement::kTransportRetiredSuperseded) == Status::kPublished);
+        Channel::TransportIntentAck lateAck;
+        Status lateAckStatus{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            lateAckStatus = fixture.channel.receiveIntentAck(lateAck);
+        });
+        RUVIA_CHECK(lateAckStatus == Status::kReceived);
+        RUVIA_CHECK(lateAck.identity == fixture.grant.identity);
+        RUVIA_CHECK(lateAck.token == late.token);
+        RUVIA_CHECK(lateAck.settlement ==
+                    Channel::IntentSettlement::kTransportRetiredSuperseded);
+
+        fixture.worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
+            if (!scheduler.beginRetirement(fixture.grant.registration.token)) {
+                throw std::runtime_error("retired scheduler slot did not enter retirement");
+            }
+            co_await runtime.connection->join();
+            if (!scheduler.retire(fixture.grant.registration.token)) {
+                throw std::runtime_error("retired scheduler slot kept an intent debt");
+            }
+            runtime.connection.reset();
+        });
+        Status workerClosed{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            workerClosed = fixture.channel.closeWorkerPublications(fixture.grant.identity);
+        });
+        RUVIA_CHECK(workerClosed == Status::kPublished);
+        RUVIA_CHECK(fixture.channel.closeNetworkPublications(fixture.grant.identity) ==
+                    Status::kPublished);
+        Channel::WorkerFinalized workerFinalized;
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.publishWorkerFinalized(fixture.grant.identity) ==
+                        Status::kPublished);
+        });
+        RUVIA_CHECK(fixture.channel.receiveWorkerFinalized(workerFinalized) == Status::kReceived);
+        RUVIA_CHECK(workerFinalized.identity == fixture.grant.identity);
+        RUVIA_CHECK(fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) ==
+                    Status::kPublished);
+        RUVIA_CHECK(fixture.channel.publishNetworkFinalized(fixture.grant.identity) ==
+                    Status::kPublished);
+        Channel::NetworkFinalized networkFinalized;
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.receiveNetworkFinalized(networkFinalized) ==
+                        Status::kReceived);
+            RUVIA_CHECK(fixture.channel.acknowledgeNetworkFinalized(fixture.grant.identity) ==
+                        Status::kPublished);
+        });
         RUVIA_CHECK(fixture.channel.readyToDestroy());
     }
     RUVIA_CHECK_EQ(memory.allocated, memory.freed);
@@ -788,6 +1006,23 @@ RUVIA_TEST(http3ServerConnectionChannelClosesPublicationGatesAndRejectsOldGenera
         RUVIA_CHECK(fixture.grant.identity.epoch > oldIdentity.epoch);
         RUVIA_CHECK(fixture.grant.identity.slotGeneration > oldIdentity.slotGeneration);
         RUVIA_CHECK(fixture.channel.commitAccepted(oldIdentity) == Status::kStale);
+        Status admissionSealed{};
+        Status staleClose{};
+        Channel::GrantPublication blockedGrant;
+        fixture.worker.call([&](Scheduler& scheduler, Runtime&) {
+            admissionSealed = fixture.channel.stopGrantPublication();
+            Connection::TransportIntent oldClose;
+            oldClose.token = {.kind = Connection::TransportIntentKind::kConnectionClose,
+                .id = {.epoch = oldIdentity.epoch,
+                    .connectionGeneration = oldIdentity.connectionGeneration,
+                    .streamId = 0},
+                .sequence = std::numeric_limits<std::uint64_t>::max()};
+            staleClose = fixture.channel.publishIntent(oldIdentity, oldClose);
+            blockedGrant = fixture.channel.reserveAndPublishGrant(scheduler, 92, 1);
+        });
+        RUVIA_CHECK(admissionSealed == Status::kPublished);
+        RUVIA_CHECK(staleClose == Status::kStale);
+        RUVIA_CHECK(blockedGrant.status == Status::kWrongState);
 
         RUVIA_CHECK(fixture.channel.revokeGrant() == Status::kPublished);
         fixture.worker.call([&](Scheduler& scheduler, Runtime&) {

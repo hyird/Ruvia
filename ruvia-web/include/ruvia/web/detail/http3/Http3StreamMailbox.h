@@ -22,12 +22,15 @@ struct Http3StreamControl final {
     enum class Kind : std::uint8_t { kConnectionClosed,
         kStreamReset,
         kWritable,
-        kStreamFin };
+        kStreamFin,
+        kTunnelEstablished };
     Kind kind{Kind::kConnectionClosed};
     Http3StreamMessageId id{};
     // kStreamFin: final cumulative byte count for this stream. Since control
     // and data lanes are independent, a consumer may observe FIN before older
     // DATA; it must defer FIN until all preceding stream bytes are consumed.
+    // kTunnelEstablished: cumulative response bytes that must be accepted by
+    // QUIC before the network owner disables the request-body timeout.
     // For a server-network-published peer kStreamReset, value is the cumulative number
     // of this stream's DATA bytes successfully published before the RESET. It
     // is only a mailbox cross-lane barrier, never QUIC RESET_STREAM Final Size.

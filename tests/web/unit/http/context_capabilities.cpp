@@ -316,6 +316,26 @@ RUVIA_TEST(context_response_output_has_one_active_alternative) {
     RUVIA_CHECK(streaming.responseOutput().responseStream() != nullptr);
 }
 
+RUVIA_TEST(context_applies_listener_alt_svc_and_allows_application_override_or_removal) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    constexpr std::string_view automatic = "h3=\":443\"; ma=86400";
+    auto context = ruvia::detail::ContextAccess::make(memory, request,
+        ruvia::test::testContextServices().withAutomaticAltSvc(automatic));
+
+    const auto defaultResponse = context.text("default");
+    RUVIA_CHECK_EQ(defaultResponse.header("Alt-Svc"), automatic);
+
+    context.header("Alt-Svc", "clear");
+    const auto overridden = context.text("override");
+    RUVIA_CHECK_EQ(overridden.header("alt-svc"), std::string_view("clear"));
+
+    context.removeHeader("ALT-SVC");
+    const auto removed = context.text("removed");
+    RUVIA_CHECK(!removed.header("Alt-Svc").has_value());
+}
+
 RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);

@@ -31,6 +31,7 @@ add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
     include/ruvia/http/Http3ServerRequestAdmission.h
     include/ruvia/http/Http3Settings.h
     include/ruvia/http/Http3StreamFrames.h
+    include/ruvia/http/Http3WebSocketHandshake.h
     include/ruvia/http/Http3VarInt.h)
 add_library(ruvia::http ALIAS ruvia-http)
 

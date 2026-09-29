@@ -34,7 +34,7 @@ public:
     }
 
 private:
-    static constexpr std::size_t kControlPrefixCapacity = 1 + 2 * 8 + 3 * 2 * 8;
+    static constexpr std::size_t kControlPrefixCapacity = 1 + 2 * 8 + 4 * 2 * 8;
 
     std::array<char, kControlPrefixCapacity> control_{};
     std::array<char, 1> qpackEncoder_{};

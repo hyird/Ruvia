@@ -182,10 +182,23 @@ void Http3QuicWireOwner::requestDrive() noexcept {
     }
 }
 
+void Http3QuicWireOwner::deferTransportRetirement() noexcept {
+    requireOwnerThread();
+    if (started_ || stopping_ || !prepared_) {
+        std::terminate();
+    }
+    transportRetirementReleased_ = false;
+}
+
+void Http3QuicWireOwner::releaseTransportRetirement() noexcept {
+    requireOwnerThread();
+    transportRetirementReleased_ = true;
+}
+
 void Http3QuicWireOwner::pollStop() noexcept {
     requireOwnerThread();
     if (!stopping_ || driving_ || !timerHandlersRetired_ || !endpoint_.socketDone() ||
-        endpoint_.sendInFlight()) {
+        endpoint_.sendInFlight() || !transportRetirementReleased_) {
         return;
     }
 
@@ -257,6 +270,7 @@ void Http3QuicWireOwner::onEndpointNotification(
         return;
     }
     if (!stopping_) {
+        transportActivity_ = true;
         drive();
     }
 }
@@ -435,6 +449,7 @@ void Http3QuicWireOwner::onTimerCompletion(std::uint64_t generation,
     }
 
     ++timerExpirations_;
+    transportActivity_ = true;
     if (generation != timerGeneration_ || stopping_) {
         return;
     }

@@ -1,28 +1,45 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <span>
+#include <string_view>
+#include <system_error>
 
+#include <asio/any_io_executor.hpp>
+
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/core/StopToken.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/WebSocketServerProtocolTypes.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 #include "ruvia/web/detail/http3/Http3StreamMailbox.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/RequestDeadline.h"
+#include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 
 namespace ruvia::detail {
 
 class RouteTable;
 
-// Worker-affine owner for one ordinary buffered HTTP/3 request. It pins the
-// session request while routing, response preparation and bounded publication
-// run; it does not own or expose the session stream's private memory.
+struct Http3TunnelCallbacks final {
+    void* context{};
+    bool (*attachScanner)(void*, std::uint64_t, ConnectionScanner::Entry&) noexcept {};
+    void (*outputReady)(void*, std::uint64_t) noexcept {};
+    void (*abort)(void*, std::uint64_t) noexcept {};
+};
+
+// Worker-affine owner for one buffered HTTP/3 request or WebSocket tunnel. It
+// pins the session request while routing, response preparation and bounded
+// publication run; it does not own or expose the session stream's private memory.
 //
 // RFC 9114 §§4.2.2, 7.2.4 and 10.5.1 say SHOULD NOT: the peer setting is
 // advisory. Compare the decoded sum(name + value + 32), including :status, not
@@ -54,11 +71,13 @@ public:
         kWrongWorker,
         kCancelled,
         kFilePayloadUnsupported,
+        kTunnelComplete,
         kFailed,
     };
 
     enum class PublishStatus : std::uint8_t {
         kBytesPublished,
+        kControlPublished,
         kFinPublished,
         kBackpressured,
         kComplete,
@@ -107,7 +126,9 @@ public:
 
     Http3BufferedRequestDispatch(Http3SansIoSessionEngine& session, const RouteTable& routes,
         WorkerMemory& worker, ContextServices services, const HttpServerOptions& options,
-        Http3StreamMailbox& outbound, Http3StreamMessageId messageId);
+        Http3StreamMailbox& outbound, Http3StreamMessageId messageId,
+        ConnectionScanner::Entry& scannerEntry, asio::any_io_executor executor,
+        Http3TunnelCallbacks tunnelCallbacks);
     ~Http3BufferedRequestDispatch();
     Http3BufferedRequestDispatch(const Http3BufferedRequestDispatch&) = delete;
     Http3BufferedRequestDispatch& operator=(const Http3BufferedRequestDispatch&) = delete;
@@ -152,6 +173,18 @@ public:
     void cancel() & noexcept;
     void cancel() && = delete;
 
+    [[nodiscard]] Task<std::error_code> publishTunnelHandshake(
+        std::span<const char> headersFrame);
+    void notifyTunnelInput() noexcept;
+    [[nodiscard]] Task<WsTransportReadResult> readTunnel(std::pmr::string& buffer);
+    [[nodiscard]] Task<std::error_code> writeTunnel(std::string_view bytes,
+        WebSocketServerTransportDisposition disposition);
+    [[nodiscard]] Task<bool> waitTunnelReceiveEnd();
+    void abortTunnel() noexcept;
+    [[nodiscard]] asio::any_io_executor executor() const noexcept {
+        return executor_;
+    }
+
     [[nodiscard]] bool handlerActive() const noexcept;
     [[nodiscard]] bool responseReady() const noexcept;
     // True once all response bytes and the final FIN control are enqueued in
@@ -176,12 +209,18 @@ private:
     };
 
     [[nodiscard]] Task<RunStatus> runHandlerInner();
+    [[nodiscard]] Task<RunStatus> runWebSocketHandler();
     [[nodiscard]] bool onWorker() const noexcept;
+    void notifyTunnelOutput() noexcept;
+    [[nodiscard]] PublishResult publishTunnelStep(PublicationDemand demand) noexcept;
     [[nodiscard]] bool cancellationRequested() const noexcept;
     void latchCancellationReason() const noexcept;
     [[nodiscard]] bool exceedsPeerFieldSectionLimit() const noexcept;
     void fail(std::exception_ptr failure = {}) noexcept;
     [[nodiscard]] bool releaseDispatchStorage() noexcept;
+    static void peerTransportFinTimeoutTick(void* target, std::int64_t nowMs) noexcept;
+    void armPeerTransportFinTimeout() noexcept;
+    void disarmPeerTransportFinTimeout() noexcept;
 
     Http3SansIoSessionEngine& session_;
     const RouteTable& routes_;
@@ -190,6 +229,12 @@ private:
     const HttpServerOptions& options_;
     Http3StreamMailbox& outbound_;
     const Http3StreamMessageId messageId_;
+    ConnectionScanner::Entry& scannerEntry_;
+    ConnectionScanner::PeriodicCheckRegistration peerTransportFinCheck_;
+    asio::any_io_executor executor_;
+    const Http3TunnelCallbacks tunnelCallbacks_;
+    WorkerSignal tunnelInputAvailable_;
+    WorkerSignal tunnelOutputAvailable_;
 
     // Declaration order makes destruction output/cursor -> response -> request
     // arena -> lease. The lease is returned only after every dependent object dies.
@@ -197,9 +242,24 @@ private:
     std::optional<RequestMemory> requestMemory_;
     std::optional<HttpResponse> response_;
     std::optional<Http3BufferedResponseOutput> output_;
+    std::pmr::string tunnelHandshakeFrame_;
+    std::size_t tunnelHandshakeOffset_{};
+    std::pmr::string tunnelDataFrame_;
+    std::uint64_t tunnelPublishedWireBytes_{};
+    bool tunnelMode_{};
+    bool tunnelDataPending_{};
+    bool tunnelEstablishedPending_{};
+    bool tunnelEstablishedPublished_{};
+    bool tunnelFinPending_{};
+    bool tunnelOutputEnded_{};
+    std::chrono::milliseconds peerTransportFinTimeout_{};
+    std::int64_t peerTransportFinDeadlineMs_{};
+    bool peerFinTimeoutArmed_{};
+    bool tunnelAborted_{};
 
     StopSource requestStopSource_;
     StopToken combinedWorkerAndRequestStop_;
+    StopRegistration tunnelStopRegistration_;
     StopRegistration publicationDeadlineRegistration_;
     std::optional<RequestDeadline> requestDeadline_;
     std::optional<ContextServices> requestServices_;

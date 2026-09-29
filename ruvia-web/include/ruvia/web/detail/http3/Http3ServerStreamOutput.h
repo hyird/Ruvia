@@ -121,6 +121,7 @@ public:
         // SSL_stream_conclude accepted local FIN; receive completion is tracked
         // by the transport until readStream observes peer EOF or RESET.
         bool sendFinAccepted{};
+        bool timedOut{};
         StreamTermination termination{};
     };
 

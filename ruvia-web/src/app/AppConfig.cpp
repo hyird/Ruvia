@@ -117,18 +117,35 @@ App& App::listen(ListenConfig config) {
                     "automatic HTTPS redirect requires both HTTP and HTTPS ports");
             }
 
+            std::optional<Http3ListenConfig> effectiveHttp3;
+            switch (config.http3.mode) {
+                case Http3Mode::kAutomatic:
+                    if (config.https.has_value()) {
+                        effectiveHttp3 = config.http3;
+                        effectiveHttp3->mode = Http3Mode::kEnabled;
+                    }
+                    break;
+                case Http3Mode::kEnabled:
+                    if (!config.https.has_value()) {
+                        throw std::invalid_argument("HTTP/3 requires an HTTPS listen port");
+                    }
+                    effectiveHttp3 = config.http3;
+                    break;
+                case Http3Mode::kDisabled:
+                    break;
+                default:
+                    throw std::invalid_argument("HTTP/3 mode is invalid");
+            }
+
             if (!config.https.has_value() && detail::hasTlsConfiguration(config.tls)) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
-            if (config.http3.has_value() && !config.https.has_value()) {
-                throw std::invalid_argument("HTTP/3 requires an HTTPS listen port");
-            }
-            if (config.http3.has_value()) {
-                ruvia::ensurePositiveDuration(config.http3->handshakeTimeout,
+            if (effectiveHttp3.has_value()) {
+                ruvia::ensurePositiveDuration(effectiveHttp3->handshakeTimeout,
                     "HTTP/3 handshake timeout must be greater than zero");
-                ruvia::ensurePositiveDuration(config.http3->drainTimeout,
+                ruvia::ensurePositiveDuration(effectiveHttp3->drainTimeout,
                     "HTTP/3 drain timeout must be greater than zero");
-                if (std::chrono::duration<long double>(config.http3->drainTimeout) >
+                if (std::chrono::duration<long double>(effectiveHttp3->drainTimeout) >
                     std::chrono::duration<long double>(
                         std::chrono::steady_clock::duration::max())) {
                     throw std::invalid_argument("HTTP/3 drain timeout is not representable");
@@ -151,8 +168,11 @@ App& App::listen(ListenConfig config) {
                 }
             }
             if (config.https.has_value()) {
+                auto tls = detail::normalizeTlsOptions(config.tls, resource);
+                tls.altSvc = detail::normalizeAltSvcAdvertisement(config.altSvc,
+                    effectiveHttp3.has_value() ? config.https : std::nullopt, resource);
                 replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https),
-                    detail::normalizeTlsOptions(config.tls, resource), config.http3);
+                    std::move(tls), effectiveHttp3);
             }
             state.listeners = std::move(replacement);
         });

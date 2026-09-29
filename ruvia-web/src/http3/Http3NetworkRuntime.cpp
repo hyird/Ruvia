@@ -19,6 +19,8 @@ namespace {
 constexpr auto kServerShutdownCode = Http3ConnectionErrorCode::kNoError;
 constexpr auto kProtocolFailureCode = Http3ConnectionErrorCode::kInternalError;
 constexpr auto kMonitorInterval = std::chrono::milliseconds(10);
+constexpr std::size_t kInputStreamPumpBudget = 64;
+constexpr std::size_t kResponseMailboxPumpBudget = 64;
 
 bool phaseTimeoutExpired(std::optional<std::chrono::milliseconds> timeout,
     std::chrono::steady_clock::time_point lastActivity,
@@ -140,6 +142,7 @@ Http3NetworkRuntime::Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRun
     }
     try {
         wire_.prepare();
+        wire_.deferTransportRetirement();
     } catch (...) {
         wire_.requestStop();
         wire_.pollStop();
@@ -350,6 +353,7 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
     try {
         bool anyProgress = false;
         bool exhaustedBudget = true;
+        transportActivityForPump_ = wire_.consumeTransportActivity();
         for (std::size_t pass = 0; pass < pumpBudget_; ++pass) {
             bool progress = false;
             if (!workers_.empty()) {
@@ -371,6 +375,12 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
                 return std::ranges::all_of(owned->channels,
                     [](const auto& channel) { return channel->readyToDestroy(); });
             });
+            const bool workersDone = std::ranges::all_of(workers_, [](const auto& owned) {
+                return owned->target.server->drained();
+            });
+            if (channelsDone && workersDone) {
+                wire_.releaseTransportRetirement();
+            }
             if (channelsDone && !wire_.stopStatus().stopping) {
                 wire_.requestStop();
                 anyProgress = true;
@@ -388,8 +398,10 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
             // after the last UDP/timer completion.
             wake();
         }
+        transportActivityForPump_ = false;
         return anyProgress;
     } catch (...) {
+        transportActivityForPump_ = false;
         reportFailure(std::current_exception());
         return false;
     }
@@ -430,11 +442,12 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
     for (std::size_t i = 0; i < worker.channels.size(); ++i) {
         auto& channel = *worker.channels[i];
         auto& connection = worker.connections[i];
-        if (!connection.grantReceived) {
+        if (!connection.grantReceived && !connection.networkPublicationsClosed) {
             Http3ServerConnectionChannel::Identity identity;
             const auto status = channel.peekGrant(identity);
             if (status == Http3ServerConnectionChannel::Status::kReceived) {
                 connection.identity = identity;
+                connection.hasLastIdentity = true;
                 connection.grantReceived = true;
                 progress = true;
             } else if (status != Http3ServerConnectionChannel::Status::kEmpty) {
@@ -449,10 +462,13 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
         if (connection.bindPublished && !connection.attachResolved) {
             progress = attach(worker, i) || progress;
         }
+        // The channel accepts worker intents during the AttachAck publication
+        // window, but the network must consume that ACK before taking one.
 
         if (connection.pendingIntentAck) {
             const auto acknowledged = channel.acknowledgeIntentAfterHandoff(
-                connection.identity, *connection.pendingIntentAck);
+                connection.identity, connection.pendingIntentAck->token,
+                connection.pendingIntentAck->settlement);
             if (acknowledged == Http3ServerConnectionChannel::Status::kPublished) {
                 connection.pendingIntentAck.reset();
                 progress = true;
@@ -460,12 +476,19 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
                 closeConnection(connection, kProtocolFailureCode);
             }
         }
-        if (connection.bindPublished && !connection.transportRetiredPublished &&
+        // Keep draining this generation's intent ledger after physical
+        // retirement. Those intents are superseded by the retired transport,
+        // but still require exact-token ACKs so the worker can retire without
+        // losing scheduler/connection bookkeeping.
+        if (connection.bindPublished && connection.attachResolved &&
             !connection.pendingIntentAck) {
             Http3ServerConnectionChannel::TransportIntent intent;
             for (;;) {
                 const auto status = channel.receiveIntent(intent);
-                if (status == Http3ServerConnectionChannel::Status::kEmpty) {
+                if (status == Http3ServerConnectionChannel::Status::kEmpty ||
+                    status == Http3ServerConnectionChannel::Status::kWrongState) {
+                    // WorkerFinalized closes this producer gate before the network
+                    // consumes that record; there can be no further intents then.
                     break;
                 }
                 if (status != Http3ServerConnectionChannel::Status::kReceived ||
@@ -475,34 +498,46 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
                     std::terminate();
                 }
                 progress = true;
-                if (intent.token.kind ==
-                    Http3BufferedServerConnection::TransportIntentKind::kConnectionClose) {
-                    closeConnection(connection,
-                        intent.connectionErrorCode.value_or(kProtocolFailureCode));
-                } else {
-                    auto* transport = wire_.transport();
-                    if (transport == nullptr) {
-                        closeConnection(connection, kProtocolFailureCode);
+                const auto settlement = connection.transportRetiredPublished
+                                            ? Http3ServerConnectionChannel::IntentSettlement::
+                                                  kTransportRetiredSuperseded
+                                            : Http3ServerConnectionChannel::IntentSettlement::
+                                                  kExecutedHandoff;
+                if (settlement ==
+                    Http3ServerConnectionChannel::IntentSettlement::kExecutedHandoff) {
+                    if (intent.token.kind ==
+                        Http3ServerConnection::TransportIntentKind::kConnectionClose) {
+                        closeConnection(connection,
+                            intent.connectionErrorCode.value_or(kProtocolFailureCode));
                     } else {
-                        const auto reset = transport->resetStream(connection.transportId,
-                            intent.token.id.streamId,
+                        terminateRequestStream(connection, intent.token.id.streamId,
                             static_cast<std::uint64_t>(intent.streamResetErrorCode));
-                        if (reset != Http3QuicServerTransport::Error::kNone &&
-                            reset != Http3QuicServerTransport::Error::kNoStream) {
-                            closeConnection(connection, kProtocolFailureCode);
-                        }
+                        stopRequestInput(connection, intent.token.id.streamId);
                     }
                 }
                 const auto acknowledged = channel.acknowledgeIntentAfterHandoff(
-                    connection.identity, intent.token);
+                    connection.identity, intent.token, settlement);
                 if (acknowledged == Http3ServerConnectionChannel::Status::kFull) {
-                    connection.pendingIntentAck = intent.token;
+                    connection.pendingIntentAck = Connection::PendingIntentSettlement{
+                        .token = intent.token,
+                        .settlement = settlement};
                     break;
                 }
                 if (acknowledged != Http3ServerConnectionChannel::Status::kPublished) {
                     closeConnection(connection, kProtocolFailureCode);
                     break;
                 }
+            }
+        }
+
+        if (stopping_ && !connection.grantReceived && connection.hasLastIdentity &&
+            !connection.networkPublicationsClosed) {
+            const auto closed = channel.closeNetworkPublications(connection.identity);
+            if (closed == Http3ServerConnectionChannel::Status::kPublished) {
+                connection.networkPublicationsClosed = true;
+                progress = true;
+            } else if (closed != Http3ServerConnectionChannel::Status::kWrongState) {
+                std::terminate();
             }
         }
 
@@ -600,12 +635,18 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
         }
 
         if (!stopping_ && channel.readyToRearm()) {
-            if (channel.rearm() != Http3ServerConnectionChannel::Status::kPublished) {
+            const auto rearmed = channel.rearm();
+            if (rearmed == Http3ServerConnectionChannel::Status::kPublished) {
+                const auto lastIdentity = connection.identity;
+                const bool hasLastIdentity = connection.hasLastIdentity;
+                connection = Connection(memory_.resource());
+                connection.identity = lastIdentity;
+                connection.hasLastIdentity = hasLastIdentity;
+                notifyWorker(worker);
+                progress = true;
+            } else if (rearmed != Http3ServerConnectionChannel::Status::kWrongState) {
                 std::terminate();
             }
-            connection = Connection(memory_.resource());
-            notifyWorker(worker);
-            progress = true;
         }
     }
     return progress;
@@ -692,9 +733,10 @@ bool Http3NetworkRuntime::retireUnbound(WorkerLink& worker, std::size_t index) n
         if (!info) {
             connection.accepted = false;
             progress = true;
-        } else if (!wire_.outboundQuiescent()) {
-            return requestRevoke(worker, index) || progress;
         } else {
+            // UDP receive/send callbacks borrow only the endpoint and bridge. They
+            // do not reference this connection's SSL state, so a serving socket
+            // must not hold one accepted connection's local retirement hostage.
             const auto retired = transport->retireConnectionLocally(connection.transportId);
             if (retired != Http3QuicServerTransport::Error::kNone &&
                 retired != Http3QuicServerTransport::Error::kNoConnection) {
@@ -746,7 +788,7 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
         return true;
     }
     try {
-        const auto prefixes = Http3LocalCriticalStreams::create();
+        const auto prefixes = Http3LocalCriticalStreams::create({.enableConnectProtocol = true});
         auto* transport = wire_.transport();
         if (!prefixes || transport == nullptr) {
             closeConnection(connection, kProtocolFailureCode);
@@ -866,10 +908,17 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         progress = true;
     }
 
-    for (auto& stream : connection.streams) {
-        if (stream.inputTerminal) {
-            continue;
-        }
+    const auto streamCount = connection.streams.size();
+    const auto startInputIndex = streamCount == 0
+                                     ? std::size_t{0}
+                                     : connection.nextInputStreamIndex % streamCount;
+    const auto streamTurnBudget = (std::min)(streamCount, kInputStreamPumpBudget);
+    std::size_t processedStreams = 0;
+    for (; processedStreams < streamTurnBudget; ++processedStreams) {
+        const auto streamIndex = (startInputIndex + processedStreams) % streamCount;
+        auto& stream = connection.streams[streamIndex];
+        // Terminal input can still need one final worker notification (notably
+        // write-timeout cancellation after FIN was already delivered).
         if (stream.pendingControl) {
             const auto sent = worker.requestMailbox.trySendControl(*stream.pendingControl);
             if (sent == Http3StreamMailbox::ControlResult::kFull) {
@@ -894,27 +943,25 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                     return true;
                 }
             }
-            stream.inputTerminal = true;
+            completeInputTerminal(connection, stream.id);
             progress = true;
+            continue;
+        }
+        if (stream.inputTerminal) {
             continue;
         }
 
         if (stream.requestStream) {
             const auto timeout = stream.receivePhase == Stream::ReceivePhase::kHeaders
                                      ? worker.target.requestHeaderTimeout
-                                     : worker.target.requestBodyTimeout;
+                                 : stream.bodyTimeoutApplies()
+                                     ? worker.target.requestBodyTimeout
+                                     : std::nullopt;
             if (phaseTimeoutExpired(timeout, stream.lastInputActivity,
                     std::chrono::steady_clock::now())) {
-                const auto termination = transport.terminateBidirectionalStream(
-                    connection.transportId, stream.id,
+                noteInputReset(connection, stream.id);
+                terminateRequestStream(connection, stream.id,
                     static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
-                if ((termination.send != Http3QuicServerTransport::Error::kNone &&
-                        termination.send != Http3QuicServerTransport::Error::kNoStream) ||
-                    (termination.close != Http3QuicServerTransport::Error::kNone &&
-                        termination.close != Http3QuicServerTransport::Error::kNoStream)) {
-                    closeConnection(connection, kProtocolFailureCode);
-                    return true;
-                }
                 stream.frameTracker.reset();
                 stream.pendingControl = Http3StreamControl{
                     .kind = Http3StreamControl::Kind::kStreamReset,
@@ -934,7 +981,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         const auto reserved = worker.requestMailbox.reserveData(messageId, reservation);
         if (reserved == Http3StreamMailbox::ReservationResult::kFull ||
             reserved == Http3StreamMailbox::ReservationResult::kNoBlock) {
-            break;
+            continue;
         }
         if (reserved != Http3StreamMailbox::ReservationResult::kReserved) {
             closeConnection(connection, kServerShutdownCode);
@@ -1010,6 +1057,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                     }
                     stream.frameTracker.reset();
                 }
+                notePeerFin(connection, stream.id);
                 stream.pendingControl = Http3StreamControl{
                     .kind = Http3StreamControl::Kind::kStreamFin,
                     .id = messageId,
@@ -1019,16 +1067,11 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                 break;
             case Http3QuicServerTransport::StreamRead::Status::kReset:
                 reservation.abort();
+                noteInputReset(connection, stream.id);
                 stream.frameTracker.reset();
                 if (stream.requestStream) {
-                    const auto terminated = transport.terminateBidirectionalStream(
-                        connection.transportId, stream.id,
+                    terminateRequestStream(connection, stream.id,
                         static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
-                    if (terminated.close != Http3QuicServerTransport::Error::kNone &&
-                        terminated.close != Http3QuicServerTransport::Error::kNoStream) {
-                        closeConnection(connection, kProtocolFailureCode);
-                        return true;
-                    }
                 }
                 stream.pendingControl = Http3StreamControl{
                     .kind = Http3StreamControl::Kind::kStreamReset,
@@ -1046,10 +1089,194 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                 return true;
         }
     }
+    const auto streamCountBeforeRetirement = connection.streams.size();
     std::erase_if(connection.streams, [](const Stream& stream) {
-        return stream.inputTerminal;
+        // Keep request-stream identity through the connection lifetime: its
+        // deferred TunnelEstablished marker may be published after peer FIN.
+        return stream.inputTerminal && !stream.requestStream;
     });
-    return progress;
+    if (connection.streams.size() != streamCountBeforeRetirement) {
+        connection.nextInputStreamIndex = 0;
+        connection.nextTunnelHandshakeStreamIndex = 0;
+        connection.tunnelHandshakeScanRemaining = connection.pendingTunnelHandshakes == 0
+                                                      ? 0
+                                                      : connection.streams.size();
+        connection.tunnelHandshakeScanDirty = false;
+    } else if (streamCount != 0) {
+        connection.nextInputStreamIndex =
+            (startInputIndex + processedStreams) % streamCount;
+    }
+    return progress || (processedStreams == streamTurnBudget &&
+                           streamTurnBudget < streamCount);
+}
+
+void Http3NetworkRuntime::terminateRequestStream(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId, std::uint64_t errorCode) noexcept {
+    bool terminateDirectly = connection.output == nullptr;
+    if (connection.output != nullptr) {
+        const auto beforeCancel = connection.output->streamInfo(streamId);
+        if (beforeCancel && beforeCancel->sendFinAccepted) {
+            // cancelStream closes only the receive side when the real local FIN
+            // has already been accepted by QUIC. Never fall back to RESET_STREAM
+            // based solely on the HTTP response's terminal state.
+            const auto result = connection.output->cancelStream(streamId, errorCode);
+            switch (result.status) {
+                case Http3ServerStreamOutput::Status::kCancelled:
+                case Http3ServerStreamOutput::Status::kClosedStream:
+                case Http3ServerStreamOutput::Status::kConnectionClosed:
+                case Http3ServerStreamOutput::Status::kStopped:
+                    return;
+                default:
+                    closeConnection(connection, kProtocolFailureCode);
+                    return;
+            }
+        }
+        const auto result = connection.output->cancelStream(streamId, errorCode);
+        switch (result.status) {
+            case Http3ServerStreamOutput::Status::kCancelled:
+            case Http3ServerStreamOutput::Status::kConnectionClosed:
+            case Http3ServerStreamOutput::Status::kStopped:
+                return;
+            case Http3ServerStreamOutput::Status::kClosedStream: {
+                const auto info = connection.output->streamInfo(streamId);
+                if (!info || info->state == Http3ServerStreamOutput::StreamState::kFinished) {
+                    terminateDirectly = true;
+                } else {
+                    return;
+                }
+                break;
+            }
+            default:
+                closeConnection(connection, kProtocolFailureCode);
+                return;
+        }
+    }
+    if (!terminateDirectly) {
+        return;
+    }
+    auto* transport = wire_.transport();
+    if (transport == nullptr) {
+        closeConnection(connection, kProtocolFailureCode);
+        return;
+    }
+    const auto termination = transport->terminateBidirectionalStream(
+        connection.transportId, streamId, errorCode);
+    if ((termination.send != Http3QuicServerTransport::Error::kNone &&
+            termination.send != Http3QuicServerTransport::Error::kNoStream) ||
+        (termination.close != Http3QuicServerTransport::Error::kNone &&
+            termination.close != Http3QuicServerTransport::Error::kNoStream)) {
+        closeConnection(connection, kProtocolFailureCode);
+    }
+}
+
+Http3NetworkRuntime::TunnelEstablishedResult
+Http3NetworkRuntime::acceptTunnelEstablished(Connection& connection,
+    const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [&control](const Stream& stream) { return stream.id == control.id.streamId; });
+    if (found == connection.streams.end()) {
+        return TunnelEstablishedResult::kProtocolFailure;
+    }
+    const auto result =
+        found->acceptTunnelEstablished(control, connection.identity, acceptedWireBytes);
+    if (result != TunnelEstablishedResult::kAccepted) {
+        return result;
+    }
+    if (found->tunnelEstablishedBarrier) {
+        if (connection.pendingTunnelHandshakes ==
+            std::numeric_limits<std::size_t>::max()) {
+            std::terminate();
+        }
+        ++connection.pendingTunnelHandshakes;
+        if (connection.tunnelHandshakeScanRemaining == 0) {
+            connection.tunnelHandshakeScanRemaining = connection.streams.size();
+            connection.nextTunnelHandshakeStreamIndex = 0;
+            connection.tunnelHandshakeScanDirty = false;
+        } else if (connection.tunnelHandshakeScanRemaining < connection.streams.size()) {
+            connection.tunnelHandshakeScanDirty = true;
+        }
+    }
+    return TunnelEstablishedResult::kAccepted;
+}
+
+bool Http3NetworkRuntime::confirmTunnelEstablished(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId,
+    std::uint64_t acceptedWireBytes) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [streamId](const Stream& stream) { return stream.id == streamId; });
+    if (found == connection.streams.end() ||
+        !found->confirmTunnelEstablished(acceptedWireBytes)) {
+        return false;
+    }
+    if (connection.pendingTunnelHandshakes == 0) {
+        std::terminate();
+    }
+    --connection.pendingTunnelHandshakes;
+    if (connection.pendingTunnelHandshakes == 0) {
+        connection.tunnelHandshakeScanRemaining = 0;
+        connection.tunnelHandshakeScanDirty = false;
+    }
+    return true;
+}
+
+void Http3NetworkRuntime::notePeerFin(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [streamId](const Stream& stream) { return stream.id == streamId; });
+    if (found != connection.streams.end()) {
+        found->inputFin = true;
+    }
+}
+
+void Http3NetworkRuntime::noteInputReset(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [streamId](const Stream& stream) { return stream.id == streamId; });
+    if (found == connection.streams.end()) {
+        return;
+    }
+    found->inputReset = true;
+    found->frameTracker.reset();
+    if (found->tunnelEstablishedBarrier) {
+        if (connection.pendingTunnelHandshakes == 0) {
+            std::terminate();
+        }
+        --connection.pendingTunnelHandshakes;
+        found->tunnelEstablishedBarrier.reset();
+    }
+    if (connection.pendingTunnelHandshakes == 0) {
+        connection.tunnelHandshakeScanRemaining = 0;
+        connection.tunnelHandshakeScanDirty = false;
+    }
+}
+
+void Http3NetworkRuntime::completeInputTerminal(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [streamId](const Stream& stream) { return stream.id == streamId; });
+    if (found == connection.streams.end()) {
+        return;
+    }
+    if (found->inputReset && found->tunnelEstablishedBarrier) {
+        if (connection.pendingTunnelHandshakes == 0) {
+            std::terminate();
+        }
+        --connection.pendingTunnelHandshakes;
+        found->tunnelEstablishedBarrier.reset();
+    }
+    found->inputTerminal = true;
+}
+
+void Http3NetworkRuntime::stopRequestInput(Connection& connection,
+    Http3QuicServerTransport::StreamId streamId) noexcept {
+    const auto found = std::ranges::find_if(connection.streams,
+        [streamId](const Stream& stream) { return stream.id == streamId; });
+    if (found == connection.streams.end()) {
+        return;
+    }
+    found->pendingControl.reset();
+    noteInputReset(connection, streamId);
+    completeInputTerminal(connection, streamId);
 }
 
 bool Http3NetworkRuntime::announceGoaway(WorkerLink& worker, std::size_t index) noexcept {
@@ -1126,34 +1353,62 @@ bool Http3NetworkRuntime::rejectRequestStream(WorkerLink& worker, std::size_t in
 bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
     bool progress = false;
     worker.responseMailboxDrained = false;
+    std::size_t processed = 0;
     for (;;) {
         if (worker.pendingResponseControl) {
             auto* connection = findConnection(worker, worker.pendingResponseControl->id);
             if (connection == nullptr || connection->output == nullptr) {
                 worker.pendingResponseControl.reset();
+                ++processed;
                 progress = true;
             } else {
-                const auto result = connection->output->acceptControl(
-                    *worker.pendingResponseControl);
-                if (result.status == Http3ServerStreamOutput::Status::kBackpressured) {
-                    break;
+                if (worker.pendingResponseControl->kind ==
+                    Http3StreamControl::Kind::kTunnelEstablished) {
+                    // Input (including peer reset/timeout) is observed before the
+                    // worker control lane; a terminal same-stream marker can lag it.
+                    const auto info = connection->output->streamInfo(
+                        worker.pendingResponseControl->id.streamId);
+                    switch (acceptTunnelEstablished(*connection,
+                        *worker.pendingResponseControl,
+                        info ? info->acceptedWireBytes : 0)) {
+                        case TunnelEstablishedResult::kAccepted:
+                        case TunnelEstablishedResult::kIgnoredTerminal:
+                            break;
+                        case TunnelEstablishedResult::kProtocolFailure:
+                            closeConnection(*connection, kProtocolFailureCode);
+                            break;
+                    }
+                    worker.pendingResponseControl.reset();
+                    ++processed;
+                    progress = true;
+                } else {
+                    const auto result = connection->output->acceptControl(
+                        *worker.pendingResponseControl);
+                    if (result.status == Http3ServerStreamOutput::Status::kBackpressured) {
+                        break;
+                    }
+                    if (result.status != Http3ServerStreamOutput::Status::kAccepted &&
+                        result.status != Http3ServerStreamOutput::Status::kFinDeferred &&
+                        result.status != Http3ServerStreamOutput::Status::kFinished &&
+                        result.status != Http3ServerStreamOutput::Status::kDuplicateFin &&
+                        result.status != Http3ServerStreamOutput::Status::kClosedStream) {
+                        closeConnection(*connection, kProtocolFailureCode);
+                    }
+                    worker.pendingResponseControl.reset();
+                    ++processed;
+                    progress = true;
                 }
-                if (result.status != Http3ServerStreamOutput::Status::kAccepted &&
-                    result.status != Http3ServerStreamOutput::Status::kFinDeferred &&
-                    result.status != Http3ServerStreamOutput::Status::kFinished &&
-                    result.status != Http3ServerStreamOutput::Status::kDuplicateFin &&
-                    result.status != Http3ServerStreamOutput::Status::kClosedStream) {
-                    closeConnection(*connection, kProtocolFailureCode);
-                }
-                worker.pendingResponseControl.reset();
-                progress = true;
             }
+        }
+        if (processed >= kResponseMailboxPumpBudget) {
+            break;
         }
         if (worker.pendingResponse) {
             auto* connection = findConnection(worker, worker.pendingResponse->id());
             if (connection == nullptr || connection->output == nullptr) {
                 worker.pendingResponse->release();
                 worker.pendingResponse.reset();
+                ++processed;
                 progress = true;
             } else {
                 const auto result = connection->output->acceptData(*worker.pendingResponse);
@@ -1166,8 +1421,14 @@ bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
                     closeConnection(*connection, kProtocolFailureCode);
                 }
                 worker.pendingResponse.reset();
+                ++processed;
                 progress = true;
             }
+        }
+        if (processed >= kResponseMailboxPumpBudget) {
+            // Leave remaining mailbox entries for the next protocol turn; the
+            // outer network pump schedules a bounded continuation while work remains.
+            break;
         }
         if (!worker.pendingResponseControl) {
             Http3StreamControl control;
@@ -1198,7 +1459,9 @@ bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) noex
     if (connection.output == nullptr) {
         return false;
     }
-    connection.output->notifyTransportActivity();
+    if (transportActivityForPump_) {
+        connection.output->notifyTransportActivity();
+    }
     const auto result = connection.output->drive();
     if (result.status == Http3ServerStreamOutput::Status::kTransportError ||
         result.status == Http3ServerStreamOutput::Status::kFinalSizeError ||
@@ -1206,7 +1469,71 @@ bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) noex
         result.status == Http3ServerStreamOutput::Status::kUnsafeToRelease) {
         closeConnection(connection, kProtocolFailureCode);
     }
-    return result.madeProgress || result.needsReschedule;
+    for (auto& stream : connection.streams) {
+        if (!stream.requestStream || stream.inputReset || stream.writeTimeoutNotified) {
+            continue;
+        }
+        const auto info = connection.output->streamInfo(stream.id);
+        if (info && info->timedOut) {
+            // Reset takes precedence over a queued FIN; if FIN was already
+            // delivered, inputTerminal does not suppress this cancellation.
+            stream.writeTimeoutNotified = true;
+            noteInputReset(connection, stream.id);
+            stream.frameTracker.reset();
+            stream.pendingControl = Http3StreamControl{
+                .kind = Http3StreamControl::Kind::kStreamReset,
+                .id = {connection.identity.epoch,
+                    connection.identity.connectionGeneration, stream.id},
+                .value = stream.receivedBytes,
+                .streamResetErrorCode = Http3ConnectionErrorCode::kRequestCancelled,
+            };
+        }
+    }
+    if (result.acceptedBytes != 0 && connection.pendingTunnelHandshakes != 0) {
+        if (connection.tunnelHandshakeScanRemaining == 0) {
+            connection.tunnelHandshakeScanRemaining = connection.streams.size();
+            connection.nextTunnelHandshakeStreamIndex = 0;
+            connection.tunnelHandshakeScanDirty = false;
+        } else if (connection.tunnelHandshakeScanRemaining < connection.streams.size()) {
+            connection.tunnelHandshakeScanDirty = true;
+        }
+    }
+
+    bool handshakeProgress = false;
+    const auto streamCount = connection.streams.size();
+    if (connection.pendingTunnelHandshakes != 0 &&
+        connection.tunnelHandshakeScanRemaining != 0) {
+        if (streamCount == 0) {
+            std::terminate();
+        }
+        const auto scanBudget = (std::min)({streamCount,
+            connection.tunnelHandshakeScanRemaining, kInputStreamPumpBudget});
+        for (std::size_t scanned = 0; scanned < scanBudget; ++scanned) {
+            const auto streamIndex = connection.nextTunnelHandshakeStreamIndex % streamCount;
+            connection.nextTunnelHandshakeStreamIndex = (streamIndex + 1) % streamCount;
+            --connection.tunnelHandshakeScanRemaining;
+            auto& stream = connection.streams[streamIndex];
+            if (!stream.tunnelEstablishedBarrier) {
+                continue;
+            }
+            const auto info = connection.output->streamInfo(stream.id);
+            if (info && confirmTunnelEstablished(connection, stream.id,
+                            info->acceptedWireBytes)) {
+                handshakeProgress = true;
+            }
+        }
+        if (connection.pendingTunnelHandshakes == 0) {
+            connection.tunnelHandshakeScanRemaining = 0;
+            connection.tunnelHandshakeScanDirty = false;
+        } else if (connection.tunnelHandshakeScanRemaining == 0 &&
+                   connection.tunnelHandshakeScanDirty) {
+            connection.tunnelHandshakeScanRemaining = streamCount;
+            connection.nextTunnelHandshakeStreamIndex = 0;
+            connection.tunnelHandshakeScanDirty = false;
+        }
+    }
+    return result.madeProgress || result.needsReschedule || handshakeProgress ||
+           connection.tunnelHandshakeScanRemaining != 0;
 }
 
 bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept {
@@ -1270,9 +1597,9 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept
         }
     }
 
-    if (!wire_.outboundQuiescent()) {
-        return false;
-    }
+    // The UDP send span is bridge-owned and receives never borrow this SSL. The
+    // output owner below separately proves that no stream write retry still
+    // borrows request memory before its records are released.
     if (connection.output != nullptr) {
         const auto stopped = connection.output->stop();
         if (stopped.status == Http3ServerStreamOutput::Status::kUnsafeToRelease) {

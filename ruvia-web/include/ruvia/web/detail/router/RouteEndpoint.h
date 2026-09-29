@@ -159,6 +159,10 @@ public:
             throw std::invalid_argument(
                 "websocket close-handshake timeout must be greater than zero");
         }
+        if (options.lifecycle.peerTransportFinTimeout.count() <= 0) {
+            throw std::invalid_argument(
+                "websocket peer transport FIN timeout must be greater than zero");
+        }
         if (options.deflate.compressionLevel < 0 || options.deflate.compressionLevel > 9) {
             throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
         }

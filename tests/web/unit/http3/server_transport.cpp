@@ -279,7 +279,8 @@ class DirectQuicPeer final {
 public:
     DirectQuicPeer(ruvia::detail::Http3QuicClientTlsContext& tls,
         ruvia::detail::Http3QuicDatagramAddress remote,
-        ruvia::detail::Http3QuicDatagramAddress local)
+        ruvia::detail::Http3QuicDatagramAddress local,
+        std::optional<std::uint64_t> idleTimeoutRequest = std::nullopt)
         : remote_(remote),
           local_(local),
           bridge_(local) {
@@ -294,7 +295,10 @@ public:
             if (!destination || !ruvia::detail::makeHttp3QuicBioAddress(remote_, destination.get()) ||
                 SSL_set1_initial_peer_addr(connection_, destination.get()) != 1 ||
                 SSL_set_default_stream_mode(connection_, SSL_DEFAULT_STREAM_MODE_NONE) != 1 ||
-                SSL_set_incoming_stream_policy(connection_, SSL_INCOMING_STREAM_POLICY_ACCEPT, 0) != 1) {
+                SSL_set_incoming_stream_policy(connection_, SSL_INCOMING_STREAM_POLICY_ACCEPT, 0) != 1 ||
+                (idleTimeoutRequest &&
+                    SSL_set_feature_request_uint(connection_, SSL_VALUE_QUIC_IDLE_TIMEOUT,
+                        *idleTimeoutRequest) != 1)) {
                 throw std::runtime_error("failed to configure direct QUIC test peer");
             }
             BIO* const bio = bridge_.releaseSslBio();
@@ -340,6 +344,10 @@ public:
         }
         char* const configuredHost = X509_VERIFY_PARAM_get0_host(parameters, 0);
         return configuredHost != nullptr && std::string_view(configuredHost) == host;
+    }
+    [[nodiscard]] bool negotiatedIdleTimeout(std::uint64_t& value) const noexcept {
+        return SSL_get_feature_negotiated_uint(connection_, SSL_VALUE_QUIC_IDLE_TIMEOUT,
+                   &value) == 1;
     }
 
     void handleEvents() {
@@ -477,6 +485,69 @@ std::pair<std::size_t, std::size_t> pumpDirectPair(ruvia::detail::Http3QuicServe
     const auto toPeer = relayDatagramsToPeer(serverBridge, peer);
     peer.handleEvents();
     return {toServer, toPeer};
+}
+
+bool drivePendingHandshakes(ruvia::detail::Http3QuicServerTransport& server,
+    ruvia::detail::Http3QuicDatagramBridge& serverBridge,
+    std::span<DirectQuicPeer*> peers, std::chrono::steady_clock::time_point deadline) {
+    using namespace ruvia::detail;
+    std::size_t settledReadyRounds{};
+    while (std::chrono::steady_clock::now() < deadline) {
+        for (DirectQuicPeer* peer : peers) {
+            peer->handleEvents();
+            (void)relayDatagrams(peer->bridge(), serverBridge, peer->local());
+        }
+        if (server.handleEvents() == Http3QuicServerTransport::EventResult::kFatal) {
+            throw std::runtime_error("pending QUIC handshake event handling failed");
+        }
+        for (unsigned packet = 0; packet < 128; ++packet) {
+            Http3QuicOutboundDatagram outbound;
+            const auto result = serverBridge.takeOutbound(outbound);
+            if (result == Http3QuicDatagramBridge::OutboundResult::kEmpty) {
+                break;
+            }
+            if (result != Http3QuicDatagramBridge::OutboundResult::kReady) {
+                throw std::runtime_error("pending QUIC handshake outbound BIO failed");
+            }
+            const auto destination = std::find_if(peers.begin(), peers.end(),
+                [&outbound](const DirectQuicPeer* peer) {
+                    return peer->local().port == outbound.destination.port;
+                });
+            if (destination == peers.end()) {
+                serverBridge.completeOutbound();
+                throw std::runtime_error("pending QUIC handshake had no destination peer");
+            }
+            DirectQuicPeer* const peer = *destination;
+            bool delivered{};
+            for (unsigned retry = 0; retry < 128 && !delivered; ++retry) {
+                const auto injected = peer->bridge().inject(outbound.bytes, peer->remote());
+                if (injected == Http3QuicDatagramBridge::InjectResult::kAccepted) {
+                    delivered = true;
+                } else if (injected == Http3QuicDatagramBridge::InjectResult::kFull) {
+                    peer->handleEvents();
+                } else {
+                    serverBridge.completeOutbound();
+                    throw std::runtime_error("pending QUIC handshake peer rejected datagram");
+                }
+            }
+            serverBridge.completeOutbound();
+            if (!delivered) {
+                throw std::runtime_error("pending QUIC handshake peer BIO stayed full");
+            }
+            peer->handleEvents();
+        }
+        if (std::all_of(peers.begin(), peers.end(), [](const DirectQuicPeer* peer) {
+                return peer->ready();
+            })) {
+            if (++settledReadyRounds == 2) {
+                return true;
+            }
+        } else {
+            settledReadyRounds = 0;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
 }
 
 struct ClientCertificateObservation final {
@@ -972,6 +1043,104 @@ RUVIA_TEST(http3QuicServerTransportReportsNegotiatedIdleExpiryWithoutActiveStrea
     if (connectionId) {
         RUVIA_CHECK(server.retireConnectionLocally(*connectionId) ==
                     Http3QuicServerTransport::Error::kNone);
+    }
+#endif
+}
+
+RUVIA_TEST(http3QuicServerTransportInheritsListenerIdleTimeoutForDeferredPendingHandshakes) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    using namespace std::chrono_literals;
+    using namespace ruvia::detail;
+    IdentityFiles files;
+    HttpServerListenerDefinition::Tls config;
+    config.identity.certificateChainFile = files.certificate.string();
+    config.identity.privateKeyFile = files.privateKey.string();
+    Http3QuicTlsContext serverTls(config, std::pmr::get_default_resource());
+    Http3QuicClientTlsContext clientTls(ClientTransportConfigView{});
+    SSL_CTX_set_verify(clientTls.nativeHandle(), SSL_VERIFY_NONE, nullptr);
+
+    {
+        Http3QuicDatagramBridge serverBridge(address());
+        Http3QuicServerTransport server(serverTls, serverBridge, {.idleTimeout = 20s});
+        auto firstLocal = address();
+        auto secondLocal = address();
+        firstLocal.port = 16020;
+        secondLocal.port = 16021;
+        DirectQuicPeer first(clientTls, address(), firstLocal);
+        DirectQuicPeer second(clientTls, address(), secondLocal);
+        std::array<DirectQuicPeer*, 2> peers{&first, &second};
+        RUVIA_CHECK(drivePendingHandshakes(server, serverBridge, peers,
+            std::chrono::steady_clock::now() + 8s));
+        RUVIA_CHECK(server.acceptConnections(0).empty());
+
+        const auto accepted = server.acceptConnections(peers.size());
+        RUVIA_CHECK_EQ(accepted.size, peers.size());
+        for (std::size_t index = 0; index < accepted.size; ++index) {
+            const auto info = server.connectionInfo(accepted.ids[index]);
+            RUVIA_CHECK(info && info->handshakeComplete && info->h3Negotiated);
+            if (info) {
+                RUVIA_CHECK_EQ(info->negotiatedIdleTimeoutMilliseconds,
+                    std::uint64_t{20'000});
+            }
+            RUVIA_CHECK(server.retireConnectionLocally(accepted.ids[index]) ==
+                        Http3QuicServerTransport::Error::kNone);
+        }
+    }
+
+    {
+        Http3QuicDatagramBridge serverBridge(address());
+        Http3QuicServerTransport server(serverTls, serverBridge);
+        auto local = address();
+        local.port = 16022;
+        DirectQuicPeer peer(clientTls, address(), local, std::uint64_t{0});
+        std::array<DirectQuicPeer*, 1> peers{&peer};
+        RUVIA_CHECK(drivePendingHandshakes(server, serverBridge, peers,
+            std::chrono::steady_clock::now() + 8s));
+
+        std::uint64_t clientNegotiatedIdleTimeout{};
+        RUVIA_CHECK(peer.negotiatedIdleTimeout(clientNegotiatedIdleTimeout));
+        RUVIA_CHECK_EQ(clientNegotiatedIdleTimeout, std::uint64_t{75'000});
+        const auto accepted = server.acceptConnections(1);
+        RUVIA_CHECK_EQ(accepted.size, std::size_t{1});
+        if (!accepted.empty()) {
+            const auto info = server.connectionInfo(accepted.ids[0]);
+            RUVIA_CHECK(info && info->handshakeComplete && info->h3Negotiated);
+            if (info) {
+                RUVIA_CHECK_EQ(info->negotiatedIdleTimeoutMilliseconds,
+                    std::uint64_t{75'000});
+            }
+            RUVIA_CHECK(server.retireConnectionLocally(accepted.ids[0]) ==
+                        Http3QuicServerTransport::Error::kNone);
+        }
+    }
+
+    {
+        Http3QuicDatagramBridge serverBridge(address());
+        Http3QuicServerTransport server(serverTls, serverBridge,
+            {.idleTimeout = std::nullopt});
+        auto local = address();
+        local.port = 16023;
+        DirectQuicPeer peer(clientTls, address(), local, std::uint64_t{0});
+        std::array<DirectQuicPeer*, 1> peers{&peer};
+        RUVIA_CHECK(drivePendingHandshakes(server, serverBridge, peers,
+            std::chrono::steady_clock::now() + 8s));
+
+        std::uint64_t clientNegotiatedIdleTimeout{};
+        RUVIA_CHECK(peer.negotiatedIdleTimeout(clientNegotiatedIdleTimeout));
+        RUVIA_CHECK_EQ(clientNegotiatedIdleTimeout, std::uint64_t{0});
+        const auto accepted = server.acceptConnections(1);
+        RUVIA_CHECK_EQ(accepted.size, std::size_t{1});
+        if (!accepted.empty()) {
+            const auto info = server.connectionInfo(accepted.ids[0]);
+            RUVIA_CHECK(info && info->handshakeComplete && info->h3Negotiated);
+            if (info) {
+                RUVIA_CHECK_EQ(info->negotiatedIdleTimeoutMilliseconds, std::uint64_t{0});
+            }
+            RUVIA_CHECK(server.retireConnectionLocally(accepted.ids[0]) ==
+                        Http3QuicServerTransport::Error::kNone);
+        }
     }
 #endif
 }

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <memory_resource>
 #include <optional>
 #include <semaphore>
@@ -15,19 +16,28 @@
 #include <thread>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
+#include <asio/post.hpp>
 
+#include "ruvia/core/AsioTask.h"
+#include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallbackRef.h"
-#include "ruvia/web/detail/http3/Http3BufferedServerConnection.h"
+#include "ruvia/web/detail/http3/Http3ServerConnection.h"
+#include "ruvia/web/detail/http3/Http3ServerConnectionChannel.h"
 #include "ruvia/web/detail/http3/Http3WorkerMailboxScheduler.h"
+#include "ruvia/web/detail/http3/Http3WorkerServer.h"
+#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 #include "memory_resource_fixture.h"
 #include "routing_fixture.h"
@@ -36,8 +46,8 @@
 
 namespace {
 
-using Connection = ruvia::detail::Http3BufferedServerConnection;
-using ConnectionConfig = ruvia::detail::Http3BufferedServerConnectionConfig;
+using Connection = ruvia::detail::Http3ServerConnection;
+using ConnectionConfig = ruvia::detail::Http3ServerConnectionConfig;
 using Scheduler = ruvia::detail::Http3WorkerMailboxScheduler;
 using CapacitySignal = ruvia::detail::Http3WorkerMailboxCapacitySignal;
 using Mailbox = ruvia::detail::Http3StreamMailbox;
@@ -105,6 +115,133 @@ struct CrossThreadWake final {
             1, std::memory_order_release);
     }
 };
+
+using WorkerServer = ruvia::detail::Http3WorkerServer;
+using ConnectionChannel = ruvia::detail::Http3ServerConnectionChannel;
+
+struct WorkerServerWakeBridge final {
+    std::atomic<WorkerServer*> server{};
+    std::atomic<unsigned> notifications{};
+
+    static void notify(void* context) noexcept {
+        auto& bridge = *static_cast<WorkerServerWakeBridge*>(context);
+        bridge.notifications.fetch_add(1, std::memory_order_release);
+        if (auto* server = bridge.server.load(std::memory_order_acquire); server != nullptr) {
+            (void)server->notification().notify();
+        }
+    }
+};
+
+struct WorkerNotificationWake final {
+    explicit WorkerNotificationWake(ruvia::WorkerNotification& target) noexcept
+        : notification(target) {}
+
+    static void activation(void* context) noexcept {
+        auto& wake = *static_cast<WorkerNotificationWake*>(context);
+        ++wake.activationNotifications;
+        if (wake.notification.notify() == ruvia::WorkerNotificationStatus::kClosed) {
+            std::terminate();
+        }
+    }
+
+    static void capacity(void* context) noexcept {
+        auto& wake = *static_cast<WorkerNotificationWake*>(context);
+        ++wake.capacityNotifications;
+        if (wake.notification.notify() == ruvia::WorkerNotificationStatus::kClosed) {
+            std::terminate();
+        }
+    }
+
+    ruvia::WorkerNotification& notification;
+    unsigned activationNotifications{};
+    unsigned capacityNotifications{};
+};
+
+ruvia::Task<void> exerciseWorkerServerPreLaunchRollback(
+    ruvia::WorkerRuntimeContext& runtime, Fixture& fixture, Mailbox& requestMailbox,
+    ConnectionChannel& channel, CrossThreadWake& networkWake,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    const auto worker = runtime.handle();
+    ruvia::detail::WorkerCapabilities capabilities(runtime.ioContext(), worker,
+        fixture.worker.resource(), {}, {});
+    ruvia::ConnectionScanner scanner(worker, {});
+    std::atomic<std::size_t> activeConnections{};
+    std::atomic<std::size_t> refusedConnections{};
+    WorkerServer server(runtime, worker, fixture.worker,
+        fixture.routes.implementation.routeTable(), capabilities, scanner,
+        runtime.ioContext().get_executor(), fixture.options, fixture.stopToken, 1, 1,
+        activeConnections, refusedConnections);
+    const std::array<ConnectionChannel*, 1> channels{&channel};
+
+    RUVIA_CHECK(!server.install());
+    server.abandonBeforeLaunch();
+    RUVIA_CHECK(server.drained());
+
+    WorkerServer stopped(runtime, worker, fixture.worker,
+        fixture.routes.implementation.routeTable(), capabilities, scanner,
+        runtime.ioContext().get_executor(), fixture.options, fixture.stopToken, 1, 1,
+        activeConnections, refusedConnections);
+    RUVIA_CHECK(stopped.stageInstall({.requestMailbox = &requestMailbox,
+        .channels = channels,
+        .networkWake = {.context = &networkWake, .notify = &CrossThreadWake::notify}}));
+    stopped.requestStop();
+    Scheduler postStopScheduler(worker, 1, fixture.worker.resource());
+    const auto grantAfterStop = channel.reserveAndPublishGrant(
+        postStopScheduler, 7, 1);
+    RUVIA_CHECK(grantAfterStop.status == ConnectionChannel::Status::kWrongState);
+    RUVIA_CHECK(postStopScheduler.snapshot().freeConnections == std::size_t{1});
+    RUVIA_CHECK(!stopped.install());
+    stopped.abandonBeforeLaunch();
+    RUVIA_CHECK(stopped.drained());
+    runtime.close();
+    co_return;
+}
+
+ruvia::Task<void> runProductionWorkerServer(
+    ruvia::WorkerRuntimeContext& runtime, Fixture& fixture, Mailbox& requestMailbox,
+    ConnectionChannel& channel, CrossThreadWake& networkWake,
+    WorkerServerWakeBridge& workerWake, std::atomic<bool>& installed,
+    std::atomic<bool>& stopRequested, ruvia::testing::TestContext& ruvia_ctx) {
+    const auto worker = runtime.handle();
+    ruvia::detail::WorkerCapabilities capabilities(runtime.ioContext(), worker,
+        fixture.worker.resource(), {}, {});
+    ruvia::ConnectionScanner scanner(worker, {});
+    std::atomic<std::size_t> activeConnections{};
+    std::atomic<std::size_t> refusedConnections{};
+    WorkerServer server(runtime, worker, fixture.worker,
+        fixture.routes.implementation.routeTable(), capabilities, scanner,
+        runtime.ioContext().get_executor(), fixture.options, fixture.stopToken, 1, 1,
+        activeConnections, refusedConnections);
+    workerWake.server.store(&server, std::memory_order_release);
+    const std::array<ConnectionChannel*, 1> channels{&channel};
+    RUVIA_CHECK(server.stageInstall({.requestMailbox = &requestMailbox,
+        .channels = channels,
+        .networkWake = {.context = &networkWake, .notify = &CrossThreadWake::notify}}));
+    if (!server.install()) {
+        server.abandonBeforeLaunch();
+        throw std::runtime_error("production HTTP/3 worker server install failed");
+    }
+
+    ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+    try {
+        tasks.spawn(server.run());
+    } catch (...) {
+        server.abandonBeforeLaunch();
+        throw;
+    }
+    installed.store(true, std::memory_order_release);
+    while (!stopRequested.load(std::memory_order_acquire)) {
+        if (co_await ruvia::sleepFor(worker, 1ms, fixture.stopToken) !=
+            ruvia::TimerSleepResult::kElapsed) {
+            break;
+        }
+    }
+    server.requestStop();
+    co_await tasks.join();
+    workerWake.server.store(nullptr, std::memory_order_release);
+    runtime.close();
+    static_cast<void>(ruvia_ctx);
+}
 
 bool accepted(Mailbox::SendResult result) noexcept {
     return result == Mailbox::SendResult::kSent ||
@@ -230,6 +367,119 @@ ruvia::Task<void> waitForNoTasks(std::span<Connection* const> connections,
     throw std::runtime_error("HTTP/3 scheduler request tasks did not retire");
 }
 
+ruvia::Task<void> stopAndRetire(Scheduler& scheduler, Scheduler::ConnectionToken token,
+    Connection& connection, ruvia::testing::TestContext& ruvia_ctx);
+
+ruvia::Task<void> exerciseActivationWakeWindow(ruvia::WorkerRuntimeContext& runtime,
+    Fixture& fixture, bool activationBeforeWait, ruvia::testing::TestContext& ruvia_ctx) {
+    const auto worker = runtime.handle();
+    ruvia::WorkerNotification notification(runtime);
+    WorkerNotificationWake wake(notification);
+    CapacitySignal capacity({.context = &wake, .notify = &WorkerNotificationWake::capacity});
+    Scheduler scheduler(worker, 1, fixture.worker.resource(), &capacity,
+        Scheduler::kDefaultControlBurstLimit,
+        {.context = &wake, .notify = &WorkerNotificationWake::activation});
+    Mailbox outbound(8, 8, 8, fixture.worker.resource(), capacity.notifier());
+    Mailbox inbound(2, 2, 2, fixture.worker.resource());
+    RUVIA_CHECK(scheduler.bindMailbox(outbound));
+    const auto registration = scheduler.reserve(kEpoch, kGeneration);
+    RUVIA_CHECK(registration.has_value());
+    if (!registration) {
+        throw std::runtime_error("HTTP/3 activation wake test could not reserve a slot");
+    }
+    Connection owner(fixture.routes.implementation.routeTable(), fixture.worker,
+        fixture.services, fixture.options, outbound, registration->activation,
+        ConnectionConfig{.epoch = kEpoch,
+            .connectionGeneration = kGeneration,
+            .maxTrackedStreams = 8});
+    RUVIA_CHECK(scheduler.attach(registration->token, owner));
+
+    bool requestFed = false;
+    std::exception_ptr requestFailure;
+    if (activationBeforeWait) {
+        const auto request = feedRequest(owner, inbound, fixture,
+            {kEpoch, kGeneration, 0}, "GET", "/deadline");
+        RUVIA_CHECK(request.status == Connection::EventStatus::kDispatched);
+        std::array<Connection*, 1> owners{&owner};
+        co_await waitForReady(owners, worker, fixture.stopToken);
+        RUVIA_CHECK(wake.activationNotifications != 0);
+        RUVIA_CHECK_EQ(capacity.generation(), std::uint64_t{0});
+    } else {
+        // Posting while this coroutine is running guarantees the WorkerNotification
+        // wait is armed before the request can produce its local activation.
+        asio::post(runtime.ioContext(), [&] {
+            try {
+                const auto request = feedRequest(owner, inbound, fixture,
+                    {kEpoch, kGeneration, 0}, "GET", "/deadline");
+                requestFed = request.status == Connection::EventStatus::kDispatched;
+            } catch (...) {
+                requestFailure = std::current_exception();
+            }
+        });
+    }
+
+    RUVIA_CHECK(co_await notification.wait() ==
+                ruvia::WorkerNotificationWaitStatus::kNotified);
+    if (requestFailure) {
+        std::rethrow_exception(requestFailure);
+    }
+    if (!activationBeforeWait) {
+        RUVIA_CHECK(requestFed);
+        std::array<Connection*, 1> owners{&owner};
+        co_await waitForReady(owners, worker, fixture.stopToken);
+    }
+    RUVIA_CHECK(wake.activationNotifications != 0);
+    RUVIA_CHECK_EQ(capacity.generation(), std::uint64_t{0});
+    RUVIA_CHECK(scheduler.takeLocalWakeObligation());
+
+    std::string responseWire;
+    const auto pumpAndDrain = [&] {
+        for (std::size_t turn = 0; turn < 64; ++turn) {
+            const auto step = scheduler.step();
+            if (step.kind == Scheduler::StepKind::kIdle) {
+                break;
+            }
+            if (step.kind == Scheduler::StepKind::kWrongWorker ||
+                step.kind == Scheduler::StepKind::kTransportIntent) {
+                std::terminate();
+            }
+        }
+        Mailbox::BorrowedBlock block;
+        while (outbound.tryReceive(block)) {
+            const auto bytes = block.bytes();
+            responseWire.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+            block.release();
+        }
+        Control control;
+        while (outbound.tryReceiveControl(control)) {
+        }
+        (void)outbound.finishDrain();
+        (void)outbound.drainReturns();
+    };
+    pumpAndDrain();
+    std::array<Connection*, 1> owners{&owner};
+    co_await waitForNoTasks(owners, worker, fixture.stopToken);
+    pumpAndDrain();
+    RUVIA_CHECK(responseWire.find("/deadline") != std::string::npos);
+
+    if (!activationBeforeWait) {
+        const auto notifier = capacity.notifier();
+        notifier.notify(notifier.context);
+        RUVIA_CHECK_EQ(capacity.generation(), std::uint64_t{1});
+        RUVIA_CHECK(scheduler.snapshot().capacityWakePending);
+        RUVIA_CHECK(wake.capacityNotifications != 0);
+        RUVIA_CHECK(co_await notification.wait() ==
+                    ruvia::WorkerNotificationWaitStatus::kNotified);
+        (void)scheduler.step();
+        RUVIA_CHECK(!scheduler.snapshot().capacityWakePending);
+    }
+
+    co_await stopAndRetire(scheduler, registration->token, owner, ruvia_ctx);
+    (void)scheduler.takeLocalWakeObligation();
+    RUVIA_CHECK(outbound.stop());
+    notification.close();
+}
+
 void drainMailbox(Mailbox& mailbox, unsigned& dataBlocks, unsigned& controls) {
     Mailbox::BorrowedBlock block;
     while (mailbox.tryReceive(block)) {
@@ -248,9 +498,39 @@ ruvia::Task<void> stopAndRetire(Scheduler& scheduler, Scheduler::ConnectionToken
     Connection& connection, ruvia::testing::TestContext& ruvia_ctx) {
     RUVIA_CHECK(connection.requestStop());
     RUVIA_CHECK(scheduler.beginRetirement(token));
+    std::optional<Scheduler::StepResult> close;
+    for (std::size_t turn = 0; turn < 1024; ++turn) {
+        const auto step = scheduler.step();
+        if (step.kind == Scheduler::StepKind::kIdle) {
+            break;
+        }
+        if (step.kind != Scheduler::StepKind::kTransportIntent) {
+            continue;
+        }
+        if (step.connection == token &&
+            step.intent.token.kind == Connection::TransportIntentKind::kConnectionClose) {
+            close = step;
+            break;
+        }
+        if (!scheduler.acknowledgeIntent(step.connection, step.intent.token)) {
+            throw std::runtime_error("scheduler intent handoff could not be settled");
+        }
+    }
+    RUVIA_CHECK(close.has_value());
+    if (!close) {
+        throw std::runtime_error("HTTP/3 close intent was not offered during retirement");
+    }
     co_await connection.join();
     RUVIA_CHECK(connection.takeOverTransportRetirement(
         {.epoch = token.epoch, .connectionGeneration = token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(token, close->intent.token));
+    while (connection.pendingTransportIntentCount() != 0) {
+        const auto pending = scheduler.step();
+        if (pending.kind != Scheduler::StepKind::kTransportIntent ||
+            !scheduler.acknowledgeIntent(token, pending.intent.token)) {
+            throw std::runtime_error("retirement intent debt could not be settled");
+        }
+    }
     RUVIA_CHECK(scheduler.retire(token));
 }
 
@@ -473,11 +753,12 @@ ruvia::Task<void> exerciseCapacityWakeFansOutAndPreservesReset(
     controlConsumer.join();
     RUVIA_CHECK_EQ(wake.notifications.load(std::memory_order_acquire), 1U);
     RUVIA_CHECK(scheduler.snapshot().capacityWakePending);
+    scheduler.notifyTransportCapacity();
     (void)outbound.drainReturns();
     RUVIA_CHECK(accepted(outbound.trySend(fillerId, filler)));
 
-    // The Any wake offers the CONTROL-blocked reset and still gives each
-    // pre-existing DATA waiter one finite recovery turn.
+    // The mailbox wake recovers response waiters; transport capacity independently
+    // recovers the reset while preserving each DATA waiter's finite recovery turn.
     const auto resetPlan = scheduler.step();
     RUVIA_CHECK(resetPlan.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(resetPlan.intent.streamResetErrorCode ==
@@ -549,7 +830,7 @@ ruvia::Task<void> exerciseCapacityWakeFansOutAndPreservesReset(
 
 ruvia::Task<void> exerciseControlOnlyResetCapacityWait(
     Fixture& fixture, const ruvia::WorkerHandle& worker,
-    ruvia::testing::TestContext& ruvia_ctx, bool lateReadyWake = false) {
+    ruvia::testing::TestContext& ruvia_ctx) {
     CrossThreadWake wake;
     CapacitySignal capacity({.context = &wake, .notify = &CrossThreadWake::notify});
     Scheduler scheduler(worker, 1, fixture.worker.resource(), &capacity);
@@ -582,39 +863,21 @@ ruvia::Task<void> exerciseControlOnlyResetCapacityWait(
                 ruvia::Http3ConnectionErrorCode::kMessageError);
     RUVIA_CHECK(scheduler.parkIntentForControlCapacity(
         reset.connection, reset.intent.token));
-    if (lateReadyWake) {
-        Control filler;
-        RUVIA_CHECK(outbound.tryReceiveControl(filler));
-        RUVIA_CHECK(!outbound.finishDrain());
-        RUVIA_CHECK(scheduler.armCapacityWait().status ==
-                    Scheduler::CapacityArmStatus::kReady);
-        // Model a callback queued during the registration recheck but delivered
-        // only after Ready. It must not erase that already established pass.
-        const auto notifier = capacity.notifier();
-        notifier.notify(notifier.context);
-        RUVIA_CHECK(scheduler.snapshot().capacityPassLanes != 0);
-    } else {
-        const auto armed = scheduler.armCapacityWait();
-        RUVIA_CHECK(armed.status == Scheduler::CapacityArmStatus::kArmed);
-        RUVIA_CHECK(armed.interest == Mailbox::CapacityInterest::kControl);
-
-        std::atomic<bool> consumerDone{};
-        std::thread consumer([&] {
-            Control control;
-            if (!outbound.tryReceiveControl(control) || outbound.finishDrain()) {
-                std::terminate();
-            }
-            consumerDone.store(true, std::memory_order_release);
-        });
-        co_await waitForAtomic(consumerDone, worker, fixture.stopToken);
-        consumer.join();
-    }
-    RUVIA_CHECK_EQ(wake.notifications.load(std::memory_order_acquire), 1U);
+    const auto noWait = scheduler.armCapacityWait();
+    RUVIA_CHECK(noWait.status == Scheduler::CapacityArmStatus::kNoBlockedWork);
+    RUVIA_CHECK(!scheduler.snapshot().capacityWaitArmed);
+    // Reset intents wait on the network owner's transport-capacity notification,
+    // not the unrelated response CONTROL lane.
+    scheduler.notifyTransportCapacity();
+    RUVIA_CHECK(scheduler.snapshot().capacityPassLanes != 0);
     const auto recovered = scheduler.step();
     RUVIA_CHECK(recovered.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(recovered.intent.token == reset.intent.token);
     RUVIA_CHECK(recovered.intent.streamResetErrorCode ==
                 ruvia::Http3ConnectionErrorCode::kMessageError);
+    Control filler;
+    RUVIA_CHECK(outbound.tryReceiveControl(filler));
+    RUVIA_CHECK(!outbound.finishDrain());
     const Control resetControl{.kind = Control::Kind::kStreamReset,
         .id = recovered.intent.token.id,
         .streamResetErrorCode = recovered.intent.streamResetErrorCode};
@@ -636,6 +899,7 @@ ruvia::Task<void> exerciseControlOnlyResetCapacityWait(
     RUVIA_CHECK(owner->takeOverTransportRetirement(
         {.epoch = registration->token.epoch,
             .connectionGeneration = registration->token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, close.intent.token));
     RUVIA_CHECK(scheduler.retire(registration->token));
     owner.reset();
     RUVIA_CHECK(outbound.stop());
@@ -704,6 +968,8 @@ ruvia::Task<void> exerciseLocalDeadlineWithoutCapacityNotifier(
     RUVIA_CHECK(reset.intent.streamResetErrorCode ==
                 ruvia::Http3ConnectionErrorCode::kRequestCancelled);
     RUVIA_CHECK(owner->requestStop());
+    RUVIA_CHECK(scheduler.step().kind == Scheduler::StepKind::kIdle);
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, reset.intent.token));
     const auto close = scheduler.step();
     RUVIA_CHECK(close.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(close.intent.token.kind == Connection::TransportIntentKind::kConnectionClose);
@@ -712,6 +978,7 @@ ruvia::Task<void> exerciseLocalDeadlineWithoutCapacityNotifier(
     RUVIA_CHECK(owner->takeOverTransportRetirement(
         {.epoch = registration->token.epoch,
             .connectionGeneration = registration->token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, close.intent.token));
     RUVIA_CHECK(scheduler.retire(registration->token));
     owner.reset();
     Control unused;
@@ -746,11 +1013,14 @@ ruvia::Task<void> exerciseStaleSlotActivationAfterJoin(
     RUVIA_CHECK(scheduler.attach(oldRegistration->token, *oldOwner));
     RUVIA_CHECK(!scheduler.reserve(kEpoch + 61, kGeneration + 61).has_value());
     RUVIA_CHECK(oldOwner->requestStop());
+    const auto oldClose = scheduler.step();
+    RUVIA_CHECK(oldClose.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(scheduler.beginRetirement(oldRegistration->token));
     co_await oldOwner->join();
     RUVIA_CHECK(oldOwner->takeOverTransportRetirement(
         {.epoch = oldRegistration->token.epoch,
             .connectionGeneration = oldRegistration->token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(oldRegistration->token, oldClose.intent.token));
     RUVIA_CHECK(scheduler.retire(oldRegistration->token));
     oldOwner.reset();
 
@@ -780,17 +1050,21 @@ ruvia::Task<void> exerciseStaleSlotActivationAfterJoin(
     RUVIA_CHECK_EQ(state.attachedConnections, std::size_t{1});
 
     RUVIA_CHECK(currentOwner->requestStop());
+    const auto currentClose = scheduler.step();
+    RUVIA_CHECK(currentClose.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(scheduler.beginRetirement(currentRegistration->token));
     co_await currentOwner->join();
     RUVIA_CHECK(currentOwner->takeOverTransportRetirement(
         {.epoch = currentRegistration->token.epoch,
             .connectionGeneration = currentRegistration->token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(
+        currentRegistration->token, currentClose.intent.token));
     RUVIA_CHECK(scheduler.retire(currentRegistration->token));
     currentOwner.reset();
     RUVIA_CHECK(outbound.stop());
 }
 
-ruvia::Task<void> exerciseArmedInterestTracksNewBlockedLane(Fixture& fixture,
+ruvia::Task<void> exerciseIntentDoesNotChangeArmedMailboxInterest(Fixture& fixture,
     const ruvia::WorkerHandle& worker, ruvia::testing::TestContext& ruvia_ctx) {
     CrossThreadWake wake;
     CapacitySignal capacity({.context = &wake, .notify = &CrossThreadWake::notify});
@@ -842,19 +1116,25 @@ ruvia::Task<void> exerciseArmedInterestTracksNewBlockedLane(Fixture& fixture,
     RUVIA_CHECK(scheduler.parkIntentForControlCapacity(reset.connection, reset.intent.token));
     const auto bothWait = scheduler.armCapacityWait();
     RUVIA_CHECK(bothWait.status == Scheduler::CapacityArmStatus::kArmed);
-    RUVIA_CHECK(bothWait.interest == Mailbox::CapacityInterest::kAny);
+    RUVIA_CHECK(bothWait.interest == Mailbox::CapacityInterest::kData);
 
     std::atomic<bool> consumerDone{};
-    std::thread controlConsumer([&] {
+    std::thread dataConsumer([&] {
+        Mailbox::BorrowedBlock block;
+        if (!outbound.tryReceive(block)) {
+            std::terminate();
+        }
+        block.release();
         Control control;
-        if (!outbound.tryReceiveControl(control)) {
+        if (!outbound.tryReceiveControl(control) || outbound.finishDrain()) {
             std::terminate();
         }
         consumerDone.store(true, std::memory_order_release);
     });
     co_await waitForAtomic(consumerDone, worker, fixture.stopToken);
-    controlConsumer.join();
+    dataConsumer.join();
     RUVIA_CHECK_EQ(wake.notifications.load(std::memory_order_acquire), 1U);
+    scheduler.notifyTransportCapacity();
     auto resumed = scheduler.step();
     std::size_t turn = 0;
     while (turn++ < 3 && resumed.kind != Scheduler::StepKind::kTransportIntent &&
@@ -946,6 +1226,7 @@ ruvia::Task<void> exerciseControlBurstOnePreservesIntentTurn(Fixture& fixture,
     RUVIA_CHECK(intent.kind == Scheduler::StepKind::kTransportIntent);
     RUVIA_CHECK(intent.intent.token.kind == Connection::TransportIntentKind::kStreamReset);
     RUVIA_CHECK(intent.connection == errorToken);
+    RUVIA_CHECK(scheduler.acknowledgeIntent(intent.connection, intent.intent.token));
 
     for (std::size_t i = 0; i < owners.size(); ++i) {
         co_await stopAndRetire(scheduler, registrations[i].token, *owners[i], ruvia_ctx);
@@ -1157,7 +1438,7 @@ RUVIA_TEST(http3WorkerMailboxSchedulerKeepsClaimedCapacityCallbackAliveAcrossSto
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3WorkerMailboxSchedulerWakesControlOnlyResetIntent) {
+RUVIA_TEST(http3WorkerMailboxSchedulerRecoversControlOnlyResetOnTransportCapacity) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -1171,7 +1452,7 @@ RUVIA_TEST(http3WorkerMailboxSchedulerWakesControlOnlyResetIntent) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3WorkerMailboxSchedulerReadyPassSurvivesLateCapacityWake) {
+RUVIA_TEST(http3WorkerMailboxSchedulerKeepsIntentOutOfMailboxCapacityInterest) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -1179,21 +1460,7 @@ RUVIA_TEST(http3WorkerMailboxSchedulerReadyPassSurvivesLateCapacityWake) {
     {
         Fixture fixture(worker, upstream);
         runWorkerTask(attachment,
-            exerciseControlOnlyResetCapacityWait(fixture, worker, ruvia_ctx, true));
-    }
-    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
-}
-
-RUVIA_TEST(http3WorkerMailboxSchedulerUpdatesArmedInterestForNewBlockedLane) {
-    auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
-    const auto worker = attachment.loop().handle();
-    ruvia::test::CountingMemoryResource upstream;
-    {
-        Fixture fixture(worker, upstream);
-        runWorkerTask(attachment,
-            exerciseArmedInterestTracksNewBlockedLane(fixture, worker, ruvia_ctx));
+            exerciseIntentDoesNotChangeArmedMailboxInterest(fixture, worker, ruvia_ctx));
     }
     RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
@@ -1236,6 +1503,195 @@ RUVIA_TEST(http3WorkerMailboxSchedulerRejectsStaleActivationAfterJoinedSlotReuse
         Fixture fixture(worker, upstream);
         runWorkerTask(attachment,
             exerciseStaleSlotActivationAfterJoin(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+ruvia::Task<void> runActivationWakeWindows(ruvia::WorkerRuntimeContext& runtime,
+    Fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
+    co_await exerciseActivationWakeWindow(runtime, fixture, true, ruvia_ctx);
+    co_await exerciseActivationWakeWindow(runtime, fixture, false, ruvia_ctx);
+    runtime.close();
+}
+
+RUVIA_TEST(http3WorkerMailboxSchedulerWakesLocalActivationBeforeAndAfterWaitArm) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext runtime(io, 32);
+    const auto worker = runtime.handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        std::promise<std::exception_ptr> taskExitPromise;
+        auto taskExit = taskExitPromise.get_future();
+        asio::co_spawn(io,
+            ruvia::asAwaitable(runActivationWakeWindows(runtime, fixture, ruvia_ctx)),
+            [&taskExitPromise](std::exception_ptr failure) {
+                taskExitPromise.set_value(std::move(failure));
+            });
+        std::promise<std::exception_ptr> runtimeExitPromise;
+        auto runtimeExit = runtimeExitPromise.get_future();
+        std::thread workerThread([&] {
+            std::exception_ptr failure;
+            try {
+                runtime.run();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            runtimeExitPromise.set_value(std::move(failure));
+        });
+        RUVIA_CHECK(taskExit.wait_for(5s) == std::future_status::ready);
+        if (taskExit.wait_for(0s) == std::future_status::ready) {
+            RUVIA_CHECK(taskExit.get() == nullptr);
+        }
+        RUVIA_CHECK(runtimeExit.wait_for(5s) == std::future_status::ready);
+        workerThread.join();
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3WorkerServerOwnerRollsBackBeforeLaunch) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext runtime(io, 32);
+    const auto worker = runtime.handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        Mailbox requestMailbox(1, 1, 1);
+        CrossThreadWake networkWake;
+        WorkerServerWakeBridge workerWake;
+        ConnectionChannel channel(
+            {.context = &networkWake, .notify = &CrossThreadWake::notify},
+            {.context = &workerWake, .notify = &WorkerServerWakeBridge::notify});
+        std::promise<std::exception_ptr> taskExitPromise;
+        auto taskExit = taskExitPromise.get_future();
+        asio::co_spawn(io,
+            ruvia::asAwaitable(exerciseWorkerServerPreLaunchRollback(
+                runtime, fixture, requestMailbox, channel, networkWake, ruvia_ctx)),
+            [&taskExitPromise](std::exception_ptr failure) {
+                taskExitPromise.set_value(std::move(failure));
+            });
+        std::promise<std::exception_ptr> runtimeExitPromise;
+        auto runtimeExit = runtimeExitPromise.get_future();
+        std::thread workerThread([&] {
+            std::exception_ptr failure;
+            try {
+                runtime.run();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            runtimeExitPromise.set_value(std::move(failure));
+        });
+        RUVIA_CHECK(taskExit.wait_for(5s) == std::future_status::ready);
+        if (taskExit.wait_for(0s) == std::future_status::ready) {
+            RUVIA_CHECK(taskExit.get() == nullptr);
+        }
+        RUVIA_CHECK(runtimeExit.wait_for(5s) == std::future_status::ready);
+        workerThread.join();
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3WorkerServerRunLoopReceivesNetworkCapacityNotifications) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext runtime(io, 32);
+    const auto worker = runtime.handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        Mailbox requestMailbox(1, 1, 1);
+        CrossThreadWake networkWake;
+        WorkerServerWakeBridge workerWake;
+        ConnectionChannel channel(
+            {.context = &networkWake, .notify = &CrossThreadWake::notify},
+            {.context = &workerWake, .notify = &WorkerServerWakeBridge::notify});
+        std::atomic<bool> installed{};
+        std::atomic<bool> stopRequested{};
+        std::promise<std::exception_ptr> taskExitPromise;
+        auto taskExit = taskExitPromise.get_future();
+        asio::co_spawn(io, ruvia::asAwaitable(runProductionWorkerServer(runtime, fixture, requestMailbox, channel, networkWake, workerWake, installed, stopRequested, ruvia_ctx)),
+            [&taskExitPromise](std::exception_ptr failure) {
+                taskExitPromise.set_value(std::move(failure));
+            });
+        std::promise<std::exception_ptr> runtimeExitPromise;
+        auto runtimeExit = runtimeExitPromise.get_future();
+        std::thread workerThread([&] {
+            std::exception_ptr failure;
+            try {
+                runtime.run();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            runtimeExitPromise.set_value(std::move(failure));
+        });
+
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        ConnectionChannel::Identity identity;
+        bool grantReceived = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto status = channel.peekGrant(identity);
+            if (status == ConnectionChannel::Status::kReceived) {
+                grantReceived = true;
+                break;
+            }
+            if (status != ConnectionChannel::Status::kEmpty) {
+                break;
+            }
+            std::this_thread::sleep_for(1ms);
+        }
+        // Grant is published inside install(), before the parent task stores
+        // installed after spawning run(). Observe both milestones separately.
+        while (!installed.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(1ms);
+        }
+        RUVIA_CHECK(installed.load(std::memory_order_acquire));
+        RUVIA_CHECK(grantReceived);
+        if (grantReceived) {
+            RUVIA_CHECK(channel.revokeGrant() == ConnectionChannel::Status::kPublished);
+            ConnectionChannel::RevokeAck revokeAck;
+            bool revokeReceived = false;
+            while (std::chrono::steady_clock::now() < deadline) {
+                const auto status = channel.receiveRevokeAck(revokeAck);
+                if (status == ConnectionChannel::Status::kReceived) {
+                    revokeReceived = revokeAck.identity == identity;
+                    break;
+                }
+                if (status != ConnectionChannel::Status::kEmpty) {
+                    break;
+                }
+                std::this_thread::sleep_for(1ms);
+            }
+            RUVIA_CHECK(revokeReceived);
+            auto closeStatus = ConnectionChannel::Status::kWrongState;
+            while (revokeReceived && std::chrono::steady_clock::now() < deadline) {
+                closeStatus = channel.closeNetworkPublications(identity);
+                if (closeStatus == ConnectionChannel::Status::kPublished) {
+                    break;
+                }
+                if (closeStatus != ConnectionChannel::Status::kWrongState) {
+                    break;
+                }
+                std::this_thread::sleep_for(1ms);
+            }
+            RUVIA_CHECK(closeStatus == ConnectionChannel::Status::kPublished);
+        }
+        stopRequested.store(true, std::memory_order_release);
+        if (auto* server = workerWake.server.load(std::memory_order_acquire);
+            server != nullptr) {
+            (void)server->notification().notify();
+        }
+        RUVIA_CHECK(taskExit.wait_for(5s) == std::future_status::ready);
+        if (taskExit.wait_for(0s) == std::future_status::ready) {
+            RUVIA_CHECK(taskExit.get() == nullptr);
+        }
+        runtime.close();
+        RUVIA_CHECK(runtimeExit.wait_for(5s) == std::future_status::ready);
+        workerThread.join();
+        RUVIA_CHECK(channel.readyToDestroy());
+        RUVIA_CHECK(workerWake.notifications.load(std::memory_order_acquire) >= 2U);
     }
     RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());

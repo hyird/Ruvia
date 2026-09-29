@@ -5,6 +5,8 @@
 // Routing: dispatching into a route and turning failures into responses.
 
 RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
+    RUVIA_CHECK_EQ(ruvia::WebSocketLifecycleOptions{}.peerTransportFinTimeout,
+        std::chrono::seconds(5));
     ruvia::detail::Router invalidRouter;
     auto& invalid = ruvia::detail::RouterImpl::from(invalidRouter);
     ruvia::WebSocketRouteConfig invalidOptions;
@@ -12,6 +14,18 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     bool rejected = false;
     try {
         invalid.registerWebSocketRoute(HttpKnownMethod::kGet, path("/invalid-ws"),
+            ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+            std::span<const ControllerMiddlewareDescriptor>{},
+            std::span<const ControllerMiddlewareDescriptor>{}, invalidOptions);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    invalidOptions.lifecycle.closeHandshakeTimeout.reset();
+    invalidOptions.lifecycle.peerTransportFinTimeout = std::chrono::milliseconds(0);
+    rejected = false;
+    try {
+        invalid.registerWebSocketRoute(HttpKnownMethod::kGet, path("/invalid-ws-fin"),
             ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
             std::span<const ControllerMiddlewareDescriptor>{},
             std::span<const ControllerMiddlewareDescriptor>{}, invalidOptions);
@@ -49,6 +63,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     ruvia::WebSocketRouteConfig options;
     options.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1234);
+    options.lifecycle.peerTransportFinTimeout = std::chrono::milliseconds(2345);
     options.deflate = {.compressionLevel = 9, .contextTakeover = true};
     impl.registerWebSocketRoute(HttpKnownMethod::kGet, path("/ws"),
         ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
@@ -61,11 +76,14 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     const auto* endpoint = resolved->route().endpoint().webSocket();
     RUVIA_CHECK(endpoint != nullptr);
     RUVIA_CHECK_EQ(endpoint->lifecycle().closeHandshakeTimeout->count(), std::int64_t{1234});
+    RUVIA_CHECK_EQ(endpoint->lifecycle().peerTransportFinTimeout.count(), std::int64_t{2345});
     RUVIA_CHECK_EQ(endpoint->deflate().compressionLevel, 9);
     RUVIA_CHECK(endpoint->deflate().contextTakeover);
     const auto cloned = resolved->route().endpoint().clone(std::pmr::get_default_resource());
     RUVIA_CHECK_EQ(cloned.webSocket()->deflate().compressionLevel, 9);
     RUVIA_CHECK(cloned.webSocket()->deflate().contextTakeover);
+    RUVIA_CHECK_EQ(cloned.webSocket()->lifecycle().peerTransportFinTimeout.count(),
+        std::int64_t{2345});
 }
 
 RUVIA_TEST(head_only_stream_completion_is_success_not_error) {

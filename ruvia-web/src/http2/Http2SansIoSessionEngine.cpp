@@ -126,8 +126,15 @@ bool Http2SansIoSessionEngine::workerRunning() const noexcept {
 }
 
 void Http2SansIoSessionEngine::setInactivityPhase() noexcept {
-    session_.scannerEntry().setPhase(
-        http2SansIoInactivityPhase(connection_.headerBlockInProgress(), streamRuntimes_.size()));
+    session_.scannerEntry().setPhase(http2SansIoInactivityPhase(
+        connection_.headerBlockInProgress(), streamRuntimes_.size(),
+        streamRuntimes_.webSocketTunnelCount() != 0));
+}
+
+void Http2SansIoSessionEngine::removeStreamRuntime(std::uint32_t streamId) noexcept {
+    if (streamRuntimes_.remove(streamId)) {
+        setInactivityPhase();
+    }
 }
 
 void Http2SansIoSessionEngine::touchActivity() noexcept {
@@ -319,6 +326,10 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     if (submittedHandshake == nullptr) {
                         co_return;
                     }
+                    if (!streamRuntimes_.markWebSocketTunnel(streamId)) {
+                        std::terminate();
+                    }
+                    setInactivityPhase();
                     ContextAccess::markWebSocketHandshakeStarted(context);
                     wakeWriter();
                     webSocketConnection.emplace(
@@ -445,7 +456,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOne(std::uint32_t streamId) {
             (void)connection_.release(std::move(*requestHead));
         }
     }
-    (void)streamRuntimes_.remove(streamId);
+    removeStreamRuntime(streamId);
     wakeWriter();
 }
 
@@ -474,7 +485,7 @@ bool Http2SansIoSessionEngine::admitStream(std::uint32_t streamId) {
         if (counted) {
             --activeHandlerTasks_;
         }
-        (void)streamRuntimes_.remove(streamId);
+        removeStreamRuntime(streamId);
         return false;
     }
     return true;
@@ -488,7 +499,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         if (signal != nullptr) {
             signal->wake();
         } else {
-            (void)streamRuntimes_.remove(streamId);
+            removeStreamRuntime(streamId);
         }
         wakeWriter();
     };
@@ -524,7 +535,7 @@ void Http2SansIoSessionEngine::drainEvents() {
                 if (status != Http2SubmitStatus::kClosed) {
                     resetEventStream(streamId, Http2ErrorCode::kInternalError);
                 } else {
-                    (void)streamRuntimes_.remove(streamId);
+                    removeStreamRuntime(streamId);
                 }
                 return;
             }
@@ -631,7 +642,7 @@ void Http2SansIoSessionEngine::drainEvents() {
         if (signal != nullptr) {
             signal->wake();
         } else {
-            (void)streamRuntimes_.remove(streamId);
+            removeStreamRuntime(streamId);
         }
     };
 

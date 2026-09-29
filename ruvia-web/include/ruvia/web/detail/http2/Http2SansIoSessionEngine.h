@@ -70,6 +70,7 @@ private:
     [[nodiscard]] Task<void> dispatchOneInner(std::uint32_t streamId);
     [[nodiscard]] Task<void> dispatchOne(std::uint32_t streamId);
     [[nodiscard]] bool admitStream(std::uint32_t streamId);
+    void removeStreamRuntime(std::uint32_t streamId) noexcept;
     void resetStreamNoThrow(std::uint32_t streamId, Http2ErrorCode error) noexcept;
 
     asio::any_io_executor executor_;

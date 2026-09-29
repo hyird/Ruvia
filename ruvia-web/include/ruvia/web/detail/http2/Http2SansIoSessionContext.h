@@ -47,9 +47,16 @@ private:
 };
 
 [[nodiscard]] inline ruvia::ConnectionScanner::Phase http2SansIoInactivityPhase(
-    bool headerBlockInProgress, std::size_t activeRuntimeCount) noexcept {
+    bool headerBlockInProgress, std::size_t activeRuntimeCount,
+    bool webSocketTunnelActive) noexcept {
     if (headerBlockInProgress) {
         return ruvia::ConnectionScanner::Phase::kReadingInitial;
+    }
+    if (webSocketTunnelActive) {
+        // A successful RFC 8441 tunnel is long-lived, not a stalled request body.
+        // Keep the header timeout above so another stream's incomplete header block
+        // cannot hold the connection open indefinitely.
+        return ruvia::ConnectionScanner::Phase::kLongLived;
     }
     return activeRuntimeCount == 0 ? ruvia::ConnectionScanner::Phase::kIdle
                                    : ruvia::ConnectionScanner::Phase::kReadingPayload;

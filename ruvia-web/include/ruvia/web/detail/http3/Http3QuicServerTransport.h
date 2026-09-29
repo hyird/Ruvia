@@ -26,6 +26,7 @@ struct Http3QuicServerTransportConfig final {
     std::size_t maxActiveConnections{128};
     std::size_t maxLifetimePeerStreams{Http3QuicStreamSet::kMaxLifetimePeerStreams};
     std::chrono::milliseconds handshakeTimeout{10000};
+    // Advertised on the listener and inherited by every child before handshake.
     // nullopt maps to QUIC's explicit zero (no idle timeout).
     std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
 };

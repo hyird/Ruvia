@@ -1,0 +1,3 @@
+# Preserve the pinned vcpkg port and its patch hunks byte-for-byte.
+*.patch whitespace=-trailing-space,-space-before-tab
+windows/portfile.cmake whitespace=-trailing-space

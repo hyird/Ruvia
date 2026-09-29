@@ -40,8 +40,12 @@ namespace ruvia::detail {
     std::string_view version;
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (HttpRequestAccess::headerKind(request, i) ==
-            std::to_underlying(RequestHeaderKind::kSecWebSocketVersion)) {
+        const auto kind = static_cast<RequestHeaderKind>(HttpRequestAccess::headerKind(request, i));
+        if (kind == RequestHeaderKind::kSecWebSocketKey ||
+            httpAsciiEqualsIgnoreCase(headers[i].name(), "sec-websocket-accept")) {
+            return WebSocketHandshakeValidationResultAccess::invalidRequest();
+        }
+        if (kind == RequestHeaderKind::kSecWebSocketVersion) {
             version = headers[i].value();
             ++versionCount;
         }

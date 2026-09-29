@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpRequestTarget.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -130,6 +131,7 @@ struct DecodeState final {
     std::size_t maxSize;
     bool ordinarySeen{false};
     bool methodSeen{false};
+    bool protocolSeen{false};
     bool schemeSeen{false};
     bool authoritySeen{false};
     bool pathSeen{false};
@@ -183,6 +185,11 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
                 if (!isToken(field.value) || !setText(state.head.method, state.methodSeen)) {
                     return fail(state);
                 }
+            } else if (field.name == ":protocol") {
+                if (!isToken(field.value) ||
+                    !setText(state.head.protocol, state.protocolSeen)) {
+                    return fail(state);
+                }
             } else if (field.name == ":scheme") {
                 if (!validScheme(field.value) || !setText(state.head.scheme, state.schemeSeen)) {
                     return fail(state);
@@ -227,17 +234,16 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     }
     if (field.name == "host") {
         if (state.kind != Http3MessageHeadKind::kRequest || field.value.empty() ||
-            (state.hostSeen && state.head.authority != field.value)) {
-            return fail(state);
-        }
-        if (state.hostSeen && state.host != field.value) {
+            state.hostSeen ||
+            (state.authoritySeen && state.head.authority != field.value)) {
             return fail(state);
         }
         state.host.assign(field.value);
         state.hostSeen = true;
-        if (state.authoritySeen && state.head.authority != field.value) {
-            return fail(state);
-        }
+    }
+    if (field.name == "origin" && state.kind == Http3MessageHeadKind::kRequest &&
+        !detail::isValidHttpOriginFieldValue(field.value)) {
+        return fail(state);
     }
     if (field.name == "content-length") {
         std::string_view remaining = field.value;
@@ -278,6 +284,7 @@ Http3MessageHeader::Http3MessageHeader(
 
 Http3MessageHead::Http3MessageHead(std::pmr::memory_resource* resource)
     : method(resource),
+      protocol(resource),
       scheme(resource),
       authority(resource),
       path(resource),
@@ -308,14 +315,21 @@ std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
             return std::unexpected(Http3MessageHeadError::kMessageError);
         }
         if (head.method == "CONNECT") {
-            const auto tunnel = detail::parseHttpAuthority(head.authority);
-            if (state.schemeSeen || state.pathSeen || !state.authoritySeen || !tunnel ||
-                tunnel->portKind() != detail::HttpAuthorityPortKind::kValue ||
-                *tunnel->port() == 0) {
-                return std::unexpected(Http3MessageHeadError::kMessageError);
+            if (state.protocolSeen) {
+                if (!state.schemeSeen || !state.authoritySeen || !state.pathSeen ||
+                    !validPath(head.path, head.method) || !validAuthority(head.authority, head.scheme)) {
+                    return std::unexpected(Http3MessageHeadError::kMessageError);
+                }
+            } else {
+                const auto tunnel = detail::parseHttpAuthority(head.authority);
+                if (state.schemeSeen || state.pathSeen || !state.authoritySeen || !tunnel ||
+                    tunnel->portKind() != detail::HttpAuthorityPortKind::kValue ||
+                    *tunnel->port() == 0) {
+                    return std::unexpected(Http3MessageHeadError::kMessageError);
+                }
             }
         } else {
-            if (!state.schemeSeen || !state.pathSeen || !validPath(head.path, head.method)) {
+            if (state.protocolSeen || !state.schemeSeen || !state.pathSeen || !validPath(head.path, head.method)) {
                 return std::unexpected(Http3MessageHeadError::kMessageError);
             }
             if (state.authoritySeen && state.hostSeen && head.authority != state.host) {

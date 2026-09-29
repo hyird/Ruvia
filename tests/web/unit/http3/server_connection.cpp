@@ -1,20 +1,21 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
-#include <asio/io_context.hpp>
-
 #include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
@@ -25,9 +26,12 @@
 #include "ruvia/http/Http3Settings.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallbackRef.h"
-#include "ruvia/web/detail/http3/Http3BufferedServerConnection.h"
+#include "ruvia/web/detail/http3/Http3NetworkRuntime.h"
+#include "ruvia/web/detail/http3/Http3ServerConnection.h"
+#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 #include "memory_resource_fixture.h"
 #include "routing_fixture.h"
@@ -36,8 +40,60 @@
 
 namespace ruvia::detail {
 
-struct Http3BufferedServerConnectionResetIntentTestAccess final {
-    using Owner = Http3BufferedServerConnection;
+struct Http3NetworkRuntimeTestAccess final {
+    using Network = Http3NetworkRuntime;
+    using Stream = Network::Stream;
+    using Connection = Network::Connection;
+    using TunnelResult = Network::TunnelEstablishedResult;
+
+    static Connection makeConnection(std::pmr::memory_resource* resource,
+        Http3ServerConnectionChannel::Identity identity) {
+        Connection connection(resource);
+        connection.identity = identity;
+        connection.streams.reserve(8);
+        return connection;
+    }
+
+    static Stream& addRequestStream(Connection& connection, std::uint64_t id) {
+        connection.streams.emplace_back(connection.streams.get_allocator().resource());
+        auto& stream = connection.streams.back();
+        stream.id = id;
+        stream.requestStream = true;
+        stream.receivePhase = Stream::ReceivePhase::kBody;
+        return stream;
+    }
+
+    static TunnelResult acceptTunnelEstablished(Connection& connection,
+        const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept {
+        return Network::acceptTunnelEstablished(connection, control, acceptedWireBytes);
+    }
+
+    static bool confirmTunnelEstablished(Connection& connection,
+        std::uint64_t streamId, std::uint64_t acceptedWireBytes) noexcept {
+        return Network::confirmTunnelEstablished(connection, streamId, acceptedWireBytes);
+    }
+
+    static void notePeerFin(Connection& connection, std::uint64_t streamId) noexcept {
+        Network::notePeerFin(connection, streamId);
+    }
+
+    static void noteInputReset(Connection& connection, std::uint64_t streamId) noexcept {
+        Network::noteInputReset(connection, streamId);
+    }
+
+    static void completeInputTerminal(Connection& connection,
+        std::uint64_t streamId) noexcept {
+        Network::completeInputTerminal(connection, streamId);
+    }
+
+    static void installFrameTracker(Stream& stream, std::pmr::memory_resource* resource) {
+        stream.frameTracker = makePmrObject<Http3StreamFrames>(resource,
+            Http3StreamKind::kRequest, resource);
+    }
+};
+
+struct Http3ServerConnectionResetIntentTestAccess final {
+    using Owner = Http3ServerConnection;
 
     static bool enqueueLocal(Owner& owner, std::uint64_t streamId) noexcept {
         return enqueue(owner, streamId, Http3ConnectionErrorCode::kRequestCancelled,
@@ -54,7 +110,11 @@ private:
         Http3ConnectionErrorCode errorCode, Owner::ResetIntentOrigin origin) noexcept {
         bool created = false;
         auto* slot = owner.findOrCreateRequestSlot(streamId, created);
-        return slot != nullptr && owner.enqueueResetIntent(*slot, errorCode, origin);
+        if (slot == nullptr || !owner.enqueueResetIntent(*slot, errorCode, origin)) {
+            return false;
+        }
+        owner.notifyActivation();
+        return true;
     }
 };
 
@@ -62,7 +122,7 @@ private:
 
 namespace {
 
-using Connection = ruvia::detail::Http3BufferedServerConnection;
+using Connection = ruvia::detail::Http3ServerConnection;
 using Control = ruvia::detail::Http3StreamControl;
 using Mailbox = ruvia::detail::Http3StreamMailbox;
 using MessageId = ruvia::detail::Http3StreamMessageId;
@@ -108,12 +168,27 @@ struct HandlerState final {
     bool slowStartedObserved{};
     std::string bodySeen;
     std::string largeResponseHeader;
+    ruvia::WorkerSignal* webSocketStarted{};
+    bool webSocketStartedObserved{};
+    bool webSocketHandlerFinished{};
     std::size_t handlerCalls{};
+    std::atomic<std::size_t>* runtimeHandlerCalls{};
 };
+
+ruvia::Task<void> webSocketHandler(void* raw, ruvia::Context& context) {
+    auto& state = *static_cast<HandlerState*>(raw);
+    state.webSocketStartedObserved = true;
+    state.webSocketStarted->notify();
+    co_await context.webSocket().close();
+    state.webSocketHandlerFinished = true;
+}
 
 ruvia::Task<ruvia::HttpResponse> requestHandler(void* raw, ruvia::Context& context) {
     auto& state = *static_cast<HandlerState*>(raw);
     ++state.handlerCalls;
+    if (state.runtimeHandlerCalls != nullptr) {
+        state.runtimeHandlerCalls->fetch_add(1, std::memory_order_relaxed);
+    }
     const auto path = context.req().path();
     if (path == "/throw") {
         throw std::runtime_error("buffered HTTP/3 route failure");
@@ -158,6 +233,11 @@ struct Routes final {
         add(ruvia::HttpKnownMethod::kGet, "/file");
         add(ruvia::HttpKnownMethod::kPost, "/body");
         add(ruvia::HttpKnownMethod::kPost, "/slow-body");
+        implementation.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
+            routing_test::path("/socket"),
+            ruvia::detail::RouteStreamHandler(&handlers, &webSocketHandler),
+            std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+            std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
         implementation.finalize();
     }
 
@@ -177,12 +257,16 @@ struct Fixture final {
     ruvia::StopToken workerStop;
     ruvia::detail::ContextServices services;
     ruvia::detail::HttpServerOptions options;
+    ruvia::ConnectionScanner scanner;
+    asio::any_io_executor executor;
 
     Fixture(const ruvia::WorkerHandle& workerHandle,
         std::pmr::memory_resource& upstream)
         : worker(upstream),
           workerStop(workerStopSource.token()),
-          services(workerHandle, workerStop) {}
+          services(workerHandle, workerStop),
+          scanner(workerHandle, {.scanInterval = 2ms}),
+          executor(asio::system_executor{}) {}
 };
 
 std::string frame(std::uint64_t type, std::string_view payload) {
@@ -257,6 +341,40 @@ Connection::EventResult routeRequest(Connection& connection, Mailbox& inbound,
     Mailbox::BorrowedBlock block;
     if (!inbound.tryReceive(block) || block.id().streamId != id.streamId) {
         throw std::runtime_error("HTTP/3 test data block is missing");
+    }
+    auto result = connection.acceptData(block);
+    block.release();
+    (void)inbound.drainReturns();
+    (void)inbound.finishDrain();
+    return result;
+}
+
+Connection::EventResult acceptWireBytes(Connection& connection, Mailbox& inbound,
+    MessageId id, std::span<const char> wire);
+
+Connection::EventResult acceptTunnelHead(Connection& connection, Mailbox& inbound,
+    ruvia::WorkerMemory& worker, MessageId id) {
+    const std::array fields{
+        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+        ruvia::Http3FieldSectionFieldView{":protocol", "websocket"},
+        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+        ruvia::Http3FieldSectionFieldView{":path", "/socket"},
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", "13"}};
+    const auto encoded = ruvia::encodeHttp3FieldSection(fields, worker.resource());
+    if (!encoded) {
+        throw std::runtime_error("HTTP/3 WebSocket field section encoding failed");
+    }
+    const auto wire = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
+        std::string_view(encoded->data(), encoded->size()));
+    const auto sent = inbound.trySend(id,
+        std::as_bytes(std::span(wire.data(), wire.size())));
+    if (!accepted(sent)) {
+        throw std::runtime_error("HTTP/3 WebSocket request mailbox is full");
+    }
+    Mailbox::BorrowedBlock block;
+    if (!inbound.tryReceive(block)) {
+        throw std::runtime_error("HTTP/3 WebSocket request block is missing");
     }
     auto result = connection.acceptData(block);
     block.release();
@@ -409,6 +527,22 @@ ruvia::Task<bool> waitForSlowStart(Fixture& fixture,
     co_return fixture.routes.handlers.slowStartedObserved;
 }
 
+void requireWatchdogSuccess(ruvia::testing::TestContext& ruvia_ctx, bool succeeded);
+
+ruvia::Task<bool> waitForWebSocketStart(Fixture& fixture,
+    const ruvia::WorkerHandle& worker, const ruvia::StopToken& stopToken) {
+    for (std::size_t attempt = 0; attempt < 2000; ++attempt) {
+        if (fixture.routes.handlers.webSocketStartedObserved) {
+            co_return true;
+        }
+        if (co_await ruvia::sleepFor(worker, 1ms, stopToken) !=
+            ruvia::TimerSleepResult::kElapsed) {
+            break;
+        }
+    }
+    co_return fixture.routes.handlers.webSocketStartedObserved;
+}
+
 ruvia::Task<bool> waitForTaskCount(Connection& connection, std::size_t count,
     const ruvia::WorkerHandle& worker, const ruvia::StopToken& stopToken) {
     for (std::size_t attempt = 0; attempt < 2000; ++attempt) {
@@ -435,8 +569,14 @@ void simulateGlobalStopTakeover(Connection& connection) {
     if (!closeIntent ||
         closeIntent->token.kind != Connection::TransportIntentKind::kConnectionClose ||
         !connection.takeOverTransportRetirement({.epoch = closeIntent->token.id.epoch,
-            .connectionGeneration = closeIntent->token.id.connectionGeneration})) {
+            .connectionGeneration = closeIntent->token.id.connectionGeneration}) ||
+        !connection.ackTransportIntent(closeIntent->token)) {
         throw std::runtime_error("test channel lifecycle owner failed to take over HTTP/3 retirement");
+    }
+    while (const auto intent = connection.peekTransportIntent()) {
+        if (!connection.ackTransportIntent(intent->token)) {
+            throw std::runtime_error("test channel lifecycle owner failed to settle HTTP/3 intent");
+        }
     }
 }
 
@@ -737,7 +877,7 @@ ruvia::Task<void> exercisePublicationDeadlineForLane(Fixture& fixture,
     const auto finalSize = requestWire(fixture.worker, method, path).size();
     const auto lateFin = connection.acceptControl(
         {Control::Kind::kStreamFin, id, static_cast<std::uint64_t>(finalSize)});
-    RUVIA_CHECK(lateFin.input.status == Connection::Input::Status::kDuplicateFin);
+    RUVIA_CHECK(lateFin.input.status == Connection::Input::Status::kClosedStream);
     RUVIA_CHECK(!connection.transportCloseRequired());
     RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
 
@@ -830,7 +970,7 @@ ruvia::Task<void> exerciseHandlerDeadlineCancellation(Fixture& fixture,
                 ruvia::Http3ConnectionErrorCode::kRequestCancelled);
     const auto lateFin = connection.acceptControl({Control::Kind::kStreamFin, id,
         static_cast<std::uint64_t>(requestWire(fixture.worker, "GET", "/slow").size())});
-    RUVIA_CHECK(lateFin.input.status == Connection::Input::Status::kDuplicateFin);
+    RUVIA_CHECK(lateFin.input.status == Connection::Input::Status::kClosedStream);
     RUVIA_CHECK(fixture.routes.handlers.slowObservedStop);
     RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
     RUVIA_CHECK(!connection.transportCloseRequired());
@@ -848,6 +988,185 @@ ruvia::Task<void> exerciseDeadlineActivationAndHandlerCancellation(
     co_await exercisePublicationDeadlineForLane(
         fixture, worker, true, kGeneration + 82, ruvia_ctx);
     co_await exerciseHandlerDeadlineCancellation(fixture, worker, ruvia_ctx);
+}
+
+ruvia::Task<void> exerciseWebSocketFinCancellation(Fixture& fixture,
+    const ruvia::WorkerHandle& worker, ruvia::testing::TestContext& ruvia_ctx,
+    bool requestStopAfterFin, bool peerReset, bool deadline = false) {
+    if (deadline) {
+        fixture.options.deadline = ruvia::DeadlineConfig{.handler = 250ms};
+    }
+    TestActivationSignal scheduler(worker);
+    ruvia::WorkerSignal started(worker);
+    fixture.routes.handlers.webSocketStartedObserved = false;
+    fixture.routes.handlers.webSocketHandlerFinished = false;
+    fixture.routes.handlers.webSocketStarted = &started;
+    Mailbox inbound(8, 8, 8, fixture.worker.resource());
+    Mailbox outbound(8, 8, 8, fixture.worker.resource());
+    const auto generation = kGeneration + (requestStopAfterFin ? 90 : peerReset ? 91
+                                                                                : 92);
+    Connection connection(fixture.routes.implementation.routeTable(), fixture.worker,
+        fixture.services, fixture.options, outbound, scheduler,
+        {.epoch = kEpoch, .connectionGeneration = generation, .maxTrackedStreams = 8, .connectionScanner = &fixture.scanner, .executor = fixture.executor});
+    const MessageId id{kEpoch, generation, 0};
+    const std::array requestFields{
+        ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+        ruvia::Http3FieldSectionFieldView{":protocol", "websocket"},
+        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+        ruvia::Http3FieldSectionFieldView{":path", "/socket"},
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", "13"}};
+    const auto encodedHead = ruvia::encodeHttp3FieldSection(requestFields, fixture.worker.resource());
+    RUVIA_CHECK(encodedHead.has_value());
+    const auto requestHead = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
+        std::string_view(encodedHead->data(), encodedHead->size()));
+    const auto request = acceptTunnelHead(connection, inbound, fixture.worker, id);
+    RUVIA_CHECK(request.status == Connection::EventStatus::kDispatched);
+    for (std::size_t attempt = 0;
+        attempt < 2000 && !fixture.routes.handlers.webSocketStartedObserved; ++attempt) {
+        if (connection.readyRequestCount() != 0) {
+            const auto publication = connection.publishOne(kAllWorkLanes);
+            RUVIA_CHECK(publication.status == Connection::PublishStatus::kAttempted);
+            std::array<PublishedWire, 6> handshake{};
+            drainAll(outbound, handshake);
+            (void)connection.reactivateBlocked({.data = true, .control = true});
+        } else if (co_await ruvia::sleepFor(worker, 1ms, fixture.workerStop) !=
+                   ruvia::TimerSleepResult::kElapsed) {
+            break;
+        }
+    }
+    requireWatchdogSuccess(ruvia_ctx,
+        co_await waitForWebSocketStart(fixture, worker, fixture.workerStop));
+
+    constexpr std::array<char, 8> maskedClose{
+        static_cast<char>(0x88), static_cast<char>(0x82), char{0x11}, char{0x22},
+        char{0x33}, char{0x44}, static_cast<char>(0x12), static_cast<char>(0xca)};
+    const auto tunnelData = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData),
+        std::string_view(maskedClose.data(), maskedClose.size()));
+    const auto acceptedClose = acceptWireBytes(connection, inbound, id,
+        std::span<const char>(tunnelData.data(), tunnelData.size()));
+    RUVIA_CHECK(acceptedClose.status == Connection::EventStatus::kAccepted);
+    bool localFinPublished = false;
+    std::array<PublishedWire, 6> tunnelWire{};
+    for (std::size_t attempt = 0; attempt < 2000 && !localFinPublished; ++attempt) {
+        if (connection.readyRequestCount() == 0) {
+            if (co_await ruvia::sleepFor(worker, 1ms, fixture.workerStop) !=
+                ruvia::TimerSleepResult::kElapsed) {
+                break;
+            }
+            continue;
+        }
+        const auto publication = connection.publishOne(kAllWorkLanes);
+        if (publication.status == Connection::PublishStatus::kNoReadyRequest) {
+            (void)co_await ruvia::sleepFor(worker, 1ms, fixture.workerStop);
+            continue;
+        }
+        if (publication.status != Connection::PublishStatus::kAttempted) {
+            break;
+        }
+        localFinPublished =
+            publication.publication.status == Connection::Dispatch::PublishStatus::kFinPublished ||
+            publication.publication.status == Connection::Dispatch::PublishStatus::kComplete;
+        drainAll(outbound, tunnelWire);
+        (void)connection.reactivateBlocked({.data = true, .control = true});
+    }
+    if (!localFinPublished) {
+        RUVIA_CHECK(connection.requestStop());
+        requireWatchdogSuccess(ruvia_ctx,
+            co_await waitForTaskCount(connection, 0, worker, fixture.workerStop));
+        co_await connection.join();
+        simulateGlobalStopTakeover(connection);
+        RUVIA_CHECK(localFinPublished);
+        co_return;
+    }
+    RUVIA_CHECK(localFinPublished);
+    RUVIA_CHECK(connection.requestInfo(id.streamId).status == Connection::RequestStatus::kPublished);
+    RUVIA_CHECK_EQ(connection.activeTaskCount(), std::size_t{1});
+
+    if (requestStopAfterFin) {
+        RUVIA_CHECK(connection.requestStop());
+    } else if (peerReset) {
+        const auto reset = connection.acceptControl({Control::Kind::kStreamReset, id,
+            static_cast<std::uint64_t>(tunnelData.size() + requestHead.size())});
+        RUVIA_CHECK(reset.status == Connection::EventStatus::kStreamCancelled);
+    } else if (!deadline) {
+        const auto peerFin = connection.acceptControl({Control::Kind::kStreamFin, id,
+            static_cast<std::uint64_t>(tunnelData.size() + requestHead.size())});
+        RUVIA_CHECK(peerFin.status == Connection::EventStatus::kAccepted);
+        RUVIA_CHECK(peerFin.input.status == Connection::Input::Status::kFinished);
+    }
+    const bool joined =
+        co_await waitForTaskCount(connection, 0, worker, fixture.workerStop);
+    requireWatchdogSuccess(ruvia_ctx, joined);
+    if (deadline) {
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{1});
+        const auto retirement = connection.peekTransportIntent();
+        RUVIA_CHECK(retirement.has_value());
+        if (!retirement) {
+            throw std::runtime_error("deadline after FIN did not retain stream retirement intent");
+        }
+        RUVIA_CHECK(retirement->token.kind == Connection::TransportIntentKind::kStreamReset);
+        RUVIA_CHECK_EQ(retirement->token.id.streamId, id.streamId);
+    } else if (peerReset) {
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
+    }
+    if (deadline) {
+        const auto lateFin = connection.acceptControl({Control::Kind::kStreamFin, id,
+            static_cast<std::uint64_t>(requestHead.size() + tunnelData.size())});
+        RUVIA_CHECK(lateFin.input.status == Connection::Input::Status::kClosedStream);
+        std::array<PublishedWire, 6> discarded{};
+        drainAll(outbound, discarded);
+        const MessageId siblingId{kEpoch, generation, 4};
+        const auto sibling = routeRequest(connection, inbound, fixture.worker, siblingId,
+            "GET", "/first");
+        RUVIA_CHECK(sibling.status == Connection::EventStatus::kDispatched);
+        co_await waitForReady(connection, 1, worker, fixture.workerStop);
+        bool siblingPublished = false;
+        for (std::size_t attempt = 0; attempt < 32 && !siblingPublished; ++attempt) {
+            const auto publication = connection.publishOne(kAllWorkLanes);
+            RUVIA_CHECK(publication.status == Connection::PublishStatus::kAttempted);
+            if (publication.publication.status ==
+                    Connection::Dispatch::PublishStatus::kFinPublished ||
+                publication.publication.status ==
+                    Connection::Dispatch::PublishStatus::kComplete) {
+                siblingPublished = true;
+            }
+            drainAll(outbound, discarded);
+            (void)connection.reactivateBlocked({.data = true, .control = true});
+        }
+        RUVIA_CHECK(siblingPublished);
+        RUVIA_CHECK(connection.requestInfo(4).status == Connection::RequestStatus::kPublished);
+        const auto retirement = connection.peekTransportIntent();
+        RUVIA_CHECK(retirement.has_value());
+        if (!retirement || retirement->token.kind != Connection::TransportIntentKind::kStreamReset ||
+            retirement->token.id.streamId != id.streamId) {
+            throw std::runtime_error("deadline reset intent changed after sibling publication");
+        }
+        RUVIA_CHECK(connection.ackTransportIntent(retirement->token));
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
+    }
+    if (requestStopAfterFin) {
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{1});
+        RUVIA_CHECK(connection.peekTransportIntent()->token.kind ==
+                    Connection::TransportIntentKind::kConnectionClose);
+    }
+    if (!connection.stopped()) {
+        RUVIA_CHECK(connection.requestStop());
+    }
+    co_await connection.join();
+    std::array<PublishedWire, 6> wires{};
+    drainAll(outbound, wires);
+    simulateGlobalStopTakeover(connection);
+}
+
+ruvia::Task<void> exerciseWebSocketFinCancellationVariants(Fixture& fixture,
+    const ruvia::WorkerHandle& worker, ruvia::testing::TestContext& ruvia_ctx) {
+    fixture.scanner.start();
+    co_await exerciseWebSocketFinCancellation(fixture, worker, ruvia_ctx, false, false);
+    co_await exerciseWebSocketFinCancellation(fixture, worker, ruvia_ctx, false, true);
+    co_await exerciseWebSocketFinCancellation(fixture, worker, ruvia_ctx, true, false);
+    co_await exerciseWebSocketFinCancellation(fixture, worker, ruvia_ctx, false, false, true);
+    fixture.scanner.stop();
 }
 
 ruvia::Task<void> exerciseSuccessfulConnection(Fixture& fixture,
@@ -1309,7 +1628,7 @@ ruvia::Task<void> exerciseRejectionResetAndStop(Fixture& fixture,
         std::span<const char>(headWire.data(), headWire.size()));
     RUVIA_CHECK(deferredHead.status == Connection::EventStatus::kRejected);
     RUVIA_CHECK_EQ(connection.activeRejectionCount(), std::size_t{1});
-    RUVIA_CHECK(ruvia::detail::Http3BufferedServerConnectionResetIntentTestAccess::enqueueLocal(
+    RUVIA_CHECK(ruvia::detail::Http3ServerConnectionResetIntentTestAccess::enqueueLocal(
         connection, deferredId.streamId));
     RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{1});
     RUVIA_CHECK(accepted(inbound.trySend(deferredId, std::as_bytes(
@@ -1754,7 +2073,7 @@ ruvia::Task<void> exerciseResetIntentMergePolicy(Fixture& fixture,
         fixture.services, fixture.options, outbound, scheduler,
         {.epoch = kEpoch, .connectionGeneration = generation, .maxTrackedStreams = 8});
     constexpr std::uint64_t streamId = 0;
-    using TestAccess = ruvia::detail::Http3BufferedServerConnectionResetIntentTestAccess;
+    using TestAccess = ruvia::detail::Http3ServerConnectionResetIntentTestAccess;
 
     RUVIA_CHECK(TestAccess::enqueueLocal(connection, streamId));
     const auto local = connection.peekTransportIntent();
@@ -1779,7 +2098,7 @@ ruvia::Task<void> exerciseResetIntentMergePolicy(Fixture& fixture,
         local->token.id.connectionGeneration);
     RUVIA_CHECK_EQ(protocol->token.id.streamId, local->token.id.streamId);
     RUVIA_CHECK(protocol->token.sequence != local->token.sequence);
-    RUVIA_CHECK(!connection.ackTransportIntent(local->token));
+    RUVIA_CHECK(connection.ackTransportIntent(local->token));
     RUVIA_CHECK(connection.peekTransportIntent()->token == protocol->token);
 
     RUVIA_CHECK(TestAccess::enqueueProtocol(connection, streamId,
@@ -2223,9 +2542,10 @@ ruvia::Task<void> exerciseStaleIntentTokens(Fixture& fixture,
         RUVIA_CHECK(closeIntent->closeReason == Connection::TransportCloseReason::kLocalStop);
         RUVIA_CHECK(!connection.transportRetired());
         RUVIA_CHECK(connection.ackTransportIntent(closeIntent->token));
-        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{1});
         RUVIA_CHECK(!connection.transportRetired());
-        RUVIA_CHECK(!connection.ackTransportIntent(currentToken));
+        RUVIA_CHECK(connection.ackTransportIntent(currentToken));
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
         RUVIA_CHECK(connection.confirmTransportRetired(
             {.epoch = epoch, .connectionGeneration = generation}));
         RUVIA_CHECK(connection.transportRetired());
@@ -2270,8 +2590,105 @@ ruvia::Task<void> exerciseGlobalStopWithUnsentReset(Fixture& fixture,
     RUVIA_CHECK(closeIntent->token.kind == Connection::TransportIntentKind::kConnectionClose);
     RUVIA_CHECK(connection.takeOverTransportRetirement(
         {.epoch = kEpoch, .connectionGeneration = kGeneration + 60}));
+    RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{2});
+    RUVIA_CHECK(connection.ackTransportIntent(closeIntent->token));
+    const auto resetAfterClose = connection.peekTransportIntent();
+    RUVIA_CHECK(resetAfterClose.has_value());
+    RUVIA_CHECK(resetAfterClose->token.kind == Connection::TransportIntentKind::kStreamReset);
+    RUVIA_CHECK(connection.ackTransportIntent(resetAfterClose->token));
     RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
     RUVIA_CHECK(!connection.transportRetired());
+}
+
+ruvia::Task<void> exerciseRetirementIntentAckOrder(
+    Fixture& fixture, const ruvia::WorkerHandle& worker,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    TestActivationSignal activation(worker);
+    using TestAccess = ruvia::detail::Http3ServerConnectionResetIntentTestAccess;
+    for (const bool retireBeforeAck : std::array{false, true}) {
+        Mailbox outbound(1, 1, 1, fixture.worker.resource());
+        const auto generation = kGeneration + (retireBeforeAck ? 171 : 170);
+        Connection connection(fixture.routes.implementation.routeTable(), fixture.worker,
+            fixture.services, fixture.options, outbound, activation,
+            {.epoch = kEpoch,
+                .connectionGeneration = generation,
+                .maxTrackedStreams = 8});
+        RUVIA_CHECK(TestAccess::enqueueLocal(connection, 0));
+        RUVIA_CHECK(connection.requestStop());
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{2});
+        if (retireBeforeAck) {
+            RUVIA_CHECK(connection.confirmTransportRetired(
+                {.epoch = kEpoch, .connectionGeneration = generation}));
+        }
+        const auto close = connection.peekTransportIntent();
+        RUVIA_CHECK(close.has_value());
+        RUVIA_CHECK(close->token.kind == Connection::TransportIntentKind::kConnectionClose);
+        RUVIA_CHECK(connection.ackTransportIntent(close->token));
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{1});
+        const auto reset = connection.peekTransportIntent();
+        RUVIA_CHECK(reset.has_value());
+        RUVIA_CHECK(reset->token.kind == Connection::TransportIntentKind::kStreamReset);
+        RUVIA_CHECK_EQ(reset->token.id.streamId, std::uint64_t{0});
+        if (!retireBeforeAck) {
+            RUVIA_CHECK(connection.confirmTransportRetired(
+                {.epoch = kEpoch, .connectionGeneration = generation}));
+        }
+        RUVIA_CHECK(connection.peekTransportIntent()->token == reset->token);
+        RUVIA_CHECK(connection.ackTransportIntent(reset->token));
+        RUVIA_CHECK(!connection.ackTransportIntent(reset->token));
+        RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
+        RUVIA_CHECK(connection.transportRetired());
+        RUVIA_CHECK(outbound.stop());
+    }
+    co_return;
+}
+
+ruvia::Task<void> exerciseSchedulerSettlesSupersededReset(Fixture& fixture,
+    const ruvia::WorkerHandle& worker, ruvia::testing::TestContext& ruvia_ctx) {
+    using Scheduler = ruvia::detail::Http3WorkerMailboxScheduler;
+    using TestAccess = ruvia::detail::Http3ServerConnectionResetIntentTestAccess;
+    Scheduler scheduler(worker, 1, fixture.worker.resource());
+    Mailbox outbound(1, 1, 1, fixture.worker.resource());
+    const auto registration = scheduler.reserve(kEpoch + 180, kGeneration + 180);
+    RUVIA_CHECK(registration.has_value());
+    if (!registration) {
+        throw std::runtime_error("scheduler reset-ACK fixture slot unavailable");
+    }
+    Connection connection(fixture.routes.implementation.routeTable(), fixture.worker,
+        fixture.services, fixture.options, outbound, registration->activation,
+        {.epoch = kEpoch + 180,
+            .connectionGeneration = kGeneration + 180,
+            .maxTrackedStreams = 8});
+    RUVIA_CHECK(scheduler.attach(registration->token, connection));
+    RUVIA_CHECK(TestAccess::enqueueLocal(connection, 0));
+    const auto offered = scheduler.step();
+    RUVIA_CHECK(offered.kind == Scheduler::StepKind::kTransportIntent);
+    RUVIA_CHECK(offered.intent.token.kind == Connection::TransportIntentKind::kStreamReset);
+    RUVIA_CHECK(TestAccess::enqueueProtocol(connection, 0,
+        ruvia::Http3ConnectionErrorCode::kMessageError));
+    const auto current = connection.peekTransportIntent();
+    RUVIA_CHECK(current.has_value());
+    RUVIA_CHECK(current->token.sequence != offered.intent.token.sequence);
+    RUVIA_CHECK(scheduler.step().kind == Scheduler::StepKind::kIdle);
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, offered.intent.token));
+    const auto replacement = scheduler.step();
+    RUVIA_CHECK(replacement.kind == Scheduler::StepKind::kTransportIntent);
+    RUVIA_CHECK(replacement.intent.token == current->token);
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, replacement.intent.token));
+    RUVIA_CHECK_EQ(connection.pendingTransportIntentCount(), std::size_t{0});
+
+    RUVIA_CHECK(connection.requestStop());
+    const auto close = scheduler.step();
+    RUVIA_CHECK(close.kind == Scheduler::StepKind::kTransportIntent);
+    RUVIA_CHECK(close.intent.token.kind == Connection::TransportIntentKind::kConnectionClose);
+    RUVIA_CHECK(scheduler.beginRetirement(registration->token));
+    co_await connection.join();
+    RUVIA_CHECK(connection.confirmTransportRetired(
+        {.epoch = registration->token.epoch,
+            .connectionGeneration = registration->token.connectionGeneration}));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, close.intent.token));
+    RUVIA_CHECK(scheduler.retire(registration->token));
+    RUVIA_CHECK(outbound.stop());
 }
 
 ruvia::Task<void> exerciseUnknownUniFinOrders(Fixture& fixture,
@@ -2294,7 +2711,119 @@ ruvia::Task<void> exerciseCriticalUniFins(Fixture& fixture,
 
 }  // namespace
 
-RUVIA_TEST(http3BufferedServerConnectionRoutesAndFairlyPublishesBufferedRequests) {
+RUVIA_TEST(http3NetworkTunnelBodyTimeoutWaitsForAcceptedHandshakeBarrier) {
+    using Access = ruvia::detail::Http3NetworkRuntimeTestAccess;
+    using Identity = ruvia::detail::Http3ServerConnectionChannel::Identity;
+    using Control = ruvia::detail::Http3StreamControl;
+    std::pmr::monotonic_buffer_resource resource;
+    const Identity identity{
+        .epoch = 7, .connectionGeneration = 11, .slot = 0, .slotGeneration = 3};
+    auto makeControl = [](std::uint64_t streamId) {
+        return Control{
+            .kind = Control::Kind::kTunnelEstablished,
+            .id = {.epoch = 7, .connectionGeneration = 11, .streamId = streamId},
+            .value = 100};
+    };
+
+    auto finFirst = Access::makeConnection(&resource, identity);
+    auto& finStream = Access::addRequestStream(finFirst, 4);
+    auto& finSibling = Access::addRequestStream(finFirst, 8);
+    Access::notePeerFin(finFirst, 4);
+    Access::completeInputTerminal(finFirst, 4);
+    RUVIA_CHECK(finStream.inputTerminal);
+    RUVIA_CHECK(!finStream.bodyTimeoutApplies());
+    RUVIA_CHECK(finSibling.bodyTimeoutApplies());
+    RUVIA_CHECK(Access::acceptTunnelEstablished(finFirst, makeControl(4), 99) ==
+                Access::TunnelResult::kAccepted);
+    RUVIA_CHECK_EQ(finFirst.pendingTunnelHandshakes, std::size_t{1});
+    RUVIA_CHECK(!finStream.bodyTimeoutApplies());
+    RUVIA_CHECK(finSibling.bodyTimeoutApplies());
+    RUVIA_CHECK(!Access::confirmTunnelEstablished(finFirst, 4, 99));
+    RUVIA_CHECK(Access::confirmTunnelEstablished(finFirst, 4, 100));
+    RUVIA_CHECK_EQ(finFirst.pendingTunnelHandshakes, std::size_t{0});
+    RUVIA_CHECK(Access::acceptTunnelEstablished(finFirst, makeControl(4), 100) ==
+                Access::TunnelResult::kProtocolFailure);
+    auto wrongIdentity = makeControl(8);
+    ++wrongIdentity.id.epoch;
+    RUVIA_CHECK(Access::acceptTunnelEstablished(finFirst, wrongIdentity, 100) ==
+                Access::TunnelResult::kProtocolFailure);
+    RUVIA_CHECK(finSibling.bodyTimeoutApplies());
+
+    auto markerFirst = Access::makeConnection(&resource, identity);
+    auto& markerStream = Access::addRequestStream(markerFirst, 12);
+    auto& markerSibling = Access::addRequestStream(markerFirst, 16);
+    RUVIA_CHECK(Access::acceptTunnelEstablished(markerFirst, makeControl(12), 99) ==
+                Access::TunnelResult::kAccepted);
+    RUVIA_CHECK_EQ(markerFirst.pendingTunnelHandshakes, std::size_t{1});
+    Access::notePeerFin(markerFirst, 12);
+    Access::completeInputTerminal(markerFirst, 12);
+    RUVIA_CHECK(markerStream.inputTerminal);
+    RUVIA_CHECK(!markerStream.bodyTimeoutApplies());
+    RUVIA_CHECK(markerSibling.bodyTimeoutApplies());
+    RUVIA_CHECK(Access::confirmTunnelEstablished(markerFirst, 12, 100));
+    RUVIA_CHECK_EQ(markerFirst.pendingTunnelHandshakes, std::size_t{0});
+
+    ruvia::test::CountingMemoryResource resetResource;
+    {
+        auto resetConnection = Access::makeConnection(&resetResource, identity);
+        auto& resetStream = Access::addRequestStream(resetConnection, 20);
+        auto& resetSibling = Access::addRequestStream(resetConnection, 24);
+        Access::installFrameTracker(resetStream, &resetResource);
+        RUVIA_CHECK(Access::acceptTunnelEstablished(resetConnection, makeControl(20), 99) ==
+                    Access::TunnelResult::kAccepted);
+        RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{1});
+        const auto deallocationsBeforeReset = resetResource.deallocationCount();
+        const auto liveAllocationsBeforeReset = resetResource.liveAllocations();
+        Access::noteInputReset(resetConnection, 20);
+        Access::completeInputTerminal(resetConnection, 20);
+        RUVIA_CHECK(resetStream.inputTerminal);
+        RUVIA_CHECK(resetStream.inputReset);
+        RUVIA_CHECK(!resetStream.frameTracker);
+        // The tracker can own more than one PMR allocation on MSVC; verify
+        // actual release rather than assuming its object is the only block.
+        RUVIA_CHECK(resetResource.deallocationCount() > deallocationsBeforeReset);
+        RUVIA_CHECK(resetResource.liveAllocations() < liveAllocationsBeforeReset);
+        RUVIA_CHECK(!resetStream.bodyTimeoutApplies());
+        RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{0});
+        RUVIA_CHECK(Access::acceptTunnelEstablished(
+                        resetConnection, makeControl(20), 100) ==
+                    Access::TunnelResult::kIgnoredTerminal);
+        RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{0});
+        RUVIA_CHECK(!resetConnection.closeStarted);
+        RUVIA_CHECK(Access::acceptTunnelEstablished(
+                        resetConnection, makeControl(20), 100) ==
+                    Access::TunnelResult::kIgnoredTerminal);
+        RUVIA_CHECK_EQ(resetConnection.pendingTunnelHandshakes, std::size_t{0});
+        RUVIA_CHECK(!resetConnection.closeStarted);
+        auto staleIdentity = makeControl(20);
+        ++staleIdentity.id.connectionGeneration;
+        RUVIA_CHECK(Access::acceptTunnelEstablished(
+                        resetConnection, staleIdentity, 100) ==
+                    Access::TunnelResult::kProtocolFailure);
+        RUVIA_CHECK(resetSibling.bodyTimeoutApplies());
+        RUVIA_CHECK_EQ(resetConnection.identity.connectionGeneration,
+            identity.connectionGeneration);
+    }
+    RUVIA_CHECK_EQ(resetResource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resetResource.allocationCount(), resetResource.deallocationCount());
+}
+
+RUVIA_TEST(http3ServerConnectionWaitsForTunnelPeerFinAfterLocalOutputFin) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        fixture.executor = attachment.loop().executor();
+        runWorkerTask(attachment,
+            exerciseWebSocketFinCancellationVariants(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3ServerConnectionRoutesAndFairlyPublishesBufferedRequests) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2307,7 +2836,7 @@ RUVIA_TEST(http3BufferedServerConnectionRoutesAndFairlyPublishesBufferedRequests
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPublishesRejectionBeforeRequestFin) {
+RUVIA_TEST(http3ServerConnectionPublishesRejectionBeforeRequestFin) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2320,7 +2849,7 @@ RUVIA_TEST(http3BufferedServerConnectionPublishesRejectionBeforeRequestFin) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPublishesMinimalRejectionWithPeerFieldLimitZero) {
+RUVIA_TEST(http3ServerConnectionPublishesMinimalRejectionWithPeerFieldLimitZero) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2333,7 +2862,7 @@ RUVIA_TEST(http3BufferedServerConnectionPublishesMinimalRejectionWithPeerFieldLi
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionParksRejectionOnExactMailboxLane) {
+RUVIA_TEST(http3ServerConnectionParksRejectionOnExactMailboxLane) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2346,7 +2875,7 @@ RUVIA_TEST(http3BufferedServerConnectionParksRejectionOnExactMailboxLane) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionRetiresRejectedResetAndUnfinishedStop) {
+RUVIA_TEST(http3ServerConnectionRetiresRejectedResetAndUnfinishedStop) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2359,7 +2888,7 @@ RUVIA_TEST(http3BufferedServerConnectionRetiresRejectedResetAndUnfinishedStop) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPublishesBodyAndConnectionBudgetRejections) {
+RUVIA_TEST(http3ServerConnectionPublishesBodyAndConnectionBudgetRejections) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2372,7 +2901,7 @@ RUVIA_TEST(http3BufferedServerConnectionPublishesBodyAndConnectionBudgetRejectio
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPublishesUnsupportedConnectStatus) {
+RUVIA_TEST(http3ServerConnectionPublishesUnsupportedConnectStatus) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2385,7 +2914,7 @@ RUVIA_TEST(http3BufferedServerConnectionPublishesUnsupportedConnectStatus) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPrioritizesProtocolErrorAfterRejectedHead) {
+RUVIA_TEST(http3ServerConnectionPrioritizesProtocolErrorAfterRejectedHead) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2398,7 +2927,7 @@ RUVIA_TEST(http3BufferedServerConnectionPrioritizesProtocolErrorAfterRejectedHea
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionBoundsRejectedStreamIndexCapacity) {
+RUVIA_TEST(http3ServerConnectionBoundsRejectedStreamIndexCapacity) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2411,7 +2940,7 @@ RUVIA_TEST(http3BufferedServerConnectionBoundsRejectedStreamIndexCapacity) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionKeepsDataAndControlBackpressureInSeparateLanes) {
+RUVIA_TEST(http3ServerConnectionKeepsDataAndControlBackpressureInSeparateLanes) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2425,7 +2954,7 @@ RUVIA_TEST(http3BufferedServerConnectionKeepsDataAndControlBackpressureInSeparat
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionActivatesBlockedPublicationOnDeadline) {
+RUVIA_TEST(http3ServerConnectionActivatesBlockedPublicationOnDeadline) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2439,7 +2968,7 @@ RUVIA_TEST(http3BufferedServerConnectionActivatesBlockedPublicationOnDeadline) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionMergesPendingResetCodesWithFreshTokens) {
+RUVIA_TEST(http3ServerConnectionMergesPendingResetCodesWithFreshTokens) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2453,7 +2982,34 @@ RUVIA_TEST(http3BufferedServerConnectionMergesPendingResetCodesWithFreshTokens) 
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPersistsCoreStreamResetCode) {
+RUVIA_TEST(http3ServerConnectionRetirementKeepsExactIntentDebtsAcrossAckOrder) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        runWorkerTask(attachment,
+            exerciseRetirementIntentAckOrder(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3ServerConnectionSchedulerSettlesSupersededResetBeforeClose) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        runWorkerTask(attachment, exerciseSchedulerSettlesSupersededReset(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3ServerConnectionPersistsCoreStreamResetCode) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2467,7 +3023,7 @@ RUVIA_TEST(http3BufferedServerConnectionPersistsCoreStreamResetCode) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionPersistsStreamExcessiveLoadResetCode) {
+RUVIA_TEST(http3ServerConnectionPersistsStreamExcessiveLoadResetCode) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2481,7 +3037,7 @@ RUVIA_TEST(http3BufferedServerConnectionPersistsStreamExcessiveLoadResetCode) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionKeepsHeaderLimitAsConnectionError) {
+RUVIA_TEST(http3ServerConnectionKeepsHeaderLimitAsConnectionError) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2495,7 +3051,7 @@ RUVIA_TEST(http3BufferedServerConnectionKeepsHeaderLimitAsConnectionError) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionMapsLocalInputFailuresToTransportCodes) {
+RUVIA_TEST(http3ServerConnectionMapsLocalInputFailuresToTransportCodes) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2509,7 +3065,7 @@ RUVIA_TEST(http3BufferedServerConnectionMapsLocalInputFailuresToTransportCodes) 
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionResetAfterFinCancelsAndJoinsHandler) {
+RUVIA_TEST(http3ServerConnectionResetAfterFinCancelsAndJoinsHandler) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2522,7 +3078,7 @@ RUVIA_TEST(http3BufferedServerConnectionResetAfterFinCancelsAndJoinsHandler) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionStopAfterPartialPublishClosesAdmissionAndJoins) {
+RUVIA_TEST(http3ServerConnectionStopAfterPartialPublishClosesAdmissionAndJoins) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2535,7 +3091,7 @@ RUVIA_TEST(http3BufferedServerConnectionStopAfterPartialPublishClosesAdmissionAn
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionIgnoresUnknownClientUniStreamsInEitherFinOrder) {
+RUVIA_TEST(http3ServerConnectionIgnoresUnknownClientUniStreamsInEitherFinOrder) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2548,7 +3104,7 @@ RUVIA_TEST(http3BufferedServerConnectionIgnoresUnknownClientUniStreamsInEitherFi
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionRejectsFinOnPeerCriticalUniStreams) {
+RUVIA_TEST(http3ServerConnectionRejectsFinOnPeerCriticalUniStreams) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2561,7 +3117,7 @@ RUVIA_TEST(http3BufferedServerConnectionRejectsFinOnPeerCriticalUniStreams) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionSharesBodyBudgetUntilStoppedLeaseJoins) {
+RUVIA_TEST(http3ServerConnectionSharesBodyBudgetUntilStoppedLeaseJoins) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2574,7 +3130,7 @@ RUVIA_TEST(http3BufferedServerConnectionSharesBodyBudgetUntilStoppedLeaseJoins) 
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionForwardsPeerLimitPublishRejection) {
+RUVIA_TEST(http3ServerConnectionForwardsPeerLimitPublishRejection) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2588,7 +3144,7 @@ RUVIA_TEST(http3BufferedServerConnectionForwardsPeerLimitPublishRejection) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionRejectsStaleIntentTokensAndPrioritizesClose) {
+RUVIA_TEST(http3ServerConnectionRejectsStaleIntentTokensAndPrioritizesClose) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();
@@ -2601,7 +3157,7 @@ RUVIA_TEST(http3BufferedServerConnectionRejectsStaleIntentTokensAndPrioritizesCl
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3BufferedServerConnectionGlobalStopTakesOverUnsentResetAfterJoin) {
+RUVIA_TEST(http3ServerConnectionGlobalStopTakesOverUnsentResetAfterJoin) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();

@@ -116,6 +116,22 @@ public:
         return responseOutput_;
     }
 
+    [[nodiscard]] constexpr std::string_view automaticAltSvc() const noexcept {
+        return automaticAltSvc_;
+    }
+
+    // The listener owns this value until every request Context has retired.
+    // An application header with the same name replaces this default.
+    [[nodiscard]] ContextServices withAutomaticAltSvc(std::string_view value) const noexcept {
+        auto services = *this;
+        services.automaticAltSvc_ = value;
+        return services;
+    }
+
+    template <typename Traits, typename Allocator>
+    ContextServices withAutomaticAltSvc(
+        std::basic_string<char, Traits, Allocator>&&) const = delete;
+
     [[nodiscard]] constexpr const ConnInfo& connInfo() const noexcept {
         return connInfo_;
     }
@@ -291,6 +307,7 @@ private:
 
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;
+    std::string_view automaticAltSvc_;
     ConnInfo connInfo_;
     const TrustedProxySet* trustedProxies_{nullptr};
     const RequestDeadline* requestDeadline_{nullptr};

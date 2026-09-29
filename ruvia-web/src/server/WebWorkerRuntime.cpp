@@ -167,7 +167,8 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
             throw std::invalid_argument("HTTP/3 worker limits are not representable");
         }
         http3Server_ = makePmrObject<Http3WorkerServer>(memory_.resource(), workerRuntime_,
-            workerRuntime_.handle(), memory_, routes_, capabilities_, options_, stopToken_,
+            workerRuntime_.handle(), memory_, routes_, capabilities_, connectionScanner_,
+            ioContext_.get_executor(), options_, stopToken_,
             *options_.maxConnections,
             static_cast<std::uint32_t>(options_.workerMailboxCapacity), activeConnectionCount_,
             connectionsRefused_);
@@ -592,12 +593,18 @@ Task<void> WebWorkerRuntime::runWorker() {
         connectionScanner_.start();
         co_await capabilities_.connect();
         if (http3Server_ != nullptr && !stopToken_.stopRequested()) {
-            // Spawn first: run() is lazy but TaskScope starts it synchronously on
-            // this worker, so it can wait for install() without allocating after
-            // the scheduler becomes live.
-            backgroundTasks_.spawn(http3Server_->run());
+            // install() prepares all worker-side state before TaskScope synchronously
+            // starts run(). If either activation or task registration fails, no
+            // run coroutine owns this bridge, so retire it before unwinding.
             if (!http3Server_->install()) {
+                http3Server_->abandonBeforeLaunch();
                 throw std::runtime_error("failed to install HTTP/3 worker bridge");
+            }
+            try {
+                backgroundTasks_.spawn(http3Server_->run());
+            } catch (...) {
+                http3Server_->abandonBeforeLaunch();
+                throw;
             }
         }
         (void)workerCompletion_.markStartupReady();

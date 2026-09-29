@@ -233,7 +233,16 @@ void ConnectionScanner::registerWorkerMaintenance(WorkerMaintenanceRegistration&
 }
 
 void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept {
-    entry.socket_ = &socket;
+    registerEntryImpl(entry, &socket);
+}
+
+void ConnectionScanner::registerEntry(Entry& entry) noexcept {
+    registerEntryImpl(entry, nullptr);
+}
+
+void ConnectionScanner::registerEntryImpl(
+    Entry& entry, asio::ip::tcp::socket* socket) noexcept {
+    entry.socket_ = socket;
     entry.scanner_ = this;
     entry.nowMs_ = &cachedNowMs_;
     entry.touch();

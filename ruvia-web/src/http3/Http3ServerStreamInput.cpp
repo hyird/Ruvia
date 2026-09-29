@@ -138,6 +138,8 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
             return acceptFin(control);
         case Http3StreamControl::Kind::kWritable:
             return {Status::kIgnoredControl};
+        case Http3StreamControl::Kind::kTunnelEstablished:
+            return {Status::kInvalidInput};
     }
     return {Status::kInvalidInput};
 }

@@ -12,6 +12,7 @@ namespace {
 constexpr std::uint64_t kQpackMaxTableCapacity = 0x1;
 constexpr std::uint64_t kMaxFieldSectionSize = 0x6;
 constexpr std::uint64_t kQpackBlockedStreams = 0x7;
+constexpr std::uint64_t kEnableConnectProtocol = 0x8;
 
 [[nodiscard]] constexpr bool isForbiddenSetting(std::uint64_t identifier) noexcept {
     return identifier == 0 || (identifier >= 0x2 && identifier <= 0x5);
@@ -55,6 +56,12 @@ std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
             case kQpackBlockedStreams:
                 settings.qpackBlockedStreams = value->value;
                 break;
+            case kEnableConnectProtocol:
+                if (value->value > 1) {
+                    return std::unexpected(Http3SettingsError::kValueOutOfRange);
+                }
+                settings.enableConnectProtocol = value->value == 1;
+                break;
             default:
                 break;
         }
@@ -64,10 +71,11 @@ std::expected<Http3Settings, Http3SettingsError> decodeHttp3Settings(
 
 std::expected<std::size_t, Http3SettingsError> encodeHttp3Settings(
     std::span<char> output, const Http3Settings& settings) noexcept {
-    constexpr std::array<std::uint64_t, 3> identifiers{
-        kQpackMaxTableCapacity, kMaxFieldSectionSize, kQpackBlockedStreams};
-    const std::array<std::optional<std::uint64_t>, 3> values{settings.qpackMaxTableCapacity,
-        settings.maxFieldSectionSize, settings.qpackBlockedStreams};
+    constexpr std::array<std::uint64_t, 4> identifiers{
+        kQpackMaxTableCapacity, kMaxFieldSectionSize, kQpackBlockedStreams, kEnableConnectProtocol};
+    const std::array<std::optional<std::uint64_t>, 4> values{settings.qpackMaxTableCapacity,
+        settings.maxFieldSectionSize, settings.qpackBlockedStreams,
+        settings.enableConnectProtocol ? std::optional<std::uint64_t>{1} : std::nullopt};
     std::size_t required = 0;
     for (std::size_t i = 0; i < values.size(); ++i) {
         if (!values[i]) {

@@ -16,7 +16,7 @@ namespace ruvia::detail {
 // stream mailbox: this type never copies request/response bytes.
 class Http3ServerConnectionChannel final {
 public:
-    using Connection = Http3BufferedServerConnection;
+    using Connection = Http3ServerConnection;
     using TransportIntent = Connection::TransportIntent;
     using TransportIntentToken = Connection::TransportIntentToken;
 
@@ -89,9 +89,15 @@ public:
         Identity identity{};
     };
 
+    enum class IntentSettlement : std::uint8_t {
+        kExecutedHandoff,
+        kTransportRetiredSuperseded,
+    };
+
     struct TransportIntentAck final {
         Identity identity{};
         TransportIntentToken token{};
+        IntentSettlement settlement{IntentSettlement::kExecutedHandoff};
     };
 
     struct TransportRetired final {
@@ -138,9 +144,13 @@ public:
     [[nodiscard]] GrantPublication reserveAndPublishGrant(
         Http3WorkerMailboxScheduler& scheduler, std::uint64_t epoch,
         std::uint64_t connectionGeneration) noexcept;
+    // Permanently seals this channel against later Grants. The worker publishes
+    // this before stopping; network rearm and worker Grant publication then have
+    // a single acquire/release ordering point.
+    [[nodiscard]] Status stopGrantPublication() noexcept;
 
     // Side-effect-free observation on the server network owner. A Grant remains
-    // pending    // until commitAccepted() or revokeGrant(). Call commitAccepted() only after
+    // pending until commitAccepted() or revokeGrant(). Call commitAccepted() only after
     // transport.acceptConnections(1) returns exactly one real connection id.
     // An empty accept leaves this Grant untouched. If commit then fails, the
     // server network owner still owns and must physically retire the accepted id/SSL.
@@ -173,11 +183,13 @@ public:
     [[nodiscard]] Status publishIntent(Identity identity,
         const TransportIntent& intent) noexcept;
     [[nodiscard]] Status receiveIntent(TransportIntent& intent) noexcept;
-    // Call only after the server network owner has reliably taken over this exact
-    // received token.
-    // A full ACK lane leaves the pending token retained so the caller can retry.
+    // Call after either an executed handoff or physical-retirement supersession
+    // of this exact received token. Superseded is valid only after this generation
+    // has published TransportRetired. A full ACK lane retains the exact token and
+    // settlement so the caller can retry without changing its claim.
     [[nodiscard]] Status acknowledgeIntentAfterHandoff(Identity identity,
-        const TransportIntentToken& token) noexcept;
+        const TransportIntentToken& token,
+        IntentSettlement settlement = IntentSettlement::kExecutedHandoff) noexcept;
     [[nodiscard]] Status receiveIntentAck(TransportIntentAck& acknowledgement) noexcept;
 
     // The server network owner records physical retirement only after its
@@ -312,8 +324,6 @@ private:
     [[nodiscard]] bool hasFreeOutstandingIntent() const noexcept;
     [[nodiscard]] bool pendingIntentsEmpty() const noexcept;
     [[nodiscard]] bool outstandingIntentsEmpty() const noexcept;
-    void clearPendingIntents() noexcept;
-    void clearOutstandingIntents() noexcept;
     [[nodiscard]] static Identity identityOf(
         const Http3WorkerMailboxScheduler::ConnectionToken& token) noexcept;
     [[nodiscard]] static bool registrationMatches(
@@ -331,6 +341,8 @@ private:
     const std::thread::id networkOwner_;
     std::thread::id workerOwner_{};
     std::atomic<bool> workerOwnerBound_{};
+    std::atomic<bool> workerStopping_{};
+    std::atomic<bool> attachSucceeded_{};
     std::atomic<Lifecycle> lifecycle_{Lifecycle::kVacant};
     Identity identity_{};  // worker-owned; published before lifecycle release
     std::atomic<bool> hasLastIdentity_{};

@@ -20,6 +20,7 @@
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
@@ -49,6 +50,7 @@ using ruvia::detail::formatClientPort;
 using ruvia::detail::HttpServerListenerDefinition;
 using ruvia::detail::HttpServerOptions;
 using ruvia::detail::isValidSniHost;
+using ruvia::detail::normalizeAltSvcAdvertisement;
 using ruvia::detail::validateClientOriginHost;
 using ruvia::detail::validateClientTransportConfig;
 using ruvia::detail::validateHttpServerConfiguration;
@@ -62,7 +64,8 @@ HttpServerListenerDefinition http3TlsListener(
     tls.identity.privateKeyFile = "key.pem";
     return HttpServerListenerDefinition(
         asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), std::move(tls),
-        ruvia::Http3ListenConfig{.handshakeTimeout = handshakeTimeout,
+        ruvia::Http3ListenConfig{.mode = ruvia::Http3Mode::kEnabled,
+            .handshakeTimeout = handshakeTimeout,
             .drainTimeout = drainTimeout});
 }
 
@@ -89,38 +92,126 @@ bool throwsInvalid(Fn&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(http3_listen_config_defaults_disabled_and_accepts_designated_values) {
-    const ruvia::ListenConfig disabled{};
-    RUVIA_CHECK(!disabled.http3.has_value());
+RUVIA_TEST(http3_listen_config_defaults_to_automatic_and_accepts_designated_values) {
+    const ruvia::ListenConfig defaults{};
+    RUVIA_CHECK_EQ(defaults.http3.mode, ruvia::Http3Mode::kAutomatic);
+    RUVIA_CHECK_EQ(defaults.http3.handshakeTimeout, std::chrono::seconds{10});
+    RUVIA_CHECK_EQ(defaults.http3.drainTimeout, std::chrono::seconds{30});
 
-    const ruvia::ListenConfig enabled{.https = 8443,
+    const ruvia::ListenConfig configured{.https = 8443,
         .http3 = ruvia::Http3ListenConfig{
+            .mode = ruvia::Http3Mode::kEnabled,
             .handshakeTimeout = std::chrono::milliseconds{25},
             .drainTimeout = std::chrono::milliseconds{50},
         }};
-    RUVIA_CHECK(enabled.http3.has_value());
-    RUVIA_CHECK_EQ(enabled.http3->handshakeTimeout, std::chrono::milliseconds{25});
-    RUVIA_CHECK_EQ(enabled.http3->drainTimeout, std::chrono::milliseconds{50});
+    RUVIA_CHECK_EQ(configured.http3.mode, ruvia::Http3Mode::kEnabled);
+    RUVIA_CHECK_EQ(configured.http3.handshakeTimeout, std::chrono::milliseconds{25});
+    RUVIA_CHECK_EQ(configured.http3.drainTimeout, std::chrono::milliseconds{50});
 }
 
-RUVIA_TEST(app_http3_listener_requires_https_and_positive_handshake_timeout) {
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().listen({.address = "127.0.0.1", .http = 8080, .http3 = ruvia::Http3ListenConfig{}});
+RUVIA_TEST(alt_svc_advertisement_normalizes_active_disabled_clear_and_override_modes) {
+    std::pmr::monotonic_buffer_resource resource;
+
+    const auto automatic = normalizeAltSvcAdvertisement(
+        ruvia::AltSvcConfig{}, std::uint16_t{443}, &resource);
+    RUVIA_CHECK_EQ(automatic, "h3=\":443\"; ma=86400");
+
+    const auto customParameters = normalizeAltSvcAdvertisement(
+        {.maxAge = std::chrono::seconds{300},
+            .persist = true,
+            .advertisedPort = std::uint16_t{9443}},
+        std::uint16_t{8443}, &resource);
+    RUVIA_CHECK_EQ(customParameters, "h3=\":9443\"; ma=300; persist=1");
+
+    RUVIA_CHECK(normalizeAltSvcAdvertisement(
+        ruvia::AltSvcConfig{}, std::nullopt, &resource)
+            .empty());
+    RUVIA_CHECK(normalizeAltSvcAdvertisement(
+        {.mode = ruvia::AltSvcMode::kDisabled}, std::uint16_t{443}, &resource)
+            .empty());
+    RUVIA_CHECK_EQ(normalizeAltSvcAdvertisement(
+                       {.mode = ruvia::AltSvcMode::kClear}, std::nullopt, &resource),
+        "clear");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)normalizeAltSvcAdvertisement(
+            {.maxAge = std::chrono::seconds{-1}}, std::uint16_t{443}, &resource);
     }));
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().listen({.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{
-                                                                        .handshakeTimeout = std::chrono::milliseconds::zero(),
-                                                                    }});
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)normalizeAltSvcAdvertisement(
+            {.advertisedPort = std::uint16_t{0}}, std::uint16_t{443}, &resource);
     }));
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().listen(
-            {.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{}});
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)normalizeAltSvcAdvertisement(
+            {.mode = static_cast<ruvia::AltSvcMode>(0xFF)}, std::uint16_t{443}, &resource);
     }));
-    RUVIA_CHECK(throwsInvalid([] {
-        ruvia::app().listen({.address = "127.0.0.1", .https = 8443, .http3 = ruvia::Http3ListenConfig{
-                                                                        .drainTimeout = std::chrono::milliseconds::zero(),
-                                                                    }});
+}
+
+RUVIA_TEST(app_http3_mode_normalizes_against_https_and_validates_effective_config) {
+    auto& app = ruvia::app();
+    app.server({});
+    app.listen({.address = "127.0.0.1", .http = 8080});
+    app.server({.maxConnectionsPerWorker = std::nullopt});
+
+    // Automatic mode remains off for HTTP-only listeners, even without an H3
+    // connection cap.
+    RUVIA_CHECK(!throwsInvalid([&] {
+        app.listen({.address = "127.0.0.1", .http = 8081});
     }));
+
+    const auto httpsConfig = [](ruvia::Http3ListenConfig http3 = {}) {
+        return ruvia::ListenConfig{
+            .address = "127.0.0.1",
+            .https = 8443,
+            .tls = {.certificateChainFile = "cert.pem", .privateKeyFile = "key.pem"},
+            .http3 = http3,
+        };
+    };
+
+    // Automatic mode enables H3 on HTTPS, so the existing finite-capacity
+    // requirement still applies.
+    RUVIA_CHECK(throwsInvalid([&] { app.listen(httpsConfig()); }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        app.listen({.address = "127.0.0.1",
+            .http = 8082,
+            .http3 = {.mode = ruvia::Http3Mode::kEnabled}});
+    }));
+
+    // Disabled mode suppresses H3 even on HTTPS and does not validate unused
+    // H3 timeout values.
+    RUVIA_CHECK(!throwsInvalid([&] {
+        app.listen(httpsConfig({.mode = ruvia::Http3Mode::kDisabled,
+            .handshakeTimeout = std::chrono::milliseconds::zero(),
+            .drainTimeout = std::chrono::milliseconds::zero()}));
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        app.listen(httpsConfig({.mode = ruvia::Http3Mode::kEnabled}));
+    }));
+
+    app.server({});
+    RUVIA_CHECK(!throwsInvalid([&] {
+        app.listen(httpsConfig({.handshakeTimeout = std::chrono::milliseconds{25},
+            .drainTimeout = std::chrono::milliseconds{50}}));
+    }));
+    RUVIA_CHECK(!throwsInvalid([&] {
+        app.listen(httpsConfig({.mode = ruvia::Http3Mode::kEnabled,
+            .handshakeTimeout = std::chrono::milliseconds{25},
+            .drainTimeout = std::chrono::milliseconds{50}}));
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        app.listen(httpsConfig({.handshakeTimeout = std::chrono::milliseconds::zero()}));
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        app.listen(httpsConfig({.drainTimeout = std::chrono::milliseconds::zero()}));
+    }));
+
+    RUVIA_CHECK(throwsInvalid([&] {
+        app.listen({.address = "127.0.0.1",
+            .http = 8083,
+            .http3 = {.mode = static_cast<ruvia::Http3Mode>(0xFF)}});
+    }));
+
+    app.server({});
+    app.listen({.address = "127.0.0.1", .http = 8080});
 }
 
 RUVIA_TEST(http3_listener_uses_one_tls_endpoint_and_rejects_duplicates) {

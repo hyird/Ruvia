@@ -166,10 +166,19 @@ private:
         return selected != nullptr ? selected->beginDispatch(worker, termination) : nullptr;
     }
 
+    void markWebSocketTunnel() noexcept {
+        webSocketTunnel_ = true;
+    }
+
+    [[nodiscard]] bool webSocketTunnel() const noexcept {
+        return webSocketTunnel_;
+    }
+
     std::uint32_t streamId_;
     std::pmr::memory_resource* resource_;
     std::optional<Http2SansIoSelectedRoute> selectedRoute_;
     std::optional<Http2RequestHeadEvent> requestHead_;
+    bool webSocketTunnel_{false};
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
@@ -255,6 +264,16 @@ public:
     }
     Http2SansIoStreamSignal* beginDispatch(std::uint32_t, WorkerHandle&&) = delete;
 
+    [[nodiscard]] bool markWebSocketTunnel(std::uint32_t streamId) noexcept {
+        auto* runtime = find(streamId);
+        if (runtime == nullptr || runtime->webSocketTunnel()) {
+            return false;
+        }
+        runtime->markWebSocketTunnel();
+        ++webSocketTunnelCount_;
+        return true;
+    }
+
     [[nodiscard]] bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
             if (slot && slot->streamId() == streamId) {
@@ -287,6 +306,10 @@ public:
         return dispatchedCount_;
     }
 
+    [[nodiscard]] std::size_t webSocketTunnelCount() const noexcept {
+        return webSocketTunnelCount_;
+    }
+
     template <typename Callback>
     void forEach(Callback&& callback) {
         for (auto& slot : inline_) {
@@ -313,6 +336,9 @@ private:
         if (runtime.dispatched()) {
             --dispatchedCount_;
         }
+        if (runtime.webSocketTunnel()) {
+            --webSocketTunnelCount_;
+        }
     }
 
     std::pmr::memory_resource* resource_;
@@ -321,6 +347,7 @@ private:
     std::pmr::vector<OverflowRuntime> overflow_;
     std::size_t size_{0};
     std::size_t dispatchedCount_{0};
+    std::size_t webSocketTunnelCount_{0};
 };
 
 }  // namespace ruvia::detail

@@ -3,9 +3,13 @@
 #include <cstddef>
 #include <memory_resource>
 #include <span>
+#include <string_view>
 #include <vector>
 
+#include "ruvia/http/Attributes.h"
 #include "ruvia/http/Http3MessageHead.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia {
@@ -28,6 +32,20 @@ public:
         return request_;
     }
     const HttpRequest& request() const&& = delete;
+
+    [[nodiscard]] std::string_view extendedConnectProtocol() const& noexcept RUVIA_LIFETIMEBOUND {
+        return head_.protocol;
+    }
+    std::string_view extendedConnectProtocol() const&& = delete;
+
+    // Extended CONNECT for websocket uses GET's route key while the exposed
+    // HttpRequest retains its wire CONNECT method.
+    [[nodiscard]] HttpKnownMethod routeMethod() const noexcept {
+        return request_.knownMethod() == HttpKnownMethod::kConnect &&
+                       httpAsciiEqualsIgnoreCase(extendedConnectProtocol(), "websocket")
+                   ? HttpKnownMethod::kGet
+                   : request_.knownMethod();
+    }
 
     [[nodiscard]] bool bodyComplete() const noexcept {
         return bodyComplete_;

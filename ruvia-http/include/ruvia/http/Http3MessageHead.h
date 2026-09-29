@@ -39,6 +39,7 @@ struct Http3MessageHead final {
     explicit Http3MessageHead(std::pmr::memory_resource* resource);
 
     std::pmr::string method;
+    std::pmr::string protocol;
     std::pmr::string scheme;
     std::pmr::string authority;
     std::pmr::string path;

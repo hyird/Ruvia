@@ -1,0 +1,146 @@
+--- a/ssl/quic/quic_local.h
++++ b/ssl/quic/quic_local.h
+@@ -246,6 +246,10 @@
+     /* The QUIC port representing the QUIC listener and socket. */
+     QUIC_PORT *port;
+ 
++    /* Requested idle timeout inherited by channels created for this listener. */
++    uint64_t max_idle_timeout_request;
++    unsigned int max_idle_timeout_request_set : 1;
++
+ #if defined(OPENSSL_THREADS)
+     /*
+      * The mutex used to synchronise access to the QUIC_ENGINE. We own this but
+--- a/ssl/quic/quic_impl.c
++++ b/ssl/quic/quic_impl.c
+@@ -3637,9 +3637,16 @@
+ 
+     qctx_lock(ctx);
+ 
+-    switch (class_) {
+-    case SSL_VALUE_CLASS_FEATURE_REQUEST:
+-        value_out = ossl_quic_channel_get_max_idle_timeout_request(ctx->qc->ch);
++    if (ctx->is_listener) {
++        if (class_ != SSL_VALUE_CLASS_FEATURE_REQUEST) {
++            QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_UNSUPPORTED_CONFIG_VALUE_CLASS,
++                NULL);
++            goto err;
++        }
++
++        value_out = ctx->ql->max_idle_timeout_request_set
++            ? ctx->ql->max_idle_timeout_request
++            : QUIC_DEFAULT_IDLE_TIMEOUT;
+ 
+         if (p_value_in != NULL) {
+             value_in = *p_value_in;
+@@ -3649,39 +3656,62 @@
+                 goto err;
+             }
+ 
+-            if (ossl_quic_channel_have_generated_transport_params(ctx->qc->ch)) {
++            if (ctx->ql->listening) {
+                 QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_FEATURE_NOT_RENEGOTIABLE,
+                     NULL);
+                 goto err;
+             }
+ 
+-            ossl_quic_channel_set_max_idle_timeout_request(ctx->qc->ch, value_in);
++            ctx->ql->max_idle_timeout_request = value_in;
++            ctx->ql->max_idle_timeout_request_set = 1;
+         }
+-        break;
++    } else {
++        switch (class_) {
++        case SSL_VALUE_CLASS_FEATURE_REQUEST:
++            value_out = ossl_quic_channel_get_max_idle_timeout_request(ctx->qc->ch);
++
++            if (p_value_in != NULL) {
++                value_in = *p_value_in;
++                if (value_in > OSSL_QUIC_VLINT_MAX) {
++                    QUIC_RAISE_NON_NORMAL_ERROR(ctx, ERR_R_PASSED_INVALID_ARGUMENT,
++                        NULL);
++                    goto err;
++                }
++
++                if (ossl_quic_channel_have_generated_transport_params(ctx->qc->ch)) {
++                    QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_FEATURE_NOT_RENEGOTIABLE,
++                        NULL);
++                    goto err;
++                }
+ 
+-    case SSL_VALUE_CLASS_FEATURE_PEER_REQUEST:
+-    case SSL_VALUE_CLASS_FEATURE_NEGOTIATED:
+-        if (p_value_in != NULL) {
+-            QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_UNSUPPORTED_CONFIG_VALUE_OP,
+-                NULL);
+-            goto err;
+-        }
++                ossl_quic_channel_set_max_idle_timeout_request(ctx->qc->ch, value_in);
++            }
++            break;
++
++        case SSL_VALUE_CLASS_FEATURE_PEER_REQUEST:
++        case SSL_VALUE_CLASS_FEATURE_NEGOTIATED:
++            if (p_value_in != NULL) {
++                QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_UNSUPPORTED_CONFIG_VALUE_OP,
++                    NULL);
++                goto err;
++            }
++
++            if (!ossl_quic_channel_is_handshake_complete(ctx->qc->ch)) {
++                QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_FEATURE_NEGOTIATION_NOT_COMPLETE,
++                    NULL);
++                goto err;
++            }
++
++            value_out = (class_ == SSL_VALUE_CLASS_FEATURE_NEGOTIATED)
++                ? ossl_quic_channel_get_max_idle_timeout_actual(ctx->qc->ch)
++                : ossl_quic_channel_get_max_idle_timeout_peer_request(ctx->qc->ch);
++            break;
+ 
+-        if (!ossl_quic_channel_is_handshake_complete(ctx->qc->ch)) {
+-            QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_FEATURE_NEGOTIATION_NOT_COMPLETE,
++        default:
++            QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_UNSUPPORTED_CONFIG_VALUE_CLASS,
+                 NULL);
+             goto err;
+         }
+-
+-        value_out = (class_ == SSL_VALUE_CLASS_FEATURE_NEGOTIATED)
+-            ? ossl_quic_channel_get_max_idle_timeout_actual(ctx->qc->ch)
+-            : ossl_quic_channel_get_max_idle_timeout_peer_request(ctx->qc->ch);
+-        break;
+-
+-    default:
+-        QUIC_RAISE_NON_NORMAL_ERROR(ctx, SSL_R_UNSUPPORTED_CONFIG_VALUE_CLASS,
+-            NULL);
+-        goto err;
+     }
+ 
+     ret = 1;
+@@ -3855,6 +3885,7 @@
+     case SSL_VALUE_STREAM_WRITE_BUF_USED:
+     case SSL_VALUE_STREAM_WRITE_BUF_AVAIL:
+         return expect_quic_cs(s, ctx);
++    case SSL_VALUE_QUIC_IDLE_TIMEOUT:
+     case SSL_VALUE_QUIC_MAX_PENDING_CONNS:
+         return expect_quic_cl(s, ctx);
+     default:
+--- a/ssl/quic/quic_port.c
++++ b/ssl/quic/quic_port.c
+@@ -574,6 +574,15 @@
+         return NULL;
+     }
+ 
++    /* Configure transport parameters before this channel can start its handshake. */
++    if (port->get_conn_user_ssl != NULL) {
++        QUIC_LISTENER *ql = port->user_ssl_arg;
++
++        if (ql != NULL && ql->max_idle_timeout_request_set)
++            ossl_quic_channel_set_max_idle_timeout_request(ch,
++                ql->max_idle_timeout_request);
++    }
++
+     ossl_qtx_set_bio(ch->qtx, port->net_wbio);
+     return ch;
+ }

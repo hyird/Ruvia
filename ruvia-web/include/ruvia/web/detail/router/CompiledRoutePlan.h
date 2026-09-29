@@ -73,6 +73,7 @@ private:
         std::int64_t webSocketPingIntervalMs{-1};
         std::int64_t webSocketPongTimeoutMs{-1};
         std::int64_t webSocketCloseTimeoutMs{-1};
+        std::int64_t webSocketPeerTransportFinTimeoutMs{5000};
         bool webSocketDeflateEnabled{true};
         int webSocketCompressionLevel{6};
         bool webSocketContextTakeover{false};

@@ -123,6 +123,23 @@ void applyExceptionResponseMetadata(HttpResponse& response, const std::exception
     }
 }
 
+void applyAutomaticResponseHeaders(
+    HttpResponse& response, const detail::ContextServices& services) {
+    if (!services.automaticAltSvc().empty()) {
+        response.header("Alt-Svc", services.automaticAltSvc());
+    }
+}
+
+void applyAutomaticResponseHeaders(HttpResponse& response, Context& context) {
+    if (response.header("Alt-Svc").has_value()) {
+        return;
+    }
+    const auto altSvc = detail::ContextAccess::responseStorage(context).header("Alt-Svc");
+    if (altSvc.has_value()) {
+        response.header("Alt-Svc", *altSvc);
+    }
+}
+
 }  // namespace
 
 Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request,
@@ -130,7 +147,9 @@ Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request,
     const auto errorHandler = errorHandlerFor(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
     if (errorHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
-        co_return makeDefaultErrorResponse(memory.resource(), error);
+        auto response = makeDefaultErrorResponse(memory.resource(), error);
+        applyAutomaticResponseHeaders(response, services);
+        co_return response;
     }
 
     auto context = detail::ContextAccess::make(memory, request,
@@ -142,7 +161,9 @@ Task<HttpResponse> detail::RouteTable::handleError(const HttpRequest& request,
         co_return co_await handleError(terminalContext, error);
     };
     const auto terminalRef = makeCallableRef<HttpResponse, Context&>(terminal);
-    co_return co_await runUnmatchedChain(context, terminalRef);
+    auto response = co_await runUnmatchedChain(context, terminalRef);
+    applyAutomaticResponseHeaders(response, context);
+    co_return response;
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& request,
@@ -151,6 +172,7 @@ Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& reques
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
         auto response = makeDefaultErrorResponse(memory.resource(), errorInfo.info);
         applyExceptionResponseMetadata(response, exception);
+        applyAutomaticResponseHeaders(response, services);
         co_return response;
     }
 
@@ -161,16 +183,20 @@ Task<HttpResponse> detail::RouteTable::handleException(const HttpRequest& reques
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(Context& context, HttpErrorInfo error) const {
-    return invokeErrorHandler(
+    auto response = co_await invokeErrorHandler(
         context, error, errorHandlerFor(detail::ContextAccess::request(context).path()));
+    applyAutomaticResponseHeaders(response, context);
+    co_return response;
 }
 
 Task<HttpResponse> detail::RouteTable::handleNotFound(
     const HttpRequest& request, RequestMemory& memory, ContextServices services) const {
     const auto notFoundHandler = notFoundHandlerFor(request.path());
     if (notFoundHandler == nullptr && unmatchedMiddlewareCount_ == 0) {
-        co_return makeDefaultErrorResponse(memory.resource(),
+        auto response = makeDefaultErrorResponse(memory.resource(),
             HttpErrorInfo({.status = ruvia::http_status::kNotFound, .message = "route not found"}));
+        applyAutomaticResponseHeaders(response, services);
+        co_return response;
     }
 
     auto context = detail::ContextAccess::make(memory, request,
@@ -193,7 +219,9 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
         co_return co_await handleException(terminalContext, exception);
     };
     const auto terminalRef = makeCallableRef<HttpResponse, Context&>(terminal);
-    co_return co_await runUnmatchedChain(context, terminalRef);
+    auto response = co_await runUnmatchedChain(context, terminalRef);
+    applyAutomaticResponseHeaders(response, context);
+    co_return response;
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(

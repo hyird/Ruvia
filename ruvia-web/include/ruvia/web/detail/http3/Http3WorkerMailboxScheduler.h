@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/web/detail/http3/Http3BufferedServerConnection.h"
+#include "ruvia/web/detail/http3/Http3ServerConnection.h"
 
 namespace ruvia::detail {
 
@@ -45,12 +45,21 @@ private:
     std::atomic<bool> pending_{};
 };
 
+struct Http3WorkerMailboxWakeRef final {
+    void* context{};
+    void (*notify)(void*) noexcept = nullptr;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return context != nullptr && notify != nullptr;
+    }
+};
+
 // Worker-affine sans-I/O scheduler for already-constructed buffered HTTP/3
 // connection owners. It owns only bounded slot/index storage; transport intent
 // handoff and the actual worker sleep/wake integration remain with its caller.
 class Http3WorkerMailboxScheduler final {
 public:
-    using Connection = Http3BufferedServerConnection;
+    using Connection = Http3ServerConnection;
     using Mailbox = Http3StreamMailbox;
 
     static constexpr std::size_t kDefaultControlBurstLimit = 4;
@@ -122,7 +131,8 @@ public:
     Http3WorkerMailboxScheduler(const WorkerHandle& worker, std::size_t maxConnections,
         std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
         Http3WorkerMailboxCapacitySignal* capacitySignal = nullptr,
-        std::size_t controlBurstLimit = kDefaultControlBurstLimit);
+        std::size_t controlBurstLimit = kDefaultControlBurstLimit,
+        Http3WorkerMailboxWakeRef workerWake = {});
     ~Http3WorkerMailboxScheduler();
     Http3WorkerMailboxScheduler(const Http3WorkerMailboxScheduler&) = delete;
     Http3WorkerMailboxScheduler& operator=(const Http3WorkerMailboxScheduler&) = delete;
@@ -158,8 +168,11 @@ public:
     // Bind the one outbound mailbox before reserving connections. The borrowed
     // mailbox must outlive every capacity arm and its notifier callbacks.
     [[nodiscard]] bool bindMailbox(Mailbox& mailbox) noexcept;
+    // Retry channel reset intents after a worker notification. This is a
+    // bounded pass independent of response-mailbox capacity.
+    void notifyTransportCapacity() noexcept;
     // Global single-producer capacity wait on that same mailbox. Call only
-    // when blocked DATA, CONTROL, or reset-intent work exists. Ready/early
+    // when blocked DATA or CONTROL publication exists. Ready/early
     // notifications are latched into a finite recovery pass.
     [[nodiscard]] CapacityArmResult armCapacityWait() noexcept;
 
@@ -251,6 +264,7 @@ private:
     const std::size_t maxConnections_;
     Http3WorkerMailboxCapacitySignal* const capacitySignal_;
     const std::size_t controlBurstLimit_;
+    const Http3WorkerMailboxWakeRef workerWake_;
     std::pmr::vector<Slot> slots_;
     std::pmr::vector<std::size_t> freeSlots_;
     std::array<SlotQueue, static_cast<std::size_t>(QueueId::kCount)> queues_{};

@@ -21,6 +21,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/Http3ServerRequestAdmission.h"
 #include "ruvia/http/Http3StreamFrames.h"
+#include "ruvia/http/Http3VarInt.h"
 #include "ruvia/web/detail/http3/Http3CriticalStreamDriver.h"
 #include "ruvia/web/detail/http3/Http3DatagramEndpoint.h"
 #include "ruvia/web/detail/http3/Http3QuicServerTransport.h"
@@ -74,6 +75,12 @@ public:
     [[nodiscard]] asio::ip::udp::endpoint localEndpoint() const;
 
 private:
+    enum class TunnelEstablishedResult : std::uint8_t {
+        kAccepted,
+        kIgnoredTerminal,
+        kProtocolFailure,
+    };
+
     struct Stream final {
         explicit Stream(std::pmr::memory_resource* resource)
             : frameTracker(nullptr, PmrObjectDeleter<Http3StreamFrames>{resource}) {}
@@ -86,10 +93,54 @@ private:
         std::optional<Http3StreamControl> pendingControl;
         std::unique_ptr<Http3StreamFrames, PmrObjectDeleter<Http3StreamFrames>> frameTracker;
         std::chrono::steady_clock::time_point lastInputActivity{};
+        std::optional<std::uint64_t> tunnelEstablishedBarrier{};
         ReceivePhase receivePhase{ReceivePhase::kHeaders};
         bool accepted{};
         bool requestStream{};
         bool inputTerminal{};
+        bool inputFin{};
+        bool inputReset{};
+        bool writeTimeoutNotified{};
+        bool tunnelEstablished{};
+
+        [[nodiscard]] TunnelEstablishedResult acceptTunnelEstablished(
+            const Http3StreamControl& control,
+            Http3ServerConnectionChannel::Identity identity,
+            std::uint64_t acceptedWireBytes) noexcept {
+            if (control.kind != Http3StreamControl::Kind::kTunnelEstablished ||
+                control.id.epoch != identity.epoch ||
+                control.id.connectionGeneration != identity.connectionGeneration ||
+                control.id.streamId != id || !requestStream || control.value == 0 ||
+                control.value > kHttp3VarIntMax) {
+                return TunnelEstablishedResult::kProtocolFailure;
+            }
+            if (inputReset || (inputTerminal && !inputFin)) {
+                return TunnelEstablishedResult::kIgnoredTerminal;
+            }
+            if (receivePhase != ReceivePhase::kBody || tunnelEstablished ||
+                tunnelEstablishedBarrier) {
+                return TunnelEstablishedResult::kProtocolFailure;
+            }
+            tunnelEstablishedBarrier = control.value;
+            (void)confirmTunnelEstablished(acceptedWireBytes);
+            return TunnelEstablishedResult::kAccepted;
+        }
+
+        [[nodiscard]] bool confirmTunnelEstablished(
+            std::uint64_t acceptedWireBytes) noexcept {
+            if (!tunnelEstablishedBarrier ||
+                acceptedWireBytes < *tunnelEstablishedBarrier) {
+                return false;
+            }
+            tunnelEstablishedBarrier.reset();
+            tunnelEstablished = true;
+            return true;
+        }
+
+        [[nodiscard]] bool bodyTimeoutApplies() const noexcept {
+            return requestStream && receivePhase == ReceivePhase::kBody &&
+                   !inputFin && !inputReset && !inputTerminal && !tunnelEstablished;
+        }
     };
 
     struct Connection final {
@@ -99,15 +150,26 @@ private:
               critical(nullptr, PmrObjectDeleter<Http3CriticalStreamDriver>{resource}) {}
 
         Http3ServerConnectionChannel::Identity identity{};
+        bool hasLastIdentity{};
         Http3QuicServerTransport::ConnectionId transportId{};
         std::pmr::vector<Stream> streams;
+        std::size_t nextInputStreamIndex{};
+        std::size_t nextTunnelHandshakeStreamIndex{};
+        std::size_t tunnelHandshakeScanRemaining{};
+        std::size_t pendingTunnelHandshakes{};
+        bool tunnelHandshakeScanDirty{};
         std::unique_ptr<Http3ServerStreamOutput,
             PmrObjectDeleter<Http3ServerStreamOutput>>
             output;
         std::unique_ptr<Http3CriticalStreamDriver,
             PmrObjectDeleter<Http3CriticalStreamDriver>>
             critical;
-        std::optional<Http3BufferedServerConnection::TransportIntentToken> pendingIntentAck;
+        struct PendingIntentSettlement final {
+            Http3ServerConnection::TransportIntentToken token{};
+            Http3ServerConnectionChannel::IntentSettlement settlement{
+                Http3ServerConnectionChannel::IntentSettlement::kExecutedHandoff};
+        };
+        std::optional<PendingIntentSettlement> pendingIntentAck;
         std::optional<Http3ServerRequestAdmissionPlanner> admissionPlanner;
         std::optional<std::chrono::steady_clock::time_point> drainDeadline;
         std::size_t admittedRequestCount{};
@@ -169,6 +231,21 @@ private:
     [[nodiscard]] bool attach(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool pumpInput(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool pumpResponses(WorkerLink& worker) noexcept;
+    [[nodiscard]] static TunnelEstablishedResult acceptTunnelEstablished(Connection& connection,
+        const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept;
+    [[nodiscard]] static bool confirmTunnelEstablished(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId,
+        std::uint64_t acceptedWireBytes) noexcept;
+    static void notePeerFin(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId) noexcept;
+    static void noteInputReset(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId) noexcept;
+    static void completeInputTerminal(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId) noexcept;
+    void terminateRequestStream(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId, std::uint64_t errorCode) noexcept;
+    void stopRequestInput(Connection& connection,
+        Http3QuicServerTransport::StreamId streamId) noexcept;
     [[nodiscard]] bool pumpOutput(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool announceGoaway(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool sealAdmission(WorkerLink& worker, std::size_t index) noexcept;
@@ -201,6 +278,8 @@ private:
     bool stopping_{};
     bool monitorScheduled_{};
     bool failureReported_{};
+    bool transportActivityForPump_{};
+    friend struct Http3NetworkRuntimeTestAccess;
 };
 
 }  // namespace ruvia::detail

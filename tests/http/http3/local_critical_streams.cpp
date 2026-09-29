@@ -66,16 +66,21 @@ RUVIA_TEST(http3_local_critical_streams_encode_absent_and_explicit_zero_limits) 
         {.maxFieldSectionSize = 0});
     const auto fieldSectionLimit = ruvia::Http3LocalCriticalStreams::create(
         {.maxFieldSectionSize = 4096});
+    const auto connectEnabled = ruvia::Http3LocalCriticalStreams::create(
+        {.enableConnectProtocol = true});
     RUVIA_CHECK(defaults.has_value());
     RUVIA_CHECK(explicitZero.has_value());
     RUVIA_CHECK(fieldSectionLimit.has_value());
-    if (defaults && explicitZero && fieldSectionLimit) {
+    RUVIA_CHECK(connectEnabled.has_value());
+    if (defaults && explicitZero && fieldSectionLimit && connectEnabled) {
         RUVIA_CHECK_EQ(defaults->controlPrefix().size(), std::size_t{7});
         RUVIA_CHECK_EQ(explicitZero->controlPrefix().size(), std::size_t{9});
         RUVIA_CHECK_EQ(fieldSectionLimit->controlPrefix().size(), std::size_t{10});
-        RUVIA_CHECK(defaults->controlPrefix().size() <= 1 + 16 + 48);
-        RUVIA_CHECK(explicitZero->controlPrefix().size() <= 1 + 16 + 48);
-        RUVIA_CHECK(fieldSectionLimit->controlPrefix().size() <= 1 + 16 + 48);
+        RUVIA_CHECK_EQ(connectEnabled->controlPrefix().size(), std::size_t{9});
+        RUVIA_CHECK(defaults->controlPrefix().size() <= 1 + 16 + 64);
+        RUVIA_CHECK(explicitZero->controlPrefix().size() <= 1 + 16 + 64);
+        RUVIA_CHECK(fieldSectionLimit->controlPrefix().size() <= 1 + 16 + 64);
+        RUVIA_CHECK(connectEnabled->controlPrefix().size() <= 1 + 16 + 64);
         RUVIA_CHECK_EQ(defaults->qpackEncoderPrefix().size(), std::size_t{1});
         RUVIA_CHECK_EQ(defaults->qpackDecoderPrefix().size(), std::size_t{1});
 
@@ -87,6 +92,15 @@ RUVIA_TEST(http3_local_critical_streams_encode_absent_and_explicit_zero_limits) 
         RUVIA_CHECK(parser.peerSettings().has_value());
         if (parser.peerSettings()) {
             RUVIA_CHECK(parser.peerSettings()->maxFieldSectionSize == std::uint64_t{4096});
+        }
+
+        ruvia::Http3ControlStream connectParser(ruvia::Http3ControlRole::kClient, &resource);
+        const auto connectPrefix = connectEnabled->controlPrefix();
+        RUVIA_CHECK(connectParser.feed(connectPrefix.subspan(1), false) ==
+                    ruvia::Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(connectParser.peerSettings().has_value());
+        if (connectParser.peerSettings()) {
+            RUVIA_CHECK(connectParser.peerSettings()->enableConnectProtocol);
         }
     }
 }

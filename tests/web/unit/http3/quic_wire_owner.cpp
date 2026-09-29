@@ -37,6 +37,11 @@ using ruvia::detail::Http3QuicDatagramAddress;
 using ruvia::detail::Http3QuicDatagramBridge;
 using ruvia::detail::Http3QuicWireOwner;
 
+Http3QuicWireOwner::ProtocolPumpResult failProtocolPump(
+    void*, ruvia::detail::Http3QuicServerTransport&) noexcept {
+    return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
+}
+
 class FailOnAllocationResource final : public std::pmr::memory_resource {
 public:
     explicit FailOnAllocationResource(std::size_t failAt) noexcept
@@ -401,6 +406,49 @@ RUVIA_TEST(http3NetworkQuicWireOwnerRetirementPostSubmissionFailureDrainsHandler
     // QUIC deadline updates cancel the first wait, so its retirement post and
     // the replacement wait precede the expiry whose retirement post is failed.
     exerciseTimerHandlerAllocationFailure(ruvia_ctx, 4, true);
+#endif
+}
+
+RUVIA_TEST(http3NetworkQuicWireOwnerFatalFailureWaitsForNetworkRetirementGate) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    TestIdentityFiles files;
+    ruvia::detail::HttpServerListenerDefinition::Tls tlsConfig;
+    tlsConfig.identity.certificateChainFile = files.certificate.string();
+    tlsConfig.identity.privateKeyFile = files.privateKey.string();
+    ruvia::detail::Http3QuicTlsContext tls(tlsConfig, std::pmr::get_default_resource());
+    asio::io_context io;
+    Http3QuicWireOwner owner(io,
+        Udp::endpoint(asio::ip::address_v4::loopback(), 0), tls, {}, nullptr,
+        {&tls, &failProtocolPump});
+    owner.prepare();
+    owner.deferTransportRetirement();
+    try {
+        owner.start();
+    } catch (...) {
+    }
+    RUVIA_CHECK(owner.failure() != nullptr);
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (io.stopped()) {
+            io.restart();
+        }
+        io.run_for(2ms);
+        owner.pollStop();
+        const auto status = owner.stopStatus();
+        if (status.socketDone && status.timerHandlersRetired) {
+            RUVIA_CHECK(!status.transportDestroyed);
+            RUVIA_CHECK(owner.transport() != nullptr);
+            RUVIA_CHECK(!status.bridgeLeaseReleased);
+            break;
+        }
+    }
+    RUVIA_CHECK(!owner.stopStatus().complete());
+    owner.releaseTransportRetirement();
+    drainOwner(io, owner);
+    RUVIA_CHECK(owner.stopStatus().complete());
+    RUVIA_CHECK(owner.stopStatus().failed);
 #endif
 }
 
