@@ -1,5 +1,6 @@
 #include <hiredis/hiredis.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <memory>
@@ -40,6 +41,14 @@ void RedisPool::ensureReader(Connection& connection) {
     }
     if (connection.reader == nullptr) {
         throw RedisError(RedisError::Code::kProtocolError, "failed to create redis reader");
+    }
+    if (config_.maxReplyBytes.has_value()) {
+        // Even a short array header can otherwise reserve billions of reply
+        // pointers before the byte budget can inspect the complete reply.
+        // Every element requires at least three RESP bytes (e.g. "+\r\n").
+        const auto elements = std::max<std::size_t>(1, *config_.maxReplyBytes / 3);
+        connection.reader->maxelements = static_cast<long long>(
+            std::min(elements, static_cast<std::size_t>(REDIS_READER_MAX_ARRAY_ELEMENTS)));
     }
     connection.replyBytes = 0;
 }
@@ -138,7 +147,7 @@ Task<RedisValue> RedisPool::readReply(
         if (config_.maxReplyBytes.has_value()) {
             const auto limit = *config_.maxReplyBytes;
             if (consumed > limit || connection.replyBytes > limit - consumed ||
-                (!reply && unreadAfter > limit - (connection.replyBytes + consumed))) {
+                (!reply && unreadAfter >= limit - (connection.replyBytes + consumed))) {
                 throw RedisError(
                     RedisError::Code::kProtocolError, "redis reply exceeds configured limit");
             }
@@ -150,8 +159,13 @@ Task<RedisValue> RedisPool::readReply(
                 *reply, 0, config_.maxArrayDepth, detail::pmrResourceOrDefault(resource));
         }
 
-        auto readCompletion = co_await asyncSocketReadSome(
-            connection, std::span<char>(connection.readBuffer), timeout);
+        auto readCapacity = connection.readBuffer.size();
+        if (config_.maxReplyBytes.has_value()) {
+            const auto unread = connection.reader->len - connection.reader->pos;
+            readCapacity = std::min(readCapacity, *config_.maxReplyBytes - connection.replyBytes - unread);
+        }
+        auto readCompletion = co_await asyncSocketReadSome(connection,
+            std::span<char>(connection.readBuffer.data(), readCapacity), timeout);
         const auto readEc = readCompletion.errorCode();
         const auto bytesRead = readCompletion.result();
         if (readEc) {

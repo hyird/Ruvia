@@ -34,8 +34,12 @@ RUVIA_REDIS_ENTITY(ClientUser, "client_users",
 // cancellation run on its own thread, including cleanup after a failed test.
 class RedisPeer final {
 public:
-    explicit RedisPeer(bool coalescePings = false)
-        : coalescePings_(coalescePings),
+    enum class Mode { kNormal,
+        kCoalescedPings,
+        kHugeArray };
+
+    explicit RedisPeer(Mode mode = Mode::kNormal)
+        : mode_(mode),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
           port_(acceptor_.local_endpoint().port()),
@@ -108,12 +112,14 @@ private:
                 continue;
             }
             std::string reply;
-            if (coalescePings_ && args.front() == "PING") {
+            if (mode_ == Mode::kCoalescedPings && args.front() == "PING") {
                 if (co_await line() != "*1" || co_await line() != "$4" ||
                     co_await line() != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
                 reply = "+PONG\r\n+PONG\r\n";
+            } else if (mode_ == Mode::kHugeArray && args.front() == "PING") {
+                reply = "*1048576\r\n";
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
             } else if (args.front() == "GET") {
@@ -130,7 +136,7 @@ private:
         }
     }
 
-    bool coalescePings_;
+    Mode mode_;
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
@@ -211,6 +217,19 @@ ruvia::Task<void> checkOversizedReply(ruvia::RedisClient& client,
     bool rejected = false;
     try {
         (void)co_await client.get("large");
+    } catch (const ruvia::RedisError& error) {
+        rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
+    }
+    RUVIA_CHECK(rejected);
+    co_await client.shutdown();
+}
+
+ruvia::Task<void> checkHugeDeclaredArray(ruvia::RedisClient& client,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    co_await client.connect();
+    bool rejected = false;
+    try {
+        co_await client.ping();
     } catch (const ruvia::RedisError& error) {
         rejected = error.code() == ruvia::RedisError::Code::kProtocolError;
     }
@@ -317,7 +336,7 @@ RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
 }
 
 RUVIA_TEST(redis_pipeline_reply_limit_counts_each_reply_not_the_tcp_batch) {
-    RedisPeer peer(true);
+    RedisPeer peer(RedisPeer::Mode::kCoalescedPings);
     ruvia::EventLoopPool pool({.loopCount = 1});
     auto config = peer.config();
     config.maxReplyBytes = 7;
@@ -335,6 +354,17 @@ RUVIA_TEST(redis_client_reply_limit_still_rejects_oversized_single_reply) {
     ruvia::RedisClient client(pool.loop(0), config);
     pool.start();
     pool.loop(0).start(checkOversizedReply(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_reply_budget_rejects_impossible_declared_array_before_its_elements_arrive) {
+    RedisPeer peer(RedisPeer::Mode::kHugeArray);
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto config = peer.config();
+    config.maxReplyBytes = 1024;
+    ruvia::RedisClient client(pool.loop(0), config);
+    pool.start();
+    pool.loop(0).start(checkHugeDeclaredArray(client, ruvia_ctx)).get();
     pool.join();
 }
 
