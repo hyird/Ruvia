@@ -278,6 +278,36 @@ RUVIA_TEST(http3_message_head_rejects_invalid_cors_preflight_fields) {
     }
 }
 
+RUVIA_TEST(http3_message_head_rejects_malformed_representation_fields) {
+    const auto valid = decode({{":method", "POST"}, {":scheme", "https"},
+                                  {":authority", "example.test"}, {":path", "/"},
+                                  {"content-type", "application/json; charset=utf-8"},
+                                  {"content-encoding", "gzip, br"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(valid.has_value());
+
+    for (const auto field : {ruvia::Http3FieldSectionFieldView{"content-type", "text plain"},
+             ruvia::Http3FieldSectionFieldView{"content-encoding", "gzip;q=1"}}) {
+        const auto request = decode({{":method", "POST"}, {":scheme", "https"},
+                                        {":authority", "example.test"}, {":path", "/"}, field},
+            ruvia::Http3MessageHeadKind::kRequest);
+        RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+    const auto repeated = decode({{":method", "POST"}, {":scheme", "https"},
+                                     {":authority", "example.test"}, {":path", "/"},
+                                     {"content-type", "text/plain"},
+                                     {"content-type", "application/json"}},
+        ruvia::Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(!repeated && repeated.error() == ruvia::Http3MessageHeadError::kMessageError);
+
+    for (const auto field : {ruvia::Http3FieldSectionFieldView{"content-type", "text plain"},
+             ruvia::Http3FieldSectionFieldView{"content-encoding", "gzip;q=1"}}) {
+        const auto response = decode({{":status", "200"}, field},
+            ruvia::Http3MessageHeadKind::kResponse);
+        RUVIA_CHECK(!response && response.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+}
+
 RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_resource_exceptions) {
     const auto oversized = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"}},
         ruvia::Http3MessageHeadKind::kRequest, std::pmr::get_default_resource(), {40, 16});

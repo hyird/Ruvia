@@ -4,7 +4,9 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
@@ -139,6 +141,7 @@ struct DecodeState final {
     bool hostSeen{false};
     bool callbackRejected{false};
     std::pmr::string host;
+    bool contentTypeSeen{false};
     bool contentLengthSeen{false};
     std::uint64_t contentLength{0};
 };
@@ -249,6 +252,16 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
                 !detail::isValidHttpCorsRequestHeaderNames(field.value))) {
             return fail(state);
         }
+    }
+    if (field.name == "content-type") {
+        if (state.contentTypeSeen || !isValidHttpContentTypeFieldValue(field.value)) {
+            return fail(state);
+        }
+        state.contentTypeSeen = true;
+    } else if (field.name == "content-encoding" &&
+               !detail::isValidHttpContentEncodingFieldValue(
+                   field.value, detail::HttpFieldListRole::kRecipient)) {
+        return fail(state);
     }
     if (field.name == "content-length") {
         std::string_view remaining = field.value;

@@ -150,6 +150,22 @@ RUVIA_TEST(http3_client_request_head_rejects_invalid_cors_preflight_fields) {
     }
 }
 
+RUVIA_TEST(http3_client_request_head_rejects_malformed_representation_fields) {
+    const std::array valid{Http3FieldSectionFieldView{"Content-Type", "application/json"},
+        Http3FieldSectionFieldView{"Content-Encoding", "gzip, br"}};
+    RUVIA_CHECK(encode("POST", "/", valid).has_value());
+    for (const auto field : {Http3FieldSectionFieldView{"Content-Type", "text plain"},
+             Http3FieldSectionFieldView{"Content-Encoding", "gzip;q=1"}}) {
+        const std::array fields{field};
+        const auto request = encode("POST", "/", fields);
+        RUVIA_CHECK(!request && request.error().kind == Http3ClientRequestHeadError::kInvalidField);
+    }
+    const std::array repeated{Http3FieldSectionFieldView{"Content-Type", "text/plain"},
+        Http3FieldSectionFieldView{"content-type", "application/json"}};
+    const auto duplicate = encode("POST", "/", repeated);
+    RUVIA_CHECK(!duplicate && duplicate.error().kind == Http3ClientRequestHeadError::kInvalidField);
+}
+
 RUVIA_TEST(http3_client_request_head_enforces_limits_and_releases_resource_allocations) {
     CountingResource resource;
     auto failed = encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/"},
