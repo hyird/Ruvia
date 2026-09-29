@@ -94,6 +94,11 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
         DbMigration{{.id = "001", .sql = "/* no statement */\n-- still none\n;"}}};
     RUVIA_CHECK(
         throwsOn([&] { validateMigrationList(std::span<const DbMigration>(commentOnlySql, 1)); }));
+    const DbMigration nestedCommentOnlySql[] = {DbMigration{{.id = "001",
+        .sql = "/* outer /* inner */ still comment */"}}};
+    RUVIA_CHECK(throwsOn([&] {
+        validateMigrationList(std::span<const DbMigration>(nestedCommentOnlySql, 1));
+    }));
     // An id longer than the 190-byte schema column is rejected.
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {DbMigration{{.id = longId, .sql = "SQL"}}};
@@ -158,6 +163,12 @@ RUVIA_TEST(db_migration_list_validation_enforces_one_statement) {
         DbMigration{{.id = "001", .sql = "CREATE TABLE a(id INT); /* one; statement */"}}};
     RUVIA_CHECK(!throwsOn(
         [&] { validateMigrationList(std::span<const DbMigration>(trailingBlockComment, 1)); }));
+    const DbMigration trailingNestedBlockComment[] = {DbMigration{{.id = "001",
+        .sql = "SELECT 1; /* outer /* nested */ still comment */"}}};
+    RUVIA_CHECK(!throwsOn([&] {
+        validateMigrationList(
+            std::span<const DbMigration>(trailingNestedBlockComment, 1), DbDriver::kPostgreSql);
+    }));
 
     // A ';' that is data -- inside a default value, a quoted identifier or a
     // comment -- is not a statement separator.
