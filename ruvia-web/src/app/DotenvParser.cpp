@@ -3,6 +3,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 #include "ruvia/web/detail/app/EnvState.h"
 
@@ -208,6 +209,10 @@ void stripUtf8Bom(std::string_view& line) noexcept {
 std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& path) {
     std::ifstream input(path);
     if (!input) {
+        std::error_code error;
+        if (std::filesystem::exists(path, error) || error) {
+            throw std::runtime_error("failed to read dotenv file: " + path.string());
+        }
         return {};
     }
 
