@@ -131,6 +131,25 @@ RUVIA_TEST(http3_client_request_head_normalizes_headers_and_rejects_invalid_inpu
     RUVIA_CHECK(!encode("GET", "/", std::array{Http3FieldSectionFieldView{"x@bad", "value"}}));
 }
 
+RUVIA_TEST(http3_client_request_head_rejects_invalid_cors_preflight_fields) {
+    for (const auto field : {Http3FieldSectionFieldView{"Origin", "https://app.example/path"},
+             Http3FieldSectionFieldView{"Access-Control-Request-Method", "POST GET"},
+             Http3FieldSectionFieldView{"Access-Control-Request-Headers", "x bad"},
+             Http3FieldSectionFieldView{"access-control-request-headers", ""}}) {
+        const std::array fields{field};
+        const auto request = encode("OPTIONS", "/", fields);
+        RUVIA_CHECK(!request && request.error().kind == Http3ClientRequestHeadError::kInvalidField);
+    }
+    const std::array valid{Http3FieldSectionFieldView{"Origin", "https://app.example"},
+        Http3FieldSectionFieldView{"Access-Control-Request-Method", "POST"},
+        Http3FieldSectionFieldView{"Access-Control-Request-Headers", "x-trace, content-type"}};
+    const auto encoded = encode("OPTIONS", "/", valid);
+    RUVIA_CHECK(encoded.has_value());
+    if (encoded) {
+        RUVIA_CHECK(decodeHttp3MessageHead(encoded->fieldSection, Http3MessageHeadKind::kRequest));
+    }
+}
+
 RUVIA_TEST(http3_client_request_head_enforces_limits_and_releases_resource_allocations) {
     CountingResource resource;
     auto failed = encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/"},

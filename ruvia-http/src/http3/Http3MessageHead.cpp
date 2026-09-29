@@ -241,9 +241,14 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         state.host.assign(field.value);
         state.hostSeen = true;
     }
-    if (field.name == "origin" && state.kind == Http3MessageHeadKind::kRequest &&
-        !detail::isValidHttpOriginFieldValue(field.value)) {
-        return fail(state);
+    if (state.kind == Http3MessageHeadKind::kRequest) {
+        if ((field.name == "origin" && !detail::isValidHttpOriginFieldValue(field.value)) ||
+            (field.name == "access-control-request-method" &&
+                !detail::isValidHttpCorsRequestMethod(field.value)) ||
+            (field.name == "access-control-request-headers" &&
+                !detail::isValidHttpCorsRequestHeaderNames(field.value))) {
+            return fail(state);
+        }
     }
     if (field.name == "content-length") {
         std::string_view remaining = field.value;

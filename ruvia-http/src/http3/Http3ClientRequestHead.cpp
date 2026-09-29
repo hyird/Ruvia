@@ -9,6 +9,7 @@
 
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/HttpRequestTarget.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -163,7 +164,13 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
         if (!token(field.name)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
-        if (!validValue(field.value)) {
+        if (!validValue(field.value) ||
+            (equalIgnoreCase(field.name, "origin") &&
+                !detail::isValidHttpOriginFieldValue(field.value)) ||
+            (equalIgnoreCase(field.name, "access-control-request-method") &&
+                !detail::isValidHttpCorsRequestMethod(field.value)) ||
+            (equalIgnoreCase(field.name, "access-control-request-headers") &&
+                !detail::isValidHttpCorsRequestHeaderNames(field.value))) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         // RFC 9110 section 9.3.8: never generate known credential/cookie

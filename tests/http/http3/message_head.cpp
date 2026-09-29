@@ -249,6 +249,35 @@ RUVIA_TEST(http3_message_head_validates_origin_and_rejects_every_duplicate_host)
     RUVIA_CHECK(!duplicateHost);
 }
 
+RUVIA_TEST(http3_message_head_rejects_invalid_cors_preflight_fields) {
+    using ruvia::Http3MessageHeadKind;
+    const auto valid = decode({{":method", "OPTIONS"}, {":scheme", "https"},
+                                  {":authority", "example.test"}, {":path", "/"},
+                                  {"origin", "https://app.example"},
+                                  {"access-control-request-method", "POST"},
+                                  {"access-control-request-headers", "x-trace, content-type"}},
+        Http3MessageHeadKind::kRequest);
+    RUVIA_CHECK(valid.has_value());
+
+    for (const std::string_view invalid : {"x bad", "", "x-trace, bad name"}) {
+        const auto request = decode({{":method", "OPTIONS"}, {":scheme", "https"},
+                                        {":authority", "example.test"}, {":path", "/"},
+                                        {"origin", "https://app.example"},
+                                        {"access-control-request-method", "POST"},
+                                        {"access-control-request-headers", invalid}},
+            Http3MessageHeadKind::kRequest);
+        RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+    for (const std::string_view invalid : {"POST GET", ""}) {
+        const auto request = decode({{":method", "OPTIONS"}, {":scheme", "https"},
+                                        {":authority", "example.test"}, {":path", "/"},
+                                        {"origin", "https://app.example"},
+                                        {"access-control-request-method", invalid}},
+            Http3MessageHeadKind::kRequest);
+        RUVIA_CHECK(!request && request.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
+}
+
 RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_resource_exceptions) {
     const auto oversized = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"}},
         ruvia::Http3MessageHeadKind::kRequest, std::pmr::get_default_resource(), {40, 16});
