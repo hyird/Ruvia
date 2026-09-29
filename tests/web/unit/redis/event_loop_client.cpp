@@ -68,6 +68,10 @@ public:
         blocked.get();
     }
 
+    std::vector<std::string> expirationCommand() {
+        return expiration_.get_future().get();
+    }
+
 private:
     asio::awaitable<std::string> line() {
         co_await asio::async_read_until(socket_, buffer_, "\r\n", asio::use_awaitable);
@@ -107,6 +111,9 @@ private:
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
             } else if (args.front() == "GET") {
                 reply = "$128\r\n" + std::string(128, 'v') + "\r\n";
+            } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
+                expiration_.set_value(args);
+                reply = ":1\r\n";
             } else if (args.front() == "HGETALL") {
                 reply = "*6\r\n$14\r\n__ruvia_entity\r\n$1\r\n1\r\n$2\r\nid\r\n$1\r\n1\r\n$4\r\nname\r\n$128\r\n" + std::string(128, 'n') + "\r\n";
             } else {
@@ -122,6 +129,7 @@ private:
     std::uint16_t port_;
     asio::streambuf buffer_;
     std::promise<void> blocked_;
+    std::promise<std::vector<std::string>> expiration_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     std::future<void> done_;
     std::thread thread_;
@@ -176,6 +184,14 @@ ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::Test
 ruvia::Task<void> blockedCommand(ruvia::RedisClient& client) {
     co_await client.connect();
     (void)co_await client.command("STALL");
+}
+
+ruvia::Task<void> checkExpiration(ruvia::RedisClient& client,
+    std::chrono::system_clock::time_point expiresAt, ruvia::testing::TestContext& ruvia_ctx) {
+    co_await client.connect();
+    const bool applied = co_await client.expireAt("session", expiresAt);
+    RUVIA_CHECK(applied);
+    co_await client.shutdown();
 }
 
 ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig config,
@@ -261,6 +277,20 @@ RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
     pool.loop(0).start(checkCommands(client, ruvia_ctx)).get();
     pool.stop();
     pool.join();
+}
+
+RUVIA_TEST(redis_client_expire_at_preserves_the_requested_deadline) {
+    RedisPeer peer;
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    ruvia::RedisClient client(pool.loop(0), peer.config());
+    pool.start();
+    const auto expiresAt = std::chrono::system_clock::time_point{
+                               std::chrono::seconds(2'000'000'000)} +
+                           std::chrono::microseconds(1'001);
+    pool.loop(0).start(checkExpiration(client, expiresAt, ruvia_ctx)).get();
+    const auto command = peer.expirationCommand();
+    pool.join();
+    RUVIA_CHECK_EQ(command, (std::vector<std::string>{"PEXPIREAT", "session", "2000000000002"}));
 }
 
 RUVIA_TEST(redis_client_loop_stop_cancels_and_joins_pending_commands) {
