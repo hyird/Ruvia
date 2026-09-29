@@ -215,6 +215,35 @@ RUVIA_TEST(http3_client_response_validates_all_trailers_before_callback) {
     RUVIA_CHECK(rejectedEvents.trailers.empty());
 }
 
+RUVIA_TEST(http3_client_response_rejects_forbidden_response_trailer_fields) {
+    std::pmr::monotonic_buffer_resource memory;
+    const std::array<char, 3> head{0, 0, static_cast<char>(0xd9)};
+    for (const auto field : {ruvia::Http3FieldSectionFieldView{"set-cookie", "sid=secret"},
+             ruvia::Http3FieldSectionFieldView{"content-encoding", "gzip"}}) {
+        const std::array fields{field};
+        const auto trailer = fieldSection(fields);
+        auto wire = frame(1, head);
+        const auto trailingFrame = frame(1, trailer);
+        wire.insert(wire.end(), trailingFrame.begin(), trailingFrame.end());
+        Events events;
+        ruvia::Http3ClientResponse response(0, ruvia::HttpKnownMethod::kGet, &memory);
+        const auto result = response.feed(wire, true, false, collect, &events);
+        RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kStreamError);
+        RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kMessageError);
+        RUVIA_CHECK(events.trailers.empty());
+    }
+    const std::array validFields{ruvia::Http3FieldSectionFieldView{"etag", "\"tag\""}};
+    const auto trailer = fieldSection(validFields);
+    auto wire = frame(1, head);
+    const auto trailingFrame = frame(1, trailer);
+    wire.insert(wire.end(), trailingFrame.begin(), trailingFrame.end());
+    Events events;
+    ruvia::Http3ClientResponse valid(0, ruvia::HttpKnownMethod::kGet, &memory);
+    const auto result = valid.feed(wire, true, false, collect, &events);
+    RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(events.trailers.size(), std::size_t{1});
+}
+
 RUVIA_TEST(http3_client_response_preserves_final_plan_after_informational_response) {
     std::pmr::monotonic_buffer_resource memory;
     constexpr std::array<char, 3> informationalSection{0, 0, static_cast<char>(0xd8)};

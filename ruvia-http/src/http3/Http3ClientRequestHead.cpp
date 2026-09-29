@@ -8,7 +8,12 @@
 #include <string_view>
 
 #include "ruvia/http/Http3MessageHead.h"
+#include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
+#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/field/HttpCorsFields.h"
+#include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -157,13 +162,22 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
     }
     std::size_t lowercaseBytes = 0;
     bool hostSeen = false;
+    bool contentTypeSeen = false;
     bool lengthSeen = false;
     std::uint64_t contentLength = 0;
     for (const auto& field : view.fields) {
         if (!token(field.name)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
-        if (!validValue(field.value)) {
+        if (!validValue(field.value) ||
+            (equalIgnoreCase(field.name, "origin") &&
+                !detail::isValidHttpOriginFieldValue(field.value)) ||
+            (equalIgnoreCase(field.name, "access-control-request-method") &&
+                !detail::isValidHttpCorsRequestMethod(field.value)) ||
+            (equalIgnoreCase(field.name, "access-control-request-headers") &&
+                !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
+            (equalIgnoreCase(field.name, "expect") &&
+                !detail::isValidHttpExpectFieldValue(field.value))) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         // RFC 9110 section 9.3.8: never generate known credential/cookie
@@ -186,6 +200,21 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
                 return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidAuthority));
             }
             hostSeen = true;
+        }
+        if (equalIgnoreCase(field.name, "content-type")) {
+            if (contentTypeSeen || !isValidHttpContentTypeFieldValue(field.value)) {
+                return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+            }
+            contentTypeSeen = true;
+        } else if (equalIgnoreCase(field.name, "content-encoding") &&
+                   !detail::isValidHttpContentEncodingFieldValue(
+                       field.value, detail::HttpFieldListRole::kSender)) {
+            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
+        }
+        if (equalIgnoreCase(field.name, "trailer") &&
+            !detail::isValidHttpRequestTrailerFieldValue(
+                field.value, detail::HttpFieldListRole::kSender)) {
+            return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         if (equalIgnoreCase(field.name, "content-length")) {
             if (connect) {
