@@ -69,6 +69,10 @@ private:
     detail::HttpClientResponseState* state_{nullptr};
 };
 
+// Owns worker-affine response storage independently of its client transport.
+// May survive client shutdown/destruction on that worker, but must be destroyed
+// before the bound EventLoop retires. Metadata views borrow this response;
+// body chunks remain valid until the next body operation.
 class HttpClientResponse final {
 public:
     HttpClientResponse(const HttpClientResponse&) = delete;
@@ -98,10 +102,7 @@ public:
 private:
     friend class detail::HttpClientPool;
 
-    HttpClientResponse(std::pmr::memory_resource* resource, const WorkerHandle& worker,
-        detail::HttpClientPool& pool);
-    HttpClientResponse(
-        std::pmr::memory_resource*, WorkerHandle&&, detail::HttpClientPool&) = delete;
+    explicit HttpClientResponse(detail::HttpClientPool& pool);
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;
     void release() noexcept;
 

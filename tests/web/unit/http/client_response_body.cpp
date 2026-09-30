@@ -43,12 +43,14 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
+#include "ruvia/web/detail/http/StreamingAccess.h"
 #include "ruvia/web/detail/http3/Http3ClientBodyBudget.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
@@ -179,6 +181,47 @@ private:
         .protocol = ruvia::HttpClientProtocol::kHttp1Only};
 }
 
+struct GatedResponseSink final {
+    explicit GatedResponseSink(const ruvia::WorkerHandle& worker)
+        : entered(worker),
+          release(worker) {}
+
+    ruvia::WorkerSignal entered;
+    ruvia::WorkerSignal release;
+    std::string output;
+};
+
+ruvia::Task<void> writeGatedResponse(void* target, std::string_view chunk) {
+    auto& sink = *static_cast<GatedResponseSink*>(target);
+    sink.entered.notify();
+    co_await sink.release.wait();
+    sink.output.append(chunk);
+}
+
+ruvia::Task<void> endGatedResponse(void*, std::span<const ruvia::HttpHeaderView>) {
+    co_return;
+}
+
+ruvia::Task<ruvia::TimerSleepResult> sleepGatedResponse(
+    void*, std::chrono::milliseconds, const ruvia::StopToken&) {
+    co_return ruvia::TimerSleepResult::kElapsed;
+}
+
+void bindGatedResponse(void*, ruvia::Context*, ruvia::Task<ruvia::HttpResponse> (*)(ruvia::Context&)) {}
+void releaseGatedResponse(void*) noexcept {}
+bool gatedResponseCommitted(void*) noexcept {
+    return false;
+}
+bool gatedResponseAborted(void*) noexcept {
+    return false;
+}
+
+[[nodiscard]] ruvia::ResponseStreamWriter makeGatedResponseWriter(GatedResponseSink& sink) noexcept {
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(*ruvia::detail::processResource(), &sink,
+        &writeGatedResponse, &endGatedResponse, &sleepGatedResponse, &bindGatedResponse,
+        &releaseGatedResponse, &gatedResponseCommitted, &gatedResponseAborted);
+}
+
 [[nodiscard]] std::string largeGzipResponseBody() {
     const std::string body(128 * 1024, 'z');
     auto result = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
@@ -192,19 +235,37 @@ private:
 
 class Http2PartialBodyPeer final {
 public:
-    explicit Http2PartialBodyPeer(asio::io_context& io)
+    explicit Http2PartialBodyPeer(asio::io_context& io, const ruvia::WorkerHandle& worker,
+        std::string body = "partial-body", std::string longHeader = {}, std::string longTrailer = {})
         : io_(io),
           acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          responseReady_(worker),
+          body_(std::move(body)),
+          longHeader_(std::move(longHeader)),
+          longTrailer_(std::move(longTrailer)),
           responseSent_(responseSentPromise_.get_future()) {}
 
     void start() {
         asio::co_spawn(io_, serve(), [this](std::exception_ptr failure) {
             failure_ = failure;
+            if (failure_ != nullptr) {
+                responseReadyPublished_ = true;
+                responseReady_.notify();
+            }
         });
     }
 
     [[nodiscard]] std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
+    }
+
+    [[nodiscard]] ruvia::Task<void> waitForResponse() {
+        while (!responseReadyPublished_) {
+            co_await responseReady_.wait();
+        }
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
     }
 
     void waitForPartialResponse() {
@@ -277,17 +338,39 @@ private:
 
         ruvia::HttpResponse response;
         response.status(ruvia::http_status::kOk);
-        if (connection.submitStreamingResponseHead(requestStream, std::move(response)) !=
-            ruvia::Http2SubmitStatus::kAccepted) {
-            throw std::runtime_error("HTTP/2 peer could not submit response headers");
+        if (!longHeader_.empty()) {
+            response.header("x-long", longHeader_);
         }
-        if (connection.submitData(requestStream, "partial-body", ruvia::Http2EndStream::kKeepOpen) !=
+        if (longTrailer_.empty()) {
+            if (connection.submitStreamingResponseHead(requestStream, std::move(response)) !=
+                ruvia::Http2SubmitStatus::kAccepted) {
+                throw std::runtime_error("HTTP/2 peer could not submit response headers");
+            }
+        } else {
+            const auto submitted = connection.submitStreamingResponseHead(requestStream,
+                std::move(response), ruvia::ResponseStreamKind::kGeneric,
+                ruvia::ResponseTrailerIntent::kPresent);
+            if (submitted.submitted() == nullptr) {
+                throw std::runtime_error("HTTP/2 peer could not submit response headers");
+            }
+        }
+        if (connection.submitData(requestStream, body_, ruvia::Http2EndStream::kKeepOpen) !=
             ruvia::Http2DataSubmitStatus::kAccepted) {
-            throw std::runtime_error("HTTP/2 peer could not submit partial response data");
+            throw std::runtime_error("HTTP/2 peer could not submit response data");
         }
-        // Retain the stream owner while the response remains open. Releasing
-        // it here would legally send RST_STREAM and invalidate this test setup.
+        if (!longTrailer_.empty()) {
+            const std::array trailers{ruvia::HttpHeaderView("x-long-trailer", longTrailer_)};
+            const auto section = ruvia::validateHttpResponseTrailers(trailers);
+            if (connection.finishResponse(requestStream, section) !=
+                ruvia::Http2FinishResponseStatus::kAccepted) {
+                throw std::runtime_error("HTTP/2 peer could not submit response trailers");
+            }
+        }
+        // Keep the request lease until the client closes. Releasing it early
+        // would invalidate the server-side request while its connection is active.
         co_await sendPending(socket, connection);
+        responseReadyPublished_ = true;
+        responseReady_.notify();
         responseSentPromise_.set_value();
 
         std::array<char, 1024> input{};
@@ -305,9 +388,14 @@ private:
 
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
+    ruvia::WorkerSignal responseReady_;
+    std::string body_;
+    std::string longHeader_;
+    std::string longTrailer_;
     std::promise<void> responseSentPromise_;
     std::future<void> responseSent_;
     std::exception_ptr failure_;
+    bool responseReadyPublished_{false};
     bool observedClientClose_{false};
 };
 
@@ -317,11 +405,12 @@ public:
         kWaitForClientClose };
 
     explicit Http1ChunkedResponsePeer(asio::io_context& io, std::string encoded,
-        EndMode endMode = EndMode::kTerminalGate)
+        EndMode endMode = EndMode::kTerminalGate, std::string longHeader = {})
         : io_(io),
           acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           gate_(io),
           encoded_(std::move(encoded)),
+          longHeader_(std::move(longHeader)),
           endMode_(endMode),
           done_(donePromise_.get_future()) {}
 
@@ -368,7 +457,11 @@ private:
         }
         std::string response =
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n"
-            "Trailer: X-End\r\nConnection: close\r\n\r\n";
+            "Trailer: X-End\r\nConnection: close\r\n";
+        if (!longHeader_.empty()) {
+            response += "X-Long: " + longHeader_ + "\r\n";
+        }
+        response += "\r\n";
         response.append(chunkSize.data(), chunkEnd);
         response += "\r\n" + encoded_ + "\r\n";
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
@@ -404,6 +497,7 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer gate_;
     std::string encoded_;
+    std::string longHeader_;
     EndMode endMode_;
     std::promise<void> donePromise_;
     std::future<void> done_;
@@ -846,10 +940,297 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
     RUVIA_CHECK(decodedBytes > config.maxResponseBytes);
 }
 
+RUVIA_TEST(http1_response_storage_remains_worker_owned_after_client_destruction) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    const std::string expected(128 * 1024, 'z');
+    const auto encoded = largeGzipResponseBody();
+    const std::string longHeader(32 * 1024, 'h');
+    Http1ChunkedResponsePeer peer(io, encoded,
+        Http1ChunkedResponsePeer::EndMode::kTerminalGate, longHeader);
+    peer.start();
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        std::optional<ruvia::HttpClientResponse> response;
+        std::optional<ruvia::HttpClientResponseBytes> retainedBody;
+        std::string collected;
+        {
+            ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(peer.port()));
+            response.emplace(co_await client.send({.target = "/retained-response"}));
+            const auto first = co_await response->body().read();
+            RUVIA_CHECK(first.has_value());
+            if (first) {
+                collected.append(reinterpret_cast<const char*>(first->data()), first->size());
+            }
+            peer.releaseTerminalChunk();
+            retainedBody.emplace(co_await response->body().readAll());
+            co_await client.shutdown();
+        }
+
+        const auto headers = response->headers();
+        const auto longValue = response->header("x-long");
+        RUVIA_CHECK(longValue.has_value());
+        RUVIA_CHECK_EQ(longValue->size(), longHeader.size());
+        RUVIA_CHECK(std::ranges::all_of(*longValue, [](char value) { return value == 'h'; }));
+        RUVIA_CHECK(!headers.empty());
+        const auto text = co_await response->body().text();
+        RUVIA_CHECK(!text.has_value());
+        RUVIA_CHECK(!(co_await response->body().read()).has_value());
+        const auto remaining = co_await response->body().readAll();
+        RUVIA_CHECK(remaining.empty());
+        const auto retainedView = retainedBody->bytes();
+        collected.append(reinterpret_cast<const char*>(retainedView.data()), retainedView.size());
+        RUVIA_CHECK_EQ(collected, expected);
+        RUVIA_CHECK_EQ(response->trailer("x-end"), std::optional<std::string_view>("retained"));
+        response.reset();
+        RUVIA_CHECK_EQ(retainedBody->bytes().size(), retainedView.size());
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(retainedBody->bytes().data()),
+                           retainedBody->bytes().size()),
+            expected.substr(expected.size() - retainedView.size()));
+        retainedBody.reset();
+    };
+    runOperation(worker, io, operation);
+    peer.wait();
+}
+
+RUVIA_TEST(client_shutdown_does_not_join_a_gated_response_pipe_consumer) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    LoopbackResponseServer server(io, worker.handle, {std::string(64 * 1024, 'p')});
+    server.start();
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto client = std::make_unique<ruvia::HttpClient>(
+            worker.attachment.loop(), localHttpClientConfig(server.port()));
+        auto response = co_await client->send({.target = "/gated-pipe"});
+        GatedResponseSink sink(worker.handle);
+        auto writer = makeGatedResponseWriter(sink);
+        bool pipeCompleted = false;
+        bool pipeClosed = false;
+        ruvia::TaskScope tasks(worker.handle);
+        auto pipeTask = [&]() -> ruvia::Task<void> {
+            try {
+                co_await response.body().pipeTo(writer);
+                pipeCompleted = true;
+            } catch (const ruvia::HttpClientError& error) {
+                pipeClosed = error.code() == ruvia::HttpClientError::Code::kClosing ||
+                             error.code() == ruvia::HttpClientError::Code::kCancelled ||
+                             error.code() == ruvia::HttpClientError::Code::kIoError;
+            }
+        };
+        tasks.spawn(pipeTask());
+        co_await sink.entered.wait();
+        client->close();
+        co_await client->shutdown();
+        client.reset();
+        sink.release.notify();
+        co_await tasks.join();
+        RUVIA_CHECK(pipeCompleted || pipeClosed);
+        RUVIA_CHECK(!sink.output.empty());
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        co_await server.wait();
+    };
+    runOperation(worker, io, operation);
+}
+
+RUVIA_TEST(client_response_cold_collection_survives_client_and_expires_with_response) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    LoopbackResponseServer server(io, worker.handle, {"cold-body"});
+    server.start();
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto client = std::make_unique<ruvia::HttpClient>(
+            worker.attachment.loop(), localHttpClientConfig(server.port()));
+        std::optional<ruvia::HttpClientResponse> response;
+        response.emplace(co_await client->send({.target = "/cold-body"}));
+        auto cold = response->body().readAll();
+        co_await client->shutdown();
+        client.reset();
+
+        auto retained = co_await std::move(cold);
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(retained.bytes().data()),
+                           retained.bytes().size()),
+            std::string_view("cold-body"));
+        auto expired = response->body().readAll();
+        response.reset();
+        bool rejected = false;
+        try {
+            (void)co_await std::move(expired);
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        co_await server.wait();
+    };
+    runOperation(worker, io, operation);
+}
+
+RUVIA_TEST(http2_completed_response_storage_survives_client_teardown) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    const std::string body(8192, 'h');
+    const std::string longHeader(32 * 1024, 'H');
+    const std::string longTrailer(32 * 1024, 'T');
+    Http2PartialBodyPeer peer(io, worker.handle, body, longHeader, longTrailer);
+    Http2PartialBodyPeer queuedPeer(io, worker.handle, body, longHeader, longTrailer);
+    peer.start();
+    queuedPeer.start();
+    auto config = localHttpClientConfig(peer.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        std::optional<ruvia::HttpClientResponse> response;
+        std::optional<std::span<const std::byte>> bodyView;
+        auto client = std::make_unique<ruvia::HttpClient>(worker.attachment.loop(), config);
+        response.emplace(co_await client->send({.target = "/retained-h2"}));
+        co_await peer.waitForResponse();
+        for (unsigned attempt = 0; response->trailers().empty() && attempt < 500; ++attempt) {
+            (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(1));
+        }
+        RUVIA_CHECK(!response->trailers().empty());
+        const auto chunk = co_await response->body().read();
+        RUVIA_CHECK(chunk.has_value());
+        bodyView = *chunk;
+        auto cold = response->body().readAll();
+        co_await client->shutdown();
+        client.reset();
+
+        const auto headers = response->headers();
+        const auto trailers = response->trailers();
+        RUVIA_CHECK(!headers.empty());
+        RUVIA_CHECK(!trailers.empty());
+        RUVIA_CHECK_EQ(response->header("x-long"),
+            std::optional<std::string_view>(std::string_view(longHeader)));
+        RUVIA_CHECK_EQ(response->trailer("x-long-trailer"),
+            std::optional<std::string_view>(std::string_view(longTrailer)));
+        RUVIA_CHECK(bodyView.has_value());
+        if (bodyView) {
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bodyView->data()),
+                               bodyView->size()),
+                body);
+        }
+
+        LoopbackResponseServer nextServer(io, worker.handle, {"next-client"});
+        nextServer.start();
+        {
+            ruvia::HttpClient nextClient(worker.attachment.loop(), localHttpClientConfig(nextServer.port()));
+            auto nextResponse = co_await nextClient.send({.target = "/new-client"});
+            auto nextBody = co_await nextResponse.body().readAll();
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(nextBody.bytes().data()),
+                               nextBody.bytes().size()),
+                std::string_view("next-client"));
+            co_await nextClient.shutdown();
+        }
+        co_await nextServer.wait();
+        const auto retainedHeader = std::ranges::find_if(headers, [](const auto& header) {
+            return header.name() == "x-long";
+        });
+        const auto retainedTrailer = std::ranges::find_if(trailers, [](const auto& header) {
+            return header.name() == "x-long-trailer";
+        });
+        RUVIA_CHECK(retainedHeader != headers.end());
+        RUVIA_CHECK(retainedTrailer != trailers.end());
+        if (retainedHeader != headers.end()) {
+            RUVIA_CHECK_EQ(retainedHeader->value(), std::string_view(longHeader));
+        }
+        if (retainedTrailer != trailers.end()) {
+            RUVIA_CHECK_EQ(retainedTrailer->value(), std::string_view(longTrailer));
+        }
+        if (bodyView) {
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bodyView->data()),
+                               bodyView->size()),
+                body);
+        }
+        auto retained = co_await std::move(cold);
+        RUVIA_CHECK(retained.empty());
+        response.reset();
+
+        auto queuedConfig = config;
+        queuedConfig.port = queuedPeer.port();
+        auto queuedClient = std::make_unique<ruvia::HttpClient>(worker.attachment.loop(), queuedConfig);
+        std::optional<ruvia::HttpClientResponse> queuedResponse;
+        queuedResponse.emplace(co_await queuedClient->send({.target = "/queued-body"}));
+        co_await queuedPeer.waitForResponse();
+        for (unsigned attempt = 0; queuedResponse->trailers().empty() && attempt < 500; ++attempt) {
+            (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(1));
+        }
+        RUVIA_CHECK(!queuedResponse->trailers().empty());
+        auto queuedBody = queuedResponse->body().readAll();
+        co_await queuedClient->shutdown();
+        queuedClient.reset();
+        auto queuedBytes = co_await std::move(queuedBody);
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(queuedBytes.bytes().data()),
+                           queuedBytes.bytes().size()),
+            body);
+        RUVIA_CHECK_EQ(queuedResponse->header("x-long"),
+            std::optional<std::string_view>(std::string_view(longHeader)));
+        queuedResponse.reset();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(queuedBytes.bytes().data()),
+                           queuedBytes.bytes().size()),
+            body);
+    };
+    runOperation(worker, io, operation);
+    peer.waitForPartialResponse();
+    queuedPeer.waitForPartialResponse();
+    peer.rethrowFailure();
+    queuedPeer.rethrowFailure();
+    RUVIA_CHECK(peer.observedClientClose());
+    RUVIA_CHECK(queuedPeer.observedClientClose());
+}
+
+RUVIA_TEST(client_shutdown_keeps_incomplete_response_error_observable) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    Http2PartialBodyPeer peer(io, worker.handle);
+    peer.start();
+    auto config = localHttpClientConfig(peer.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        std::optional<ruvia::HttpClientResponse> response;
+        bool runningReadFailed = false;
+        {
+            ruvia::HttpClient client(worker.attachment.loop(), config);
+            response.emplace(co_await client.send({.target = "/incomplete-after-close"}));
+            asio::steady_timer closeTimer(io);
+            closeTimer.expires_after(std::chrono::milliseconds(50));
+            closeTimer.async_wait([&client](const std::error_code& error) {
+                if (!error) {
+                    client.close();
+                }
+            });
+            try {
+                (void)co_await response->body().readAll();
+            } catch (const ruvia::HttpClientError& error) {
+                runningReadFailed = error.code() == ruvia::HttpClientError::Code::kClosing ||
+                                    error.code() == ruvia::HttpClientError::Code::kCancelled ||
+                                    error.code() == ruvia::HttpClientError::Code::kIoError;
+            }
+            RUVIA_CHECK(runningReadFailed);
+            co_await client.shutdown();
+        }
+        bool retainedResponseFailed = false;
+        try {
+            (void)co_await response->body().readAll();
+        } catch (const ruvia::HttpClientError& error) {
+            retainedResponseFailed = error.code() == ruvia::HttpClientError::Code::kClosing ||
+                                     error.code() == ruvia::HttpClientError::Code::kCancelled ||
+                                     error.code() == ruvia::HttpClientError::Code::kIoError;
+        }
+        RUVIA_CHECK(retainedResponseFailed);
+        response.reset();
+    };
+    runOperation(worker, io, operation);
+    peer.waitForPartialResponse();
+    peer.rethrowFailure();
+    RUVIA_CHECK(peer.observedClientClose());
+}
+
 RUVIA_TEST(http2_event_loop_stop_joins_reader_writer_with_a_partial_response_body) {
     auto& io = ruvia::test::newTestIoContext();
     TestWorker worker(io);
-    Http2PartialBodyPeer peer(io);
+    Http2PartialBodyPeer peer(io, worker.handle);
     peer.start();
     auto config = localHttpClientConfig(peer.port());
     config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
@@ -962,7 +1343,9 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
             RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
             const auto beforeHeaderRelease = resource.liveAllocations();
             retainedResponse.reset();
-            RUVIA_CHECK(resource.liveAllocations() < beforeHeaderRelease);
+            // Response storage has an independent owner; releasing it must not
+            // retire the client's request/transport allocations.
+            RUVIA_CHECK_EQ(resource.liveAllocations(), beforeHeaderRelease);
             scope.close();
             co_await scope.closeAndJoin();
             registry.closeNow();

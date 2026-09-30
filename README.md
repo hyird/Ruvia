@@ -292,7 +292,15 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
 
 `HttpClientResponse` owns status, protocol version, headers, trailers, and an
 address-stable linear body state; it does not borrow from the request builder
-or caller stack. `send()` completes when the final response head is available.
+or caller stack. Its worker-affine storage survives client shutdown and destruction
+on that worker. Client shutdown cancels and joins producers and send operations,
+then detaches their transport; it does not join response body consumers (which
+may be waiting on a downstream `pipeTo()` write). Keep the response and downstream
+writer alive until those operations finish, and destroy the response on its bound
+worker before the EventLoop retires. Metadata views borrow the response; body
+chunks expire on the next body operation. Retaining a response also retains its
+storage pool's caches until the last response state is released.
+`send()` completes when the final response head is available.
 `maxResponseBytes` bounds each `readAll()` result and the HTTP/1 queued body
 window, not the total number of bytes that may pass through `read()` or
 `pipeTo()`. Responses with a non-identity `Content-Encoding` are decoded before
