@@ -896,6 +896,10 @@ variants when the server switch is enabled.
 `compression()` also enables incremental gzip, Brotli, or zstd for response
 streams; each handler write is flushed through the encoder so SSE and other
 low-latency streams do not wait for a full buffered response.
+Buffered and streaming representations advertise `Vary: Accept-Encoding` when
+this policy can select their coding, including negotiated identity and HEAD
+metadata. Fixed representations such as `no-transform` responses are not marked
+as varying by this policy.
 An application-provided known `Content-Encoding` (including a stack composed only
 of known codings) is treated as an already-built representation and every coding
 must still be acceptable to the request's `Accept-Encoding`; otherwise the response
