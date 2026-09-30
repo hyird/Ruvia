@@ -1,6 +1,7 @@
 #include <atomic>
 #include <future>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -8,6 +9,7 @@
 
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/TaskScope.h"
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 
 #include "test_harness.h"
@@ -202,21 +204,151 @@ ruvia::Task<bool> awaitScopedBool(ruvia::ScopedOperation<bool>& operation) {
     co_return co_await std::move(operation);
 }
 
-void recordStartCheck(void* target) noexcept {
-    ++*static_cast<int*>(target);
+struct CheckerTarget final {
+    bool alive{true};
+    int calls{};
+    int invalidCalls{};
+    std::size_t allocatedBytesAtCheck{};
+    CountingResource* resource{};
+};
+
+void checkTarget(void* target) noexcept {
+    auto& checker = *static_cast<CheckerTarget*>(target);
+    ++checker.calls;
+    if (!checker.alive) {
+        ++checker.invalidCalls;
+    }
+    if (checker.resource != nullptr) {
+        checker.allocatedBytesAtCheck = checker.resource->inUseBytes;
+    }
+}
+
+ruvia::Task<void> observeCheckAtTaskStart(CheckerTarget& checker, int& checksAtStart) {
+    checksAtStart = checker.calls;
+    co_return;
 }
 
 ruvia::Task<void> completeImmediately() {
     co_return;
 }
 
+struct ReentrantRetirementStats final {
+    bool childSpawned{};
+    bool pendingOperationsAtSpawn{};
+    int expirationsAtSpawn{};
+    std::size_t bytesAtSpawn{};
+    std::size_t allocationsAfterJoin{};
+    std::size_t bytesAfterJoin{};
+    int expirationsAfterJoin{};
+};
+
+ruvia::Task<void> joinAndObserveTask(ruvia::detail::ScopedOperationScope& scope,
+    CountingResource& resource, int& expiredCount, ReentrantRetirementStats& stats) {
+    co_await scope.closeAndJoin();
+    stats.allocationsAfterJoin = resource.inUseAllocations;
+    stats.bytesAfterJoin = resource.inUseBytes;
+    stats.expirationsAfterJoin = expiredCount;
+}
+
+struct ReentrantFrameInput final {
+    ReentrantFrameInput(std::pmr::memory_resource* resource, ruvia::TaskScope& children,
+        ruvia::detail::ScopedOperationScope& parentScope, CountingResource& countingResource,
+        int& expiredCount, ReentrantRetirementStats& stats)
+        : payload(1024, 'r', resource),
+          children(&children),
+          parentScope(&parentScope),
+          countingResource(&countingResource),
+          expiredCount(&expiredCount),
+          stats(&stats) {}
+    ReentrantFrameInput(const ReentrantFrameInput&) = delete;
+    ReentrantFrameInput& operator=(const ReentrantFrameInput&) = delete;
+    ReentrantFrameInput(ReentrantFrameInput&& other) noexcept
+        : payload(std::move(other.payload)),
+          children(std::exchange(other.children, nullptr)),
+          parentScope(other.parentScope),
+          countingResource(other.countingResource),
+          expiredCount(other.expiredCount),
+          stats(other.stats) {}
+    ReentrantFrameInput& operator=(ReentrantFrameInput&&) = delete;
+    ~ReentrantFrameInput() noexcept {
+        if (children == nullptr) {
+            return;
+        }
+        children->spawn(joinAndObserveTask(
+            *parentScope, *countingResource, *expiredCount, *stats));
+        stats->childSpawned = true;
+        stats->pendingOperationsAtSpawn = parentScope->hasPendingOperations();
+        stats->expirationsAtSpawn = *expiredCount;
+        stats->bytesAtSpawn = countingResource->inUseBytes;
+    }
+
+    std::pmr::string payload;
+    ruvia::TaskScope* children;
+    ruvia::detail::ScopedOperationScope* parentScope;
+    CountingResource* countingResource;
+    int* expiredCount;
+    ReentrantRetirementStats* stats;
+};
+
+ruvia::Task<void> coldWithReentrantInput(ReentrantFrameInput input) {
+    if (input.payload.empty()) {
+        throw std::runtime_error("payload unexpectedly empty");
+    }
+    co_return;
+}
+
+struct SiblingDropInput final {
+    SiblingDropInput(CountingResource& resource,
+        std::unique_ptr<ruvia::ScopedOperation<void>>& sibling)
+        : payload(1024, 's', &resource),
+          sibling(&sibling) {}
+    SiblingDropInput(const SiblingDropInput&) = delete;
+    SiblingDropInput& operator=(const SiblingDropInput&) = delete;
+    SiblingDropInput(SiblingDropInput&& other) noexcept
+        : payload(std::move(other.payload)),
+          sibling(std::exchange(other.sibling, nullptr)) {}
+    SiblingDropInput& operator=(SiblingDropInput&&) = delete;
+    ~SiblingDropInput() {
+        if (sibling != nullptr) {
+            sibling->reset();
+        }
+    }
+
+    std::pmr::string payload;
+    std::unique_ptr<ruvia::ScopedOperation<void>>* sibling;
+};
+
+ruvia::Task<void> coldWithSiblingDrop(SiblingDropInput input) {
+    if (input.payload.empty()) {
+        throw std::runtime_error("payload unexpectedly empty");
+    }
+    co_return;
+}
+
+ruvia::Task<void> runReentrantColdDrop(const ruvia::WorkerHandle& worker,
+    ruvia::detail::ScopedOperationScope& parentScope, CountingResource& resource,
+    int& expiredCount, ReentrantRetirementStats& stats, bool closeScope = false) {
+    ruvia::TaskScope children(worker);
+    {
+        ReentrantFrameInput input(&resource, children, parentScope, resource, expiredCount, stats);
+        auto operation = ruvia::detail::makeScopedOperation(
+            parentScope, coldWithReentrantInput(std::move(input)));
+        if (closeScope) {
+            parentScope.close();
+        }
+        static_cast<void>(operation);
+    }
+    co_await children.join();
+}
+
 }  // namespace
 
-RUVIA_TEST(scoped_operation_start_check_runs_before_beginning_task) {
+RUVIA_TEST(scoped_operation_start_check_runs_before_task_body) {
     ruvia::detail::ScopedOperationScope scope;
-    int checks = 0;
+    CheckerTarget checker;
+    int checksAtStart = 0;
     auto operation = ruvia::detail::makeScopedOperation(
-        scope, completeImmediately(), &recordStartCheck, &checks);
+        scope, observeCheckAtTaskStart(checker, checksAtStart), &checkTarget, &checker);
     auto root = ruvia::EventLoopPool({.loopCount = 1});
     const auto loop = root.loop(0);
     auto awaited = loop.start(awaitScopedOperation(operation));
@@ -224,21 +356,24 @@ RUVIA_TEST(scoped_operation_start_check_runs_before_beginning_task) {
     awaited.get();
     root.stop();
     root.join();
-    RUVIA_CHECK_EQ(checks, 1);
+    RUVIA_CHECK_EQ(checksAtStart, 1);
+    RUVIA_CHECK_EQ(checker.calls, 2);
 }
 
 RUVIA_TEST(scoped_operation_start_check_runs_before_cold_frame_destruction) {
     ruvia::detail::ScopedOperationScope scope;
     CountingResource resource;
-    int checks = 0;
+    CheckerTarget checker{.resource = &resource};
     {
         std::pmr::string payload(1024, 'p', &resource);
         auto operation = ruvia::detail::makeScopedOperation(
-            scope, coldWithPayload(std::move(payload)), &recordStartCheck, &checks);
-        RUVIA_CHECK_EQ(checks, 0);
+            scope, coldWithPayload(std::move(payload)), &checkTarget, &checker);
+        RUVIA_CHECK_EQ(checker.calls, 0);
     }
-    RUVIA_CHECK_EQ(checks, 1);
+    RUVIA_CHECK_EQ(checker.calls, 1);
+    RUVIA_CHECK(checker.allocatedBytesAtCheck > 0U);
     RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
     scope.close();
 }
 
@@ -455,5 +590,189 @@ RUVIA_TEST(scoped_operation_scope_close_reclaims_cold_frame_before_capability_ex
     RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
     RUVIA_CHECK(!scope.hasPendingOperations());
     // The expired public operation may remain alive after its frame is gone.
+    static_cast<void>(operation);
+}
+
+RUVIA_TEST(scoped_operation_expiration_clears_borrowed_start_check) {
+    ruvia::detail::ScopedOperationScope scope;
+    CountingResource resource;
+    CheckerTarget checker{.resource = &resource};
+    {
+        auto operation = ruvia::detail::makeScopedOperation(scope,
+            coldWithPayload(std::pmr::string(1024, 'p', &resource)), &checkTarget, &checker);
+        RUVIA_CHECK(resource.inUseBytes > 0U);
+        scope.close();
+        RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+        checker.alive = false;
+
+        ruvia::EventLoopPool loops({.loopCount = 1});
+        const auto loop = loops.loop(0);
+        auto expiredRoot = loop.start(awaitScopedOperation(operation));
+        loops.start();
+        bool rejectedAsExpired = false;
+        try {
+            expiredRoot.get();
+        } catch (const std::logic_error&) {
+            rejectedAsExpired = true;
+        }
+        RUVIA_CHECK(rejectedAsExpired);
+        loops.stop();
+        loops.join();
+    }
+    RUVIA_CHECK_EQ(checker.calls, 1);
+    RUVIA_CHECK_EQ(checker.invalidCalls, 0);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+}
+
+RUVIA_TEST(scoped_operation_created_after_scope_close_discards_cold_frame) {
+    ruvia::detail::ScopedOperationScope scope;
+    CountingResource resource;
+    CheckerTarget checker{.resource = &resource};
+    scope.close();
+    checker.alive = false;
+
+    auto operation = ruvia::detail::makeScopedOperation(scope,
+        coldWithPayload(std::pmr::string(1024, 'p', &resource)), &checkTarget, &checker);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    auto expiredRoot = loop.start(awaitScopedOperation(operation));
+    loops.start();
+    bool rejectedAsExpired = false;
+    try {
+        expiredRoot.get();
+    } catch (const std::logic_error&) {
+        rejectedAsExpired = true;
+    }
+    RUVIA_CHECK(rejectedAsExpired);
+    loops.stop();
+    loops.join();
+
+    RUVIA_CHECK_EQ(checker.calls, 0);
+    RUVIA_CHECK_EQ(checker.invalidCalls, 0);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+}
+
+RUVIA_TEST(scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    const auto worker = loop.handle();
+    ruvia::detail::ScopedOperationScope parentScope;
+    CountingResource resource;
+    int expiredCount = 0;
+    std::size_t bytesAtExpire = std::numeric_limits<std::size_t>::max();
+    TestScopedCapability capability(parentScope, expiredCount, &resource, &bytesAtExpire);
+    static_cast<void>(capability);
+    ReentrantRetirementStats stats;
+
+    auto root = loop.start(runReentrantColdDrop(
+        worker, parentScope, resource, expiredCount, stats));
+    loops.start();
+    root.get();
+
+    RUVIA_CHECK(stats.childSpawned);
+    RUVIA_CHECK(stats.pendingOperationsAtSpawn);
+    RUVIA_CHECK_EQ(stats.expirationsAtSpawn, 0);
+    RUVIA_CHECK(stats.bytesAtSpawn > 0U);
+    RUVIA_CHECK_EQ(expiredCount, 1);
+    RUVIA_CHECK_EQ(bytesAtExpire, 0U);
+    RUVIA_CHECK_EQ(stats.allocationsAfterJoin, 0U);
+    RUVIA_CHECK_EQ(stats.bytesAfterJoin, 0U);
+    RUVIA_CHECK_EQ(stats.expirationsAfterJoin, 1);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+    RUVIA_CHECK(!parentScope.hasPendingOperations());
+    loops.stop();
+    loops.join();
+}
+
+RUVIA_TEST(scoped_operation_completion_clears_borrowed_start_check) {
+    ruvia::detail::ScopedOperationScope scope;
+    CheckerTarget checker;
+    {
+        auto operation = ruvia::detail::makeScopedOperation(
+            scope, completeImmediately(), &checkTarget, &checker);
+        ruvia::EventLoopPool loops({.loopCount = 1});
+        const auto loop = loops.loop(0);
+        auto firstRoot = loop.start(awaitScopedOperation(operation));
+        loops.start();
+        firstRoot.get();
+        RUVIA_CHECK_EQ(checker.calls, 2);
+        checker.alive = false;
+
+        auto repeatedRoot = loop.start(awaitScopedOperation(operation));
+        bool rejectedAsCompleted = false;
+        try {
+            repeatedRoot.get();
+        } catch (const std::logic_error&) {
+            rejectedAsCompleted = true;
+        }
+        RUVIA_CHECK(rejectedAsCompleted);
+        loops.stop();
+        loops.join();
+    }
+    RUVIA_CHECK_EQ(checker.calls, 2);
+    RUVIA_CHECK_EQ(checker.invalidCalls, 0);
+    scope.close();
+}
+
+RUVIA_TEST(scoped_operation_scope_drain_allows_reentrant_join_after_all_frames_release) {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    const auto worker = loop.handle();
+    ruvia::detail::ScopedOperationScope scope;
+    CountingResource resource;
+    int expiredCount = 0;
+    std::size_t bytesAtExpire = std::numeric_limits<std::size_t>::max();
+    TestScopedCapability capability(scope, expiredCount, &resource, &bytesAtExpire);
+    ReentrantRetirementStats stats;
+    auto root = loop.start(runReentrantColdDrop(
+        worker, scope, resource, expiredCount, stats, true));
+    loops.start();
+    root.get();
+    RUVIA_CHECK(stats.childSpawned);
+    RUVIA_CHECK(stats.pendingOperationsAtSpawn);
+    RUVIA_CHECK_EQ(stats.expirationsAtSpawn, 0);
+    RUVIA_CHECK(stats.bytesAtSpawn > 0U);
+    RUVIA_CHECK_EQ(expiredCount, 1);
+    RUVIA_CHECK_EQ(bytesAtExpire, 0U);
+    RUVIA_CHECK_EQ(stats.allocationsAfterJoin, 0U);
+    RUVIA_CHECK_EQ(stats.bytesAfterJoin, 0U);
+    RUVIA_CHECK_EQ(stats.expirationsAfterJoin, 1);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK(!scope.hasPendingOperations());
+    loops.stop();
+    loops.join();
+}
+
+RUVIA_TEST(scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
+    ruvia::detail::ScopedOperationScope scope;
+    CountingResource resource;
+    int expiredCount = 0;
+    std::size_t bytesAtExpire = std::numeric_limits<std::size_t>::max();
+    TestScopedCapability capability(scope, expiredCount, &resource, &bytesAtExpire);
+    std::unique_ptr<ruvia::ScopedOperation<void>> sibling(
+        new auto(ruvia::detail::makeScopedOperation(scope,
+            coldWithPayload(std::pmr::string(1024, 'p', &resource)))));
+    auto operation = ruvia::detail::makeScopedOperation(scope,
+        coldWithSiblingDrop(SiblingDropInput(resource, sibling)));
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 2U);
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    auto joined = loop.start(joinAndObserveBytes(scope, resource));
+    loops.start();
+    RUVIA_CHECK_EQ(joined.get(), 0U);
+    RUVIA_CHECK(sibling == nullptr);
+    RUVIA_CHECK_EQ(expiredCount, 1);
+    RUVIA_CHECK_EQ(bytesAtExpire, 0U);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 0U);
+    RUVIA_CHECK_EQ(resource.inUseBytes, 0U);
+    RUVIA_CHECK(!scope.hasPendingOperations());
+    loops.stop();
+    loops.join();
     static_cast<void>(operation);
 }

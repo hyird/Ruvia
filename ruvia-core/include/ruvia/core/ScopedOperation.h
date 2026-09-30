@@ -53,7 +53,9 @@ public:
 private:
     friend class ScopedOperationNode;
     friend class ScopedCapabilityNode;
+    struct DrainGuard;
     struct JoinAwaiter;
+    void retireColdOperations() noexcept;
     void expireForJoin() noexcept;
     void expireCapabilities() noexcept;
     void resumeJoiner() noexcept;
@@ -111,38 +113,38 @@ public:
 
 protected:
     explicit ScopedOperationNode(ScopedOperationScope& scope) noexcept;
-    void setExpireCold(void (*expireCold)(ScopedOperationNode&) noexcept) noexcept {
-        expireCold_ = expireCold;
-    }
-    void setStartCheck(void (*check)(void*) noexcept, void* target) noexcept {
-        startCheck_ = check;
-        startCheckTarget_ = target;
-    }
+    // Bind only after the typed frame owner has been fully constructed.
+    // An inactive scope consumes the cold frame without retaining any borrow.
+    void bindFrame(void (*retireCold)(ScopedOperationNode&) noexcept,
+        void (*checkAffinity)(void*) noexcept, void* affinityTarget) noexcept;
     void begin();
+    void prepareCompletion() const noexcept;
     void complete() noexcept;
+    void retireFrame() noexcept;
 
 private:
     friend class ScopedOperationScope;
     enum class Phase : std::uint8_t { kCold,
         kRunning,
+        kRetiring,
         kComplete,
         kExpired };
-    void expire() noexcept;
+    void clearFrameBinding() noexcept;
 
     ScopedOperationScope* scope_{nullptr};
     ScopedOperationNode* previous_{nullptr};
     ScopedOperationNode* next_{nullptr};
     Phase phase_{Phase::kCold};
-    void (*expireCold_)(ScopedOperationNode&) noexcept {nullptr};
-    void (*startCheck_)(void*) noexcept {nullptr};
-    void* startCheckTarget_{nullptr};
+    void (*retireCold_)(ScopedOperationNode&) noexcept {nullptr};
+    void (*checkAffinity_)(void*) noexcept {nullptr};
+    void* affinityTarget_{nullptr};
 };
 
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task);
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope, Task<T> task, void (*startCheck)(void*) noexcept, void* target);
+    ScopedOperationScope& scope, Task<T> task, void (*checkAffinity)(void*) noexcept, void* target);
 
 }  // namespace detail
 
@@ -162,6 +164,7 @@ class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode 
             return awaiter_.await_suspend(continuation);
         }
         T await_resume() {
+            owner_->prepareCompletion();
             struct Complete final {
                 Awaiter& awaiter;
                 ~Complete() {
@@ -200,6 +203,10 @@ public:
     ScopedOperation& operator=(const ScopedOperation&) = delete;
     ScopedOperation(ScopedOperation&&) = delete;
     ScopedOperation& operator=(ScopedOperation&&) = delete;
+    ~ScopedOperation() {
+        // Check while frame-held PMR data and leases are still alive.
+        retireFrame();
+    }
 
     [[nodiscard]] Awaiter operator co_await() && {
         return Awaiter(*this);
@@ -218,13 +225,13 @@ private:
         detail::ScopedOperationScope&, Task<U>, void (*)(void*) noexcept, void*);
 
     ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task,
-        void (*startCheck)(void*) noexcept = nullptr, void* startCheckTarget = nullptr)
+        void (*checkAffinity)(void*) noexcept = nullptr, void* affinityTarget = nullptr)
         : detail::ScopedOperationNode(scope),
           task_(std::move(task)) {
-        setStartCheck(startCheck, startCheckTarget);
-        setExpireCold([](detail::ScopedOperationNode& node) noexcept {
+        bindFrame([](detail::ScopedOperationNode& node) noexcept {
             static_cast<ScopedOperation&>(node).task_.reset();
-        });
+        },
+            checkAffinity, affinityTarget);
     }
 
     std::optional<Task<T>> task_;
@@ -239,8 +246,8 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope, Task<T> task, void (*startCheck)(void*) noexcept, void* target) {
-    return ScopedOperation<T>(scope, std::move(task), startCheck, target);
+    ScopedOperationScope& scope, Task<T> task, void (*checkAffinity)(void*) noexcept, void* target) {
+    return ScopedOperation<T>(scope, std::move(task), checkAffinity, target);
 }
 
 }  // namespace detail
