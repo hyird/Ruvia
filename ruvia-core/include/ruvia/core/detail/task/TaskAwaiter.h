@@ -51,6 +51,16 @@ public:
         return task_.handle_.promise().result();
     }
 
+    // Scoped owners must release frame-held parameters before publishing
+    // completion. Ordinary Task awaiting still retains its frame until this
+    // awaiter is destroyed; only a completed frame may be retired explicitly.
+    void retireCompletedFrame() noexcept {
+        if (task_.handle_ != nullptr && !task_.handle_.done()) {
+            std::terminate();
+        }
+        task_.reset();
+    }
+
 private:
     Task<T> task_;
 };

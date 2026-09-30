@@ -33,8 +33,8 @@ public:
     ScopedOperationScope& operator=(ScopedOperationScope&&) = delete;
 
     void close() noexcept;
-    // Expires cold operations, waits for every running operation to complete,
-    // then expires capabilities. The caller must run this on the execution
+    // Expires cold operations, waits for every running operation to release
+    // its completed frame, then expires capabilities. The caller must run this on the execution
     // context that owns the scope.
     [[nodiscard]] Task<void> closeAndJoin() &;
     Task<void> closeAndJoin() && = delete;
@@ -163,11 +163,14 @@ class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode 
         }
         T await_resume() {
             struct Complete final {
-                ScopedOperation* owner;
+                Awaiter& awaiter;
                 ~Complete() {
-                    owner->complete();
+                    awaiter.awaiter_.retireCompletedFrame();
+                    // This may synchronously resume join and retire the owner.
+                    // Do not touch the frame or its borrowed state afterwards.
+                    awaiter.owner_->complete();
                 }
-            } complete{owner_};
+            } complete{*this};
             if constexpr (std::is_void_v<T>) {
                 awaiter_.await_resume();
             } else {
