@@ -9,7 +9,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/Http1ClientRequestWriter.h"
+#include "ruvia/http/Http1ClientExchangeState.h"
+#include "ruvia/http/HttpClientResponseHead.h"
 #include "ruvia/http/HttpTransferCoding.h"
 
 namespace ruvia {

@@ -276,6 +276,9 @@ private:
 
     RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
         std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+    RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
+        std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
+        OperationOptions options) noexcept;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<T> scoped(ruvia::Task<T> task) const {

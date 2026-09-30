@@ -17,7 +17,9 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/web/detail/redis/RedisClientRuntime.h"
 #include "ruvia/web/redis/RedisClient.h"
 
@@ -205,6 +207,11 @@ ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::Test
     auto users = client.getRepository<ClientUser>();
     auto user = co_await users.findOne({.where = ClientUser::column<"id">() == "1"});
     RUVIA_CHECK(user.has_value());
+    std::string mutablePing(128, 'm');
+    auto coldPing = client.ping(mutablePing);
+    mutablePing.assign(128, 'n');
+    const auto ownedEcho = co_await std::move(coldPing);
+    RUVIA_CHECK(ownedEcho == std::string_view(std::string(128, 'm')));
     for (int index = 0; index < 32; ++index) {
         auto cold = client.get(std::string(128, 'k'));
         (void)cold;
@@ -321,12 +328,76 @@ ruvia::Task<void> blockedCommand(ruvia::RedisClient& client) {
     (void)co_await client.command("STALL");
 }
 
+ruvia::Task<void> connectUntilStopped(ruvia::RedisClient& client, bool& cancelled) {
+    try {
+        co_await client.connect();
+    } catch (const ruvia::RedisError&) {
+        cancelled = true;
+    }
+}
+
 ruvia::Task<void> checkExpiration(ruvia::RedisClient& client,
     std::chrono::system_clock::time_point expiresAt, ruvia::testing::TestContext& ruvia_ctx) {
     co_await client.connect();
     const bool applied = co_await client.expireAt("session", expiresAt);
     RUVIA_CHECK(applied);
     co_await client.shutdown();
+}
+
+ruvia::Task<void> checkRuntimeHandleTimeout(ruvia::EventLoop loop, ruvia::RedisConfig config,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    config.commandTimeout.reset();
+    auto worker = loop.handle();
+    ruvia::detail::RedisClientRuntime runtime(loop.ioContext(), worker,
+        ruvia::detail::RedisConfigStorage(config, std::pmr::get_default_resource()),
+        std::pmr::get_default_resource());
+    ruvia::detail::ScopedOperationScope scope;
+    co_await runtime.connect();
+    auto handle = runtime.handle(scope, {.timeout = std::chrono::seconds(5)});
+    auto copied = handle;
+    auto inherited = copied.withOptions({});
+    auto shortened = inherited.withOptions({.timeout = std::chrono::milliseconds(100)});
+    auto derived = shortened.withOptions({.timeout = std::chrono::seconds(5)});
+    auto coldOperation = derived.command("STALL");
+    (void)co_await ruvia::sleepFor(worker, std::chrono::milliseconds(250));
+    const auto started = std::chrono::steady_clock::now();
+    bool commandTimedOut = false;
+    try {
+        (void)co_await std::move(coldOperation);
+    } catch (const ruvia::RedisError& error) {
+        commandTimedOut = error.code() == ruvia::RedisError::Code::kTimeout;
+    }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    RUVIA_CHECK(commandTimedOut);
+    // Cold time must not consume the deadline; a longer override cannot relax it.
+    RUVIA_CHECK(elapsed >= std::chrono::milliseconds(50));
+    RUVIA_CHECK(elapsed < std::chrono::seconds(2));
+    runtime.closeNow();
+    co_await scope.closeAndJoin();
+}
+
+ruvia::Task<void> checkRuntimeHandleCancellationBridge(ruvia::EventLoop loop,
+    ruvia::RedisConfig config, ruvia::StopSource& baseStop,
+    ruvia::StopSource& overrideStop, ruvia::testing::TestContext& ruvia_ctx) {
+    config.commandTimeout.reset();
+    auto worker = loop.handle();
+    ruvia::detail::RedisClientRuntime runtime(loop.ioContext(), worker,
+        ruvia::detail::RedisConfigStorage(config, std::pmr::get_default_resource()),
+        std::pmr::get_default_resource());
+    ruvia::detail::ScopedOperationScope scope;
+    co_await runtime.connect();
+    auto configured = runtime.handle(scope, {.stopToken = baseStop.token()});
+    auto copied = configured;
+    auto derived = copied.withOptions({.stopToken = overrideStop.token()});
+    bool cancelled = false;
+    try {
+        (void)co_await derived.command("STALL");
+    } catch (const ruvia::RedisError& error) {
+        cancelled = error.code() == ruvia::RedisError::Code::kCancelled;
+    }
+    RUVIA_CHECK(cancelled);
+    runtime.closeNow();
+    co_await scope.closeAndJoin();
 }
 
 ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig config,
@@ -338,7 +409,8 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
             ruvia::detail::RedisConfigStorage(config, &memory), &memory);
         ruvia::detail::ScopedOperationScope scope;
         co_await runtime.connect();
-        auto handle = runtime.handle(scope);
+        auto handle = runtime.handle(scope, {.timeout = std::chrono::seconds(2)});
+        auto copiedHandle = handle;
         // Warm connection buffers, then retain a result across later calls.
         {
             auto warm = co_await handle.ping(std::string(256, 'w'));
@@ -368,7 +440,8 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
             stop.requestStop();
             bool cancelled = false;
             try {
-                (void)co_await handle.withOptions({.stopToken = stop.token()}).get(std::string(128, 'c'));
+                (void)co_await copiedHandle.withOptions({.stopToken = stop.token()})
+                    .get(std::string(128, 'c'));
             } catch (const ruvia::RedisError&) {
                 cancelled = true;
             }
@@ -380,13 +453,45 @@ ruvia::Task<void> checkRuntimeMemory(ruvia::EventLoop loop, ruvia::RedisConfig c
         RUVIA_CHECK(memory.deallocationCount() > deallocations);
         retained.reset();
         RUVIA_CHECK(memory.liveAllocations() < baseline);
-        runtime.closeNow();
         co_await scope.closeAndJoin();
+        auto inactiveHandle = runtime.handle(scope);
+        bool inactiveRejected = false;
+        try {
+            (void)inactiveHandle.ping();
+        } catch (const std::logic_error&) {
+            inactiveRejected = true;
+        }
+        RUVIA_CHECK(inactiveRejected);
+        runtime.closeNow();
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
 }
 
 }  // namespace
+
+RUVIA_TEST(redis_client_runtime_handle_options_survive_copy_and_derivation) {
+    RedisPeer peer;
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    pool.start();
+    pool.loop(0).start(checkRuntimeHandleTimeout(pool.loop(0), peer.config(), ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_client_runtime_handle_bridges_both_stop_tokens_after_copy_and_derivation) {
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    pool.start();
+    for (const bool stopBase : {true, false}) {
+        RedisPeer peer;
+        ruvia::StopSource baseStop;
+        ruvia::StopSource overrideStop;
+        auto operation = pool.loop(0).start(checkRuntimeHandleCancellationBridge(
+            pool.loop(0), peer.config(), baseStop, overrideStop, ruvia_ctx));
+        peer.waitForBlockedCommand();
+        (stopBase ? baseStop : overrideStop).requestStop();
+        operation.get();
+    }
+    pool.join();
+}
 
 RUVIA_TEST(redis_client_runtime_reclaims_operations_independently_of_retained_results) {
     RedisPeer peer;
@@ -552,6 +657,32 @@ RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
     pool.stop();
     pool.join();
     RUVIA_CHECK(cancelled);
+}
+
+RUVIA_TEST(redis_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
+    for (const bool useAttachmentRun : {false, true}) {
+        RedisPeer peer;
+        auto config = peer.config();
+        config.password = "stall-authentication";
+        asio::io_context io;
+        auto attachment = ruvia::attachEventLoop(io);
+        ruvia::RedisClient client(attachment.loop(), config);
+        bool cancelled = false;
+        auto root = attachment.loop().start(connectUntilStopped(client, cancelled));
+        std::thread driver([&] {
+            if (useAttachmentRun) {
+                attachment.run();
+            } else {
+                io.run();
+            }
+        });
+        peer.waitForBlockedCommand();
+        attachment.stop();
+        driver.join();
+        root.get();
+        RUVIA_CHECK(cancelled);
+        RUVIA_CHECK(!client.worker().accepting());
+    }
 }
 
 RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {

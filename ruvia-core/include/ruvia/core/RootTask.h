@@ -128,11 +128,8 @@ class RootTaskState final : public RootTaskStateBase {
 public:
     using RootTaskStateBase::RootTaskStateBase;
 
-    void completeValue(T value) noexcept {
-        {
-            const std::lock_guard lock(mutex_);
-            value_.emplace(std::move(value));
-        }
+    void completeValue(T value) {
+        value_.emplace(std::move(value));
         completeSuccess();
     }
 
@@ -142,7 +139,6 @@ public:
         if (failure) {
             std::rethrow_exception(failure);
         }
-        std::lock_guard lock(mutex_);
         return std::move(*value_);
     }
 
@@ -199,17 +195,25 @@ public:
         requireState().wait();
     }
 
+    // User result moves run without the state mutex and may re-enter this
+    // RootTask. The object must remain alive for the entire synchronous call;
+    // replacing its owned state during a move is supported.
     decltype(auto) get() {
         if (!state_) {
             throw std::logic_error("root task has no result");
         }
+        auto state = state_;
         if constexpr (std::is_void_v<T>) {
-            state_->get();
-            state_.reset();
+            state->get();
+            if (state_ == state) {
+                state_.reset();
+            }
             return;
         } else {
-            auto value = state_->get();
-            state_.reset();
+            auto value = state->get();
+            if (state_ == state) {
+                state_.reset();
+            }
             return value;
         }
     }

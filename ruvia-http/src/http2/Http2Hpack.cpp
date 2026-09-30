@@ -173,8 +173,8 @@ HpackDecodeResult HpackDecoder::decode(
     }
     try {
         auto result = decodeBlock(block, target, callback);
-        if (const auto* failure = result.failure();
-            failure != nullptr && failure->error() != HpackDecodeError::kCallbackRejected) {
+        if (const auto error = result.error();
+            error.has_value() && *error != HpackDecodeError::kCallbackRejected) {
             transaction.rollback();
         }
         return result;

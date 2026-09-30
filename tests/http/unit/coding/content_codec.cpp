@@ -285,6 +285,115 @@ RUVIA_TEST(http_content_encode_round_trips_across_output_block_boundaries) {
     }
 }
 
+RUVIA_TEST(http_content_whole_buffer_results_keep_their_memory_resource_and_release_failures) {
+    const std::string plain(1024, 'r');
+    constexpr std::array codings{HttpContentCoding::kIdentity, HttpContentCoding::kGzip,
+        HttpContentCoding::kBrotli, HttpContentCoding::kZstd};
+
+    for (const auto coding : codings) {
+        CountingMemoryResource resource;
+        {
+            auto firstEncoded = encodeHttpContent(coding, plain,
+                {.maxEncodedBytes = plain.size() * 2, .resource = &resource});
+            RUVIA_CHECK(firstEncoded.encoded() != nullptr);
+            if (firstEncoded.encoded() == nullptr) {
+                continue;
+            }
+            const auto encodedBytes = firstEncoded.encoded()->bytes();
+            auto firstDecoded = decodeHttpContent(coding, encodedBytes,
+                {.maxDecodedBytes = plain.size(), .resource = &resource});
+            RUVIA_CHECK(firstDecoded.decoded() != nullptr);
+            if (firstDecoded.decoded() == nullptr) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(firstDecoded.decoded()->bytes(), std::string_view(plain));
+            const auto retainedBaseline = resource.liveBytes();
+
+            for (int iteration = 0; iteration < 8; ++iteration) {
+                {
+                    auto repeatedEncoded = encodeHttpContent(coding, plain,
+                        {.maxEncodedBytes = plain.size() * 2, .resource = &resource});
+                    RUVIA_CHECK(repeatedEncoded.encoded() != nullptr);
+                    if (repeatedEncoded.encoded() != nullptr) {
+                        RUVIA_CHECK_EQ(repeatedEncoded.encoded()->bytes(), encodedBytes);
+                    }
+                }
+                RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+                {
+                    auto repeatedDecoded = decodeHttpContent(coding, encodedBytes,
+                        {.maxDecodedBytes = plain.size(), .resource = &resource});
+                    RUVIA_CHECK(repeatedDecoded.decoded() != nullptr);
+                    if (repeatedDecoded.decoded() != nullptr) {
+                        RUVIA_CHECK_EQ(repeatedDecoded.decoded()->bytes(), std::string_view(plain));
+                    }
+                }
+                RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+                RUVIA_CHECK_EQ(firstEncoded.encoded()->bytes(), encodedBytes);
+                RUVIA_CHECK_EQ(firstDecoded.decoded()->bytes(), std::string_view(plain));
+            }
+
+            for (const std::size_t cap : {std::size_t{0}, std::size_t{1}}) {
+                const auto encodeFailure = encodeHttpContent(coding, plain,
+                    {.maxEncodedBytes = cap, .resource = &resource});
+                RUVIA_CHECK(encodeFailure.encoded() == nullptr);
+                RUVIA_CHECK(encodeFailure.failure() != nullptr);
+                if (encodeFailure.failure() != nullptr) {
+                    RUVIA_CHECK(encodeFailure.failure()->error() ==
+                                HttpContentEncodeError::kEncodedSizeExceeded);
+                }
+                RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+
+                const auto decodeFailure = decodeHttpContent(coding, encodedBytes,
+                    {.maxDecodedBytes = cap, .resource = &resource});
+                RUVIA_CHECK(decodeFailure.decoded() == nullptr);
+                RUVIA_CHECK(decodeFailure.failure() != nullptr);
+                if (decodeFailure.failure() != nullptr) {
+                    RUVIA_CHECK(decodeFailure.failure()->error() ==
+                                HttpContentDecodeError::kDecodedSizeExceeded);
+                }
+                RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+            }
+
+            if (coding != HttpContentCoding::kIdentity) {
+                const auto invalid = decodeHttpContent(coding, "not valid coded data",
+                    {.maxDecodedBytes = plain.size(), .resource = &resource});
+                RUVIA_CHECK(invalid.decoded() == nullptr);
+                RUVIA_CHECK(invalid.failure() != nullptr);
+                if (invalid.failure() != nullptr) {
+                    RUVIA_CHECK(invalid.failure()->error() ==
+                                HttpContentDecodeError::kInvalidContent);
+                }
+                RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+            }
+
+            auto decodedBytes = std::move(*firstDecoded.decoded()).takeBytes();
+            RUVIA_CHECK(decodedBytes.get_allocator().resource() == &resource);
+            RUVIA_CHECK_EQ(std::string_view(decodedBytes), std::string_view(plain));
+            RUVIA_CHECK_EQ(firstEncoded.encoded()->bytes(), encodedBytes);
+            RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+        }
+        RUVIA_CHECK_EQ(resource.liveBytes(), std::size_t{0});
+    }
+
+    bool encodeAllocationThrew = false;
+    try {
+        (void)encodeHttpContent(HttpContentCoding::kIdentity, plain,
+            {.maxEncodedBytes = plain.size(), .resource = std::pmr::null_memory_resource()});
+    } catch (const std::bad_alloc&) {
+        encodeAllocationThrew = true;
+    }
+    RUVIA_CHECK(encodeAllocationThrew);
+
+    bool decodeAllocationThrew = false;
+    try {
+        (void)decodeHttpContent(HttpContentCoding::kIdentity, plain,
+            {.maxDecodedBytes = plain.size(), .resource = std::pmr::null_memory_resource()});
+    } catch (const std::bad_alloc&) {
+        decodeAllocationThrew = true;
+    }
+    RUVIA_CHECK(decodeAllocationThrew);
+}
+
 RUVIA_TEST(http_content_decoder_state_uses_the_callers_memory_resource) {
     const struct {
         HttpContentCoding coding;

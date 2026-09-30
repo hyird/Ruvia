@@ -171,7 +171,7 @@ HeaderObservation decodeSingleHeaderFrame(std::pmr::memory_resource* resource,
     HpackDecoder decoder({.resource = resource});
     const auto decodeResult =
         decoder.decode(bytes.substr(9, header.length), &observation, &observeHeader);
-    RUVIA_CHECK(decodeResult.decoded() != nullptr);
+    RUVIA_CHECK(decodeResult.decoded());
     return observation;
 }
 

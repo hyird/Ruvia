@@ -19,8 +19,8 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/RuntimeLifecycle.h"
-#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
+#include "ruvia/core/WorkerSubmissionView.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/detail/http3/Http3NetworkRuntime.h"
@@ -41,7 +41,7 @@ using TcpAcceptedSocket = asio::ip::tcp::socket;
 class ServerNetworkRuntime final {
 public:
     struct Target final {
-        const WorkerHandle* worker{};
+        WorkerSubmissionView submission{};
         void* object{};
         // Must report false while the worker is unready, stopping, or at capacity.
         bool (*available)(void*) noexcept {};

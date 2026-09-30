@@ -15,7 +15,6 @@
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
@@ -457,11 +456,8 @@ void HttpResponse::materializeBody() {
 }
 
 void HttpResponse::fileBody(std::filesystem::path file, std::uint64_t size,
-    std::uint64_t offset, std::uint64_t length, std::array<std::uint64_t, 4> identity,
-    bool checked) {
-    setFileBody(std::move(file), size, offset, length,
-        checked ? detail::ResponseFileIdentity::checked(identity)
-                : detail::ResponseFileIdentity::unchecked());
+    std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) {
+    setFileBody(std::move(file), size, offset, length, identity);
 }
 
 void HttpResponse::contentRange(
@@ -483,11 +479,11 @@ void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size) {
 
 void HttpResponse::setFileBody(
     std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-    setFileBody(std::move(file), size, offset, length, detail::ResponseFileIdentity::unchecked());
+    setFileBody(std::move(file), size, offset, length, HttpResponseFileIdentity::unchecked());
 }
 
 void HttpResponse::setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
-    std::uint64_t length, detail::ResponseFileIdentity identity) {
+    std::uint64_t length, HttpResponseFileIdentity identity) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }

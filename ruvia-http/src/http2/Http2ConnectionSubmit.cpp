@@ -133,29 +133,29 @@ void Http2Connection::commitConnectResponseHead(
     }
 }
 
-Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
+Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
     std::uint32_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan writePlan) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        return Http2BufferedResponseHeadSubmitResult::makeClosedFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kClosed);
     }
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr) {
-        return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidState);
     }
     if (writePlan.requestMethod() != stream->requestKnownMethod() ||
         !writePlan.matchesResponse(response)) {
-        return Http2BufferedResponseHeadSubmitResult::makeResponsePlanMismatchFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kResponsePlanMismatch);
     }
     const bool successfulConnect =
         response.status().isSuccessful() && stream->tunnel().pending() != nullptr;
     if (successfulConnect) {
-        return Http2BufferedResponseHeadSubmitResult::makeInvalidStateFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidState);
     }
     const auto controlResult = http2FinalResponseControlPlan(response);
     const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
-        return Http2BufferedResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
 
     const auto headPlanResult = http2BufferedResponseHeadPlan(writePlan, response);
@@ -166,11 +166,11 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             error == Http2ResponseHeadPlanError::kResponseStatusMismatch ||
             error == Http2ResponseHeadPlanError::kResponseRepresentationMismatch;
         return responsePlanMismatch
-                   ? Http2BufferedResponseHeadSubmitResult::makeResponsePlanMismatchFailure()
-                   : Http2BufferedResponseHeadSubmitResult::makeInvalidMessageFailure();
+                   ? Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kResponsePlanMismatch)
+                   : Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     if (!appendHttp2ResponseHeaders(*stream, response, *headPlan, *http2Control)) {
-        return Http2BufferedResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     const auto endStream =
         writePlan.sendBody() ? Http2EndStream::kKeepOpen : Http2EndStream::kEndStream;
@@ -189,7 +189,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
         (void)stream->rejectConnect();
     }
     http2ReleaseLocalHeaderBlock(*stream);
-    return Http2BufferedResponseHeadSubmitResult::makeSubmitted(std::move(writePlan));
+    return Http2ResponseHeadSubmitResult::makeSubmitted(std::move(writePlan));
 }
 
 Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
@@ -197,23 +197,23 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     ResponseTrailerIntent trailerIntent) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        return Http2StreamingResponseHeadSubmitResult::makeClosedFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kClosed);
     }
     const bool successfulConnect =
         head.status().isSuccessful() && stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr || successfulConnect) {
-        return Http2StreamingResponseHeadSubmitResult::makeInvalidStateFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidState);
     }
     auto preparedCommitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp2Frames,
         stream->requestKnownMethod(), head.status(), trailerIntent);
     if (!preparedCommitPlan.trailerIntentAllowed()) {
-        return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     const auto controlResult = http2FinalResponseControlPlan(head);
     const auto* http2Control = controlResult.control();
     if (http2Control == nullptr) {
-        return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     auto streamHead =
         prepareResponseStreamHead(std::move(head), kind, std::move(preparedCommitPlan));
@@ -226,10 +226,10 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         http2StreamingResponseHeadPlan(commitPlan.bodyPlan(), streamHead.response());
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
-        return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     if (!appendHttp2ResponseHeaders(*stream, streamHead.response(), *headPlan, *http2Control)) {
-        return Http2StreamingResponseHeadSubmitResult::makeInvalidMessageFailure();
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     const auto endStream =
         commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded

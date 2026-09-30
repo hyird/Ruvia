@@ -33,4 +33,9 @@ RedisHandle RedisClientRuntime::handle(ScopedOperationScope& scope) const {
     return RedisHandle(*general_, *blocking_, resource_, scope);
 }
 
+RedisHandle RedisClientRuntime::handle(ScopedOperationScope& scope, OperationOptions options) const {
+    validateOperationOptions(options);
+    return RedisHandle(*general_, *blocking_, resource_, scope, std::move(options));
+}
+
 }  // namespace ruvia::detail

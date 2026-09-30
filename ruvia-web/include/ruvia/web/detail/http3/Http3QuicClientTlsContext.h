@@ -27,7 +27,7 @@ public:
     void prepare(SSL* ssl, std::string_view host) const;
 
 private:
-    struct ContextDeleter final {
+    struct ContextDeleter {
         void operator()(SSL_CTX* context) const noexcept;
     };
     std::unique_ptr<SSL_CTX, ContextDeleter> context_;

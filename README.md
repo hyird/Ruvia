@@ -477,21 +477,45 @@ if (!posted.accepted()) {
     // Retry or persist the rejected callable.
 }
 
-auto stopRegistration = loop.onStop([&socket] {
+auto stopRegistration = loop.onStop([&socket]() -> ruvia::Task<void> {
     std::error_code ignored;
     socket.close(ignored);
+    co_return;
 });
 
 loops.stop();
 loops.join();
 ```
 
-Keep the stop registration alive while its resource is active. The callback
-runs on the owning event-loop thread before that loop exits. Do not call
-`run()`, `stop()`, or `restart()` on a pool-owned `io_context`; lifecycle
-control belongs to `EventLoopPool`. Cross-thread application work uses bounded
-`EventLoop::post()`. Web workers expose `WorkerHandle`/`WebWorkerHandle`, not
-their `io_context` or executor.
+Keep the stop registration alive while its resource is active. `onStop()`
+callbacks return `Task<void>` and run on the owning event-loop thread. All
+callbacks are started before awaiting their completion. Cancel resource work
+and join its pending operations before returning, including exception paths;
+stopping does not wait for a graceful application-request drain. A callback
+already started remains owned until completion even if its registration is reset.
+
+Stopping closes external submission and cancels timers, but retains the runtime
+until its stop callbacks and admitted root tasks finish. Once retired, escaped
+`EventLoop` and `WorkerHandle` values are invalid; `ioContext()` and `executor()`
+throw `std::logic_error`. Do not call `run()`, `stop()`, or `restart()` on a
+pool-owned `io_context`; lifecycle control belongs to `EventLoopPool`.
+Cross-thread application work uses bounded `EventLoop::post()`. Web workers
+expose `WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
+
+Native completion handlers can submit terminal failures with
+`loop.reportFailure(std::exception_ptr)`. This requests runtime-owner stop
+without throwing through the native handler or stopping an external context.
+A pool records its first failure and rethrows it from `join()`; an attachment
+reports the failure through its diagnostic outlet while retiring its runtime.
+
+Integrations that own a `WorkerRuntimeContext` can use its `submission()` to
+obtain a `WorkerSubmissionView` for bounded submission without retaining endpoint
+ownership. The runtime must outlive the entire synchronous `post()` call,
+including callable construction, movement, and rejection cleanup. A closed or
+detached runtime that remains alive rejects submissions; the view is invalid
+once its runtime is destroyed. Use `WorkerHandle` when endpoint ownership must
+escape the runtime's lifetime. Queued callables must independently preserve any
+data they borrow until execution or destruction.
 
 A lazy `Task<T>` needs an explicit root owner. `EventLoop::start()` schedules it
 on that loop and returns a move-only `RootTask<T>` completion owner:
@@ -514,7 +538,9 @@ loops.join();
 ```
 
 Keep the `RootTask` and consume it before stopping resources the task may still
-use. `get()` waits and rethrows the task exception. Destroying an in-flight
+use. Register resource cancellation with `onStop()` so admitted roots can finish
+when the loop stops; a root waiting indefinitely without a cancellation path
+prevents retirement. `get()` waits and rethrows the task exception. Destroying an in-flight
 `RootTask` never destroys its suspended coroutine frame; an eventual unobserved
 failure is routed to the loop failure sink and a pooled loop rethrows it from
 `join()`. This setup-time root ownership does not replace bounded
@@ -534,19 +560,24 @@ auto loop = attachment.loop();
 std::thread thread([&] { io.run(); });
 loop.post([] { /* runs on the external context */ });
 
-attachment.stop(); // closes the mailbox, runs onStop hooks, releases its work guard
+attachment.stop(); // requests cancellation and asynchronous runtime retirement
 thread.join();
 ```
 
 The attachment may be stopped or destroyed while another thread is inside
-`run()`: its context service retains the worker state until the terminal
-cleanup handler drains. The external owner still retains ownership of
-`run()`, `stop()`, `restart()`, and the thread; the attachment never calls
-`io_context::stop()` because the context may host unrelated work. If the
-context is destroyed first, returned `EventLoop` handles become terminal and
-their `ioContext()`/`executor()` access throws `std::logic_error`. A second
-attachment is rejected until the first attachment's terminal cleanup has
-completed.
+`run()`: its context service retains the worker state and work guard until
+asynchronous cleanup and admitted roots finish. Continue driving the external
+context until that retirement completes, using either its native `run()` or
+`EventLoopAttachment::run()`. The external owner retains ownership of `stop()`,
+`restart()`, and the thread; the attachment never calls `io_context::stop()` or
+waits for unrelated native work. A second attachment is rejected until the
+first runtime has retired.
+
+Complete managed tasks and resource cleanup before destroying the external
+context. Destroying it with active structured obligations is a contract
+violation. Without those obligations, destroying the context first safely
+invalidates escaped handles; `ioContext()` and `executor()` then throw
+`std::logic_error`.
 
 Outbound HTTP clients are first-class event-loop objects too. A client owns one
 origin's worker-local DNS, TCP/TLS, connection pool, HTTP/1.1 and HTTP/2 state;
@@ -582,8 +613,13 @@ connects lazily on the bound loop; retries, cancellation, timeouts and protocol
 selection use the same runtime as `Context::httpClient()`. Operations must be
 created and awaited on that loop. `close()` is idempotent, may be called from any
 thread, and immediately requests cancellation without waiting. Use
-`co_await client.shutdown()` on the bound loop when the client teardown must be
-complete before the loop or its owning memory is destroyed.
+`co_await client.shutdown()` on the bound loop to complete teardown before
+releasing a client's resources. HTTP, database, Redis, and WebSocket clients
+also participate in their loop's asynchronous stop, using that same shutdown
+path; no separate manual shutdown is required merely to stop the loop. An
+internal teardown failure is terminal and is reported to the loop even without
+a shutdown waiter. Explicit `shutdown()` still rethrows that same failure;
+ordinary request or connection-attempt errors are not teardown failures.
 
 Database clients are first-class event-loop objects. They do not require an HTTP
 `App`, request `Context`, server worker, or an aggregate worker service. Bind
@@ -2369,7 +2405,15 @@ failure throws; abort the connection rather than retrying with a weak key.
 This replaces the former `WebSocketServerConnection` header, type, and options:
 server consumers rename these to `WebSocketConnection` and retain defaults.
 SSE messages are
-formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
+formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`. URL
+component and URL-encoded pair helpers are available from
+`<ruvia/http/UrlEncoding.h>`: `UrlDecodeMode::kPercent` leaves `+` literal,
+while `kForm` maps it to a space. `decodeUrlComponent()` returns a PMR string
+using the selected `UrlDecodeOptions::resource` (or the default resource), which
+must outlive the result. `visitUrlEncodedPairs()` supplies raw views borrowing
+the input, can stop early when a bool visitor returns false, and does not validate
+percent escapes. `findUrlEncodedValue()` compares decoded names, selects the
+last duplicate, and returns the still-encoded value as a borrowed view.
 
 `Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a
 caller-generated random nonce and validates the peer's response against that
@@ -2385,6 +2429,12 @@ backpressure, merge credits from the same stream without allocation, and
 acknowledge or destroy them when their bytes have been consumed.
 The supplied PMR resource must outlive the connection and all retained events,
 credits, response heads, and trailers allocated from it.
+
+HTTP/1 persistence uses `Http1RequestConnectionPlan` from
+`<ruvia/http/Http1RequestConnectionPlan.h>`. Parsing establishes its version and
+initial reuse disposition; `applyRequestBodyConsumption()` and `requireClose()`
+can only tighten it to close. Buffered and streaming response drivers consume
+that same plan when finalizing connection semantics.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and
 drive transport I/O themselves. Content-Encoding parsing distinguishes identity,
@@ -2406,6 +2456,13 @@ wire block: HTTP/1 target authority can replace Host, while HTTP/2 pseudo-fields
 are exposed separately and Cookie fields are coalesced. Query lookup is explicit:
 `lastRawQueryValue()` compares encoded keys, returns the encoded value, performs
 no form-style `+` conversion, and chooses the last duplicate.
+
+File responses preserve an opaque `HttpResponseFileIdentity` from
+`<ruvia/http/HttpResponseFile.h>`. Pass that token directly to
+`HttpResponse::fileBody(path, size, offset, length, identity)`; the response owns
+its path, while the `HttpResponseFileView` returned by `fileBody()` borrows it.
+The runtime supplies and validates checked identities after opening the file;
+the protocol library does not perform file I/O.
 
 Borrowed outbound-client models say so in their names: `HttpOriginView`,
 `HttpClientRequestView`, `HttpClientRequestContentView`, and

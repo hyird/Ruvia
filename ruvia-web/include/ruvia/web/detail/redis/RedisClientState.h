@@ -42,7 +42,8 @@ private:
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<RedisClientState> state);
-    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<RedisClientState> state);
+    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<RedisClientState> state,
+        ClientCloseState::ObservationMode mode);
     [[nodiscard]] Task<void> connectOnWorker();
     [[nodiscard]] Task<void> closeOnWorker();
     void requireConnectedOnWorker() const;

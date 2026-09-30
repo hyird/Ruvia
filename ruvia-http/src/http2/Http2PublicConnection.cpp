@@ -31,21 +31,6 @@ namespace {
     return detail::Http2RequestContent::streaming();
 }
 
-[[nodiscard]] Http2ResponseHeadSubmitError toPublicResponseHeadSubmitError(
-    detail::Http2ResponseHeadSubmitError error) noexcept {
-    switch (error) {
-        case detail::Http2ResponseHeadSubmitError::kClosed:
-            return Http2ResponseHeadSubmitError::kClosed;
-        case detail::Http2ResponseHeadSubmitError::kInvalidState:
-            return Http2ResponseHeadSubmitError::kInvalidState;
-        case detail::Http2ResponseHeadSubmitError::kResponsePlanMismatch:
-            return Http2ResponseHeadSubmitError::kResponsePlanMismatch;
-        case detail::Http2ResponseHeadSubmitError::kInvalidMessage:
-            return Http2ResponseHeadSubmitError::kInvalidMessage;
-    }
-    std::terminate();
-}
-
 }  // namespace
 
 static std::expected<HttpRequest, HttpProtocolError> buildHttp2ServerRequest(
@@ -695,12 +680,7 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
 Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
     std::uint32_t streamId, const HttpResponse& response,
     HttpBufferedResponseWritePlan writePlan) {
-    const auto result = impl_->connection.submitResponseHead(streamId, response, std::move(writePlan));
-    if (const auto* failure = result.failure()) {
-        return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(toPublicResponseHeadSubmitError(failure->error())));
-    }
-    return Http2ResponseHeadSubmitResult(*result.submitted());
+    return impl_->connection.submitResponseHead(streamId, response, std::move(writePlan));
 }
 
 Http2SubmitStatus Http2Connection::submitBufferedResponse(
@@ -717,12 +697,12 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     const auto result = impl_->connection.submitResponseHead(streamId, response, plan);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {
-            case detail::Http2ResponseHeadSubmitError::kClosed:
+            case Http2ResponseHeadSubmitError::kClosed:
                 return Http2SubmitStatus::kClosed;
-            case detail::Http2ResponseHeadSubmitError::kInvalidState:
-            case detail::Http2ResponseHeadSubmitError::kResponsePlanMismatch:
+            case Http2ResponseHeadSubmitError::kInvalidState:
+            case Http2ResponseHeadSubmitError::kResponsePlanMismatch:
                 return Http2SubmitStatus::kInvalidState;
-            case detail::Http2ResponseHeadSubmitError::kInvalidMessage:
+            case Http2ResponseHeadSubmitError::kInvalidMessage:
                 return Http2SubmitStatus::kInvalidMessage;
         }
     }
@@ -740,13 +720,8 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
 Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
     std::uint32_t streamId, HttpResponse response, ResponseStreamKind kind,
     ResponseTrailerIntent trailerIntent) {
-    const auto result = impl_->connection.submitStreamingResponseHead(
+    return impl_->connection.submitStreamingResponseHead(
         streamId, std::move(response), kind, trailerIntent);
-    if (const auto* failure = result.failure()) {
-        return Http2StreamingResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(toPublicResponseHeadSubmitError(failure->error())));
-    }
-    return Http2StreamingResponseHeadSubmitResult(*result.submitted());
 }
 
 Http2SubmitStatus Http2Connection::submitStreamingResponseHead(

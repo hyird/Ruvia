@@ -38,7 +38,7 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       resolver_(loop_.ioContext()),
       stream_(loop_.ioContext(), tlsContext_),
       writeSignal_(worker_),
-      closeState_(worker_),
+      closeState_(loop_, worker_),
       input_(memory_.allocator<char>()),
       selectedSubprotocol_(memory_.allocator<char>()) {
     input_.reserve(kWebSocketClientTransportBufferBytes);
@@ -54,9 +54,9 @@ WebSocketClientState::~WebSocketClientState() {
 
 void WebSocketClientState::bindStop() {
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
-    stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
+    stopRegistration_ = loop_.onStop([weak = std::move(weak)]() -> Task<void> {
         if (const auto state = weak.lock()) {
-            state->startCloseOnWorker();
+            co_await shutdownOwned(state, ClientCloseState::ObservationMode::kRetirement);
         }
     });
 }

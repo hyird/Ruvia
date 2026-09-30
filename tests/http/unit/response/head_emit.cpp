@@ -20,26 +20,26 @@
 
 namespace {
 
+using ruvia::http1BufferedResponsePlan;
+using ruvia::http1ChunkedResponseStreamHeadPlan;
+using ruvia::http1CloseDelimitedResponseStreamHeadPlan;
+using ruvia::http1KnownLengthResponseStreamHeadPlan;
+using ruvia::Http1RequestConnectionPlan;
+using ruvia::Http1ResponseHeadPlan;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 using ruvia::planHttpResponseBody;
 using ruvia::detail::appendResponseHead;
-using ruvia::detail::http1BufferedResponsePlan;
-using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
-using ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan;
 using ruvia::detail::Http1FinalResponseCommitError;
 using ruvia::detail::Http1FinalResponseCommitFailure;
 using ruvia::detail::Http1FinalResponseCommitResult;
-using ruvia::detail::http1KnownLengthResponseStreamHeadPlan;
-using ruvia::detail::Http1ResponseHeadPlan;
-using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::ResponseHeadBuffer;
 
-ruvia::detail::Http1ServerConnectionPlan connectionPlanFor(
+ruvia::Http1RequestConnectionPlan connectionPlanFor(
     ruvia::HttpProtocolVersion protocolVersion) {
     return protocolVersion == ruvia::HttpProtocolVersion::kHttp10
-               ? ruvia::http1PlanHttp10RequestConnection(false, false)
-               : ruvia::http1PlanHttp11RequestConnection(false);
+               ? ruvia::planHttp10RequestConnection(false, false)
+               : ruvia::planHttp11RequestConnection(false);
 }
 
 std::string emitHead(HttpResponse& response, const Http1ResponseHeadPlan& plan) {
@@ -91,8 +91,8 @@ std::size_t countOccurrences(std::string_view haystack, std::string_view needle)
     return count;
 }
 
-ruvia::detail::Http1ServerConnectionPlan commitResponse(
-    HttpResponse& response, ruvia::detail::Http1ServerConnectionPlan plan) {
+ruvia::Http1RequestConnectionPlan commitResponse(
+    HttpResponse& response, ruvia::Http1RequestConnectionPlan plan) {
     const auto result = ruvia::detail::http1CommitFinalResponse(response, plan);
     if (result.failure() != nullptr || result.committed() == nullptr) {
         throw std::logic_error("expected successful HTTP/1 final response commit");
@@ -124,7 +124,6 @@ bool throwsLength(Fn&& fn) {
 
 RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     using ruvia::planBufferedHttpResponseWrite;
-    using ruvia::detail::http1BufferedResponsePlan;
     using ruvia::detail::Http1ServerRequestParser;
 
     Http1ServerRequestParser parser;

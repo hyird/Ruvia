@@ -70,7 +70,7 @@ namespace ruvia::detail {
 template <typename Result>
 class AsioCompletion;
 
-struct RedisReaderDeleter final {
+struct RedisReaderDeleter {
     void operator()(redisReader* reader) const noexcept;
 };
 

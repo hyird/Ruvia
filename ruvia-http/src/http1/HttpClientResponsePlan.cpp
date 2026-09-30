@@ -1,6 +1,7 @@
 #include <expected>
 #include <optional>
 
+#include "ruvia/http/HttpClientResponseHead.h"
 #include "ruvia/http/detail/client/HttpClientResponseHead.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"

@@ -139,7 +139,8 @@ private:
     };
 
     [[nodiscard]] static Task<void> connectOwned(std::shared_ptr<WebSocketClientState> state);
-    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state);
+    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<WebSocketClientState> state,
+        ClientCloseState::ObservationMode mode);
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
         std::shared_ptr<WebSocketClientState> state, OperationOptions options,
         ActivityLease activity);

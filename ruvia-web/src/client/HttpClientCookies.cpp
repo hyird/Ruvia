@@ -15,7 +15,7 @@
 #include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 
 namespace ruvia::detail {
 namespace {

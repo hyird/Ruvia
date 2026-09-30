@@ -18,7 +18,7 @@ class Http1RequestBufferCompletion;
 // Initial bump block for the per-request arena, carried inside a work set. The
 // request monotonic_buffer_resource bump-allocates from here before spilling to
 // the worker resource, so a typical small request touches no heap at all. Sized
-// to the shared kRequestArenaInitialBytes (see MemoryPool.h) so the HTTP/1 and
+// to the shared kRequestArenaInitialBytes (see MemoryPoolConfig.h) so the HTTP/1 and
 // HTTP/2 request arenas start from one identical block size.
 inline constexpr std::size_t kWorkSetArenaBytes = kRequestArenaInitialBytes;
 

@@ -6,15 +6,10 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/detail/coding/HttpContentCodecResult.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 
 namespace ruvia::detail {
-
-struct HttpContentDecodeResultAccess final {
-    [[nodiscard]] static HttpContentDecodeResult failure(HttpContentDecodeError error) noexcept {
-        return HttpContentDecodeResult::makeFailure(error);
-    }
-};
 
 template <typename Headers>
 [[nodiscard]] inline HttpContentCodingFieldResult httpClientContentCodingOf(

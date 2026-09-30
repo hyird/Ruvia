@@ -3,6 +3,7 @@
 #include <array>
 
 #include "ruvia/core/detail/task/TaskPromise.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia {
@@ -20,7 +21,10 @@ std::pmr::memory_resource* processResource() noexcept {
     // still destroy PMR-backed completion state while the process is leaving
     // main(). A function-local static resource would be released during static
     // teardown before those detached threads necessarily finish.
-    static auto* const resource = new std::pmr::synchronized_pool_resource;
+    // Bind the upstream explicitly: first use may occur while an embedding
+    // application has temporarily replaced the global PMR default resource.
+    static auto* const resource =
+        new std::pmr::synchronized_pool_resource(std::pmr::new_delete_resource());
     return resource;
 }
 
@@ -127,24 +131,30 @@ void taskFrameDeallocateSized(void* pointer, std::size_t bytes) noexcept {
 
 }  // namespace detail
 
+class WorkerMemory::Impl final {
+public:
+    explicit Impl(std::pmr::memory_resource& upstream)
+        : pool_(&upstream) {}
+
+    std::pmr::unsynchronized_pool_resource pool_;
+};
+
+void WorkerMemory::ImplDeleter::operator()(Impl* impl) const noexcept {
+    if (impl != nullptr) {
+        auto* upstream = impl->pool_.upstream_resource();
+        detail::destroyPmrObject(impl, upstream);
+    }
+}
+
 WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
     : WorkerMemory(*detail::processResource(), config) {}
 
 WorkerMemory::WorkerMemory(std::pmr::memory_resource& upstream, const MemoryPoolConfig& config)
-    : config_(config),
-      resource_(&upstream) {}
+    : impl_(detail::constructPmrObject<Impl>(&upstream, upstream)),
+      resource_(&impl_->pool_),
+      requestInitialBufferBytes_(config.requestInitialBufferBytes) {}
 
-std::pmr::memory_resource* WorkerMemory::resource() & noexcept {
-    return &resource_;
-}
-
-std::pmr::memory_resource* WorkerMemory::resource() const& noexcept {
-    return const_cast<std::pmr::unsynchronized_pool_resource*>(&resource_);
-}
-
-std::size_t WorkerMemory::requestInitialBufferBytes() const noexcept {
-    return config_.requestInitialBufferBytes;
-}
+WorkerMemory::~WorkerMemory() = default;
 
 RequestMemory::RequestMemory(WorkerMemory& worker)
     : arena_(worker.requestInitialBufferBytes(), worker.resource()) {}
@@ -164,7 +174,7 @@ std::pmr::memory_resource* RequestMemory::resource() & noexcept {
 }
 
 std::pmr::memory_resource* RequestMemory::resource() const& noexcept {
-    return const_cast<std::pmr::monotonic_buffer_resource*>(&arena_);
+    return &arena_;
 }
 
 std::pmr::memory_resource* RequestMemory::upstreamResource() & noexcept {

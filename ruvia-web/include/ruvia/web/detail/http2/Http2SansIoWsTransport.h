@@ -24,7 +24,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/http/Http2Connection.h"
-#include "ruvia/http/WebSocketServerProtocol.h"
+#include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -96,8 +96,8 @@ public:
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(
-        std::string_view bytes, WebSocketServerTransportDisposition disposition) {
-        const auto terminal = disposition == WebSocketServerTransportDisposition::kEndTransport
+        std::string_view bytes, WebSocketTransportDisposition disposition) {
+        const auto terminal = disposition == WebSocketTransportDisposition::kEndTransport
                                   ? Http2EndStream::kEndStream
                                   : Http2EndStream::kKeepOpen;
         constexpr std::size_t kSubmitChunkBytes = kHttp2DataOutputCreditBytes;

@@ -21,7 +21,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPoolConfig.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpHeader.h"

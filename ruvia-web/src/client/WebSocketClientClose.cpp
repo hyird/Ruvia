@@ -73,7 +73,8 @@ void WebSocketClientState::requestCancel() noexcept {
     requestAbort(AbortReason::kCancelled);
 }
 
-Task<void> WebSocketClientState::shutdownOwned(std::shared_ptr<WebSocketClientState> state) {
+Task<void> WebSocketClientState::shutdownOwned(
+    std::shared_ptr<WebSocketClientState> state, ClientCloseState::ObservationMode mode) {
     if (!state->worker_.isCurrent()) {
         throw std::logic_error("WebSocket client shutdown must run on its bound event loop");
     }
@@ -81,7 +82,7 @@ Task<void> WebSocketClientState::shutdownOwned(std::shared_ptr<WebSocketClientSt
     while (!state->closeState_.complete()) {
         co_await state->closeState_.wait();
     }
-    state->closeState_.rethrowFailure();
+    state->closeState_.observeFailure(mode);
 }
 
 void WebSocketClientState::startCloseOnWorker() noexcept {
@@ -112,12 +113,16 @@ Task<void> WebSocketClientState::closeOnWorker() {
 }
 
 void WebSocketClientState::finishClose(const TaskCompletionResult<void>& result) {
+    if (connectInFlight_ || heartbeatInFlight_ || operationScope_.hasPendingOperations()) {
+        std::terminate();
+    }
     phase_.store(Phase::kClosed, std::memory_order_release);
-    closeState_.finish(result);
+    const auto* failure = result.failure();
+    closeState_.finish(failure == nullptr ? std::exception_ptr{} : failure->exception());
 }
 
 Task<void> WebSocketClientState::shutdown() {
-    return shutdownOwned(shared_from_this());
+    return shutdownOwned(shared_from_this(), ClientCloseState::ObservationMode::kCaller);
 }
 
 ScopedOperation<void> WebSocketClientState::close(

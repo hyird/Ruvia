@@ -41,6 +41,10 @@ const WorkerHandle& WorkerRuntimeContext::handle() const noexcept {
     return impl_->handle_;
 }
 
+WorkerSubmissionView WorkerRuntimeContext::submission() const& noexcept {
+    return WorkerSubmissionView(impl_->dispatcher_.get());
+}
+
 void WorkerRuntimeContext::run() {
     impl_->dispatcher_->runContext();
 }

@@ -15,6 +15,7 @@
 
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/Http2Framing.h"
+#include "ruvia/http/Http2ResponseHeadSubmitResult.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpExpectations.h"
@@ -189,70 +190,6 @@ private:
         Http2RequestHeadSubmitError error) noexcept {
         return Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure(error));
     }
-    Value value_;
-};
-
-enum class Http2ResponseHeadSubmitError : std::uint8_t {
-    kClosed,
-    kInvalidState,
-    kResponsePlanMismatch,
-    kInvalidMessage,
-};
-
-class Http2ResponseHeadSubmitFailure final {
-public:
-    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class Http2Connection;
-    friend class Http2ResponseHeadSubmitResult;
-    explicit constexpr Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError error) noexcept
-        : error_(error) {}
-    Http2ResponseHeadSubmitError error_;
-};
-
-class Http2ResponseHeadSubmitResult final {
-public:
-    [[nodiscard]] const HttpBufferedResponseWritePlan* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
-    }
-    const HttpBufferedResponseWritePlan* submitted() const&& = delete;
-    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
-    }
-    const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
-
-private:
-    friend class Http2Connection;
-    using Value =
-        std::expected<HttpBufferedResponseWritePlan, Http2ResponseHeadSubmitFailure>;
-    explicit Http2ResponseHeadSubmitResult(HttpBufferedResponseWritePlan plan)
-        : value_(std::move(plan)) {}
-    explicit Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
-    Value value_;
-};
-
-class Http2StreamingResponseHeadSubmitResult final {
-public:
-    [[nodiscard]] const ResponseStreamCommitPlan* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
-    }
-    const ResponseStreamCommitPlan* submitted() const&& = delete;
-    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
-    }
-    const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
-
-private:
-    friend class Http2Connection;
-    using Value = std::expected<ResponseStreamCommitPlan, Http2ResponseHeadSubmitFailure>;
-    explicit Http2StreamingResponseHeadSubmitResult(ResponseStreamCommitPlan plan)
-        : value_(std::move(plan)) {}
-    explicit Http2StreamingResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
     Value value_;
 };
 

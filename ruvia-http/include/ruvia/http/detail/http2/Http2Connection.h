@@ -38,6 +38,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/Http2ResponseHeadSubmitResult.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpInterimResponse.h"
@@ -235,40 +236,9 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
 };
 
 // A final response HEADERS transaction either commits one body/stream plan or
-// rejects the submission without exposing a plan that was never committed.
-// The refusal reason is a plain enum, matching the request-head submission
-// contract; protocol layers never manufacture exception objects.
-enum class Http2ResponseHeadSubmitError : std::uint8_t {
-    kClosed,
-    kInvalidState,
-    kResponsePlanMismatch,
-    kInvalidMessage,
-};
-
-// Shadow the non-template public result before the dependent friend declaration;
-// otherwise MSVC resolves the friend to the enclosing namespace's result.
-template <typename Plan>
-class Http2ResponseHeadSubmitResult;
-
-class Http2ResponseHeadSubmitFailure final {
-public:
-    [[nodiscard]] constexpr bool peerClosed() const noexcept {
-        return error_ == Http2ResponseHeadSubmitError::kClosed;
-    }
-
-    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
-        return error_;
-    }
-
-private:
-    template <typename>
-    friend class Http2ResponseHeadSubmitResult;
-
-    explicit constexpr Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError error) noexcept
-        : error_(error) {}
-
-    Http2ResponseHeadSubmitError error_;
-};
+// rejects the submission without exposing a plan that was never committed. The
+// refusal reason is a plain enum, matching the request-head submission contract;
+// protocol layers never manufacture exception objects.
 
 [[nodiscard]] inline std::string_view http2ResponseHeadSubmitErrorMessage(
     Http2ResponseHeadSubmitError error) noexcept {
@@ -284,65 +254,6 @@ private:
     }
     return "unknown HTTP/2 response head submission failure";
 }
-
-// The successful alternative directly owns the plan that now governs
-// DATA/END_STREAM. A failure owns only its refusal reason, so callers cannot
-// observe body metadata from a rejected transaction or forget a parallel status.
-template <typename Plan>
-class Http2ResponseHeadSubmitResult final {
-public:
-    [[nodiscard]] const Plan* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
-    }
-    [[nodiscard]] const Plan* submitted() const&& = delete;
-
-    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
-    }
-    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const&& = delete;
-
-private:
-    friend class Http2Connection;
-
-    using Value = std::expected<Plan, Http2ResponseHeadSubmitFailure>;
-
-    explicit Http2ResponseHeadSubmitResult(Plan plan)
-        : value_(std::move(plan)) {}
-
-    explicit Http2ResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
-        : value_(std::unexpected(failure)) {}
-
-    [[nodiscard]] static Http2ResponseHeadSubmitResult makeSubmitted(Plan plan) {
-        return Http2ResponseHeadSubmitResult(std::move(plan));
-    }
-
-    [[nodiscard]] static Http2ResponseHeadSubmitResult makeClosedFailure() {
-        return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kClosed));
-    }
-
-    [[nodiscard]] static Http2ResponseHeadSubmitResult makeInvalidStateFailure() {
-        return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kInvalidState));
-    }
-
-    [[nodiscard]] static Http2ResponseHeadSubmitResult makeResponsePlanMismatchFailure() {
-        return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kResponsePlanMismatch));
-    }
-
-    [[nodiscard]] static Http2ResponseHeadSubmitResult makeInvalidMessageFailure() {
-        return Http2ResponseHeadSubmitResult(
-            Http2ResponseHeadSubmitFailure(Http2ResponseHeadSubmitError::kInvalidMessage));
-    }
-
-    Value value_;
-};
-
-using Http2BufferedResponseHeadSubmitResult =
-    Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
-using Http2StreamingResponseHeadSubmitResult =
-    Http2ResponseHeadSubmitResult<ResponseStreamCommitPlan>;
 
 // A response body the send window could not fully drain: the core keeps the unsent
 // remainder and flushes it as WINDOW_UPDATE/SETTINGS reopen the window (nghttp2-style
@@ -434,7 +345,7 @@ public:
     // here) are likewise rejected transactionally. An exclusive
     // Http2ResponseHeadPlan owns canonical, explicit, absent, or forbidden
     // Content-Length metadata before the encoder and local DATA state advance.
-    [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(std::uint32_t streamId,
+    [[nodiscard]] Http2ResponseHeadSubmitResult submitResponseHead(std::uint32_t streamId,
         const HttpResponse& response, HttpBufferedResponseWritePlan writePlan);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK

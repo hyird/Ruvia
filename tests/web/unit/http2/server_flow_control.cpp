@@ -422,7 +422,7 @@ ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& contex
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     response.fileBody(std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0,
-        declaredLength, {}, false);
+        declaredLength, ruvia::HttpResponseFileIdentity::unchecked());
     co_return response;
 }
 
@@ -441,7 +441,7 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
     response.status(ruvia::http_status::kOk);
     constexpr std::uint64_t declaredLength = 40000;
     response.fileBody(std::filesystem::path(missingFileBodyPath()), declaredLength, 0,
-        declaredLength, {}, false);
+        declaredLength, ruvia::HttpResponseFileIdentity::unchecked());
     co_return response;
 }
 

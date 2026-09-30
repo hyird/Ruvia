@@ -342,7 +342,7 @@ RUVIA_TEST(response_file_input_rejects_in_place_mutation_after_open) {
         return;
     }
 
-    const auto file = ruvia::detail::ResponseFileBodyAccess::make(
+    const ruvia::HttpResponseFileView file(
         path.c_str(), snapshot.size, 0, snapshot.size, snapshot.identity);
     auto input = ruvia::detail::openResponseFileInput(file);
     RUVIA_CHECK(static_cast<bool>(input));

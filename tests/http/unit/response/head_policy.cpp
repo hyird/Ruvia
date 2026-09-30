@@ -4,8 +4,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
@@ -208,15 +208,15 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     response.body("hello");
     const auto bodyPlan =
         ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
-    const auto connectionPlan = ruvia::http1PlanHttp11RequestConnection(false);
+    const auto connectionPlan = ruvia::planHttp11RequestConnection(false);
     const auto writePlan =
         ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    const auto combined = ruvia::detail::http1BufferedResponsePlan(writePlan, connectionPlan);
+    const auto combined = ruvia::http1BufferedResponsePlan(writePlan, connectionPlan);
     const auto& buffered = combined.headPlan();
     const auto chunked =
-        ruvia::detail::http1ChunkedResponseStreamHeadPlan(bodyPlan, connectionPlan);
+        ruvia::http1ChunkedResponseStreamHeadPlan(bodyPlan, connectionPlan);
     const auto closeDelimited =
-        ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan, connectionPlan);
+        ruvia::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan, connectionPlan);
 
     RUVIA_CHECK(buffered.buffered() != nullptr);
     RUVIA_CHECK(buffered.chunkedStream() == nullptr);

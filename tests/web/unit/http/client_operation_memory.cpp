@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -9,6 +10,8 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/OperationOptions.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
@@ -150,6 +153,88 @@ RUVIA_TEST(client_operation_arguments_use_redis_registry_owner_resource) {
     RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
 }
 #endif
+
+RUVIA_TEST(http_registry_direct_options_are_owned_and_expired_handles_keep_priority) {
+    auto& ioContext = ruvia::test::newTestIoContext();
+    TestWorker worker(ioContext);
+    ruvia::test::CountingMemoryResource owner;
+    const std::array definitions{httpDefinition("default")};
+    {
+        ruvia::detail::HttpClientRegistry registry(
+            ioContext, worker.handle(), &owner, std::span(definitions));
+        ruvia::detail::ScopedOperationScope scope;
+        ruvia::StopSource stop;
+        auto handle = registry.get(scope, {.timeout = std::chrono::seconds(4),
+                                              .stopToken = stop.token()});
+        auto copy = handle;
+        auto derived = copy.withOptions({.timeout = std::chrono::seconds(2)});
+        auto expired = derived;
+        scope.close();
+
+        bool invalidWins = false;
+        try {
+            (void)expired.withOptions({.timeout = std::chrono::milliseconds::zero()});
+        } catch (const std::invalid_argument&) {
+            invalidWins = true;
+        } catch (const std::logic_error&) {
+        }
+        RUVIA_CHECK(invalidWins);
+
+        bool invalidDefaultOptionsRejected = false;
+        try {
+            (void)registry.get(scope, {.timeout = std::chrono::milliseconds::zero()});
+        } catch (const std::invalid_argument&) {
+            invalidDefaultOptionsRejected = true;
+        }
+        RUVIA_CHECK(invalidDefaultOptionsRejected);
+        bool expiredOperationRejected = false;
+        try {
+            (void)expired.send({.target = "/"});
+        } catch (const std::logic_error&) {
+            expiredOperationRejected = true;
+        }
+        RUVIA_CHECK(expiredOperationRejected);
+
+        const auto baseline = owner.liveAllocations();
+        {
+            ruvia::detail::ScopedOperationScope coldScope;
+            auto cold = registry.get(coldScope, {.timeout = std::chrono::seconds(3)});
+            const std::string target = "/" + std::string(4096, 'c');
+            auto operation = cold.send({.target = target});
+            RUVIA_CHECK(owner.liveAllocations() > baseline);
+        }
+        RUVIA_CHECK_EQ(owner.liveAllocations(), baseline);
+    }
+    RUVIA_CHECK_EQ(owner.liveAllocations(), std::size_t{0});
+
+    const std::array onlyNamed{httpDefinition("api")};
+    {
+        ruvia::detail::HttpClientRegistry missingDefault(
+            ioContext, worker.handle(), std::pmr::get_default_resource(), std::span(onlyNamed));
+        ruvia::detail::ScopedOperationScope scope;
+        bool missingWins = false;
+        try {
+            (void)missingDefault.get(scope, {.timeout = std::chrono::milliseconds::zero()});
+        } catch (const ruvia::HttpClientError& error) {
+            missingWins = error.code() == ruvia::HttpClientError::Code::kNotConfigured;
+        }
+        RUVIA_CHECK(missingWins);
+    }
+    {
+        const std::array configured{httpDefinition("default")};
+        ruvia::detail::HttpClientRegistry closingRegistry(
+            ioContext, worker.handle(), std::pmr::get_default_resource(), std::span(configured));
+        closingRegistry.closeNow();
+        ruvia::detail::ScopedOperationScope scope;
+        bool closingWins = false;
+        try {
+            (void)closingRegistry.get(scope, {.timeout = std::chrono::milliseconds::zero()});
+        } catch (const ruvia::HttpClientError& error) {
+            closingWins = error.code() == ruvia::HttpClientError::Code::kClosing;
+        }
+        RUVIA_CHECK(closingWins);
+    }
+}
 
 RUVIA_TEST(client_operation_arguments_use_http_registry_owner_resource) {
     auto& ioContext = ruvia::test::newTestIoContext();

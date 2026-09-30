@@ -6,7 +6,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 
 #include "memory_resource_fixture.h"

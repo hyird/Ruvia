@@ -8,9 +8,9 @@
 
 namespace {
 
-using ruvia::detail::decodeUrlComponent;
-using ruvia::detail::hasUrlEncoding;
-using Mode = ruvia::detail::UrlDecodeMode;
+using ruvia::decodeUrlComponent;
+using ruvia::hasUrlEncoding;
+using Mode = ruvia::UrlDecodeMode;
 
 }  // namespace
 

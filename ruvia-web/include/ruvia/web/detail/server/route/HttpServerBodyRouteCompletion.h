@@ -82,7 +82,7 @@ inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
 template <typename TakePipeline>
 [[nodiscard]] inline Http1SessionRequestCompletion completeSuccessfulHttpBodyRoute(
     ruvia::ConnectionScanner::Entry& scannerEntry, HttpResponse& response,
-    Http1ServerConnectionPlan connectionPlan, Http1RequestSequence& requestSequence,
+    Http1RequestConnectionPlan connectionPlan, Http1RequestSequence& requestSequence,
     Http1RequestBodyConsumption bodyConsumption, std::pmr::string& pipelineStash,
     TakePipeline takePipeline) {
     connectionPlan =

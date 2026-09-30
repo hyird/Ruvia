@@ -51,7 +51,7 @@ ServerNetworkRuntime::ServerNetworkRuntime(std::span<const HttpServerListenerDef
         }
     }
     for (const auto& target : targets_) {
-        if (target.worker == nullptr || target.object == nullptr || target.available == nullptr ||
+        if (!target.submission.valid() || target.object == nullptr || target.available == nullptr ||
             target.accept == nullptr) {
             throw std::invalid_argument("server network TCP target callbacks and object must be set");
         }
@@ -420,7 +420,7 @@ void ServerNetworkRuntime::accepted(std::size_t listenerIndex,
     for (std::size_t offset = 0; offset < targets_.size(); ++offset) {
         const auto index = (nextTarget_ + offset) % targets_.size();
         if (targets_[index].available(targets_[index].object) &&
-            targets_[index].worker->accepting()) {
+            targets_[index].submission.accepting()) {
             selected = index;
             nextTarget_ = (index + 1) % targets_.size();
             break;
@@ -432,7 +432,7 @@ void ServerNetworkRuntime::accepted(std::size_t listenerIndex,
     }
     const auto target = targets_[selected];
     try {
-        auto posted = target.worker->post([target, ticket = std::move(ticket)]() mutable noexcept {
+        auto posted = target.submission.post([target, ticket = std::move(ticket)]() mutable noexcept {
             if (!target.available(target.object)) {
                 return;
             }

@@ -44,7 +44,7 @@ private:
         unsigned char* outputLength, const unsigned char* input, unsigned int inputLength,
         void* argument) noexcept;
 
-    struct ContextDeleter final {
+    struct ContextDeleter {
         void operator()(SSL_CTX* context) const noexcept;
     };
     using ContextOwner = std::unique_ptr<SSL_CTX, ContextDeleter>;

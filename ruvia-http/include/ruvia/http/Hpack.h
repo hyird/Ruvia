@@ -7,41 +7,17 @@
 #include <functional>
 #include <memory>
 #include <memory_resource>
-#include <optional>
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/HpackProtocolTypes.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia {
 
-enum class HpackDecodeError : std::uint8_t {
-    kNeedMore,
-    kIntegerOverflow,
-    kInvalidIndex,
-    kInvalidString,
-    kInvalidHuffman,
-    kDynamicTableSize,
-    kCallbackRejected,
-};
-
-class HpackDecodeResult final {
-public:
-    [[nodiscard]] constexpr bool decoded() const noexcept {
-        return !error_.has_value();
-    }
-    [[nodiscard]] constexpr std::optional<HpackDecodeError> error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class HpackDecoder;
-    explicit constexpr HpackDecodeResult(std::optional<HpackDecodeError> error) noexcept
-        : error_(error) {}
-    std::optional<HpackDecodeError> error_;
-};
-
 struct HpackDecoderOptions final {
+    // Must outlive the decoder, including its implementation and dynamic table.
+    // nullptr binds the current default PMR resource at construction.
     std::pmr::memory_resource* resource{nullptr};
 };
 
@@ -59,6 +35,8 @@ public:
 
     void setMaxDynamicTableSize(std::size_t bytes);
 
+    // Header name/value views are borrowed only for the callback invocation.
+    // Copy into owned storage when retaining a field beyond that invocation.
     template <typename Callback>
         requires std::predicate<Callback&, std::string_view, std::string_view>
     [[nodiscard]] HpackDecodeResult decode(std::string_view block, Callback&& callback) {
@@ -108,7 +86,10 @@ private:
         std::string_view block, void* target, HeaderCallback callback);
 
     class Impl;
-    std::unique_ptr<Impl> impl_;
+    struct ImplDeleter {
+        void operator()(Impl* value) const noexcept;
+    };
+    std::unique_ptr<Impl, ImplDeleter> impl_;
 };
 
 struct HpackHeaderWithNameIndexOptions final {

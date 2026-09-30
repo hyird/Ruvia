@@ -49,7 +49,7 @@ public:
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(
-        std::string_view bytes, WebSocketServerTransportDisposition /*disposition*/) {
+        std::string_view bytes, WebSocketTransportDisposition /*disposition*/) {
         if (bytes.empty()) {
             co_return std::error_code{};
         }

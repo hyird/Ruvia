@@ -14,6 +14,7 @@ namespace ruvia {
 
 namespace detail {
 struct HttpContentDecodeResultAccess;
+struct HttpContentEncodeResultAccess;
 }  // namespace detail
 
 enum class HttpContentEncodeError : std::uint8_t { kEncodedSizeExceeded,
@@ -42,6 +43,7 @@ public:
 
 private:
     friend class HttpContentEncodeResult;
+    friend struct detail::HttpContentEncodeResultAccess;
 
     explicit HttpEncodedContent(std::pmr::string bytes) noexcept
         : bytes_(std::move(bytes)) {}
@@ -57,6 +59,7 @@ public:
 
 private:
     friend class HttpContentEncodeResult;
+    friend struct detail::HttpContentEncodeResultAccess;
 
     explicit constexpr HttpContentEncodeFailure(HttpContentEncodeError error) noexcept
         : error_(error) {}
@@ -89,19 +92,9 @@ public:
     const HttpContentEncodeFailure* failure() const&& = delete;
 
 private:
-    friend HttpContentEncodeResult encodeHttpContent(
-        HttpContentCoding, std::string_view, HttpContentEncodeOptions);
+    friend struct detail::HttpContentEncodeResultAccess;
 
     using Value = std::expected<HttpEncodedContent, HttpContentEncodeFailure>;
-
-    [[nodiscard]] static HttpContentEncodeResult makeEncoded(std::pmr::string bytes) noexcept {
-        return HttpContentEncodeResult(HttpEncodedContent(std::move(bytes)));
-    }
-
-    [[nodiscard]] static HttpContentEncodeResult makeFailure(
-        HttpContentEncodeError error) noexcept {
-        return HttpContentEncodeResult(HttpContentEncodeFailure(error));
-    }
 
     explicit HttpContentEncodeResult(HttpEncodedContent encoded) noexcept
         : value_(std::move(encoded)) {}
@@ -147,6 +140,7 @@ public:
 
 private:
     friend class HttpContentDecodeResult;
+    friend struct detail::HttpContentDecodeResultAccess;
 
     explicit HttpDecodedContent(std::pmr::string bytes) noexcept
         : bytes_(std::move(bytes)) {}
@@ -162,6 +156,7 @@ public:
 
 private:
     friend class HttpContentDecodeResult;
+    friend struct detail::HttpContentDecodeResultAccess;
 
     explicit constexpr HttpContentDecodeFailure(HttpContentDecodeError error) noexcept
         : error_(error) {}
@@ -195,19 +190,8 @@ public:
 
 private:
     friend struct detail::HttpContentDecodeResultAccess;
-    friend HttpContentDecodeResult decodeHttpContent(
-        HttpContentCoding, std::string_view, HttpContentDecodeOptions);
 
     using Value = std::expected<HttpDecodedContent, HttpContentDecodeFailure>;
-
-    [[nodiscard]] static HttpContentDecodeResult makeDecoded(std::pmr::string bytes) noexcept {
-        return HttpContentDecodeResult(HttpDecodedContent(std::move(bytes)));
-    }
-
-    [[nodiscard]] static HttpContentDecodeResult makeFailure(
-        HttpContentDecodeError error) noexcept {
-        return HttpContentDecodeResult(HttpContentDecodeFailure(error));
-    }
 
     explicit HttpContentDecodeResult(HttpDecodedContent decoded) noexcept
         : value_(std::move(decoded)) {}

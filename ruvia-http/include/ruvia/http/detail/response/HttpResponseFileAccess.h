@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/util/NativePath.h"
 
 namespace ruvia::detail {
 
@@ -19,7 +20,7 @@ struct HttpResponseFileAccess final {
     }
 
     static void setFile(HttpResponse& response, std::filesystem::path file, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) {
+        std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) {
         response.setFileBody(std::move(file), size, offset, length, identity);
     }
 
@@ -55,7 +56,7 @@ inline void setResponseFileBody(HttpResponse& response, std::filesystem::path fi
 }
 
 inline void setResponseFileBody(HttpResponse& response, std::filesystem::path file,
-    std::uint64_t size, std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) {
+    std::uint64_t size, std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) {
     HttpResponseFileAccess::setFile(response, std::move(file), size, offset, length, identity);
 }
 

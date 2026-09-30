@@ -189,6 +189,9 @@ RUVIA_TEST(web_worker_dispatch_retires_late_factory_producer) {
     fixture.retire();
     state.releaseFactory.release();
     producer.join();
+    // Retirement retains the context until reserved publication quiesces.
+    // Drive the late factory's abandonment before destroying its owner.
+    fixture.ioContext.poll();
 
     const auto stats = fixture.dispatch->stats();
     RUVIA_CHECK_EQ(status.load(std::memory_order_acquire), ruvia::PostStatus::kAccepted);

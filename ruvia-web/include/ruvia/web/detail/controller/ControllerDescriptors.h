@@ -29,7 +29,7 @@ template <typename ControllerT>
 class ControllerRegistrationAccess;
 
 struct ControllerStoreState;
-struct ControllerStoreStateDeleter final {
+struct ControllerStoreStateDeleter {
     void operator()(ControllerStoreState* state) const noexcept;
 };
 
@@ -125,7 +125,7 @@ private:
         std::pmr::vector<ControllerMiddlewareDescriptor> middlewares, OwnedPrefixTag);
 
     class Impl;
-    struct ImplDeleter final {
+    struct ImplDeleter {
         void operator()(Impl* impl) const noexcept;
     };
     std::unique_ptr<Impl, ImplDeleter> impl_;

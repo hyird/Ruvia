@@ -317,7 +317,7 @@ RUVIA_TEST(http3_response_writer_reports_final_automatic_and_explicit_content_le
 
 RUVIA_TEST(http3_response_writer_head_and_status_content_length_projection) {
     ruvia::HttpResponse headResponse;
-    headResponse.fileBody("unused.bin", 123, 0, 123, {}, false);
+    headResponse.fileBody("unused.bin", 123, 0, 123, ruvia::HttpResponseFileIdentity::unchecked());
     const auto headPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kHead, headResponse);
     const auto head = ruvia::encodeHttp3ResponseHead(headResponse, headPlan);
     RUVIA_CHECK(head.has_value());

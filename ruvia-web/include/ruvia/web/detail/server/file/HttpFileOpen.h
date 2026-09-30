@@ -83,7 +83,7 @@ public:
     // Recheck the same native handle after a whole-file operation. Opening a
     // descriptor validates replacement races, but an in-place write can alter
     // bytes while that descriptor remains valid. The ctime/change-time token
-    // in ResponseFileIdentity makes that mutation visible to the runtime.
+    // in HttpResponseFileIdentity makes that mutation visible to the runtime.
     [[nodiscard]] bool matchesSnapshot(
         HttpResponseFileIdentity expected, std::uint64_t expectedSize) const noexcept {
         if (!expected.requiresValidation()) {

@@ -826,7 +826,7 @@ RUVIA_TEST(http2_websocket_transport_empty_end_completes_with_zero_send_window) 
     });
     asio::co_spawn(io, [&]() -> asio::awaitable<void> {
             writeError = co_await ruvia::asAwaitable(transport.writeBytes(
-                {}, ruvia::WebSocketServerTransportDisposition::kEndTransport));
+                {}, ruvia::WebSocketTransportDisposition::kEndTransport));
             completed = true;
             watchdog.cancel();
             attachment.stop(); }, stopIoOnCompletion(io));

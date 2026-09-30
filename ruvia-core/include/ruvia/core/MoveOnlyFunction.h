@@ -23,6 +23,27 @@ concept MoveOnlyFunctionTarget =
 template <typename Signature>
 class MoveOnlyFunction;
 
+namespace detail {
+
+inline constexpr std::size_t kMoveOnlyFunctionInlineSize = 3 * sizeof(void*);
+inline constexpr std::size_t kMoveOnlyFunctionInlineAlignment = alignof(std::max_align_t);
+
+template <typename Stored>
+inline constexpr bool MoveOnlyFunctionFitsInline =
+    sizeof(Stored) <= kMoveOnlyFunctionInlineSize &&
+    alignof(Stored) <= kMoveOnlyFunctionInlineAlignment &&
+    std::is_nothrow_move_constructible_v<Stored>;
+
+template <typename Signature, typename Fn>
+inline constexpr bool MoveOnlyFunctionBorrowSafeInput =
+    !std::same_as<std::remove_cvref_t<Fn>, MoveOnlyFunction<Signature>> &&
+    MoveOnlyFunctionFitsInline<std::decay_t<Fn>> &&
+    std::is_trivially_constructible_v<std::decay_t<Fn>, Fn&&> &&
+    std::is_trivially_move_constructible_v<std::decay_t<Fn>> &&
+    std::is_trivially_destructible_v<std::decay_t<Fn>>;
+
+}  // namespace detail
+
 template <typename Result, typename... Args>
 class MoveOnlyFunction<Result(Args...)> final {
 public:
@@ -39,7 +60,7 @@ public:
                 return;
             }
         }
-        if constexpr (fitsInline<Stored>) {
+        if constexpr (detail::MoveOnlyFunctionFitsInline<Stored>) {
             object_ = storage_;
             ::new (object_) Stored(std::forward<Fn>(fn));
             operations_ = &inlineOperations<Stored>;
@@ -88,8 +109,6 @@ public:
     }
 
 private:
-    static constexpr std::size_t kInlineSize = 3 * sizeof(void*);
-
     // The members are initialized explicitly rather than left to default
     // construction: the operation tables below are const static aggregates, and
     // MSVC reports C4268 when such an object is zero-filled by a compiler
@@ -99,11 +118,6 @@ private:
         void (*destroy)(void*) noexcept = nullptr;
         void (*move)(void*, void*) noexcept = nullptr;
     };
-
-    template <typename Stored>
-    static constexpr bool fitsInline =
-        sizeof(Stored) <= kInlineSize && alignof(Stored) <= alignof(std::max_align_t) &&
-        std::is_nothrow_move_constructible_v<Stored>;
 
     template <typename Stored>
     static Result invoke(void* object, Args&&... args) {
@@ -164,7 +178,8 @@ private:
         other.object_ = nullptr;
     }
 
-    alignas(std::max_align_t) std::byte storage_[kInlineSize];
+    alignas(detail::kMoveOnlyFunctionInlineAlignment)
+        std::byte storage_[detail::kMoveOnlyFunctionInlineSize];
     void* object_{nullptr};
     const Operations* operations_{nullptr};
 };

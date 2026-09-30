@@ -28,9 +28,12 @@
 
 namespace http2_connection_test {
 
+using ruvia::Http2ResponseHeadSubmitError;
+using ruvia::Http2ResponseHeadSubmitFailure;
+using ruvia::Http2ResponseHeadSubmitResult;
+using ruvia::Http2StreamingResponseHeadSubmitResult;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
-using ruvia::detail::Http2BufferedResponseHeadSubmitResult;
 using ruvia::detail::Http2ConnectForm;
 using ruvia::detail::Http2Connection;
 using ruvia::detail::Http2DataSubmitStatus;
@@ -49,10 +52,7 @@ using ruvia::detail::Http2RequestContent;
 using ruvia::detail::Http2RequestHeadSubmitError;
 using ruvia::detail::Http2RequestHeadSubmitFailure;
 using ruvia::detail::Http2RequestHeadSubmitResult;
-using ruvia::detail::Http2ResponseHeadSubmitError;
-using ruvia::detail::Http2ResponseHeadSubmitFailure;
 using ruvia::detail::Http2StreamCloseSource;
-using ruvia::detail::Http2StreamingResponseHeadSubmitResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2SubmitStatus;
 using ruvia::detail::Http2SubmittedRequestHead;
@@ -102,12 +102,12 @@ inline bool responseHeadSubmitted(const Result& result) {
 template <typename Result>
 inline std::string_view responseHeadSubmitFailureMessage(const Result& result) {
     if (const auto* failure = result.failure()) {
-        return http2ResponseHeadSubmitErrorMessage(failure->error());
+        return ruvia::detail::http2ResponseHeadSubmitErrorMessage(failure->error());
     }
     throw std::runtime_error("HTTP/2 response head did not fail");
 }
 
-inline Http2BufferedResponseHeadSubmitResult submitBufferedResponseHead(
+inline Http2ResponseHeadSubmitResult submitBufferedResponseHead(
     Http2Connection& connection, std::uint32_t streamId, const ruvia::HttpResponse& response) {
     const auto* stream = connection.stream(streamId);
     const auto requestMethod =

@@ -7,12 +7,12 @@
 #include <utility>
 
 #include "ruvia/http/Http1ClosePolicy.h"
+#include "ruvia/http/Http1RequestConnectionPlan.h"
+#include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
-#include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
@@ -20,18 +20,13 @@
 
 namespace ruvia {
 
-[[nodiscard]] inline constexpr Http1ServerConnectionPlan http1ApplyRequestBodyConsumption(
-    Http1ServerConnectionPlan plan, Http1RequestBodyConsumption consumption) noexcept {
-    return consumption == Http1RequestBodyConsumption::kComplete ? plan : plan.requireClose();
-}
-
 class Http1ResponseStreamPlan final {
 public:
     [[nodiscard]] ResponseStreamFraming framing() const noexcept {
         return framing_;
     }
 
-    [[nodiscard]] Http1ServerConnectionPlan requestConnectionPlan() const noexcept {
+    [[nodiscard]] Http1RequestConnectionPlan requestConnectionPlan() const noexcept {
         return requestConnectionPlan_;
     }
 
@@ -50,7 +45,7 @@ private:
         const Http1ServerRequestParseState&, Http1ClosePolicy) noexcept;
 
     Http1ResponseStreamPlan(ResponseStreamFraming framing,
-        Http1ServerConnectionPlan requestConnectionPlan, Http1ClosePolicy closePolicy,
+        Http1RequestConnectionPlan requestConnectionPlan, Http1ClosePolicy closePolicy,
         HttpKnownMethod requestMethod) noexcept
         : framing_(framing),
           requestConnectionPlan_(requestConnectionPlan),
@@ -58,7 +53,7 @@ private:
           requestMethod_(requestMethod) {}
 
     ResponseStreamFraming framing_;
-    Http1ServerConnectionPlan requestConnectionPlan_;
+    Http1RequestConnectionPlan requestConnectionPlan_;
     Http1ClosePolicy closePolicy_{Http1ClosePolicy::kCloseAfterResponse};
     HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
 };
@@ -70,7 +65,7 @@ private:
 // close delimiting, from a body-suppressed response that is already self-delimited.
 [[nodiscard]] inline Http1ResponseStreamPlan http1PlanResponseStream(
     const Http1ServerRequestParseState& parsed, Http1ClosePolicy closePolicy) noexcept {
-    const auto requestConnectionPlan = http1ApplyRequestBodyConsumption(parsed.connectionPlan,
+    const auto requestConnectionPlan = applyRequestBodyConsumption(parsed.connectionPlan,
         parsed.bodyPlan.requiresConsumption() ? Http1RequestBodyConsumption::kIncomplete
                                               : Http1RequestBodyConsumption::kComplete);
     const auto framing = parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11
@@ -159,10 +154,10 @@ private:
 // failure or unwrap a second success container.
 class Http1FinalResponseCommitResult final {
 public:
-    [[nodiscard]] const Http1ServerConnectionPlan* committed() const& noexcept {
+    [[nodiscard]] const Http1RequestConnectionPlan* committed() const& noexcept {
         return value_ ? &*value_ : nullptr;
     }
-    [[nodiscard]] const Http1ServerConnectionPlan* committed() const&& = delete;
+    [[nodiscard]] const Http1RequestConnectionPlan* committed() const&& = delete;
 
     [[nodiscard]] const Http1FinalResponseCommitFailure* failure() const& noexcept {
         return value_ ? nullptr : &value_.error();
@@ -171,18 +166,18 @@ public:
 
 private:
     friend Http1FinalResponseCommitResult http1CommitFinalResponse(
-        HttpResponse&, Http1ServerConnectionPlan);
+        HttpResponse&, Http1RequestConnectionPlan);
 
-    using Value = std::expected<Http1ServerConnectionPlan, Http1FinalResponseCommitFailure>;
+    using Value = std::expected<Http1RequestConnectionPlan, Http1FinalResponseCommitFailure>;
 
-    explicit Http1FinalResponseCommitResult(Http1ServerConnectionPlan connectionPlan) noexcept
+    explicit Http1FinalResponseCommitResult(Http1RequestConnectionPlan connectionPlan) noexcept
         : value_(connectionPlan) {}
 
     explicit Http1FinalResponseCommitResult(Http1FinalResponseCommitFailure failure) noexcept
         : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http1FinalResponseCommitResult committed(
-        Http1ServerConnectionPlan connectionPlan) noexcept {
+        Http1RequestConnectionPlan connectionPlan) noexcept {
         return Http1FinalResponseCommitResult(connectionPlan);
     }
 
@@ -200,7 +195,7 @@ private:
 // appropriate Connection field. Success retains the exact request version for
 // head serialization; wire-message failures remain typed.
 [[nodiscard]] inline Http1FinalResponseCommitResult http1CommitFinalResponse(
-    HttpResponse& response, Http1ServerConnectionPlan plan) {
+    HttpResponse& response, Http1RequestConnectionPlan plan) {
     const auto controlResult = detail::http1FinalResponseControlPlan(response);
     if (const auto* failure = controlResult.failure()) {
         return Http1FinalResponseCommitResult::failure(*failure);
@@ -264,7 +259,7 @@ public:
     }
     [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const&& = delete;
 
-    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
+    [[nodiscard]] Http1RequestConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
     }
 
@@ -276,14 +271,14 @@ private:
         HttpResponse, std::uint64_t, ResponseStreamKind, const Http1ResponseStreamPlan&);
 
     PreparedHttp1ResponseStream(ResponseStreamHead head, Http1ResponseHeadPlan responseHeadPlan,
-        Http1ServerConnectionPlan connectionPlan) noexcept
+        Http1RequestConnectionPlan connectionPlan) noexcept
         : head_(std::move(head)),
           responseHeadPlan_(responseHeadPlan),
           connectionPlan_(connectionPlan) {}
 
     ResponseStreamHead head_;
     Http1ResponseHeadPlan responseHeadPlan_;
-    Http1ServerConnectionPlan connectionPlan_;
+    Http1RequestConnectionPlan connectionPlan_;
 };
 
 class PreparedHttp1ResponseStreamResult final {

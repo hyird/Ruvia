@@ -115,61 +115,43 @@ HttpContentCodingFieldResult parseHttpContentCodingHeaders(
 
 HttpContentDecodeResult decodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
-    detail::ContentDecodeAttempt attempt{
-        std::unexpect, HttpContentDecodeError::kUnsupportedCoding};
     switch (coding) {
         case HttpContentCoding::kGzip:
-            attempt = detail::decodeGzipContent(input, options.maxDecodedBytes, options.resource);
-            break;
+            return detail::decodeGzipContent(input, options.maxDecodedBytes, options.resource);
         case HttpContentCoding::kBrotli:
-            attempt = detail::decodeBrotliContent(input, options.maxDecodedBytes, options.resource);
-            break;
+            return detail::decodeBrotliContent(input, options.maxDecodedBytes, options.resource);
         case HttpContentCoding::kZstd:
-            attempt = detail::decodeZstdContent(input, options.maxDecodedBytes, options.resource);
-            break;
-        case HttpContentCoding::kIdentity: {
+            return detail::decodeZstdContent(input, options.maxDecodedBytes, options.resource);
+        case HttpContentCoding::kIdentity:
             if (input.size() > options.maxDecodedBytes) {
-                attempt = std::unexpected(HttpContentDecodeError::kDecodedSizeExceeded);
-            } else {
-                attempt =
-                    std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
+                return detail::HttpContentDecodeResultAccess::failure(
+                    HttpContentDecodeError::kDecodedSizeExceeded);
             }
-            break;
-        }
+            return detail::HttpContentDecodeResultAccess::decoded(std::pmr::string(
+                input, detail::httpPmrResourceOrDefault(options.resource)));
     }
-    if (attempt) {
-        return HttpContentDecodeResult::makeDecoded(std::move(*attempt));
-    }
-    return HttpContentDecodeResult::makeFailure(attempt.error());
+    return detail::HttpContentDecodeResultAccess::failure(
+        HttpContentDecodeError::kUnsupportedCoding);
 }
 
 HttpContentEncodeResult encodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options) {
-    detail::ContentEncodeAttempt attempt{std::unexpect, HttpContentEncodeError::kEncoderFailure};
     switch (coding) {
         case HttpContentCoding::kBrotli:
-            attempt = detail::encodeBrotliContent(input, options.maxEncodedBytes, options.resource);
-            break;
+            return detail::encodeBrotliContent(input, options.maxEncodedBytes, options.resource);
         case HttpContentCoding::kZstd:
-            attempt = detail::encodeZstdContent(input, options.maxEncodedBytes, options.resource);
-            break;
+            return detail::encodeZstdContent(input, options.maxEncodedBytes, options.resource);
         case HttpContentCoding::kGzip:
-            attempt = detail::encodeGzipContent(input, options.maxEncodedBytes, options.resource);
-            break;
-        case HttpContentCoding::kIdentity: {
+            return detail::encodeGzipContent(input, options.maxEncodedBytes, options.resource);
+        case HttpContentCoding::kIdentity:
             if (input.size() > options.maxEncodedBytes) {
-                attempt = std::unexpected(HttpContentEncodeError::kEncodedSizeExceeded);
-            } else {
-                attempt =
-                    std::pmr::string(input, detail::httpPmrResourceOrDefault(options.resource));
+                return detail::HttpContentEncodeResultAccess::failure(
+                    HttpContentEncodeError::kEncodedSizeExceeded);
             }
-            break;
-        }
+            return detail::HttpContentEncodeResultAccess::encoded(std::pmr::string(
+                input, detail::httpPmrResourceOrDefault(options.resource)));
     }
-    if (attempt) {
-        return HttpContentEncodeResult::makeEncoded(std::move(*attempt));
-    }
-    return HttpContentEncodeResult::makeFailure(attempt.error());
+    return detail::HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
 }
 
 }  // namespace ruvia

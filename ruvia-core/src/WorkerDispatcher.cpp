@@ -143,13 +143,18 @@ void WorkerDispatcher::publish(std::size_t index) {
     }
     if (abandon) {
         auto abandoned = std::move(impl_->nodes[index].task);
+        IdleCallbacks callbacks{processResource()};
         {
             std::lock_guard lock(impl_->mutex);
             impl_->nodes[index].state = Impl::NodeState::kFree;
             impl_->nodes[index].next = impl_->freeHead;
             impl_->freeHead = index;
             --impl_->pendingCount;
+            callbacks = takeIdleCallbacksLocked();
         }
+        abandoned = nullptr;
+        notifyIdle(std::move(callbacks));
+        impl_->pendingChanged.notify_all();
     }
 }
 
@@ -162,13 +167,18 @@ void WorkerDispatcher::rollbackReserved(std::size_t index) noexcept {
         impl_->nodes[index].state = Impl::NodeState::kReleasing;
     }
     auto abandoned = std::move(impl_->nodes[index].task);
+    IdleCallbacks callbacks{processResource()};
     {
         std::lock_guard lock(impl_->mutex);
         impl_->nodes[index].state = Impl::NodeState::kFree;
         impl_->nodes[index].next = impl_->freeHead;
         impl_->freeHead = index;
         --impl_->pendingCount;
+        callbacks = takeIdleCallbacksLocked();
     }
+    abandoned = nullptr;
+    notifyIdle(std::move(callbacks));
+    impl_->pendingChanged.notify_all();
 }
 
 void WorkerDispatcher::defer(MoveOnlyFunction<void()> task) {
@@ -212,6 +222,62 @@ void WorkerDispatcher::registerShutdownListener(
     }
     std::erase_if(impl_->shutdownListeners, [](const auto& entry) { return entry.expired(); });
     impl_->shutdownListeners.emplace_back(listener);
+}
+
+void WorkerDispatcher::whenShutdownNotificationsComplete(MoveOnlyFunction<void()> callback) {
+    if (!callback) {
+        throw std::invalid_argument("shutdown notification callback requires a callable");
+    }
+    bool ready = false;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->shutdownNotificationActive) {
+            impl_->shutdownNotificationWaiters.push_back(std::move(callback));
+        } else {
+            ready = true;
+        }
+    }
+    if (ready) {
+        callback();
+    }
+}
+
+void WorkerDispatcher::whenIdle(MoveOnlyFunction<void()> callback) {
+    if (!callback) {
+        throw std::invalid_argument("worker idle callback requires a callable");
+    }
+    bool ready = false;
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->contextAttached) {
+            throw std::runtime_error("worker execution context is detached");
+        }
+        ready = impl_->pendingCount == 0 && impl_->activeCount == 0;
+        if (!ready) {
+            impl_->idleWaiters.push_back(std::move(callback));
+        }
+    }
+    if (ready) {
+        callback();
+    }
+}
+
+WorkerDispatcher::IdleCallbacks WorkerDispatcher::takeIdleCallbacksLocked() {
+    IdleCallbacks callbacks{processResource()};
+    if (impl_->pendingCount == 0 && impl_->activeCount == 0) {
+        callbacks.swap(impl_->idleWaiters);
+    }
+    return callbacks;
+}
+
+void WorkerDispatcher::notifyIdle(IdleCallbacks callbacks) noexcept {
+    for (auto& callback : callbacks) {
+        try {
+            callback();
+        } catch (...) {
+            std::terminate();
+        }
+    }
 }
 
 void WorkerDispatcher::runContext() {
@@ -283,7 +349,7 @@ void WorkerDispatcher::close() noexcept {
 }
 
 void WorkerDispatcher::detachContext() noexcept {
-    ShutdownListeners abandonedListeners;
+    ShutdownListeners abandonedListeners{processResource()};
     std::pmr::vector<TimerEntry> abandonedTimers(impl_->timers.get_allocator());
     std::pmr::vector<TimerSlot> abandonedTimerSlots(impl_->timerSlots.get_allocator());
     std::unique_ptr<asio::steady_timer> detachedTimer;
@@ -316,12 +382,17 @@ void WorkerDispatcher::detachContext() noexcept {
     abandonQueued();
 }
 
+void WorkerDispatcher::waitForReservations() noexcept {
+    std::unique_lock lock(impl_->mutex);
+    impl_->pendingChanged.wait(lock, [this] { return impl_->pendingCount == 0; });
+}
+
 bool WorkerDispatcher::attached() const noexcept {
     return impl_->contextAttached.load(std::memory_order_acquire);
 }
 
-WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(bool abandonDrain) noexcept {
-    ShutdownListeners listeners;
+WorkerDispatcher::ShutdownBatch WorkerDispatcher::beginStopping(bool abandonDrain) noexcept {
+    ShutdownBatch batch;
     {
         std::lock_guard lock(impl_->mutex);
         if (abandonDrain) {
@@ -329,18 +400,45 @@ WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(bool abandon
             impl_->abandonDrain = true;
         }
         if (!impl_->accepting) {
-            return listeners;
+            return batch;
         }
         impl_->accepting = false;
-        listeners.swap(impl_->shutdownListeners);
+        impl_->shutdownNotificationActive = true;
+        batch.listeners.swap(impl_->shutdownListeners);
+        batch.active = true;
     }
-    return listeners;
+    return batch;
 }
 
-void WorkerDispatcher::notifyStopping(const ShutdownListeners& listeners) noexcept {
-    for (const auto& entry : listeners) {
+void WorkerDispatcher::notifyStopping(ShutdownBatch batch) noexcept {
+    if (!batch.active) {
+        return;
+    }
+    for (const auto& entry : batch.listeners) {
         if (const auto listener = entry.lock()) {
             listener->workerStopping();
+        }
+    }
+    for (const auto& entry : batch.listeners) {
+        if (const auto listener = entry.lock()) {
+            listener->workerStoppingComplete();
+        }
+    }
+
+    IdleCallbacks waiters{processResource()};
+    {
+        std::lock_guard lock(impl_->mutex);
+        if (!impl_->shutdownNotificationActive) {
+            std::terminate();
+        }
+        impl_->shutdownNotificationActive = false;
+        waiters.swap(impl_->shutdownNotificationWaiters);
+    }
+    for (auto& waiter : waiters) {
+        try {
+            waiter();
+        } catch (...) {
+            std::terminate();
         }
     }
 }
@@ -361,15 +459,20 @@ void WorkerDispatcher::abandonQueued() noexcept {
             impl_->nodes[index].state = Impl::NodeState::kReleasing;
         }
         auto abandoned = std::move(impl_->nodes[index].task);
+        IdleCallbacks callbacks{processResource()};
         {
             std::lock_guard lock(impl_->mutex);
             impl_->nodes[index].state = Impl::NodeState::kFree;
             impl_->nodes[index].next = impl_->freeHead;
             impl_->freeHead = index;
             --impl_->pendingCount;
+            callbacks = takeIdleCallbacksLocked();
         }
         // Destroy user closures outside the dispatcher mutex. Their destructors
         // may reconcile higher-level outstanding-work reservations.
+        abandoned = nullptr;
+        notifyIdle(std::move(callbacks));
+        impl_->pendingChanged.notify_all();
     }
 }
 
@@ -410,28 +513,41 @@ void WorkerDispatcher::drain() {
             }
             impl_->nodes[index].state = Impl::NodeState::kActive;
             --impl_->pendingCount;
+            ++impl_->activeCount;
         }
         task = std::move(impl_->nodes[index].task);
         try {
             task();
         } catch (...) {
+            task = nullptr;
             {
                 std::lock_guard lock(impl_->mutex);
                 impl_->nodes[index].state = Impl::NodeState::kFree;
                 impl_->nodes[index].next = impl_->freeHead;
                 impl_->freeHead = index;
+                --impl_->activeCount;
             }
             notifyStopping(beginStopping(true));
             abandonQueued();
+            IdleCallbacks callbacks{processResource()};
+            {
+                std::lock_guard lock(impl_->mutex);
+                callbacks = takeIdleCallbacksLocked();
+            }
+            notifyIdle(std::move(callbacks));
             throw;
         }
         task = nullptr;
+        IdleCallbacks callbacks{processResource()};
         {
             std::lock_guard lock(impl_->mutex);
             impl_->nodes[index].state = Impl::NodeState::kFree;
             impl_->nodes[index].next = impl_->freeHead;
             impl_->freeHead = index;
+            --impl_->activeCount;
+            callbacks = takeIdleCallbacksLocked();
         }
+        notifyIdle(std::move(callbacks));
     }
     abandonQueued();
 }

@@ -14,12 +14,12 @@ namespace ruvia::detail {
 
 template <typename Visitor>
 [[nodiscard]] bool visitRawFormFields(std::string_view body, Visitor&& visitor) {
-    return visitUrlEncodedPairs(body, std::forward<Visitor>(visitor));
+    return ruvia::visitUrlEncodedPairs(body, std::forward<Visitor>(visitor));
 }
 
 [[nodiscard]] inline bool formFieldNameEquals(
     std::string_view encodedName, std::string_view field) noexcept {
-    return urlComponentEquals(encodedName, field, UrlDecodeMode::kForm);
+    return ruvia::urlComponentEquals(encodedName, field, UrlDecodeMode::kForm);
 }
 
 template <typename Visitor>
@@ -34,7 +34,7 @@ template <typename Visitor>
         }
 
         auto decodedName =
-            decodeUrlComponent(name, {.mode = UrlDecodeMode::kForm, .resource = resource});
+            ruvia::decodeUrlComponent(name, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedName.has_value()) {
             valid = false;
             return false;

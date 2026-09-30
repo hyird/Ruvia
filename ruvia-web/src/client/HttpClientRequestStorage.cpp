@@ -65,4 +65,20 @@ HttpClientRequestStorage& HttpClientRequestStorage::setBody(std::string_view bod
     return *this;
 }
 
+HttpClientRequestView HttpClientRequestStorageAccess::view(
+    const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers) {
+    headers.clear();
+    headers.reserve(request.headers_.size());
+    for (const auto& header : request.headers_) {
+        headers.emplace_back(header.name, header.value);
+    }
+    HttpClientRequestView result;
+    result.method = request.method_;
+    result.target = request.target_;
+    result.headers = std::span<const HttpHeaderView>(headers);
+    result.content = request.hasBody_ ? HttpClientRequestContentView::bytes(request.body_)
+                                      : HttpClientRequestContentView::none();
+    return result;
+}
+
 }  // namespace ruvia::detail

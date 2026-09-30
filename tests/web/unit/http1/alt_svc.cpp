@@ -152,7 +152,7 @@ void parseHttp1Request(std::string_view wire, ruvia::Http1ServerRequestParseStat
 
 ruvia::Task<void> writeBufferedResponse(tcp::socket& socket, ruvia::WorkerMemory& worker,
     const ruvia::HttpRequest& request, ruvia::HttpResponse& response,
-    ruvia::Http1ServerConnectionPlan connectionPlan) {
+    ruvia::Http1RequestConnectionPlan connectionPlan) {
     ruvia::HttpResponseHeadBuffer head(worker.allocator<char>());
     std::pmr::string fileChunk(worker.allocator<char>());
     const auto writePlan = ruvia::http1BufferedResponsePlan(

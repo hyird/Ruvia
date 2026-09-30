@@ -296,7 +296,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                     // An unresolved request never consumes its body, regardless
                     // of whether the shared Web dispatch selected a document-root
                     // file, 404, 405, or OPTIONS response.
-                    auto connectionPlan = http1ApplyRequestBodyConsumption(
+                    auto connectionPlan = applyRequestBodyConsumption(
                         parsed.connectionPlan, parsed.bodyPlan.requiresConsumption()
                                                    ? Http1RequestBodyConsumption::kIncomplete
                                                    : Http1RequestBodyConsumption::kComplete);

@@ -1,47 +1,26 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/WebSocketServerProtocolTypes.h"
+#include "ruvia/http/WebSocketProtocolTypes.h"
 
 namespace ruvia {
 
-// Payload views remain valid until the next WebSocketServerProtocol::poll().
-class WebSocketServerEvent final {
-public:
-    [[nodiscard]] WebSocketServerEventKind kind() const noexcept;
-    [[nodiscard]] const WebSocketServerMessageEvent* message() const& noexcept;
-    const WebSocketServerMessageEvent* message() const&& = delete;
-    [[nodiscard]] const WebSocketServerPingEvent* ping() const& noexcept;
-    const WebSocketServerPingEvent* ping() const&& = delete;
-    [[nodiscard]] const WebSocketServerPongEvent* pong() const& noexcept;
-    const WebSocketServerPongEvent* pong() const&& = delete;
-    [[nodiscard]] const WebSocketServerCloseEvent* close() const& noexcept;
-    const WebSocketServerCloseEvent* close() const&& = delete;
-    [[nodiscard]] const WebSocketServerProtocolErrorEvent* protocolError() const& noexcept;
-    const WebSocketServerProtocolErrorEvent* protocolError() const&& = delete;
-    [[nodiscard]] const WebSocketServerTransportEndEvent* transportEnd() const& noexcept;
-    const WebSocketServerTransportEndEvent* transportEnd() const&& = delete;
-
-private:
-    friend class WebSocketServerProtocol;
-    using Value = std::variant<WebSocketServerMessageEvent, WebSocketServerPingEvent,
-        WebSocketServerPongEvent, WebSocketServerCloseEvent,
-        WebSocketServerProtocolErrorEvent, WebSocketServerTransportEndEvent>;
-    static_assert(static_cast<std::size_t>(WebSocketServerEventKind::kTransportEnd) + 1 ==
-                  std::variant_size_v<Value>);
-    explicit WebSocketServerEvent(Value value) noexcept;
-    Value value_;
+struct WebSocketServerProtocolOptions final {
+    WebSocketCompression compression{WebSocketCompression::kDisabled};
+    int compressionLevel{6};
 };
 
 // Sans-I/O WebSocket server protocol. The input buffer is borrowed and must
 // outlive this object; its memory resource must also outlive this object.
+// Event payload views remain valid until the next poll() or input mutation.
 class WebSocketServerProtocol final {
 public:
     explicit WebSocketServerProtocol(std::pmr::string& input,
@@ -56,24 +35,26 @@ public:
     WebSocketServerProtocol(WebSocketServerProtocol&&) = delete;
     WebSocketServerProtocol& operator=(WebSocketServerProtocol&&) = delete;
 
-    [[nodiscard]] std::optional<WebSocketServerEvent> poll() &;
-    [[nodiscard]] std::optional<WebSocketServerEvent> poll() && = delete;
-    [[nodiscard]] WebSocketServerOutputPlan outputPlan() const& noexcept;
-    [[nodiscard]] WebSocketServerOutputPlan outputPlan() const&& = delete;
-    [[nodiscard]] WebSocketServerOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
+    [[nodiscard]] std::optional<WebSocketEvent> poll() &;
+    std::optional<WebSocketEvent> poll() && = delete;
+    [[nodiscard]] WebSocketOutputPlan outputPlan() const& noexcept;
+    WebSocketOutputPlan outputPlan() const&& = delete;
+    [[nodiscard]] WebSocketOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
-    [[nodiscard]] WebSocketServerAbortDisposition abort() noexcept;
+    [[nodiscard]] WebSocketAbortDisposition abort() noexcept;
     [[nodiscard]] WebSocketLivenessMode livenessMode() const noexcept;
-    [[nodiscard]] WebSocketServerFrameSubmitStatus submitFrame(
+    [[nodiscard]] WebSocketFrameSubmitStatus submitFrame(
         WebSocketOpcode opcode, std::string_view payload, bool compress = true);
-    [[nodiscard]] WebSocketServerCloseSubmitStatus submitClose(
+    [[nodiscard]] WebSocketCloseSubmitStatus submitClose(
         std::uint16_t code, std::string_view reason);
 
 private:
     struct Impl;
-    std::pmr::memory_resource* resource_;
-    Impl* impl_;
+    struct ImplDeleter {
+        void operator()(Impl* value) const noexcept;
+    };
+    std::unique_ptr<Impl, ImplDeleter> impl_;
 };
 
 }  // namespace ruvia

@@ -1,6 +1,10 @@
+#include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/http/WebSocketServerProtocol.h"
@@ -25,15 +29,21 @@ class CountingResource final : public std::pmr::memory_resource {
 public:
     std::size_t liveBytes{0};
     std::size_t allocations{0};
+    std::size_t deallocations{0};
+    bool reject{false};
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject) {
+            throw std::bad_alloc();
+        }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
         ++allocations;
         liveBytes += bytes;
         return allocation;
     }
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        ++deallocations;
         liveBytes -= bytes;
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
@@ -111,7 +121,7 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     RUVIA_CHECK(sender.consumeOutput(messageWire.size()) == WebSocketOutputConsumeStatus::kDrained);
     input.append(messageWire);
     auto message = protocol.poll();
-    RUVIA_CHECK(message && message->kind() == WebSocketServerEventKind::kMessage);
+    RUVIA_CHECK(message && message->kind() == WebSocketEventKind::kMessage);
     RUVIA_CHECK(message && message->message());
     if (message && message->message()) {
         RUVIA_CHECK(message->message()->opcode() == WebSocketOpcode::kText);
@@ -124,7 +134,7 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     RUVIA_CHECK(sender.consumeOutput(pingWire.size()) == WebSocketOutputConsumeStatus::kDrained);
     input.append(pingWire);
     auto ping = protocol.poll();
-    RUVIA_CHECK(ping && ping->kind() == WebSocketServerEventKind::kPing);
+    RUVIA_CHECK(ping && ping->kind() == WebSocketEventKind::kPing);
     RUVIA_CHECK(ping && ping->ping());
     if (ping && ping->ping()) {
         RUVIA_CHECK_EQ(ping->ping()->payload(), "p");
@@ -161,26 +171,26 @@ RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
             }
         }
         RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "out") ==
-                    WebSocketServerFrameSubmitStatus::kAccepted);
+                    WebSocketFrameSubmitStatus::kAccepted);
         auto pending = protocol.outputPlan().bytes();
         RUVIA_CHECK(protocol.consumeOutput(pending.size()) ==
-                    WebSocketServerOutputConsumeStatus::kDrained);
+                    WebSocketOutputConsumeStatus::kDrained);
         const auto liveBeforeSubmit = memory.liveBytes;
         for (int i = 0; i < 32; ++i) {
             RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "out") ==
-                        WebSocketServerFrameSubmitStatus::kAccepted);
+                        WebSocketFrameSubmitStatus::kAccepted);
             pending = protocol.outputPlan().bytes();
             RUVIA_CHECK(protocol.consumeOutput(pending.size()) ==
-                        WebSocketServerOutputConsumeStatus::kDrained);
+                        WebSocketOutputConsumeStatus::kDrained);
         }
         // PMR implementations may allocate a transient container proxy on each
         // submit; those allocations must not remain live after output drains.
         RUVIA_CHECK_EQ(memory.liveBytes, liveBeforeSubmit);
         protocol.notifyTransportEof();
         auto end = protocol.poll();
-        RUVIA_CHECK(end && end->kind() == WebSocketServerEventKind::kTransportEnd);
+        RUVIA_CHECK(end && end->kind() == WebSocketEventKind::kTransportEnd);
         protocol.commitTransportEnd();
-        RUVIA_CHECK(protocol.abort() == WebSocketServerAbortDisposition::kNoTransportAction);
+        RUVIA_CHECK(protocol.abort() == WebSocketAbortDisposition::kNoTransportAction);
     }
     RUVIA_CHECK_EQ(memory.liveBytes, bytesBeforeProtocol);
 }
@@ -191,7 +201,7 @@ RUVIA_TEST(ws_public_server_protocol_reports_protocol_error_as_public_value) {
     // A server-side connection must reject an unmasked client frame.
     input.append("\x81\x01x", 3);
     auto error = protocol.poll();
-    RUVIA_CHECK(error && error->kind() == WebSocketServerEventKind::kProtocolError);
+    RUVIA_CHECK(error && error->kind() == WebSocketEventKind::kProtocolError);
     RUVIA_CHECK(error && error->protocolError() && error->protocolError()->closeCode() == 1002);
 }
 
@@ -202,17 +212,17 @@ RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
     const std::string payload(200, 'x');
 
     RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, payload, false) ==
-                WebSocketServerFrameSubmitStatus::kAccepted);
+                WebSocketFrameSubmitStatus::kAccepted);
     auto output = protocol.outputPlan().bytes();
     RUVIA_CHECK(!output.empty());
     if (!output.empty()) {
         RUVIA_CHECK((static_cast<unsigned char>(output[0]) & 0x40U) == 0);
     }
     RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
-                WebSocketServerOutputConsumeStatus::kDrained);
+                WebSocketOutputConsumeStatus::kDrained);
 
     RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, payload) ==
-                WebSocketServerFrameSubmitStatus::kAccepted);
+                WebSocketFrameSubmitStatus::kAccepted);
     output = protocol.outputPlan().bytes();
     RUVIA_CHECK(!output.empty());
     if (!output.empty()) {
@@ -223,51 +233,51 @@ RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
 RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input);
-    RUVIA_CHECK(protocol.submitClose(1000, "done") == WebSocketServerCloseSubmitStatus::kAccepted);
+    RUVIA_CHECK(protocol.submitClose(1000, "done") == WebSocketCloseSubmitStatus::kAccepted);
     RUVIA_CHECK(protocol.outputPlan().disposition() ==
-                WebSocketServerTransportDisposition::kKeepOpen);
+                WebSocketTransportDisposition::kKeepOpen);
     const auto output = protocol.outputPlan().bytes();
     RUVIA_CHECK(!output.empty());
     RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
-                WebSocketServerOutputConsumeStatus::kDrained);
+                WebSocketOutputConsumeStatus::kDrained);
     // After our Close frame is sent, the protocol still awaits the peer's
     // Close; transport EOF terminates that wait without fabricating a reply.
     RUVIA_CHECK(protocol.outputPlan().disposition() ==
-                WebSocketServerTransportDisposition::kKeepOpen);
+                WebSocketTransportDisposition::kKeepOpen);
     protocol.notifyTransportEof();
     RUVIA_CHECK(protocol.outputPlan().disposition() ==
-                WebSocketServerTransportDisposition::kEndTransport);
+                WebSocketTransportDisposition::kEndTransport);
 }
 
 RUVIA_TEST(ws_public_server_eof_discards_pending_output_before_transport_end) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input);
     RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "unsent") ==
-                WebSocketServerFrameSubmitStatus::kAccepted);
+                WebSocketFrameSubmitStatus::kAccepted);
     const auto output = protocol.outputPlan().bytes();
     RUVIA_CHECK(output.size() > 1);
-    RUVIA_CHECK(protocol.consumeOutput(1) == WebSocketServerOutputConsumeStatus::kPending);
+    RUVIA_CHECK(protocol.consumeOutput(1) == WebSocketOutputConsumeStatus::kPending);
 
     protocol.notifyTransportEof();
     const auto end = protocol.outputPlan();
     RUVIA_CHECK(end.bytes().empty());
-    RUVIA_CHECK(end.disposition() == WebSocketServerTransportDisposition::kEndTransport);
+    RUVIA_CHECK(end.disposition() == WebSocketTransportDisposition::kEndTransport);
     // The driver can finish its direction without consuming bytes discarded by EOF.
     RUVIA_CHECK(protocol.consumeOutput(end.bytes().size()) ==
-                WebSocketServerOutputConsumeStatus::kDrained);
+                WebSocketOutputConsumeStatus::kDrained);
     protocol.commitTransportEnd();
-    RUVIA_CHECK(protocol.abort() == WebSocketServerAbortDisposition::kNoTransportAction);
+    RUVIA_CHECK(protocol.abort() == WebSocketAbortDisposition::kNoTransportAction);
 }
 
 RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input);
     RUVIA_CHECK(protocol.submitClose(1000, "done") ==
-                WebSocketServerCloseSubmitStatus::kAccepted);
+                WebSocketCloseSubmitStatus::kAccepted);
     auto output = protocol.outputPlan().bytes();
     RUVIA_CHECK(!output.empty());
     RUVIA_CHECK(protocol.consumeOutput(output.size()) ==
-                WebSocketServerOutputConsumeStatus::kDrained);
+                WebSocketOutputConsumeStatus::kDrained);
 
     // Masked client Ping("p") followed by an empty masked Close.
     input.append(
@@ -275,17 +285,17 @@ RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
         "\x88\x80\x05\x06\x07\x08",
         13);
     const auto ping = protocol.poll();
-    RUVIA_CHECK(ping && ping->kind() == WebSocketServerEventKind::kPing);
+    RUVIA_CHECK(ping && ping->kind() == WebSocketEventKind::kPing);
     RUVIA_CHECK(ping && ping->ping() && ping->ping()->payload() == "p");
     const auto close = protocol.poll();
-    RUVIA_CHECK(close && close->kind() == WebSocketServerEventKind::kClose);
+    RUVIA_CHECK(close && close->kind() == WebSocketEventKind::kClose);
 
     const auto plan = protocol.outputPlan();
     RUVIA_CHECK_EQ(plan.bytes(), std::string_view("\x8a\x01p", 3));
     RUVIA_CHECK(plan.disposition() ==
-                WebSocketServerTransportDisposition::kEndTransport);
+                WebSocketTransportDisposition::kEndTransport);
     RUVIA_CHECK(protocol.consumeOutput(plan.bytes().size()) ==
-                WebSocketServerOutputConsumeStatus::kDrained);
+                WebSocketOutputConsumeStatus::kDrained);
     protocol.commitTransportEnd();
     RUVIA_CHECK(protocol.livenessMode() == WebSocketLivenessMode::kInactive);
 }
@@ -440,4 +450,96 @@ RUVIA_TEST(ws_public_connection_reuses_buffers_and_releases_owned_memory) {
         (void)connection.abort();
     }
     RUVIA_CHECK_EQ(resource.liveBytes, std::size_t{0});
+}
+
+RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
+    CountingResource sourceMemory;
+    CountingResource replacedMemory;
+    MaskSource mask;
+    const std::string payload(1024, 'x');
+    {
+        WebSocketConnection source({.resource = &sourceMemory,
+            .role = WebSocketConnectionRole::kClient,
+            .maskKeyGenerator = &MaskSource::generate,
+            .maskKeyContext = &mask});
+        WebSocketConnection server;
+        RUVIA_CHECK(server.submitFrame(WebSocketOpcode::kBinary, payload) == WebSocketFrameSubmitStatus::kAccepted);
+        const auto wire = drain(server);
+        RUVIA_CHECK(source.feed(wire) == WebSocketFeedStatus::kAccepted);
+        const auto event = source.nextEvent();
+        RUVIA_CHECK(event && event->message());
+        if (!event || !event->message()) {
+            return;
+        }
+        const auto retainedPayload = event->message()->payload();
+        RUVIA_CHECK(source.submitFrame(WebSocketOpcode::kBinary, retainedPayload) == WebSocketFrameSubmitStatus::kAccepted);
+        const auto retainedOutput = source.outputPlan().bytes();
+        const auto liveBeforeMove = sourceMemory.liveBytes;
+        const auto allocationsBeforeMove = sourceMemory.allocations;
+        WebSocketConnection moved(std::move(source));
+        WebSocketConnection replacement({.resource = &replacedMemory});
+        RUVIA_CHECK(replacedMemory.liveBytes > 0);
+        replacement = std::move(moved);
+        RUVIA_CHECK_EQ(replacedMemory.liveBytes, std::size_t{0});
+        RUVIA_CHECK_EQ(sourceMemory.liveBytes, liveBeforeMove);
+        RUVIA_CHECK_EQ(sourceMemory.allocations, allocationsBeforeMove);
+        RUVIA_CHECK_EQ(retainedPayload, payload);
+        RUVIA_CHECK(replacement.outputPlan().bytes().data() == retainedOutput.data());
+        RUVIA_CHECK_EQ(replacement.outputPlan().bytes(), retainedOutput);
+        RUVIA_CHECK(server.feed(retainedOutput) == WebSocketFeedStatus::kAccepted);
+        const auto echoed = server.nextEvent();
+        RUVIA_CHECK(echoed && echoed->message() && echoed->message()->payload() == payload);
+        // EOF/abort discard logical output without invalidating a transport's
+        // outstanding write borrow. Only destruction releases the backing bytes.
+        const std::string savedOutput(retainedOutput);
+        replacement.notifyTransportEof();
+        RUVIA_CHECK(replacement.abort() == WebSocketAbortDisposition::kAbortTransport);
+        RUVIA_CHECK_EQ(retainedOutput, savedOutput);
+        RUVIA_CHECK_EQ(sourceMemory.liveBytes, liveBeforeMove);
+    }
+    RUVIA_CHECK_EQ(sourceMemory.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(sourceMemory.allocations, sourceMemory.deallocations);
+    RUVIA_CHECK_EQ(replacedMemory.allocations, replacedMemory.deallocations);
+}
+
+RUVIA_TEST(ws_public_driver_implementation_lifetime_and_construction_failures) {
+    CountingResource memory;
+    {
+        WebSocketConnection unused({.resource = &memory});
+        RUVIA_CHECK(memory.liveBytes > 0);
+    }
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        WebSocketConnection invalid({.resource = &memory, .role = WebSocketConnectionRole::kClient});
+    }));
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        WebSocketConnection invalid({.resource = &memory, .compression = static_cast<WebSocketCompression>(255)});
+    }));
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    {
+        std::pmr::string input(&memory);
+        const auto inputBytes = memory.liveBytes;
+        {
+            WebSocketServerProtocol unused(input);
+            RUVIA_CHECK(memory.liveBytes > inputBytes);
+        }
+        RUVIA_CHECK_EQ(memory.liveBytes, inputBytes);
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            WebSocketServerProtocol invalid(input, ProtocolByteLimit::unlimited(),
+                WebSocketServerProtocolOptions{.compression = static_cast<WebSocketCompression>(255)});
+        }));
+        RUVIA_CHECK_EQ(memory.liveBytes, inputBytes);
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            WebSocketServerProtocol invalid(input, ProtocolByteLimit::unlimited(),
+                WebSocketServerProtocolOptions{.compressionLevel = 10});
+        }));
+        RUVIA_CHECK_EQ(memory.liveBytes, inputBytes);
+    }
+    memory.reject = true;
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        WebSocketConnection rejected({.resource = &memory});
+    }));
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
 }

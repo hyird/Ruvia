@@ -11,7 +11,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/detail/util/NativePath.h"
 
 namespace ruvia {
@@ -98,7 +98,7 @@ public:
         return length_;
     }
 
-    [[nodiscard]] constexpr ResponseFileIdentity identity() const noexcept {
+    [[nodiscard]] constexpr HttpResponseFileIdentity identity() const noexcept {
         return identity_;
     }
 
@@ -107,7 +107,7 @@ private:
 
     HttpOwnedResponseFile(std::pmr::memory_resource* resource, const std::filesystem::path& file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        ResponseFileIdentity identity)
+        HttpResponseFileIdentity identity)
         : nativePath_(resource),
           size_(size),
           offset_(offset),
@@ -120,7 +120,7 @@ private:
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
-    ResponseFileIdentity identity_;
+    HttpResponseFileIdentity identity_;
 };
 
 class HttpBorrowedResponseFile final {
@@ -141,7 +141,7 @@ public:
         return length_;
     }
 
-    [[nodiscard]] constexpr ResponseFileIdentity identity() const noexcept {
+    [[nodiscard]] constexpr HttpResponseFileIdentity identity() const noexcept {
         return identity_;
     }
 
@@ -149,7 +149,7 @@ private:
     friend class HttpResponseBody;
 
     constexpr HttpBorrowedResponseFile(const HttpNativePathChar* nativePath, std::uint64_t size,
-        std::uint64_t offset, std::uint64_t length, ResponseFileIdentity identity) noexcept
+        std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) noexcept
         : nativePath_(nativePath),
           size_(size),
           offset_(offset),
@@ -160,7 +160,7 @@ private:
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
-    ResponseFileIdentity identity_;
+    HttpResponseFileIdentity identity_;
 };
 
 // Owns exactly one legal buffered response-body representation. The common
@@ -220,18 +220,18 @@ public:
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
 
-    [[nodiscard]] std::optional<ResponseFileBody> file() const& noexcept {
+    [[nodiscard]] std::optional<HttpResponseFileView> file() const& noexcept {
         if (const auto* body = ownedFile()) {
-            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(),
+            return HttpResponseFileView(body->nativePathCStr(), body->size(), body->offset(),
                 body->length(), body->identity());
         }
         if (const auto* body = borrowedFile()) {
-            return ResponseFileBody(body->nativePathCStr(), body->size(), body->offset(),
+            return HttpResponseFileView(body->nativePathCStr(), body->size(), body->offset(),
                 body->length(), body->identity());
         }
         return std::nullopt;
     }
-    [[nodiscard]] std::optional<ResponseFileBody> file() const&& = delete;
+    [[nodiscard]] std::optional<HttpResponseFileView> file() const&& = delete;
 
     [[nodiscard]] std::size_t size() const noexcept {
         if (const auto* body = ownedFile()) {
@@ -299,14 +299,14 @@ private:
 
     void setOwnedFile(std::pmr::memory_resource* resource, const std::filesystem::path& file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) {
+        HttpResponseFileIdentity identity = HttpResponseFileIdentity::unchecked()) {
         HttpOwnedResponseFile body(resource, file, size, offset, length, identity);
         value_.emplace<HttpOwnedResponseFile>(std::move(body));
     }
 
     void setBorrowedFile(const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset,
         std::uint64_t length,
-        ResponseFileIdentity identity = ResponseFileIdentity::unchecked()) noexcept {
+        HttpResponseFileIdentity identity = HttpResponseFileIdentity::unchecked()) noexcept {
         value_.emplace<HttpBorrowedResponseFile>(
             HttpBorrowedResponseFile(file, size, offset, length, identity));
     }

@@ -18,18 +18,6 @@ static_assert(std::is_nothrow_constructible_v<PreparedRequestWriteResult, std::i
     Http3ClientRequestWrite::PreparedTag, std::pmr::memory_resource*, HttpClientRequestStorage&&,
     std::pmr::string&&, std::pmr::string&&, std::pmr::vector<char>&&, Http3DataWritePlan>);
 
-struct HttpClientRequestStorageAccess final {
-    static const auto& headers(const HttpClientRequestStorage& request) noexcept {
-        return request.headers_;
-    }
-    static auto& headers(HttpClientRequestStorage& request) noexcept {
-        return request.headers_;
-    }
-    static bool hasBody(const HttpClientRequestStorage& request) noexcept {
-        return request.hasBody_;
-    }
-};
-
 Http3ClientRequestWrite::Http3ClientRequestWrite(PreparedTag,
     std::pmr::memory_resource* resource, HttpClientRequestStorage&& request,
     std::pmr::string&& scheme,

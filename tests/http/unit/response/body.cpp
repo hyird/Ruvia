@@ -13,7 +13,6 @@
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/response/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileBody.h"
 
 #include "test_harness.h"
 
@@ -127,7 +126,7 @@ RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
     RUVIA_CHECK(!ownedFile->identity().requiresValidation());
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
 
-    const auto identity = ruvia::detail::ResponseFileIdentity::checked({11, 22, 33, 44});
+    const auto identity = ruvia::HttpResponseFileIdentity::checked({11, 22, 33, 44});
     setResponseFileBody(response, ownedPath, 20, 5, 7, identity);
     const auto checkedFile = responseBody(response).file();
     RUVIA_CHECK(checkedFile.has_value());
@@ -168,17 +167,67 @@ RUVIA_TEST(public_response_file_view_exposes_read_only_descriptor) {
     RUVIA_CHECK(file.identity() == identity);
 }
 
-RUVIA_TEST(response_body_file_transition_validates_before_replacement) {
+RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replacement) {
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
-    response.body("preserved");
+    const auto path = std::filesystem::path("public-response.bin");
+    const auto unchecked = ruvia::HttpResponseFileIdentity::unchecked();
 
-    RUVIA_CHECK(
-        throwsInvalidArgument([&] { setResponseFileBody(response, std::filesystem::path{}, 10); }));
+    response.body("preserved");
     RUVIA_CHECK(throwsInvalidArgument([&] {
-        setResponseFileBody(response, std::filesystem::path("invalid-range.bin"), 10, 8, 3);
+        response.fileBody(std::filesystem::path{}, 10, 0, 10, unchecked);
     }));
-    RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
-    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("preserved"));
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        response.fileBody(std::filesystem::path("invalid-range.bin"), 10, 8, 3, unchecked);
+    }));
+    RUVIA_CHECK(!response.fileBody().has_value());
+    RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("preserved"));
+
+    response.fileBody(path, 16, 3, 7, unchecked);
+    auto file = response.fileBody();
+    RUVIA_CHECK(file.has_value());
+    if (file) {
+        RUVIA_CHECK(file->toPath() == path);
+        RUVIA_CHECK(file->identity() == unchecked);
+        RUVIA_CHECK(!file->identity().requiresValidation());
+    }
+
+    const auto checked = ruvia::HttpResponseFileIdentity::checked({11, 22, 33, 44});
+    response.fileBody(std::filesystem::path("checked-response.bin"), 16, 3, 7, checked);
+    file = response.fileBody();
+    RUVIA_CHECK(file.has_value());
+    if (file) {
+        RUVIA_CHECK(file->identity() == checked);
+        RUVIA_CHECK(file->identity().requiresValidation());
+    }
+
+    RUVIA_CHECK(throwsInvalidArgument([&] {
+        response.fileBody(std::filesystem::path("invalid-range.bin"), 10, 8, 3, checked);
+    }));
+    file = response.fileBody();
+    RUVIA_CHECK(file.has_value());
+    if (file) {
+        RUVIA_CHECK(file->toPath() == std::filesystem::path("checked-response.bin"));
+        RUVIA_CHECK(file->identity() == checked);
+    }
+}
+
+RUVIA_TEST(response_file_body_move_preserves_owned_path_and_identity) {
+    HttpResponse source({.resource = std::pmr::new_delete_resource()});
+    const auto path = std::filesystem::path("moved-response.bin");
+    const auto identity = ruvia::HttpResponseFileIdentity::checked({9, 8, 7, 6});
+    source.fileBody(path, 23, 4, 9, identity);
+
+    HttpResponse target;
+    target = std::move(source);
+    const auto file = target.fileBody();
+    RUVIA_CHECK(file.has_value());
+    if (file) {
+        RUVIA_CHECK(file->toPath() == path);
+        RUVIA_CHECK_EQ(file->size(), std::uint64_t{23});
+        RUVIA_CHECK_EQ(file->offset(), std::uint64_t{4});
+        RUVIA_CHECK_EQ(file->length(), std::uint64_t{9});
+        RUVIA_CHECK(file->identity() == identity);
+    }
 }
 
 RUVIA_TEST(response_body_move_preserves_active_alternative) {

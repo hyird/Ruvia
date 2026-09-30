@@ -15,6 +15,7 @@
 
 #include "ruvia/http/Attributes.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/util/PmrResource.h"
@@ -336,9 +337,10 @@ public:
     void ownedBody(std::pmr::string&& value);
     void staticBody(std::string_view value) noexcept;
     void materializeBody();
-    // File and protocol metadata capabilities used by higher-level response builders.
+    // Own the path in this response's PMR storage and preserve the runtime's
+    // opaque identity token. Path and range validation precede body replacement.
     void fileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length, std::array<std::uint64_t, 4> identity, bool checked);
+        std::uint64_t length, HttpResponseFileIdentity identity);
     void contentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void contentRangeUnsatisfied(std::uint64_t size);
     void addVaryToken(std::string_view token);
@@ -391,7 +393,7 @@ private:
     void setFileBody(
         std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length, detail::ResponseFileIdentity identity);
+        std::uint64_t length, HttpResponseFileIdentity identity);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length);
