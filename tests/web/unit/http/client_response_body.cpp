@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/AsioTask.h"
+#include "ruvia/core/Async.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/TaskScope.h"
@@ -39,6 +41,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/Http2Framing.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
@@ -176,6 +179,17 @@ private:
         .protocol = ruvia::HttpClientProtocol::kHttp1Only};
 }
 
+[[nodiscard]] std::string largeGzipResponseBody() {
+    const std::string body(128 * 1024, 'z');
+    auto result = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, body,
+        {.maxEncodedBytes = body.size()});
+    if (result.encoded() == nullptr) {
+        throw std::runtime_error("could not encode fake HTTP response body");
+    }
+    auto encoded = std::move(*result.encoded()).takeBytes();
+    return std::string(encoded.data(), encoded.size());
+}
+
 class Http2PartialBodyPeer final {
 public:
     explicit Http2PartialBodyPeer(asio::io_context& io)
@@ -294,6 +308,107 @@ private:
     std::promise<void> responseSentPromise_;
     std::future<void> responseSent_;
     std::exception_ptr failure_;
+    bool observedClientClose_{false};
+};
+
+class Http1ChunkedResponsePeer final {
+public:
+    enum class EndMode : unsigned char { kTerminalGate,
+        kWaitForClientClose };
+
+    explicit Http1ChunkedResponsePeer(asio::io_context& io, std::string encoded,
+        EndMode endMode = EndMode::kTerminalGate)
+        : io_(io),
+          acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          gate_(io),
+          encoded_(std::move(encoded)),
+          endMode_(endMode),
+          done_(donePromise_.get_future()) {}
+
+    void start() {
+        asio::co_spawn(io_, serve(), [this](std::exception_ptr failure) {
+            failure_ = failure;
+            donePromise_.set_value();
+        });
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    void releaseTerminalChunk() {
+        releaseRequested_ = true;
+        gate_.cancel();
+    }
+
+    [[nodiscard]] bool observedClientClose() const noexcept {
+        return observedClientClose_;
+    }
+
+    void wait() {
+        if (done_.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            throw std::runtime_error("HTTP/1 peer did not finish");
+        }
+        done_.get();
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+private:
+    asio::awaitable<void> serve() {
+        auto socket = co_await acceptor_.async_accept(asio::use_awaitable);
+        asio::streambuf request;
+        co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
+        std::array<char, 2 * sizeof(std::size_t)> chunkSize{};
+        const auto [chunkEnd, chunkError] = std::to_chars(
+            chunkSize.data(), chunkSize.data() + chunkSize.size(), encoded_.size(), 16);
+        if (chunkError != std::errc{}) {
+            throw std::runtime_error("HTTP/1 peer could not format chunk size");
+        }
+        std::string response =
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n"
+            "Trailer: X-End\r\nConnection: close\r\n\r\n";
+        response.append(chunkSize.data(), chunkEnd);
+        response += "\r\n" + encoded_ + "\r\n";
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+
+        if (endMode_ == EndMode::kWaitForClientClose) {
+            std::array<char, 1024> input{};
+            std::error_code error;
+            while (co_await socket.async_read_some(asio::buffer(input),
+                asio::redirect_error(asio::use_awaitable, error))) {
+            }
+            observedClientClose_ = error == asio::error::eof ||
+                                   error == asio::error::connection_reset ||
+                                   error == asio::error::operation_aborted;
+            co_return;
+        }
+
+        if (!releaseRequested_) {
+            gate_.expires_after(std::chrono::seconds(5));
+            std::error_code gateError;
+            co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, gateError));
+            if (gateError != asio::error::operation_aborted) {
+                throw std::runtime_error("HTTP/1 terminal-chunk gate expired");
+            }
+        }
+
+        constexpr std::string_view terminal = "0\r\nX-End: retained\r\n\r\n";
+        co_await asio::async_write(socket, asio::buffer(terminal), asio::use_awaitable);
+        std::error_code ignored;
+        socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+    }
+
+    asio::io_context& io_;
+    asio::ip::tcp::acceptor acceptor_;
+    asio::steady_timer gate_;
+    std::string encoded_;
+    EndMode endMode_;
+    std::promise<void> donePromise_;
+    std::future<void> done_;
+    std::exception_ptr failure_;
+    bool releaseRequested_{false};
     bool observedClientClose_{false};
 };
 
@@ -520,6 +635,215 @@ RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_opera
         };
         runOperation(worker, io, operation);
     }
+}
+
+RUVIA_TEST(http1_full_response_queue_cancellation_and_deadline_finish_without_reading) {
+    for (const bool deadline : {false, true}) {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(io, worker.handle, {std::string(65536, 'q')});
+        auto config = localHttpClientConfig(server.port());
+        config.maxResponseBytes = 1024;
+        ruvia::HttpClient client(worker.attachment.loop(), config);
+        ruvia::StopSource stop;
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto handle = client.withOptions({
+                .timeout = deadline ? std::optional(std::chrono::milliseconds(40)) : std::nullopt,
+                .stopToken = stop.token(),
+            });
+            auto response = co_await handle.send({.target = "/backpressure"});
+            RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+            RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
+            // Keep the response alive without reading or abandoning it. The
+            // producer must leave its full-queue wait using the terminal event.
+            if (deadline) {
+                (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(80));
+            } else {
+                stop.requestStop();
+            }
+            // Ordered worker turns drain cancellation publication and the
+            // producer's scheduled wake, without body-reader side effects.
+            for (unsigned turn = 0; turn != 4; ++turn) {
+                (void)co_await ruvia::asyncAsio([&io](auto done) {
+                    asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
+                });
+            }
+            RUVIA_CHECK_EQ(client.stats().failedRequests, std::size_t{1});
+            RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{0});
+            co_await client.shutdown();
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // Cancellation can race the peer's final socket write.
+            }
+        };
+        runOperation(worker, io, operation);
+    }
+}
+
+RUVIA_TEST(http1_full_response_queue_loop_stop_joins_without_reading) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    LoopbackResponseServer server(io, worker.handle, {std::string(65536, 'q')});
+    auto config = localHttpClientConfig(server.port());
+    config.maxResponseBytes = 1024;
+    ruvia::HttpClient client(worker.attachment.loop(), config);
+    server.start();
+    bool joined = false;
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto response = co_await client.send({.target = "/backpressure-stop"});
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        worker.attachment.stop();
+        // The response remains alive across shutdown; its destructor/read()
+        // cannot be the event that wakes the producer.
+        co_await client.shutdown();
+        joined = true;
+        try {
+            co_await server.wait();
+        } catch (const std::system_error&) {
+        }
+    };
+    runOperation(worker, io, operation);
+    RUVIA_CHECK(joined);
+    RUVIA_CHECK(!worker.handle.valid());
+}
+
+RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
+    const auto encoded = largeGzipResponseBody();
+    for (const bool deadline : {false, true}) {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        Http1ChunkedResponsePeer peer(
+            io, encoded, Http1ChunkedResponsePeer::EndMode::kWaitForClientClose);
+        auto config = localHttpClientConfig(peer.port());
+        config.maxResponseBytes = 1024;
+        ruvia::HttpClient client(worker.attachment.loop(), config);
+        ruvia::StopSource stop;
+        peer.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto handle = client.withOptions({
+                .timeout = deadline ? std::optional(std::chrono::milliseconds(200)) : std::nullopt,
+                .stopToken = stop.token(),
+            });
+            auto response = co_await handle.send({.target = "/transfer-gzip-backpressure"});
+            RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+            RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
+            for (unsigned turn = 0; turn != 4; ++turn) {
+                co_await ruvia::asyncAsio([&io](auto done) {
+                    asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
+                });
+            }
+            RUVIA_CHECK(client.stats().bytesReceived >= encoded.size());
+
+            if (deadline) {
+                (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(300));
+            } else {
+                stop.requestStop();
+            }
+            for (unsigned turn = 0; turn != 4; ++turn) {
+                co_await ruvia::asyncAsio([&io](auto done) {
+                    asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
+                });
+            }
+            RUVIA_CHECK_EQ(client.stats().failedRequests, std::size_t{1});
+            RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{0});
+            // Keep response alive through join. No body read or response
+            // destruction may be what releases the producer's full queue.
+            co_await client.shutdown();
+        };
+        runOperation(worker, io, operation);
+        peer.wait();
+        RUVIA_CHECK(peer.observedClientClose());
+    }
+}
+
+RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    const auto encoded = largeGzipResponseBody();
+    Http1ChunkedResponsePeer peer(
+        io, encoded, Http1ChunkedResponsePeer::EndMode::kWaitForClientClose);
+    auto config = localHttpClientConfig(peer.port());
+    config.maxResponseBytes = 1024;
+    ruvia::HttpClient client(worker.attachment.loop(), config);
+    peer.start();
+    bool joined = false;
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto response = co_await client.send({.target = "/transfer-gzip-stop"});
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
+        for (unsigned turn = 0; turn != 4; ++turn) {
+            co_await ruvia::asyncAsio([&io](auto done) {
+                asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
+            });
+        }
+        RUVIA_CHECK(client.stats().bytesReceived >= encoded.size());
+        worker.attachment.stop();
+        co_await client.shutdown();
+        joined = true;
+    };
+    runOperation(worker, io, operation);
+    peer.wait();
+    RUVIA_CHECK(joined);
+    RUVIA_CHECK(peer.observedClientClose());
+    RUVIA_CHECK(!worker.handle.valid());
+}
+
+RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_each_decode) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    const std::string expected(128 * 1024, 'z');
+    auto encodedResult = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, expected,
+        {.maxEncodedBytes = expected.size()});
+    RUVIA_CHECK(encodedResult.encoded() != nullptr);
+    auto encoded = std::move(*encodedResult.encoded()).takeBytes();
+    Http1ChunkedResponsePeer peer(io, std::string(encoded.data(), encoded.size()));
+    auto config = localHttpClientConfig(peer.port());
+    config.maxResponseBytes = 1024;
+    ruvia::HttpClient client(worker.attachment.loop(), config);
+    peer.start();
+
+    std::size_t decodedBytes = 0;
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto response = co_await client.send({.target = "/transfer-gzip"});
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
+
+        const auto first = co_await response.body().read();
+        RUVIA_CHECK(first.has_value());
+        RUVIA_CHECK(first->size() <= config.maxResponseBytes);
+        RUVIA_CHECK(!response.body().complete());
+        const auto firstView = std::string_view(
+            reinterpret_cast<const char*>(first->data()), first->size());
+        decodedBytes += first->size();
+
+        // Let the producer decode already-buffered compressed bytes while the
+        // consumer's borrowed view remains live; only pending storage may grow.
+        for (unsigned turn = 0; turn != 4; ++turn) {
+            co_await ruvia::asyncAsio([&io](auto done) {
+                asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
+            });
+        }
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(first->data()), first->size()),
+            firstView);
+        peer.releaseTerminalChunk();
+
+        while (const auto chunk = co_await response.body().read()) {
+            RUVIA_CHECK(chunk->size() <= config.maxResponseBytes);
+            decodedBytes += chunk->size();
+        }
+        RUVIA_CHECK(response.body().complete());
+        RUVIA_CHECK_EQ(response.trailer("x-end"), std::optional<std::string_view>("retained"));
+        RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{0});
+        co_await client.shutdown();
+    };
+    runOperation(worker, io, operation);
+    peer.wait();
+    RUVIA_CHECK_EQ(decodedBytes, expected.size());
+    RUVIA_CHECK(decodedBytes > config.maxResponseBytes);
 }
 
 RUVIA_TEST(http2_event_loop_stop_joins_reader_writer_with_a_partial_response_body) {

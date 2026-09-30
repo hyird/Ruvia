@@ -1,12 +1,19 @@
+#include <algorithm>
 #include <array>
 #include <exception>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
+#include "ruvia/http/Http1ClientResponseBodyDecoder.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponseBodyDecoding.h"
+#include "ruvia/web/detail/body/HttpBodyBuffer.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
@@ -105,16 +112,13 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             throw HttpClientError(HttpClientError::Code::kProtocolError,
                 "HTTP tunnel and protocol upgrade responses require a dedicated API");
         }
+        Http1ClientResponseBodyDecoder bodyDecoder(parsed->plan(), responseResource);
+        const bool contentSemanticsPresent = parsed->plan().withoutContent() == nullptr;
         configureHttpClientResponseDecoding(*response.state_);
         response.state_->headReady = true;
         response.state_->headSignal.notify();
 
-        bool requireEmptyContent = false;
-        const auto appendChecked = [&](std::string_view bytes) {
-            if (requireEmptyContent && !bytes.empty()) {
-                throw HttpClientError(
-                    HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
-            }
+        const auto appendOutput = [&](std::string_view bytes) {
             const auto retained = response.state_->buffered.size() - response.state_->offset +
                                   response.state_->pending.size();
             if (response.state_->collectAll &&
@@ -123,67 +127,10 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                 throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
                     "HTTP response exceeds configured byte limit");
             }
+            // The consumer's last borrowed view lives in buffered, not pending.
+            // Appending producer output must never relocate that view.
             response.state_->pending.append(bytes);
             response.state_->dataSignal.notify();
-        };
-        std::optional<HttpTransferCodingDecoder> transferDecoder;
-        std::array<char, kBodyReadChunkBytes> transferOutput{};
-        const auto configureTransferDecoder = [&](HttpTransferCodings codings) {
-            if (codings.count != 0) {
-                // Transfer-coding is a streaming hop-by-hop framing transform. The HTTP client
-                // response limit belongs to queued body/readAll/content-coding policy, not to the
-                // cumulative number of bytes an incremental read() or pipeTo() consumer may drain.
-                transferDecoder.emplace(
-                    codings.values[0], responseResource, ProtocolByteLimit::unlimited());
-            }
-        };
-        const auto throwTransferFailure = [](const HttpTransferCodingDecoder::Result& result) -> void {
-            if (result.state() == HttpTransferCodingDecoder::State::kProtocolError) {
-                if (const auto* error = result.protocolError();
-                    error != nullptr && error->status() == http_status::kContentTooLarge) {
-                    throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
-                        "HTTP response exceeds configured byte limit");
-                }
-                throw HttpClientError(
-                    HttpClientError::Code::kProtocolError, "invalid HTTP response transfer coding");
-            }
-            if (result.state() == HttpTransferCodingDecoder::State::kDecoderError) {
-                throw HttpClientError(HttpClientError::Code::kProtocolError,
-                    "HTTP response transfer-coding decoder failed");
-            }
-        };
-        const auto appendTransferDecoded = [&](std::string_view encodedBytes) {
-            if (!transferDecoder) {
-                appendChecked(encodedBytes);
-                return;
-            }
-            for (;;) {
-                const auto decoded = transferDecoder->decode(encodedBytes, transferOutput);
-                encodedBytes.remove_prefix(std::min(encodedBytes.size(), decoded.consumedBytes()));
-                if (decoded.state() == HttpTransferCodingDecoder::State::kOutput) {
-                    appendChecked(decoded.output());
-                    continue;
-                }
-                throwTransferFailure(decoded);
-                if (decoded.state() == HttpTransferCodingDecoder::State::kNeedInput ||
-                    decoded.state() == HttpTransferCodingDecoder::State::kComplete) {
-                    return;
-                }
-                throw HttpClientError(HttpClientError::Code::kProtocolError,
-                    "invalid HTTP response transfer-coding state");
-            }
-        };
-        const auto finishTransferDecoder = [&] {
-            if (!transferDecoder) {
-                return;
-            }
-            const auto finished = transferDecoder->finishInput();
-            if (finished.state() == HttpTransferCodingDecoder::State::kComplete) {
-                return;
-            }
-            throwTransferFailure(finished);
-            throw HttpClientError(
-                HttpClientError::Code::kProtocolError, "incomplete HTTP response transfer coding");
         };
         const auto retainTrailers = [&](std::string_view trailerBlock) {
             const auto ok = visitHttpResponseTrailers(
@@ -193,133 +140,84 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                     return true;
                 });
             if (!ok) {
-                throw HttpClientError(HttpClientError::Code::kProtocolError,
-                    "invalid chunked HTTP response trailers");
+                throw std::logic_error("HTTP decoder published invalid response trailers");
             }
         };
         const auto waitForBufferSpace = [&]() -> Task<void> {
             while (!response.state_->collectAll &&
                    response.state_->pending.size() >= config_.maxResponseBytes) {
-                co_await response.state_->spaceSignal.wait();
+                throwAbort(connection);
+                if (!armDeadline(connection, timeout, DeadlineKind::kResponseBuffer)) {
+                    throw HttpClientError(
+                        HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
+                }
+                try {
+                    co_await response.state_->spaceSignal.wait();
+                } catch (...) {
+                    (void)clearDeadline(connection);
+                    throw;
+                }
+                const bool timedOut = clearDeadline(connection) || timeout.expired();
+                throwAbort(connection);
+                if (timedOut) {
+                    throw HttpClientError(
+                        HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
+                }
                 if (response.state_->abandoned) {
                     throw HttpClientError(
                         HttpClientError::Code::kCancelled, "HTTP response body was abandoned");
                 }
             }
         };
-        const auto readMore = [&]() -> Task<void> {
+
+        std::array<char, kHttpBodyBufferBytes> output{};
+        bool eof = false;
+        Http1ClosePolicy persistence = Http1ClosePolicy::kCloseAfterResponse;
+        for (;;) {
+            // Backpressure applies to decoding buffered compressed input too,
+            // not just to the next transport read. One step cannot overfill the
+            // producer queue; readAll retains its separate total byte policy.
             co_await waitForBufferSpace();
-            const auto bytes = co_await readSome(connection, input, timeout);
-            if (bytes == 0) {
-                throw HttpClientError(HttpClientError::Code::kIoError,
-                    "upstream closed before the HTTP response completed");
-            }
-            connection.readBuffer.append(input.data(), bytes);
-        };
-        bool closeAfter = false;
-        bool contentSemanticsPresent = false;
-
-        auto chunkedPlan = parsed->plan().chunked();
-        auto closeDelimitedPlan = parsed->plan().closeDelimited();
-        bool framingHandled = false;
-        if (const auto* known = parsed->plan().knownLength()) {
-            contentSemanticsPresent = true;
-            auto remaining = known->contentLength();
-            while (remaining != 0) {
-                if (connection.readBuffer.empty()) {
-                    co_await readMore();
-                }
-                const auto count = std::min(remaining, connection.readBuffer.size());
-                appendChecked(std::string_view(connection.readBuffer).substr(0, count));
-                connection.readBuffer.erase(0, count);
-                remaining -= count;
-            }
-            closeAfter = known->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-            framingHandled = true;
-        } else if (const auto* zero = parsed->plan().zeroContent()) {
-            contentSemanticsPresent = true;
-            requireEmptyContent = true;
-            if (const auto* zeroKnown = zero->knownLength()) {
-                while (connection.readBuffer.size() < zeroKnown->contentLength()) {
-                    co_await readMore();
-                }
-                if (zeroKnown->contentLength() != 0) {
-                    throw HttpClientError(HttpClientError::Code::kProtocolError,
-                        "HTTP 205 response content is not empty");
-                }
-                closeAfter = zeroKnown->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-                framingHandled = true;
-            } else if (zero->chunked()) {
-                chunkedPlan = zero->chunked();
-            } else if (zero->closeDelimited()) {
-                closeDelimitedPlan = zero->closeDelimited();
-            } else {
-                throw HttpClientError(
-                    HttpClientError::Code::kProtocolError, "invalid HTTP 205 response framing");
-            }
-        }
-
-        if (!framingHandled && chunkedPlan != nullptr) {
-            contentSemanticsPresent = true;
-            configureTransferDecoder(chunkedPlan->transferCodings());
-            // Chunked framing is a streaming delimiter. Size policy is enforced by
-            // queued-body backpressure and by readAll/content-coding collection, not by
-            // the cumulative number of bytes an incremental read() consumer drains.
-            HttpResponseChunkedBodyDecoder decoder(ProtocolByteLimit::unlimited());
-            for (;;) {
-                auto decoded = decoder.decode(connection.readBuffer);
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kBody) {
-                    appendTransferDecoded(decoded.body());
-                }
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kComplete) {
-                    retainTrailers(decoded.trailers());
-                }
-                connection.readBuffer.erase(0, decoded.consumedBytes());
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kInvalid) {
-                    throw HttpClientError(
-                        HttpClientError::Code::kProtocolError, "invalid chunked HTTP response");
-                }
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kComplete) {
-                    break;
-                }
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kNeedMore ||
-                    connection.readBuffer.empty()) {
-                    co_await readMore();
-                }
-            }
-            finishTransferDecoder();
-            closeAfter = chunkedPlan->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-            framingHandled = true;
-        } else if (!framingHandled && closeDelimitedPlan != nullptr) {
-            contentSemanticsPresent = true;
-            configureTransferDecoder(closeDelimitedPlan->transferCodings());
-            appendTransferDecoded(connection.readBuffer);
-            connection.readBuffer.clear();
-            for (;;) {
-                co_await waitForBufferSpace();
-                const auto bytes = co_await readSome(connection, input, timeout, true);
-                if (bytes == 0) {
-                    break;
-                }
-                appendTransferDecoded(std::string_view(input.data(), bytes));
-            }
-            finishTransferDecoder();
-            closeAfter = true;
-            framingHandled = true;
-        }
-
-        if (!framingHandled) {
-            if (const auto* without = parsed->plan().withoutContent()) {
-                closeAfter = without->persistence() == Http1ClosePolicy::kCloseAfterResponse;
-            } else {
+            throwAbort(connection);
+            const auto capacity = response.state_->collectAll
+                                      ? output.size()
+                                      : std::min(output.size(),
+                                            config_.maxResponseBytes - response.state_->pending.size());
+            const auto scratch = std::span<char>(output).first(capacity);
+            const auto decoded = eof
+                                     ? bodyDecoder.finishInput(connection.readBuffer, scratch)
+                                     : bodyDecoder.decode(connection.readBuffer, scratch);
+            const auto consumed = decoded.consumedBytes();
+            if (const auto* body = decoded.output()) {
+                appendOutput(body->bytes());
+            } else if (const auto* trailers = decoded.trailers()) {
+                retainTrailers(trailers->bytes());
+            } else if (const auto* failure = decoded.protocolFailure()) {
                 throw HttpClientError(HttpClientError::Code::kProtocolError,
-                    "HTTP tunnel and protocol upgrade responses require a dedicated API");
+                    std::string(http1ClientResponseBodyErrorMessage(failure->error())));
+            } else if (decoded.decoderFailure() != nullptr) {
+                throw HttpClientError(HttpClientError::Code::kProtocolError,
+                    "HTTP/1 response body decoder failed");
             }
-        }
-        if (requireEmptyContent &&
-            (!response.state_->buffered.empty() || !response.state_->pending.empty())) {
-            throw HttpClientError(
-                HttpClientError::Code::kProtocolError, "HTTP 205 response content is not empty");
+            // Output/trailers have been owned before their source is compacted.
+            connection.readBuffer.erase(0, consumed);
+            if (const auto* complete = decoded.complete()) {
+                persistence = complete->persistence();
+                break;
+            }
+            if (decoded.needInput() == nullptr ||
+                (consumed != 0 && !connection.readBuffer.empty())) {
+                continue;
+            }
+            if (eof) {
+                throw std::logic_error("HTTP body decoder requested input after EOF");
+            }
+            const auto bytes = co_await readSome(connection, input, timeout, true);
+            if (bytes == 0) {
+                eof = true;
+            } else {
+                connection.readBuffer.append(input.data(), bytes);
+            }
         }
         if (!connection.readBuffer.empty()) {
             throw HttpClientError(
@@ -333,7 +231,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         if (timeout.expired()) {
             throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
         }
-        if (closeAfter) {
+        if (persistence == Http1ClosePolicy::kCloseAfterResponse) {
             close(connection);
         }
         co_return;

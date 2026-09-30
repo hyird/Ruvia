@@ -4,6 +4,26 @@
 
 namespace ruvia::detail {
 
+// A stack-owned intrusive obligation keeps a reentrant join from publishing
+// retirement while a scope is still draining frames or visiting capabilities.
+struct ScopedOperationScope::DrainGuard final : ScopedOperationNode {
+    explicit DrainGuard(ScopedOperationScope& scope) noexcept
+        : ScopedOperationNode(scope) {
+        if (scope_ == nullptr) {
+            scope.link(*this);
+        }
+        phase_ = Phase::kRetiring;
+    }
+
+    ~DrainGuard() {
+        auto* scope = scope_;
+        phase_ = Phase::kExpired;
+        scope->unlink(*this);
+        // This is the final scope access: join may retire its owner inline.
+        scope->resumeJoiner();
+    }
+};
+
 struct ScopedOperationScope::JoinAwaiter final {
     explicit JoinAwaiter(ScopedOperationScope& owner) noexcept
         : owner(owner) {}
@@ -26,17 +46,20 @@ struct ScopedOperationScope::JoinAwaiter final {
 };
 
 void ScopedOperationScope::close() noexcept {
-    active_ = false;
-    while (head_ != nullptr) {
-        auto* operation = head_;
-        if (operation->phase_ == ScopedOperationNode::Phase::kRunning) {
+    if (head_ == nullptr && capabilityHead_ == nullptr) {
+        active_ = false;
+        return;
+    }
+    for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
+        if (operation->phase_ == ScopedOperationNode::Phase::kRunning ||
+            operation->phase_ == ScopedOperationNode::Phase::kRetiring) {
             std::terminate();
         }
-        operation->expire();
     }
-    while (capabilityHead_ != nullptr) {
-        capabilityHead_->expire();
-    }
+    DrainGuard drain(*this);
+    active_ = false;
+    retireColdOperations();
+    expireCapabilities();
 }
 
 Task<void> ScopedOperationScope::closeAndJoin() & {
@@ -56,15 +79,25 @@ Task<void> ScopedOperationScope::closeAndJoin() & {
     co_await JoinAwaiter(*this);
 }
 
-void ScopedOperationScope::expireForJoin() noexcept {
-    active_ = false;
-    for (auto* operation = head_; operation != nullptr;) {
-        auto* next = operation->next_;
-        if (operation->phase_ != ScopedOperationNode::Phase::kRunning) {
-            operation->expire();
+void ScopedOperationScope::retireColdOperations() noexcept {
+    for (;;) {
+        auto* operation = head_;
+        while (operation != nullptr && operation->phase_ != ScopedOperationNode::Phase::kCold) {
+            operation = operation->next_;
         }
-        operation = next;
+        if (operation == nullptr) {
+            return;
+        }
+        operation->retireFrame();
+        // A frame destructor can remove other cold nodes. Never carry a raw
+        // traversal cursor across cleanup; search the live chain again.
     }
+}
+
+void ScopedOperationScope::expireForJoin() noexcept {
+    DrainGuard drain(*this);
+    active_ = false;
+    retireColdOperations();
 }
 
 void ScopedOperationScope::expireCapabilities() noexcept {
@@ -216,28 +249,56 @@ ScopedOperationNode::ScopedOperationNode(ScopedOperationScope& scope) noexcept {
 }
 
 ScopedOperationNode::~ScopedOperationNode() {
-    if (startCheck_ != nullptr) {
-        startCheck_(startCheckTarget_);
-    }
-    if (phase_ == Phase::kRunning) {
+    if (scope_ != nullptr || phase_ == Phase::kRunning || phase_ == Phase::kRetiring) {
         std::terminate();
-    }
-    if (scope_ != nullptr) {
-        scope_->unlink(*this);
     }
 }
 
-void ScopedOperationNode::begin() {
-    if (startCheck_ != nullptr) {
-        startCheck_(startCheckTarget_);
+void ScopedOperationNode::bindFrame(void (*retireCold)(ScopedOperationNode&) noexcept,
+    void (*checkAffinity)(void*) noexcept, void* affinityTarget) noexcept {
+    if (retireCold == nullptr || retireCold_ != nullptr) {
+        std::terminate();
     }
+    if (phase_ == Phase::kExpired) {
+        phase_ = Phase::kRetiring;
+        retireCold(*this);
+        phase_ = Phase::kExpired;
+        return;
+    }
+    if (phase_ != Phase::kCold) {
+        std::terminate();
+    }
+    retireCold_ = retireCold;
+    checkAffinity_ = checkAffinity;
+    affinityTarget_ = affinityTarget;
+}
+
+void ScopedOperationNode::clearFrameBinding() noexcept {
+    retireCold_ = nullptr;
+    checkAffinity_ = nullptr;
+    affinityTarget_ = nullptr;
+}
+
+void ScopedOperationNode::begin() {
     if (phase_ == Phase::kExpired) {
         throw std::logic_error("capability operation scope has expired");
     }
     if (phase_ != Phase::kCold) {
         throw std::logic_error("capability operation can only be awaited once");
     }
+    if (checkAffinity_ != nullptr) {
+        checkAffinity_(affinityTarget_);
+    }
     phase_ = Phase::kRunning;
+}
+
+void ScopedOperationNode::prepareCompletion() const noexcept {
+    if (phase_ != Phase::kRunning) {
+        std::terminate();
+    }
+    if (checkAffinity_ != nullptr) {
+        checkAffinity_(affinityTarget_);
+    }
 }
 
 void ScopedOperationNode::complete() noexcept {
@@ -245,6 +306,7 @@ void ScopedOperationNode::complete() noexcept {
         std::terminate();
     }
     phase_ = Phase::kComplete;
+    clearFrameBinding();
     if (scope_ != nullptr) {
         auto* scope = scope_;
         scope->unlink(*this);
@@ -252,19 +314,25 @@ void ScopedOperationNode::complete() noexcept {
     }
 }
 
-void ScopedOperationNode::expire() noexcept {
-    if (startCheck_ != nullptr) {
-        startCheck_(startCheckTarget_);
-    }
-    if (phase_ == Phase::kRunning) {
+void ScopedOperationNode::retireFrame() noexcept {
+    if (phase_ == Phase::kRunning || phase_ == Phase::kRetiring) {
         std::terminate();
     }
-    if (phase_ == Phase::kCold && expireCold_ != nullptr) {
-        expireCold_(*this);
+    if (phase_ == Phase::kCold) {
+        if (checkAffinity_ != nullptr) {
+            checkAffinity_(affinityTarget_);
+        }
+        phase_ = Phase::kRetiring;
+        const auto retireCold = retireCold_;
+        clearFrameBinding();
+        retireCold(*this);
     }
     phase_ = Phase::kExpired;
     if (scope_ != nullptr) {
-        scope_->unlink(*this);
+        auto* scope = scope_;
+        scope->unlink(*this);
+        // No owner/frame access is allowed after this publication point.
+        scope->resumeJoiner();
     }
 }
 

@@ -183,6 +183,7 @@ private:
     void disarm(WorkerTimerRegistration& timer) noexcept;
     void throwAbort() const;
     [[nodiscard]] static bool generateMask(void*, WebSocketMaskKey& key) noexcept;
+    static void checkOperationAffinity(void* target) noexcept;
 
     EventLoop loop_;
     WorkerHandle worker_;

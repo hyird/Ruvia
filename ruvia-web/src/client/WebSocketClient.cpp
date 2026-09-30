@@ -8,6 +8,7 @@
 
 #include <openssl/rand.h>
 
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
 
@@ -89,6 +90,13 @@ std::uint16_t WebSocketClientState::port() const noexcept {
 bool WebSocketClientState::generateMask(void*, WebSocketMaskKey& key) noexcept {
     return RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), static_cast<int>(key.size())) ==
            1;
+}
+
+void WebSocketClientState::checkOperationAffinity(void* target) noexcept {
+    const auto& worker = *static_cast<const WorkerHandle*>(target);
+    if (!worker.isCurrent()) {
+        std::terminate();
+    }
 }
 
 void WebSocketClientState::arm(WorkerTimerRegistration& timer,

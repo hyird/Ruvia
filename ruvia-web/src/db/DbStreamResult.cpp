@@ -83,7 +83,8 @@ ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
         operationScope(), readTask(OperationGuard(state_->operation)));
 }
 
-Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard operation) {
+Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     auto row = co_await readPoolStream(
@@ -102,7 +103,8 @@ ScopedOperation<void> DbStreamResult::close() & {
         operationScope(), closeTask(OperationGuard(state_->operation)));
 }
 
-Task<void> DbStreamResult::closeTask(OperationGuard operation) {
+Task<void> DbStreamResult::closeTask(OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     co_await closePoolStream(lease.client, lease.slot, lease.result, lease.resource, lease.options);

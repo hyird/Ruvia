@@ -80,7 +80,8 @@ private:
         kCancelled,
         kClosing };
     enum class DeadlineKind : std::uint8_t { kResolve,
-        kSocket };
+        kSocket,
+        kResponseBuffer };
 
     struct Http2PendingStream final {
         Http2PendingStream(const WorkerHandle& worker, HttpClientResponse& value)
@@ -154,6 +155,9 @@ private:
         std::uint64_t cancellationId{0};
         WireProtocol protocol{WireProtocol::kUnknown};
         AbortReason abortReason{AbortReason::kNone};
+        // Borrowed only while the serialized HTTP/1 operation is active. Lets
+        // terminal cancellation wake a producer blocked on response backpressure.
+        HttpClientResponseState* activeHttp1Response{nullptr};
         bool connected{false};
     };
 

@@ -5,7 +5,9 @@
 #include <optional>
 #include <type_traits>
 
+#include "ruvia/http/Http1ChunkDecodeError.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpTransferCodingDecodeError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
 namespace ruvia {
@@ -43,6 +45,31 @@ private:
 
     Kind kind_;
 };
+
+[[nodiscard]] inline HttpProtocolError httpRequestChunkDecodeError(
+    Http1ChunkDecodeError error) noexcept {
+    switch (error) {
+        case Http1ChunkDecodeError::kInvalidFraming:
+            return HttpProtocolError(http_status::kBadRequest, "invalid chunked request body");
+        case Http1ChunkDecodeError::kBodyLimitExceeded:
+            return HttpRequestBodyFailure::tooLarge().protocolError();
+        case Http1ChunkDecodeError::kFramingLimitExceeded:
+            return HttpProtocolError(
+                http_status::kContentTooLarge, "request body framing is too large");
+    }
+    return HttpProtocolError(http_status::kBadRequest, "invalid chunked request body");
+}
+
+[[nodiscard]] inline HttpProtocolError httpRequestTransferCodingError(
+    HttpTransferCodingDecodeError error) noexcept {
+    switch (error) {
+        case HttpTransferCodingDecodeError::kInvalidContent:
+            return HttpProtocolError(http_status::kBadRequest, "invalid transfer-coding body");
+        case HttpTransferCodingDecodeError::kDecodedSizeExceeded:
+            return HttpRequestBodyFailure::tooLarge().protocolError();
+    }
+    return HttpProtocolError(http_status::kBadRequest, "invalid transfer-coding body");
+}
 
 [[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodySizeFailure(
     std::size_t size, ProtocolByteLimit limit) noexcept {

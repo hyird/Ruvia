@@ -24,7 +24,8 @@ ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientState::read(
     requireCurrent();
     return makeScopedOperation(operationScope_,
         readOwned(shared_from_this(), std::move(options),
-            ActivityLease(readActive_, "concurrent WebSocket client reads are not supported")));
+            ActivityLease(readActive_, "concurrent WebSocket client reads are not supported")),
+        &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(

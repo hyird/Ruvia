@@ -134,7 +134,8 @@ ScopedOperation<void> WebSocketClientState::close(
         closeOwned(shared_from_this(), options, std::move(reason), std::move(operationOptions),
             ActivityLease(readActive_, "WebSocket client close cannot overlap read"),
             ActivityLease(writeActive_, "WebSocket client close cannot overlap write"),
-            ActivityLease(closeActive_, "WebSocket client close is already in progress")));
+            ActivityLease(closeActive_, "WebSocket client close is already in progress")),
+        &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState> state,

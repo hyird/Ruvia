@@ -100,7 +100,8 @@ ScopedOperation<void> WebSocketClientState::write(
     std::pmr::string owned(payload, memory_.resource());
     return makeScopedOperation(operationScope_,
         writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options),
-            ActivityLease(writeActive_, "concurrent WebSocket client writes are not supported")));
+            ActivityLease(writeActive_, "concurrent WebSocket client writes are not supported")),
+        &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state,

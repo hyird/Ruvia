@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstddef>
 #include <exception>
 #include <stdexcept>
 #include <type_traits>
@@ -9,11 +10,14 @@
 
 namespace ruvia::detail {
 
-// A database stream or transaction owns one pool lease. Active means the lease
-// is idle and may admit an operation; Reserved means exactly one cold
-// operation owns the lease reservation; Operating means its coroutine drives
-// the connection. Closed and Failed are distinct terminal states so a failed
-// lease can never be reused accidentally.
+// A database stream or transaction owns one pool lease. Cold guards only
+// register lifetime obligations that forbid destroying their owner; they do
+// not reserve the operation right. Operating is the sole state that grants
+// that right. Closed and Failed are terminal states so a failed lease can
+// never be reused accidentally.
+template <typename Payload>
+class DbOperationGuard;
+
 template <typename Payload>
 class DbOperationState final {
 public:
@@ -21,10 +25,6 @@ public:
     struct Failed final {};
 
     struct Active final {
-        Payload payload;
-    };
-
-    struct Reserved final {
         Payload payload;
     };
 
@@ -42,7 +42,7 @@ public:
     DbOperationState(const DbOperationState&) = delete;
     DbOperationState& operator=(const DbOperationState&) = delete;
     ~DbOperationState() {
-        if (std::holds_alternative<Reserved>(state_) || std::holds_alternative<Operating>(state_)) {
+        if (coldBorrows_ != 0 || std::holds_alternative<Operating>(state_)) {
             std::terminate();
         }
     }
@@ -55,7 +55,7 @@ public:
     }
 
     [[nodiscard]] const Payload& activePayload() const {
-        if (std::holds_alternative<Reserved>(state_) || std::holds_alternative<Operating>(state_)) {
+        if (std::holds_alternative<Operating>(state_)) {
             throw std::logic_error("database operation is already in progress");
         }
         const auto* active = std::get_if<Active>(&state_);
@@ -65,44 +65,49 @@ public:
         return active->payload;
     }
 
-    void reserve() {
-        if (std::holds_alternative<Reserved>(state_) || std::holds_alternative<Operating>(state_)) {
-            throw std::logic_error("database operation is already in progress");
-        }
-        auto* active = std::get_if<Active>(&state_);
-        if (active == nullptr) {
-            throw std::logic_error("database resource is not active");
-        }
-        Payload payload(std::move(active->payload));
-        state_.template emplace<Reserved>(std::move(payload));
+private:
+    friend class DbOperationGuard<Payload>;
+
+    void registerColdBorrow() noexcept {
+        ++coldBorrows_;
     }
 
-    void start() noexcept {
-        auto* reserved = std::get_if<Reserved>(&state_);
-        if (reserved == nullptr) {
+    void start() {
+        auto* active = std::get_if<Active>(&state_);
+        if (active == nullptr) {
+            throw std::logic_error(std::holds_alternative<Operating>(state_)
+                                       ? "database operation is already in progress"
+                                       : "database resource is not active");
+        }
+        if (coldBorrows_ == 0) {
             std::terminate();
         }
-        Payload payload(std::move(reserved->payload));
+        --coldBorrows_;
+        Payload payload(std::move(active->payload));
         state_.template emplace<Operating>(std::move(payload));
     }
 
-    void cancelReservation() noexcept {
-        auto* reserved = std::get_if<Reserved>(&state_);
-        if (reserved == nullptr) {
+    void releaseColdBorrow() noexcept {
+        if (coldBorrows_ == 0) {
             std::terminate();
         }
-        Payload payload(std::move(reserved->payload));
-        state_.template emplace<Active>(std::move(payload));
+        --coldBorrows_;
     }
 
-    [[nodiscard]] Payload& operationPayload() noexcept {
-        if (auto* reserved = std::get_if<Reserved>(&state_); reserved != nullptr) {
-            return reserved->payload;
-        }
-        if (auto* operating = std::get_if<Operating>(&state_); operating != nullptr) {
+    [[nodiscard]] Payload& operationPayload(bool started) {
+        if (started) {
+            auto* operating = std::get_if<Operating>(&state_);
+            if (operating == nullptr) {
+                std::terminate();
+            }
             return operating->payload;
         }
-        std::terminate();
+        if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
+            return active->payload;
+        }
+        throw std::logic_error(std::holds_alternative<Operating>(state_)
+                                   ? "database operation is already in progress"
+                                   : "database resource is not active");
     }
 
     void finishActive() noexcept {
@@ -128,36 +133,38 @@ public:
         state_.template emplace<Failed>();
     }
 
+public:
     template <typename Release>
         requires std::is_nothrow_invocable_v<Release&, Payload&>
     void reset(Release&& release) noexcept {
+        if (coldBorrows_ != 0 || std::holds_alternative<Operating>(state_)) {
+            // Destroying the database owner while any operation borrows it would
+            // leave that coroutine with a dangling owner, even before start().
+            std::terminate();
+        }
         if (auto* active = std::get_if<Active>(&state_); active != nullptr) {
             release(active->payload);
-        } else if (std::holds_alternative<Reserved>(state_) ||
-                   std::holds_alternative<Operating>(state_)) {
-            // Destroying the database owner while its structured operation is
-            // pending or running would leave that coroutine borrowing a dead object.
-            std::terminate();
         }
         state_.template emplace<Closed>();
     }
 
 private:
-    std::variant<Closed, Active, Reserved, Operating, Failed> state_{};
+    std::variant<Closed, Active, Operating, Failed> state_{};
+    std::size_t coldBorrows_{0};
 };
 
-// One operation on a DbOperationState. Construction reserves the lease
-// immediately; start() marks the point at which the coroutine begins to drive
-// it. Destroying a cold guard releases the reservation, while destroying a
-// started guard fails the operation unless it named its own ending.
+// One operation on a DbOperationState. Construction only registers a cold
+// lifetime borrow. start() acquires the exclusive lease when the coroutine
+// actually begins. Dropping a cold guard unregisters only its own borrow;
+// destroying a started guard without naming an ending fails the lease.
 template <typename Payload>
 class DbOperationGuard final {
 public:
     using State = DbOperationState<Payload>;
 
-    explicit DbOperationGuard(State& state)
+    explicit DbOperationGuard(State& state) noexcept
         : state_(&state) {
-        state_->reserve();
+        state_->registerColdBorrow();
     }
 
     DbOperationGuard(const DbOperationGuard&) = delete;
@@ -172,18 +179,18 @@ public:
             if (started_) {
                 state_->finishFailed();
             } else {
-                state_->cancelReservation();
+                state_->releaseColdBorrow();
             }
         }
     }
 
-    void start() noexcept {
+    void start() {
         state_->start();
         started_ = true;
     }
 
-    [[nodiscard]] Payload& lease() noexcept {
-        return state_->operationPayload();
+    [[nodiscard]] Payload& lease() {
+        return state_->operationPayload(started_);
     }
 
     void finishActive() noexcept {
