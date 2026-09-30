@@ -314,6 +314,10 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     ruvia::detail::ScopedOperationScope operationScope;
     auto handle = registry.get(operationScope);
     auto copiedHandle = handle;
+    auto configuredHandle = handle.withOptions({.timeout = std::chrono::seconds(3)});
+    auto copiedConfiguredHandle = configuredHandle;
+    auto derivedConfiguredHandle = copiedConfiguredHandle.withOptions(
+        {.timeout = std::chrono::seconds(1)});
     auto pipeline = handle.pipeline();
     pipeline.get("key");
     auto movedPipeline = std::move(pipeline);
@@ -326,6 +330,27 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     bool copyRejected = false;
     bool builderRejected = false;
     bool transactionRejected = false;
+    const auto optionFailureOrder = [](const auto& capability) {
+        bool validationWrongOrder = false;
+        bool lifetimeRejected = false;
+        try {
+            (void)capability.withOptions({.timeout = std::chrono::milliseconds::zero()});
+        } catch (const std::invalid_argument&) {
+            validationWrongOrder = true;
+        } catch (const std::logic_error&) {
+            lifetimeRejected = true;
+        }
+        return std::pair{validationWrongOrder, lifetimeRejected};
+    };
+    const auto handleOptionFailure = optionFailureOrder(handle);
+    const auto configuredOptionFailure = optionFailureOrder(configuredHandle);
+    const auto copiedConfiguredOptionFailure = optionFailureOrder(copiedConfiguredHandle);
+    const auto derivedConfiguredOptionFailure = optionFailureOrder(derivedConfiguredHandle);
+    const bool expiredOptionsRejectedBeforeValidation =
+        !handleOptionFailure.first && handleOptionFailure.second &&
+        !configuredOptionFailure.first && configuredOptionFailure.second &&
+        !copiedConfiguredOptionFailure.first && copiedConfiguredOptionFailure.second &&
+        !derivedConfiguredOptionFailure.first && derivedConfiguredOptionFailure.second;
     try {
         (void)handle.ping();
     } catch (const std::logic_error&) {
@@ -346,6 +371,7 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     } catch (const std::logic_error&) {
         transactionRejected = true;
     }
+    RUVIA_CHECK(expiredOptionsRejectedBeforeValidation);
     RUVIA_CHECK(handleRejected);
     RUVIA_CHECK(copyRejected);
     RUVIA_CHECK(builderRejected);

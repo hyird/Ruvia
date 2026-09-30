@@ -82,8 +82,3 @@ private:
 };
 
 }  // namespace ruvia
-
-namespace ruvia::detail {
-// Compatibility name retained for existing runtime integrations.
-using ResponseFileIdentity = ruvia::HttpResponseFileIdentity;
-}  // namespace ruvia::detail

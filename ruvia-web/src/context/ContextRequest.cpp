@@ -96,12 +96,12 @@ void Context::ensureRequestQuery() const {
     std::pmr::vector<std::pmr::string> storage(arena());
     auto query = detail::RequestNameValueListAccess::make(arena());
     bool valid = true;
-    const bool completed = detail::visitUrlEncodedPairs(request_.queryString(),
+    const bool completed = visitUrlEncodedPairs(request_.queryString(),
         [&storage, &query, &valid](std::string_view key, std::string_view value) {
             const auto name =
-                detail::borrowOrDecode(storage, key, detail::UrlDecodeMode::kForm);
+                detail::borrowOrDecode(storage, key, UrlDecodeMode::kForm);
             const auto decodedValue =
-                detail::borrowOrDecode(storage, value, detail::UrlDecodeMode::kForm);
+                detail::borrowOrDecode(storage, value, UrlDecodeMode::kForm);
             if (!name || !decodedValue) {
                 valid = false;
                 return false;
@@ -215,9 +215,9 @@ void Context::ensureRouteParams() const {
     detail::RequestNameValueListAccess::reserve(params, paramCount_);
     for (std::size_t i = 0; i < paramCount_; ++i) {
         auto value = paramValues_[i];
-        if (detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
-            auto decoded = detail::decodeUrlComponent(
-                value, {.mode = detail::UrlDecodeMode::kPercent, .resource = arena()});
+        if (hasUrlEncoding(value, UrlDecodeMode::kPercent)) {
+            auto decoded = decodeUrlComponent(
+                value, {.mode = UrlDecodeMode::kPercent, .resource = arena()});
             if (!decoded) {
                 requestStorage_->routeParamsInvalid = true;
                 detail::throwInvalidParam();

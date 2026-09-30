@@ -359,10 +359,9 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     const auto closed = submitBufferedResponseHead(missingStream, 1, response);
     RUVIA_CHECK(closed.submitted() == nullptr);
     RUVIA_CHECK(closed.failure() != nullptr);
-    RUVIA_CHECK(closed.failure()->peerClosed());
-    RUVIA_CHECK_EQ(closed.failure()->error(), ruvia::detail::Http2ResponseHeadSubmitError::kClosed);
+    RUVIA_CHECK_EQ(closed.failure()->error(), ruvia::Http2ResponseHeadSubmitError::kClosed);
     RUVIA_CHECK_EQ(ruvia::detail::http2ResponseHeadSubmitErrorMessage(
-                       ruvia::detail::Http2ResponseHeadSubmitError::kClosed),
+                       ruvia::Http2ResponseHeadSubmitError::kClosed),
         std::string_view("HTTP/2 response stream is closed"));
     RUVIA_CHECK(missingStream.pendingOutput().empty());
 
@@ -373,6 +372,9 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     RUVIA_CHECK(submitted.submitted() != nullptr);
     RUVIA_CHECK(submitted.failure() == nullptr);
     RUVIA_CHECK_EQ(submitted.submitted()->contentLength(), std::uint64_t{2});
+    RUVIA_CHECK(buffered.submitData(1, "ok", Http2EndStream::kEndStream) ==
+                Http2DataSubmitStatus::kAccepted);
+    RUVIA_CHECK_EQ(submitted.submitted()->contentLength(), std::uint64_t{2});
 
     Http2Connection streaming(&resource);
     handshake(streaming);
@@ -382,6 +384,12 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     const auto streamingSubmitted =
         streaming.submitStreamingResponseHead(1, std::move(streamingHead),
             ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(streamingSubmitted.submitted() != nullptr);
+    RUVIA_CHECK(streamingSubmitted.failure() == nullptr);
+    RUVIA_CHECK(streaming.submitData(1, "body", Http2EndStream::kKeepOpen) ==
+                Http2DataSubmitStatus::kAccepted);
+    RUVIA_CHECK(streaming.finishResponse(1, validatedTrailers({})) ==
+                Http2FinishSubmitStatus::kAccepted);
     RUVIA_CHECK(streamingSubmitted.submitted() != nullptr);
     RUVIA_CHECK(streamingSubmitted.failure() == nullptr);
 }
@@ -520,7 +528,7 @@ RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
         HpackDecoder decoder({.resource = &resource});
         const auto decodeResult =
             decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
-        RUVIA_CHECK(decodeResult.decoded() != nullptr);
+        RUVIA_CHECK(decodeResult.decoded());
         if (expectedContentLength.empty()) {
             RUVIA_CHECK_EQ(observation.count, static_cast<std::size_t>(0));
         } else {
@@ -828,7 +836,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_request_without_authority) {
     HpackDecoder decoder({.resource = &resource});
     const auto decoded =
         decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
-    RUVIA_CHECK(decoded.decoded() != nullptr);
+    RUVIA_CHECK(decoded.decoded());
     RUVIA_CHECK_EQ(observation.scheme, std::string("git+ssh"));
     RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{0});
     RUVIA_CHECK_EQ(observation.pathCount, std::size_t{1});
@@ -856,7 +864,7 @@ RUVIA_TEST(http2_connection_encodes_non_http_userinfo_authority) {
     HpackDecoder decoder({.resource = &resource});
     const auto decoded =
         decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
-    RUVIA_CHECK(decoded.decoded() != nullptr);
+    RUVIA_CHECK(decoded.decoded());
     RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{1});
     RUVIA_CHECK_EQ(observation.authority, std::string("deploy:secret@example.test:9418"));
 }
@@ -876,7 +884,7 @@ RUVIA_TEST(http2_connection_encodes_options_asterisk_path) {
     HpackDecoder decoder({.resource = &resource});
     const auto decoded =
         decoder.decode(out.substr(9, frame.length), &observation, &observeRequestContentLength);
-    RUVIA_CHECK(decoded.decoded() != nullptr);
+    RUVIA_CHECK(decoded.decoded());
     RUVIA_CHECK_EQ(observation.path, std::string("*"));
     RUVIA_CHECK_EQ(observation.authorityCount, std::size_t{0});
 }

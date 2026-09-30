@@ -1,9 +1,10 @@
-#include "ruvia/http/detail/client/HttpClientResponseHead.h"
+#include "ruvia/http/HttpClientResponseHead.h"
 
 #include <charconv>
 #include <expected>
 #include <system_error>
 
+#include "ruvia/http/detail/client/HttpClientResponseHead.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"

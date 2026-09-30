@@ -129,4 +129,11 @@ enum class Http2RequestHeadSubmitError : std::uint8_t {
     kInvalidMessage,
 };
 
+enum class Http2ResponseHeadSubmitError : std::uint8_t {
+    kClosed,
+    kInvalidState,
+    kResponsePlanMismatch,
+    kInvalidMessage,
+};
+
 }  // namespace ruvia

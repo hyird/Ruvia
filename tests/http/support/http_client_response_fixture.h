@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpClientRedirect.h"
 #include "ruvia/http/HttpLimits.h"

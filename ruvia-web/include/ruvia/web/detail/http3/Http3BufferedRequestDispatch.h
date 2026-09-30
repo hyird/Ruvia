@@ -17,7 +17,7 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/WebSocketServerProtocolTypes.h"
+#include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
@@ -178,7 +178,7 @@ public:
     void notifyTunnelInput() noexcept;
     [[nodiscard]] Task<WsTransportReadResult> readTunnel(std::pmr::string& buffer);
     [[nodiscard]] Task<std::error_code> writeTunnel(std::string_view bytes,
-        WebSocketServerTransportDisposition disposition);
+        WebSocketTransportDisposition disposition);
     [[nodiscard]] Task<bool> waitTunnelReceiveEnd();
     void abortTunnel() noexcept;
     [[nodiscard]] asio::any_io_executor executor() const noexcept {

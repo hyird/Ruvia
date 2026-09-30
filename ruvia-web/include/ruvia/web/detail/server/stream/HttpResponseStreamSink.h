@@ -64,7 +64,7 @@ public:
         return state_.aborted();
     }
 
-    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
+    [[nodiscard]] Http1RequestConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
     }
 
@@ -282,7 +282,7 @@ private:
     const WorkerHandle& worker_;
     ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
-    Http1ServerConnectionPlan connectionPlan_;
+    Http1RequestConnectionPlan connectionPlan_;
     HttpStreamingResponseCompression compression_;
     ResponseStreamState state_;
 };

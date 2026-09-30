@@ -23,6 +23,7 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/web/db/DbClient.h"
 
@@ -139,6 +140,14 @@ private:
     std::thread thread_;
 };
 
+ruvia::Task<void> connectUntilStopped(ruvia::DbClient& client, bool& cancelled) {
+    try {
+        co_await client.connect();
+    } catch (const ruvia::DbError&) {
+        cancelled = true;
+    }
+}
+
 ruvia::Task<bool> canCreateOperation(ruvia::DbClient& client) {
     try {
         // A cold operation exercises the public connected-client contract
@@ -230,6 +239,30 @@ RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
     }
     pool.join();
     RUVIA_CHECK(!pool.loop(0).accepting());
+}
+
+RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
+    for (const bool useAttachmentRun : {false, true}) {
+        PostgreSqlStartupPeer peer;
+        asio::io_context io;
+        auto attachment = ruvia::attachEventLoop(io);
+        ruvia::DbClient client(attachment.loop(), peer.config());
+        bool cancelled = false;
+        auto root = attachment.loop().start(connectUntilStopped(client, cancelled));
+        std::thread driver([&] {
+            if (useAttachmentRun) {
+                attachment.run();
+            } else {
+                io.run();
+            }
+        });
+        peer.waitForStartup();
+        attachment.stop();
+        driver.join();
+        root.get();
+        RUVIA_CHECK(cancelled);
+        RUVIA_CHECK(!client.worker().accepting());
+    }
 }
 
 RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {

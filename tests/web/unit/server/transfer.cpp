@@ -50,7 +50,7 @@ RUVIA_TEST(web_worker_records_transferred_socket_assignment_failure) {
 
     auto ticket = ruvia::detail::NativeAcceptedSocketTicket(asio::ip::tcp::v4(), 0,
         ruvia::detail::NativeAcceptedSocketTicket::invalidNative());
-    auto post = runtime.worker().post([&runtime, ticket = std::move(ticket)]() mutable {
+    auto post = runtime.networkSubmission().post([&runtime, ticket = std::move(ticket)]() mutable {
         runtime.acceptTransferredConnection(std::move(ticket));
     });
     RUVIA_CHECK(post.accepted());
@@ -88,7 +88,7 @@ RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
     RUVIA_CHECK(!releaseError);
     auto firstTicket = ruvia::detail::NativeAcceptedSocketTicket(
         asio::ip::tcp::v4(), 0, firstNative);
-    auto firstPost = runtime.worker().post([&runtime, firstTicket = std::move(firstTicket)]() mutable {
+    auto firstPost = runtime.networkSubmission().post([&runtime, firstTicket = std::move(firstTicket)]() mutable {
         runtime.acceptTransferredConnection(std::move(firstTicket));
     });
     RUVIA_CHECK(firstPost.accepted());
@@ -109,7 +109,7 @@ RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
     RUVIA_CHECK(!releaseError);
     auto secondTicket = ruvia::detail::NativeAcceptedSocketTicket(
         asio::ip::tcp::v4(), 0, secondNative);
-    auto secondPost = runtime.worker().post([&runtime, secondTicket = std::move(secondTicket)]() mutable {
+    auto secondPost = runtime.networkSubmission().post([&runtime, secondTicket = std::move(secondTicket)]() mutable {
         runtime.acceptTransferredConnection(std::move(secondTicket));
     });
     RUVIA_CHECK(secondPost.accepted());
@@ -121,5 +121,6 @@ RUVIA_TEST(web_worker_accepts_transferred_connection_on_its_worker) {
     runtime.stop();
     runtime.join();
 
-    RUVIA_CHECK(runtime.worker().post([] {}).status() == ruvia::PostStatus::kWorkerStopping);
+    RUVIA_CHECK(runtime.networkSubmission().post([] {}).status() ==
+                ruvia::PostStatus::kWorkerStopping);
 }

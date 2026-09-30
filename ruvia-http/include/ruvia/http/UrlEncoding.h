@@ -14,7 +14,7 @@
 #include "ruvia/http/detail/util/Hex.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 enum class UrlDecodeMode : std::uint8_t { kPercent,
     kForm };
@@ -24,10 +24,13 @@ struct UrlDecodeOptions final {
     std::pmr::memory_resource* resource{nullptr};
 };
 
+// Percent mode treats '+' literally; form mode decodes '+' as a space.
 [[nodiscard]] inline bool hasUrlEncoding(std::string_view value, UrlDecodeMode mode) noexcept {
     return std::ranges::any_of(value,
         [mode](char c) noexcept { return c == '%' || (mode == UrlDecodeMode::kForm && c == '+'); });
 }
+
+namespace detail {
 
 // Decode the percent-escape at position i, where input[i] == '%'. Returns the
 // decoded byte (0-255), or -1 if the escape is truncated or contains a non-hex
@@ -47,12 +50,27 @@ struct UrlDecodeOptions final {
     return (high << 4) | low;
 }
 
+template <typename Visitor>
+[[nodiscard]] bool dispatchUrlEncodedPairVisitor(
+    Visitor& visitor, std::string_view name, std::string_view value) {
+    if constexpr (requires {
+                      { visitor(name, value) } -> std::convertible_to<bool>;
+                  }) {
+        return static_cast<bool>(visitor(name, value));
+    } else {
+        visitor(name, value);
+        return true;
+    }
+}
+
+}  // namespace detail
+
 [[nodiscard]] inline bool validateUrlEncoding(std::string_view value) noexcept {
     for (std::size_t i = 0; i < value.size(); ++i) {
         if (value[i] != '%') {
             continue;
         }
-        if (decodePercentByte(value, i) < 0) {
+        if (detail::decodePercentByte(value, i) < 0) {
             return false;
         }
     }
@@ -60,11 +78,12 @@ struct UrlDecodeOptions final {
 }
 
 // Returns the complete decoded component or no value for malformed percent
-// encoding. The caller never supplies mutable storage, so a failure cannot
-// expose the prefix decoded before the bad escape.
+// encoding. Percent mode treats '+' literally; form mode converts it to a space.
+// The result is allocated from options.resource (or the default PMR resource),
+// which must outlive the returned string. On failure, no decoded prefix escapes.
 [[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(
     std::string_view input, UrlDecodeOptions options = {}) {
-    std::pmr::string output(httpPmrResourceOrDefault(options.resource));
+    std::pmr::string output(detail::httpPmrResourceOrDefault(options.resource));
     bool valid = true;
     output.resize_and_overwrite(input.size(), [&](char* bytes, std::size_t) noexcept {
         std::size_t written = 0;
@@ -73,7 +92,7 @@ struct UrlDecodeOptions final {
             if (options.mode == UrlDecodeMode::kForm && c == '+') {
                 c = ' ';
             } else if (c == '%') {
-                const int byte = decodePercentByte(input, i);
+                const int byte = detail::decodePercentByte(input, i);
                 if (byte < 0) {
                     valid = false;
                     return std::size_t{0};
@@ -90,6 +109,9 @@ struct UrlDecodeOptions final {
     return output;
 }
 
+// Compare a percent-encoded component to its decoded value without allocating.
+// Percent mode treats '+' literally; form mode converts it to a space. Malformed
+// percent escapes never compare equal.
 [[nodiscard]] inline bool urlComponentEquals(
     std::string_view encoded, std::string_view decoded, UrlDecodeMode mode) noexcept {
     if (encoded.size() < decoded.size()) {
@@ -102,7 +124,7 @@ struct UrlDecodeOptions final {
         if (mode == UrlDecodeMode::kForm && c == '+') {
             c = ' ';
         } else if (c == '%') {
-            const int byte = decodePercentByte(encoded, i);
+            const int byte = detail::decodePercentByte(encoded, i);
             if (byte < 0) {
                 return false;
             }
@@ -116,24 +138,10 @@ struct UrlDecodeOptions final {
     return out == decoded.size();
 }
 
-template <typename Visitor>
-[[nodiscard]] bool dispatchUrlEncodedPairVisitor(
-    Visitor& visitor, std::string_view name, std::string_view value) {
-    if constexpr (requires {
-                      { visitor(name, value) } -> std::convertible_to<bool>;
-                  }) {
-        return static_cast<bool>(visitor(name, value));
-    } else {
-        visitor(name, value);
-        return true;
-    }
-}
-
-// Visit every non-empty "name=value" pair (name alone for a segment without
-// '='). Returns true when the visitor saw every pair; false when the visitor
-// requested an early stop (a bool-returning visitor returns false to stop).
-// Malformed percent escapes are not checked here; callers that need strict
-// validation use validateUrlEncoding() or decodeUrlComponent() first.
+// Visit raw, borrowed name/value views for each non-empty pair. A bool-returning
+// visitor returning false stops iteration and makes this return false; a void
+// visitor always traverses all pairs. Pair traversal does not validate percent
+// escapes. The input storage must remain alive while each view is used.
 template <typename Visitor>
 [[nodiscard]] bool visitUrlEncodedPairs(std::string_view input, Visitor&& visitor) {
     auto& visitorRef = visitor;
@@ -148,7 +156,7 @@ template <typename Visitor>
             const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
             const auto value =
                 equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
-            if (!dispatchUrlEncodedPairVisitor(visitorRef, name, value)) {
+            if (!detail::dispatchUrlEncodedPairVisitor(visitorRef, name, value)) {
                 return false;
             }
         }
@@ -161,11 +169,9 @@ template <typename Visitor>
     return true;
 }
 
-// Returns the raw (still percent-encoded) value view of the LAST pair whose
-// name matches `decodedName` after decoding, or no value. Later pairs override
-// earlier ones (query parameters share the last-match convention of repeated
-// header fields); the scan therefore always runs to the end. The returned view
-// borrows `input` and must be percent-decoded by the caller before use.
+// Returns the raw (still percent-encoded) borrowed value of the LAST pair whose
+// name matches decodedName. Later duplicates override earlier ones. The value
+// must be decoded separately before use; input storage must outlive the view.
 [[nodiscard]] inline std::optional<std::string_view> findUrlEncodedValue(
     std::string_view input, std::string_view decodedName, UrlDecodeMode mode) {
     std::optional<std::string_view> result;
@@ -178,8 +184,7 @@ template <typename Visitor>
     return result;
 }
 
-template <HttpTemporaryOwningCharString Input>
-std::optional<std::string_view> findUrlEncodedValue(
-    Input&&, std::string_view, UrlDecodeMode) = delete;
+template <detail::HttpTemporaryOwningCharString Input>
+std::optional<std::string_view> findUrlEncodedValue(Input&&, std::string_view, UrlDecodeMode) = delete;
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

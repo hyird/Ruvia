@@ -1,6 +1,10 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 
+#include <exception>
+
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 
 namespace ruvia::detail {
 namespace {
@@ -34,22 +38,6 @@ HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const Worker
     aliasIndex_.build({kDefaultCapabilityAlias});
     pools_.reserve(1);
     add(ioContext, worker, HttpClientConfigStorage(defaultConfig, resource_), resultBudget);
-}
-
-HttpClientRequestView HttpClientRequestStorageAccess::view(
-    const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers) {
-    headers.clear();
-    headers.reserve(request.headers_.size());
-    for (const auto& header : request.headers_) {
-        headers.emplace_back(header.name, header.value);
-    }
-    HttpClientRequestView result;
-    result.method = request.method_;
-    result.target = request.target_;
-    result.headers = std::span<const HttpHeaderView>(headers);
-    result.content = request.hasBody_ ? HttpClientRequestContentView::bytes(request.body_)
-                                      : HttpClientRequestContentView::none();
-    return result;
 }
 
 HttpClientRegistry::HttpClientRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
@@ -108,8 +96,18 @@ void HttpClientRegistry::closeNow() noexcept {
 
 Task<void> HttpClientRegistry::join() {
     closeNow();
+    std::exception_ptr failure;
     for (std::size_t i = 0; i < pools_.size(); ++i) {
-        co_await pools_[i]->join();
+        try {
+            co_await pools_[i]->join();
+        } catch (...) {
+            if (failure == nullptr) {
+                failure = std::current_exception();
+            }
+        }
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
     }
 }
 
@@ -123,6 +121,21 @@ HttpClientHandle HttpClientRegistry::get(ScopedOperationScope& scope) const {
             HttpClientError::Code::kNotConfigured, "fixed HTTP client is not configured");
     }
     return HttpClientHandle(*pools_[*defaultPoolIndex], resource_, scope);
+}
+
+HttpClientHandle HttpClientRegistry::get(
+    ScopedOperationScope& scope, OperationOptions options) const {
+    if (closing_) {
+        throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
+    }
+    const auto defaultPoolIndex = aliasIndex_.defaultIndex();
+    if (!defaultPoolIndex.has_value()) {
+        throw HttpClientError(
+            HttpClientError::Code::kNotConfigured, "fixed HTTP client is not configured");
+    }
+    validateOperationOptions(options);
+    return HttpClientHandle(
+        *pools_[*defaultPoolIndex], resource_, scope, std::move(options));
 }
 
 HttpClientHandle HttpClientRegistry::get(

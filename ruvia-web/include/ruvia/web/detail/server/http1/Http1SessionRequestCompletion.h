@@ -8,7 +8,7 @@
 #include <variant>
 
 #include "ruvia/http/BorrowedText.h"
-#include "ruvia/http/Http1ServerConnectionPlan.h"
+#include "ruvia/http/Http1RequestConnectionPlan.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
@@ -124,7 +124,7 @@ private:
 class Http1SessionRequestCompletion final {
 public:
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedClosing(
-        Http1ServerConnectionPlan connectionPlan) noexcept {
+        Http1RequestConnectionPlan connectionPlan) noexcept {
         if (connectionPlan.disposition() != Http1ClosePolicy::kCloseAfterResponse) {
             std::terminate();
         }
@@ -133,13 +133,13 @@ public:
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedUnrestored(
-        Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
+        Http1RequestConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
         return Http1SessionRequestCompletion(Http1BufferedResponseReady{}, connectionPlan,
             unshiftedBufferCompletion(connectionPlan, consumedBytes));
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeBufferedPipelineRestore(
-        Http1ServerConnectionPlan connectionPlan, BorrowedText pipeline) noexcept {
+        Http1RequestConnectionPlan connectionPlan, BorrowedText pipeline) noexcept {
         if (connectionPlan.disposition() != Http1ClosePolicy::kAllowReuse) {
             std::terminate();
         }
@@ -148,7 +148,7 @@ public:
     }
 
     [[nodiscard]] static Http1SessionRequestCompletion makeCommittedStream(
-        Http1ServerConnectionPlan connectionPlan, HttpStatusCode status,
+        Http1RequestConnectionPlan connectionPlan, HttpStatusCode status,
         std::size_t consumedBytes) noexcept {
         return Http1SessionRequestCompletion(Http1CommittedStreamResponse(status), connectionPlan,
             unshiftedBufferCompletion(connectionPlan, consumedBytes));
@@ -164,7 +164,7 @@ public:
     }
     [[nodiscard]] constexpr const Http1CommittedStreamResponse* committedStream() const&& = delete;
 
-    [[nodiscard]] constexpr Http1ServerConnectionPlan connectionPlan() const noexcept {
+    [[nodiscard]] constexpr Http1RequestConnectionPlan connectionPlan() const noexcept {
         return connectionPlan_;
     }
 
@@ -178,7 +178,7 @@ public:
     // Rebind the final response plan without losing the exact read-buffer
     // cleanup alternative already established by request-body dispatch.
     [[nodiscard]] Http1SessionRequestCompletion withBufferedConnectionPlan(
-        Http1ServerConnectionPlan connectionPlan) const& noexcept {
+        Http1RequestConnectionPlan connectionPlan) const& noexcept {
         if (std::get_if<Http1CommittedStreamResponse>(&value_) != nullptr) {
             std::terminate();
         }
@@ -201,7 +201,7 @@ private:
     using Value = std::variant<Http1BufferedResponseReady, Http1CommittedStreamResponse>;
 
     [[nodiscard]] static Http1RequestBufferCompletion unshiftedBufferCompletion(
-        Http1ServerConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
+        Http1RequestConnectionPlan connectionPlan, std::size_t consumedBytes) noexcept {
         if (connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse) {
             return Http1RequestBufferCompletion(Http1RequestBufferDiscarded{});
         }
@@ -209,14 +209,14 @@ private:
     }
 
     template <typename Alternative>
-    Http1SessionRequestCompletion(Alternative alternative, Http1ServerConnectionPlan connectionPlan,
+    Http1SessionRequestCompletion(Alternative alternative, Http1RequestConnectionPlan connectionPlan,
         Http1RequestBufferCompletion bufferCompletion) noexcept
         : value_(std::move(alternative)),
           connectionPlan_(connectionPlan),
           bufferCompletion_(std::move(bufferCompletion)) {}
 
     Value value_;
-    Http1ServerConnectionPlan connectionPlan_;
+    Http1RequestConnectionPlan connectionPlan_;
     Http1RequestBufferCompletion bufferCompletion_;
 };
 

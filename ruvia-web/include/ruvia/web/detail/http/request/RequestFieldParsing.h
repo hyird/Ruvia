@@ -65,11 +65,11 @@ inline void appendLowerAscii(std::pmr::string& output, std::string_view input) {
 // encoding, not an absent value.
 [[nodiscard]] inline std::optional<std::string_view> borrowOrDecode(
     std::pmr::vector<std::pmr::string>& storage, std::string_view input,
-    detail::UrlDecodeMode mode) {
-    if (!detail::hasUrlEncoding(input, mode)) {
+    UrlDecodeMode mode) {
+    if (!ruvia::hasUrlEncoding(input, mode)) {
         return input;
     }
-    auto decoded = detail::decodeUrlComponent(
+    auto decoded = ruvia::decodeUrlComponent(
         input, {.mode = mode, .resource = storage.get_allocator().resource()});
     if (!decoded) {
         return std::nullopt;

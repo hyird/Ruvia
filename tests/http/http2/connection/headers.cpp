@@ -669,7 +669,7 @@ RUVIA_TEST(http2_connection_rejects_trailers_for_contentless_statuses_before_hea
         RUVIA_CHECK(result.failure() != nullptr);
         if (result.failure() != nullptr) {
             RUVIA_CHECK(result.failure()->error() ==
-                        ruvia::detail::Http2ResponseHeadSubmitError::kInvalidMessage);
+                        ruvia::Http2ResponseHeadSubmitError::kInvalidMessage);
         }
         RUVIA_CHECK(conn.pendingOutput().empty());
         RUVIA_CHECK(conn.stream(1)->localSend().headPending() != nullptr);

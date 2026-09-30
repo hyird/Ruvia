@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <expected>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
 #include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/detail/coding/HttpContentCodecResult.h"
 
 // One compression library binding per coding, behind a uniform signature: decode
 // or encode a whole buffer through the caller's memory resource, bounded by an
@@ -14,9 +14,6 @@
 // asks for is decided elsewhere; this is only the machinery each one runs on.
 
 namespace ruvia::detail {
-
-using ContentEncodeAttempt = std::expected<std::pmr::string, HttpContentEncodeError>;
-using ContentDecodeAttempt = std::expected<std::pmr::string, HttpContentDecodeError>;
 
 // Append decoder output while enforcing the ceiling; false means the ceiling
 // would be exceeded and the decode must fail.
@@ -29,18 +26,18 @@ using ContentDecodeAttempt = std::expected<std::pmr::string, HttpContentDecodeEr
     return true;
 }
 
-[[nodiscard]] ContentDecodeAttempt decodeGzipContent(
+[[nodiscard]] HttpContentDecodeResult decodeGzipContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
-[[nodiscard]] ContentDecodeAttempt decodeBrotliContent(
+[[nodiscard]] HttpContentDecodeResult decodeBrotliContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
-[[nodiscard]] ContentDecodeAttempt decodeZstdContent(
+[[nodiscard]] HttpContentDecodeResult decodeZstdContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
 
-[[nodiscard]] ContentEncodeAttempt encodeGzipContent(
+[[nodiscard]] HttpContentEncodeResult encodeGzipContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
-[[nodiscard]] ContentEncodeAttempt encodeBrotliContent(
+[[nodiscard]] HttpContentEncodeResult encodeBrotliContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
-[[nodiscard]] ContentEncodeAttempt encodeZstdContent(
+[[nodiscard]] HttpContentEncodeResult encodeZstdContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

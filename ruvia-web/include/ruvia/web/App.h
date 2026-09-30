@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "ruvia/core/BlockingPool.h"
-#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/ErrorHandlers.h"
@@ -160,7 +159,7 @@ private:
     App& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
     App& useWorkerStateDefinition(detail::WorkerStateDefinition definition);
 
-    struct StateDeleter final {
+    struct StateDeleter {
         void operator()(detail::AppState* state) const noexcept;
     };
 

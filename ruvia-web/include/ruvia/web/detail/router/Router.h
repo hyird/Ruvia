@@ -27,7 +27,7 @@ public:
     Router& operator=(Router&&) = delete;
 
 private:
-    struct ImplDeleter final {
+    struct ImplDeleter {
         void operator()(RouterImpl* impl) const noexcept;
     };
 

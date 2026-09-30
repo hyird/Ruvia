@@ -274,7 +274,7 @@ RUVIA_TEST(http3BufferedResponseWriteFileWithoutPayloadSendsOnlyMetadata) {
         const auto method = scenario == 0 ? ruvia::HttpKnownMethod::kHead : ruvia::HttpKnownMethod::kGet;
         const std::uint64_t length = scenario == 0 ? 5 : 0;
         ruvia::HttpResponse response;
-        response.fileBody("unopened-response.bin", length, 0, length, {}, true);
+        response.fileBody("unopened-response.bin", length, 0, length, ruvia::HttpResponseFileIdentity::checked({}));
         response.header("X-Projection", "retained");
         const auto plan = ruvia::planBufferedHttpResponseWrite(method, response);
         RUVIA_CHECK(!plan.sendBody() || plan.contentLength() == 0);
@@ -340,7 +340,7 @@ RUVIA_TEST(http3BufferedResponseWriteEmptyAndNoContentResponsesOmitData) {
 
 RUVIA_TEST(http3BufferedResponseWriteRejectsFilesAndEncodingFailures) {
     ruvia::HttpResponse fileResponse;
-    fileResponse.fileBody("response.bin", 5, 0, 5, {}, true);
+    fileResponse.fileBody("response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
     const auto filePlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, fileResponse);
     auto file = Cursor::create(fileResponse, filePlan, nullptr);
     RUVIA_CHECK(!file && file.error() == Cursor::Error::kFileBodyUnsupported);

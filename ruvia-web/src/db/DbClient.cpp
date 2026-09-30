@@ -24,7 +24,7 @@ DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
       worker_(loop_.handle()),
       memory_(),
       databases_(loop_.ioContext(), worker_, memory_.resource(), config),
-      closeState_(worker_) {}
+      closeState_(loop_, worker_) {}
 
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
@@ -37,9 +37,9 @@ DbClientState::~DbClientState() {
 void DbClientState::bindStop() {
     try {
         std::weak_ptr<DbClientState> weak = shared_from_this();
-        stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
+        stopRegistration_ = loop_.onStop([weak = std::move(weak)]() -> Task<void> {
             if (const auto state = weak.lock()) {
-                state->startCloseOnWorker();
+                co_await shutdownOwned(state, ClientCloseState::ObservationMode::kRetirement);
             }
         });
     } catch (...) {
@@ -151,10 +151,11 @@ void DbClientState::requestClose() noexcept {
 }
 
 Task<void> DbClientState::shutdown() {
-    return shutdownOwned(shared_from_this());
+    return shutdownOwned(shared_from_this(), ClientCloseState::ObservationMode::kCaller);
 }
 
-Task<void> DbClientState::shutdownOwned(std::shared_ptr<DbClientState> state) {
+Task<void> DbClientState::shutdownOwned(
+    std::shared_ptr<DbClientState> state, ClientCloseState::ObservationMode mode) {
     if (!state->worker_.isCurrent()) {
         throw std::logic_error("database client shutdown must run on its bound event loop");
     }
@@ -162,7 +163,7 @@ Task<void> DbClientState::shutdownOwned(std::shared_ptr<DbClientState> state) {
     while (!state->closeState_.complete()) {
         co_await state->closeState_.wait();
     }
-    state->closeState_.rethrowFailure();
+    state->closeState_.observeFailure(mode);
 }
 
 void DbClientState::startCloseOnWorker() noexcept {
@@ -200,8 +201,12 @@ Task<void> DbClientState::closeOnWorker() {
 }
 
 void DbClientState::finishClose(const TaskCompletionResult<void>& result) {
+    if (connectInFlight_ || operationScope_.hasPendingOperations()) {
+        std::terminate();
+    }
     phase_.store(Phase::kClosed, std::memory_order_release);
-    closeState_.finish(result);
+    const auto* failure = result.failure();
+    closeState_.finish(failure == nullptr ? std::exception_ptr{} : failure->exception());
 }
 
 }  // namespace ruvia::detail

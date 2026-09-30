@@ -95,7 +95,7 @@ RUVIA_TEST(http2_websocket_transport_abort_wakes_budget_waiter) {
     });
     asio::co_spawn(io, [&]() -> asio::awaitable<void> {
             writeError = co_await ruvia::asAwaitable(transport.writeBytes(
-                "blocked", ruvia::WebSocketServerTransportDisposition::kKeepOpen));
+                "blocked", ruvia::WebSocketTransportDisposition::kKeepOpen));
             completed = true;
             watchdog.cancel();
             attachment.stop(); }, asio::detached);

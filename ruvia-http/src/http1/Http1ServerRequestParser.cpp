@@ -33,7 +33,7 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     // Incomplete input allocates no descriptor storage.
     state.progress_ = Http1ServerNeedRequestHead{};
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
-    state.connectionPlan = Http1ServerConnectionPlan::http11Close();
+    state.connectionPlan = Http1RequestConnectionPlan::http11Close();
     state.responseCodingQualities = {};
     HttpRequestAccess::reset(state.request);
 
@@ -93,8 +93,8 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     // disposition is already derived from the parsed Connection fields and is
     // tightened to close by body/response policy later.
     state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11
-                               ? http1PlanHttp11RequestConnection(block.connectionOptions.close())
-                               : http1PlanHttp10RequestConnection(block.connectionOptions.close(),
+                               ? planHttp11RequestConnection(block.connectionOptions.close())
+                               : planHttp10RequestConnection(block.connectionOptions.close(),
                                      block.connectionOptions.keepAlive());
     if (block.upgradeProtocols.hasField() && !block.connectionOptions.upgrade()) {
         return fail(HttpParseError::kInvalidConnection);

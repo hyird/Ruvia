@@ -40,20 +40,20 @@ Task<void> WebSocketConnection<Transport>::closeOwned(::ruvia::WebSocketCloseOpt
         {
             WriteGuard writeGuard(*this, WritePhase::kApplication);
             switch (protocol_.submitClose(options.code, reason)) {
-                case WebSocketServerCloseSubmitStatus::kAccepted:
+                case WebSocketCloseSubmitStatus::kAccepted:
                     flushOutput = true;
                     awaitPeerClose = true;
                     break;
-                case WebSocketServerCloseSubmitStatus::kAlreadyClosing:
+                case WebSocketCloseSubmitStatus::kAlreadyClosing:
                     flushOutput = true;
                     break;
-                case WebSocketServerCloseSubmitStatus::kClosed:
+                case WebSocketCloseSubmitStatus::kClosed:
                     break;
-                case WebSocketServerCloseSubmitStatus::kInvalidCode:
+                case WebSocketCloseSubmitStatus::kInvalidCode:
                     throw std::invalid_argument("invalid websocket close code");
-                case WebSocketServerCloseSubmitStatus::kInvalidReason:
+                case WebSocketCloseSubmitStatus::kInvalidReason:
                     throw std::invalid_argument("invalid websocket close reason");
-                case WebSocketServerCloseSubmitStatus::kReasonTooLarge:
+                case WebSocketCloseSubmitStatus::kReasonTooLarge:
                     throw std::invalid_argument("websocket close reason is too large");
             }
             if (flushOutput) {
@@ -135,17 +135,17 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeFrameNow(
     WebSocketOpcode opcode, std::string_view payload, bool compress) {
     switch (protocol_.submitFrame(opcode, payload, compress)) {
-        case WebSocketServerFrameSubmitStatus::kAccepted:
+        case WebSocketFrameSubmitStatus::kAccepted:
             break;
-        case WebSocketServerFrameSubmitStatus::kNotOpen:
+        case WebSocketFrameSubmitStatus::kNotOpen:
             co_return;
-        case WebSocketServerFrameSubmitStatus::kInvalidOpcode:
+        case WebSocketFrameSubmitStatus::kInvalidOpcode:
             throw std::logic_error("invalid outbound websocket opcode");
-        case WebSocketServerFrameSubmitStatus::kMessageTooLarge:
+        case WebSocketFrameSubmitStatus::kMessageTooLarge:
             throw std::invalid_argument("websocket message is too large");
-        case WebSocketServerFrameSubmitStatus::kInvalidTextPayload:
+        case WebSocketFrameSubmitStatus::kInvalidTextPayload:
             throw std::invalid_argument("websocket text payload is not valid UTF-8");
-        case WebSocketServerFrameSubmitStatus::kControlFrameTooLarge:
+        case WebSocketFrameSubmitStatus::kControlFrameTooLarge:
             throw std::invalid_argument("websocket control frame is too large");
     }
     co_await flushProtocolOutputNow();
@@ -163,7 +163,7 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
     for (;;) {
         const auto plan = protocol_.outputPlan();
         const auto disposition = plan.disposition();
-        if (plan.bytes().empty() && disposition == WebSocketServerTransportDisposition::kKeepOpen) {
+        if (plan.bytes().empty() && disposition == WebSocketTransportDisposition::kKeepOpen) {
             co_return;
         }
         const auto ec = co_await transport_.writeBytes(plan.bytes(), disposition);
@@ -172,11 +172,11 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
             (void)protocol_.abort();
             throw std::system_error(ec, "failed to write websocket bytes");
         }
-        if (protocol_.consumeOutput(plan.bytes().size()) != WebSocketServerOutputConsumeStatus::kDrained) {
+        if (protocol_.consumeOutput(plan.bytes().size()) != WebSocketOutputConsumeStatus::kDrained) {
             std::terminate();
         }
         scannerEntry_.touch();
-        if (disposition == WebSocketServerTransportDisposition::kEndTransport) {
+        if (disposition == WebSocketTransportDisposition::kEndTransport) {
             protocol_.commitTransportEnd();
             co_return;
         }
@@ -187,7 +187,7 @@ template <typename Transport>
 void WebSocketConnection<Transport>::abortTransport(bool forceTransport) noexcept {
     livenessState_ = WebSocketLivenessIdle{};
     const auto disposition = protocol_.abort();
-    if (forceTransport || disposition == WebSocketServerAbortDisposition::kAbortTransport) {
+    if (forceTransport || disposition == WebSocketAbortDisposition::kAbortTransport) {
         transport_.abort();
         notifyWriteIdle();
     }

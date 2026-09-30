@@ -200,6 +200,25 @@ void recordAssignment(void* object,
 
 }  // namespace
 
+RUVIA_TEST(network_target_requires_a_bound_submission_view) {
+    asio::io_context worker;
+    ruvia::WorkerRuntimeContext workerRuntime(worker, 1);
+    TargetState target{.context = &worker};
+    const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
+    const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
+        {}, &target, available, receive}};
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        ruvia::detail::ServerNetworkRuntime network(listeners, targets);
+    }));
+
+    const auto submission = workerRuntime.submission();
+    workerRuntime.close();
+    const std::array closedTargets{ruvia::detail::ServerNetworkRuntime::Target{
+        submission, &target, available, receive}};
+    ruvia::detail::ServerNetworkRuntime network(listeners, closedTargets);
+    RUVIA_CHECK(!submission.accepting());
+}
+
 RUVIA_TEST(network_assigns_native_socket_and_performs_worker_io) {
     using namespace std::chrono_literals;
     asio::io_context worker;
@@ -208,7 +227,7 @@ RUVIA_TEST(network_assigns_native_socket_and_performs_worker_io) {
     std::thread workerThread([&] { workerRuntime.run(); });
     TargetState target{.context = &worker};
     const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
-        &workerRuntime.handle(), &target, available, receive}};
+        workerRuntime.submission(), &target, available, receive}};
     const std::array listeners{
         Listener({asio::ip::address_v4::loopback(), 0}),
         Listener({asio::ip::address_v4::loopback(), 0})};
@@ -326,7 +345,7 @@ RUVIA_TEST(network_rejected_worker_closes_native_ticket) {
     workerRuntime.close();
     TargetState target{.context = &worker};
     const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
-        &workerRuntime.handle(), &target, available, receive}};
+        workerRuntime.submission(), &target, available, receive}};
     const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
     ruvia::detail::ServerNetworkRuntime network(listeners, targets);
     network.prepare();
@@ -343,6 +362,71 @@ RUVIA_TEST(network_rejected_worker_closes_native_ticket) {
     RUVIA_CHECK(static_cast<bool>(error));
     network.stop();
     network.join();
+}
+
+RUVIA_TEST(network_queue_full_drops_accepted_ticket) {
+    using namespace std::chrono_literals;
+    asio::io_context worker;
+    ruvia::WorkerRuntimeContext workerRuntime(worker, 1);
+    auto workerGuard = asio::make_work_guard(worker);
+    std::thread workerThread([&] { workerRuntime.run(); });
+
+    std::mutex gateMutex;
+    std::condition_variable gateCondition;
+    bool entered = false;
+    bool release = false;
+    RUVIA_CHECK(workerRuntime.handle().post([&] {
+                                          std::unique_lock lock(gateMutex);
+                                          entered = true;
+                                          gateCondition.notify_one();
+                                          gateCondition.wait(lock, [&] { return release; });
+                                      })
+            .accepted());
+    {
+        std::unique_lock lock(gateMutex);
+        RUVIA_CHECK(gateCondition.wait_for(lock, 2s, [&] { return entered; }));
+    }
+    RUVIA_CHECK(workerRuntime.handle().post([] {}).accepted());
+
+    TargetState target{.context = &worker};
+    const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
+        workerRuntime.submission(), &target, available, receive}};
+    const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
+    ruvia::detail::ServerNetworkRuntime network(listeners, targets);
+    network.prepare();
+    network.launch();
+    network.waitUntilReady();
+    network.requestServe();
+    RUVIA_CHECK(network.waitUntilServing());
+
+    asio::io_context clientContext;
+    asio::ip::tcp::socket client(clientContext);
+    client.connect(network.localEndpoint(0));
+    client.non_blocking(true);
+    std::array<char, 1> byte{};
+    asio::error_code error;
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (std::chrono::steady_clock::now() < deadline) {
+        (void)client.read_some(asio::buffer(byte), error);
+        if (error == asio::error::eof || error == asio::error::connection_reset) {
+            break;
+        }
+        error.clear();
+        std::this_thread::sleep_for(1ms);
+    }
+    RUVIA_CHECK(target.availabilityChecks.load(std::memory_order_relaxed) != 0);
+    RUVIA_CHECK(error == asio::error::eof || error == asio::error::connection_reset);
+
+    network.stop();
+    network.join();
+    {
+        std::lock_guard lock(gateMutex);
+        release = true;
+    }
+    gateCondition.notify_one();
+    workerRuntime.close();
+    workerGuard.reset();
+    workerThread.join();
 }
 
 RUVIA_TEST(network_worker_stop_retires_queued_ticket) {
@@ -369,7 +453,7 @@ RUVIA_TEST(network_worker_stop_retires_queued_ticket) {
 
     TargetState target{.context = &worker};
     const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
-        &workerRuntime.handle(), &target, available, receive}};
+        workerRuntime.submission(), &target, available, receive}};
     const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
     ruvia::detail::ServerNetworkRuntime network(listeners, targets);
     network.prepare();
@@ -459,9 +543,9 @@ RUVIA_TEST(network_round_robins_across_available_workers) {
     }
     const std::array targets{
         ruvia::detail::ServerNetworkRuntime::Target{
-            &first.runtime.handle(), &firstState, assignmentAvailable, recordAssignment},
+            first.runtime.submission(), &firstState, assignmentAvailable, recordAssignment},
         ruvia::detail::ServerNetworkRuntime::Target{
-            &second.runtime.handle(), &secondState, assignmentAvailable, recordAssignment}};
+            second.runtime.submission(), &secondState, assignmentAvailable, recordAssignment}};
     const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
     ruvia::detail::ServerNetworkRuntime network(listeners, targets);
     network.prepare();
@@ -562,7 +646,7 @@ RUVIA_TEST(app_worker_remains_alive_until_network_quiesces_and_finalizes) {
     }
 
     const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
-        &worker.worker(), &worker, webWorkerAvailable, webWorkerAccept}};
+        worker.networkSubmission(), &worker, webWorkerAvailable, webWorkerAccept}};
     ruvia::detail::ServerNetworkRuntime network(configuration.listeners(), targets);
     network.prepare();
     network.launch();
@@ -647,7 +731,7 @@ RUVIA_TEST(network_stop_closes_listener_with_accept_pending) {
     std::thread workerThread([&] { workerRuntime.run(); });
     TargetState target{.context = &worker};
     const std::array targets{ruvia::detail::ServerNetworkRuntime::Target{
-        &workerRuntime.handle(), &target, available, receive}};
+        workerRuntime.submission(), &target, available, receive}};
     const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
     ruvia::detail::ServerNetworkRuntime network(listeners, targets);
     network.prepare();

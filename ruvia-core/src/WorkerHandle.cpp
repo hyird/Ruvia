@@ -71,6 +71,30 @@ void detail::WorkerHandleAccess::registerShutdownListener(
     dispatcher->registerShutdownListener(listener);
 }
 
+void detail::WorkerHandleAccess::whenShutdownNotificationsComplete(
+    const WorkerHandle& worker, MoveOnlyFunction<void()> callback) {
+    const auto& dispatcher = worker.dispatcher_;
+    if (!dispatcher) {
+        throw std::runtime_error("cannot observe shutdown notifications on a stopped worker");
+    }
+    dispatcher->whenShutdownNotificationsComplete(std::move(callback));
+}
+
+void detail::WorkerHandleAccess::whenIdle(
+    const WorkerHandle& worker, MoveOnlyFunction<void()> callback) {
+    const auto& dispatcher = worker.dispatcher_;
+    if (!dispatcher) {
+        throw std::runtime_error("cannot observe idleness on a stopped worker");
+    }
+    dispatcher->whenIdle(std::move(callback));
+}
+
+void detail::WorkerHandleAccess::waitForReservations(const WorkerHandle& worker) noexcept {
+    if (worker.dispatcher_) {
+        worker.dispatcher_->waitForReservations();
+    }
+}
+
 void detail::WorkerHandleAccess::scheduleTimer(const WorkerHandle& worker,
     WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline,
     MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {

@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/HpackProtocolTypes.h"
 
 namespace ruvia::detail {
 
@@ -12,10 +12,10 @@ enum class HeaderDecodeStatus : std::uint8_t { kOk,
 
 [[nodiscard]] inline HeaderDecodeStatus http2ClassifyHeaderDecodeResult(
     const HpackDecodeResult& result) noexcept {
-    if (result.decoded() != nullptr) {
+    if (result.decoded()) {
         return HeaderDecodeStatus::kOk;
     }
-    return result.failure()->error() == HpackDecodeError::kCallbackRejected
+    return result.error() == HpackDecodeError::kCallbackRejected
                ? HeaderDecodeStatus::kProtocolError
                : HeaderDecodeStatus::kCompressionError;
 }

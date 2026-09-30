@@ -21,11 +21,11 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool hasFormEncoding(std::string_view value) noexcept {
-    return hasUrlEncoding(value, UrlDecodeMode::kForm);
+    return ruvia::hasUrlEncoding(value, UrlDecodeMode::kForm);
 }
 
 [[nodiscard]] inline bool validateFormEncoding(std::string_view body) noexcept {
-    return validateUrlEncoding(body);
+    return ruvia::validateUrlEncoding(body);
 }
 
 enum class FormValueEncoding : std::uint8_t { kUrlEncoded,
@@ -82,7 +82,7 @@ template <typename T>
     auto decoded = input;
     if (encoding == FormValueEncoding::kUrlEncoded && hasFormEncoding(input)) {
         decodedStorage =
-            decodeUrlComponent(input, {.mode = UrlDecodeMode::kForm, .resource = resource});
+            ruvia::decodeUrlComponent(input, {.mode = UrlDecodeMode::kForm, .resource = resource});
         if (!decodedStorage.has_value()) {
             return std::nullopt;
         }

@@ -62,7 +62,7 @@ public:
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(std::string_view bytes,
-        WebSocketServerTransportDisposition disposition) {
+        WebSocketTransportDisposition disposition) {
         return dispatch_.writeTunnel(bytes, disposition);
     }
 
@@ -770,7 +770,7 @@ Task<WsTransportReadResult> Http3BufferedRequestDispatch::readTunnel(
 }
 
 Task<std::error_code> Http3BufferedRequestDispatch::writeTunnel(
-    std::string_view bytes, WebSocketServerTransportDisposition disposition) {
+    std::string_view bytes, WebSocketTransportDisposition disposition) {
     if (!onWorker() || !tunnelMode_ || tunnelOutputEnded_) {
         co_return std::make_error_code(std::errc::operation_not_permitted);
     }
@@ -809,7 +809,7 @@ Task<std::error_code> Http3BufferedRequestDispatch::writeTunnel(
         }
         offset += count;
     }
-    if (disposition == WebSocketServerTransportDisposition::kEndTransport) {
+    if (disposition == WebSocketTransportDisposition::kEndTransport) {
         tunnelFinPending_ = true;
         notifyTunnelOutput();
         while (!tunnelOutputEnded_) {

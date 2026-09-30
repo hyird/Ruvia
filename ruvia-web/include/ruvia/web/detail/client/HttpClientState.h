@@ -43,7 +43,8 @@ private:
     };
 
     [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<HttpClientState> state);
+    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<HttpClientState> state,
+        ClientCloseState::ObservationMode mode);
     void requireOpenOnWorker() const;
     void startCloseOnWorker() noexcept;
     [[nodiscard]] Task<void> closeOnWorker();

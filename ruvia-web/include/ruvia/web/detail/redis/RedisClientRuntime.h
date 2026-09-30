@@ -3,6 +3,7 @@
 #include <memory>
 #include <memory_resource>
 
+#include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/memory/PmrObject.h"
@@ -31,6 +32,7 @@ public:
     [[nodiscard]] Task<void> connect();
     void closeNow() noexcept;
     [[nodiscard]] RedisHandle handle(ScopedOperationScope& scope) const;
+    [[nodiscard]] RedisHandle handle(ScopedOperationScope& scope, OperationOptions options) const;
 
 private:
     RedisConfigStorage config_;

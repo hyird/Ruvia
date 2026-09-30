@@ -52,7 +52,7 @@ std::optional<std::string_view> HttpRequest::header(std::string_view name) const
 std::optional<std::string_view> HttpRequest::lastRawQueryValue(
     std::string_view rawName) const noexcept {
     std::optional<std::string_view> result;
-    (void)detail::visitUrlEncodedPairs(
+    (void)visitUrlEncodedPairs(
         queryString_, [&](std::string_view name, std::string_view value) noexcept {
             if (name == rawName) {
                 result = value;

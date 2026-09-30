@@ -56,15 +56,23 @@ public:
     [[nodiscard]] bool isCurrent() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
 
+    // A retired pool loop or attachment is invalid; accessing its context or
+    // obtaining a fresh executor then throws std::logic_error. Previously
+    // obtained executors must not outlive the loop's physical context storage.
     [[nodiscard]] asio::io_context& ioContext() const&;
     asio::io_context& ioContext() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
     [[nodiscard]] WorkerHandle handle() const noexcept;
 
+    // Reports a terminal runtime failure without throwing on the caller's
+    // thread. Pool owners retain the first failure for join(); attachments
+    // route it to the existing unhandled-failure diagnostic.
+    void reportFailure(std::exception_ptr failure) const noexcept;
+
     template <typename Fn>
         requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return handle().post(std::forward<Fn>(fn));
+        return dispatchHandle().post(std::forward<Fn>(fn));
     }
 
     // Starts one lazy Task on this loop and returns its structured completion
@@ -74,6 +82,10 @@ public:
     template <typename T>
         requires detail::AsioTaskResult<T>
     [[nodiscard]] RootTask<T> start(Task<T> task) const {
+        auto retirementLease = acquireRootLease();
+        if (!retirementLease) {
+            throw std::runtime_error("event loop is stopping");
+        }
         auto completion = std::make_shared<detail::RootTaskState<T>>(handle(), failureSink());
         const auto boundExecutor = executor();
         // drain() destroys remaining mailbox closures without invoking them when
@@ -101,19 +113,25 @@ public:
             }
         };
         auto posted = post([task = std::move(task), completion, boundExecutor,
+                               retirementLease = std::move(retirementLease),
                                launch = LaunchGuard(completion)]() mutable {
             try {
                 detail::asyncStartTask(std::move(task),
                     asio::bind_executor(boundExecutor,
-                        [completion](detail::TaskCompletionResult<T> result) mutable {
-                            if (const auto* failure = result.failure()) {
-                                completion->completeFailure(failure->exception());
-                                return;
-                            }
-                            if constexpr (std::is_void_v<T>) {
-                                completion->completeValue();
-                            } else {
-                                completion->completeValue(std::move(*result.success()).takeValue());
+                        [completion, retirementLease](detail::TaskCompletionResult<T> result) mutable {
+                            try {
+                                if (const auto* failure = result.failure()) {
+                                    completion->completeFailure(failure->exception());
+                                    return;
+                                }
+                                if constexpr (std::is_void_v<T>) {
+                                    completion->completeValue();
+                                } else {
+                                    completion->completeValue(
+                                        std::move(*result.success()).takeValue());
+                                }
+                            } catch (...) {
+                                completion->completeFailure(std::current_exception());
                             }
                         }));
                 launch.release();
@@ -131,17 +149,26 @@ public:
         return RootTask<T>(std::move(completion));
     }
 
+    // Stop cleanup is asynchronous and joined before runtime retirement. The
+    // callable owner remains address-stable until its returned Task and
+    // completion handler have both finished; resetting the registration only
+    // unregisters cleanup that has not started.
     template <typename Fn>
-        requires detail::MoveOnlyFunctionTarget<void, Fn>
+        requires std::invocable<Fn&> &&
+                 std::same_as<std::invoke_result_t<Fn&>, Task<void>> &&
+                 std::move_constructible<std::decay_t<Fn>>
     [[nodiscard]] EventLoopStopRegistration onStop(Fn&& fn) const {
-        return registerStopCallback(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
+        return registerStopCallback(
+            MoveOnlyFunction<Task<void>()>(std::forward<Fn>(fn)));
     }
 
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
+    [[nodiscard]] const WorkerHandle& dispatchHandle() const noexcept;
     [[nodiscard]] EventLoopStopRegistration registerStopCallback(
-        MoveOnlyFunction<void()> callback) const;
+        MoveOnlyFunction<Task<void>()> callback) const;
     [[nodiscard]] detail::EventLoopFailureSink failureSink() const;
+    [[nodiscard]] std::shared_ptr<void> acquireRootLease() const;
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;

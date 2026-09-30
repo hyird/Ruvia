@@ -309,7 +309,7 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     Collector fields;
     HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto decodeResult = decoder.decode(block, &fields, &collect);
-    RUVIA_CHECK(decodeResult.decoded() != nullptr);
+    RUVIA_CHECK(decodeResult.decoded());
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-extensions",
@@ -332,7 +332,7 @@ RUVIA_TEST(websocket_h2_handshake_encodes_owned_cookies_and_application_date) {
     Collector decoded;
     HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(block, &decoded, &collect);
-    RUVIA_CHECK(result.decoded() != nullptr);
+    RUVIA_CHECK(result.decoded());
     RUVIA_CHECK(hasHeader(decoded, ":status", "200"));
     RUVIA_CHECK(hasHeader(decoded, "set-cookie", "sid=0123456789abcdef; HttpOnly"));
     RUVIA_CHECK(hasHeader(decoded, "set-cookie", "theme=dark"));

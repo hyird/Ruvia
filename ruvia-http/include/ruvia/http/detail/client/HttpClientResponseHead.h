@@ -5,6 +5,7 @@
 #include <expected>
 #include <string_view>
 
+#include "ruvia/http/Http1ClientExchangeState.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"

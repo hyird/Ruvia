@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/HttpClient.h"
+
 namespace ruvia::detail {
 
 struct HttpClientRequestStorageAccess;
@@ -59,6 +61,20 @@ private:
     std::pmr::vector<Header> headers_;
     std::pmr::string body_;
     bool hasBody_{false};
+};
+
+struct HttpClientRequestStorageAccess final {
+    [[nodiscard]] static HttpClientRequestView view(
+        const HttpClientRequestStorage& request, std::pmr::vector<HttpHeaderView>& headers);
+    [[nodiscard]] static const auto& headers(const HttpClientRequestStorage& request) noexcept {
+        return request.headers_;
+    }
+    [[nodiscard]] static auto& headers(HttpClientRequestStorage& request) noexcept {
+        return request.headers_;
+    }
+    [[nodiscard]] static bool hasBody(const HttpClientRequestStorage& request) noexcept {
+        return request.hasBody_;
+    }
 };
 
 }  // namespace ruvia::detail

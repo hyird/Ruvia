@@ -31,7 +31,7 @@ namespace ruvia::detail {
 // policy, which supplies four transport-specific operations:
 //   asio-executor executor() const;
 //   Task<WsTransportReadResult> readMore(std::pmr::string& buffer);
-//   Task<std::error_code> writeBytes(std::string_view, WebSocketServerTransportDisposition);
+//   Task<std::error_code> writeBytes(std::string_view, WebSocketTransportDisposition);
 //   void abort() noexcept;  // abort this WebSocket transport, not an unrelated h2 stream
 template <typename Transport>
 class WebSocketConnection final {

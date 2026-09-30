@@ -57,6 +57,15 @@ RedisHandle::RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& bloc
       blockingPool_(&blockingPool),
       resource_(detail::pmrResourceOrDefault(resource)) {}
 
+RedisHandle::RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
+    std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
+    OperationOptions options) noexcept
+    : detail::ScopedCapabilityNode(operationScope, &RedisHandle::expireCapability),
+      pool_(&generalPool),
+      blockingPool_(&blockingPool),
+      resource_(detail::pmrResourceOrDefault(resource)),
+      operationOptions_(std::move(options)) {}
+
 RedisHandle::RedisHandle(const RedisHandle& other) noexcept
     : detail::ScopedCapabilityNode(other),
       pool_(other.pool_),

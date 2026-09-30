@@ -1,13 +1,17 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -21,6 +25,8 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/TaskScope.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -29,6 +35,244 @@
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 
 namespace {
+
+class CountingResource final : public std::pmr::memory_resource {
+public:
+    std::size_t allocations{};
+    std::size_t deallocations{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocations;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        ++deallocations;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+struct PostPayload final {
+    explicit PostPayload(std::pmr::memory_resource* resource)
+        : bytes(resource) {
+        bytes.resize(4096, 'x');
+    }
+    PostPayload(PostPayload&&) noexcept = default;
+    PostPayload(const PostPayload&) = delete;
+    std::pmr::vector<char> bytes;
+};
+
+struct ReentrantPostState final {
+    ruvia::EventLoop* loop;
+    std::unique_ptr<ruvia::EventLoopPool>* pool;
+    std::promise<void>* completion;
+    std::atomic_bool* payloadValid;
+
+    void shutDownLoop() noexcept {
+        *loop = ruvia::EventLoop{};
+        pool->reset();
+    }
+};
+
+struct InlineReentrantPostCallable final {
+    explicit InlineReentrantPostCallable(ReentrantPostState& state) noexcept
+        : state(&state) {
+        payload.fill('x');
+    }
+    InlineReentrantPostCallable(const InlineReentrantPostCallable& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->shutDownLoop();
+    }
+    InlineReentrantPostCallable(InlineReentrantPostCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->shutDownLoop();
+    }
+    ~InlineReentrantPostCallable() {
+        payload.fill('\0');
+    }
+
+    void operator()() {
+        state->payloadValid->store(payload.size() == 16 && payload.front() == 'x' &&
+                                       payload.back() == 'x',
+            std::memory_order_release);
+        state->completion->set_value();
+    }
+
+    ReentrantPostState* state;
+    std::array<char, 16> payload{};
+};
+
+struct HeapReentrantPostCallable final {
+    explicit HeapReentrantPostCallable(ReentrantPostState& state,
+        std::pmr::memory_resource* resource)
+        : state(&state),
+          payload(resource) {
+        payload.resize(4096, 'x');
+    }
+    HeapReentrantPostCallable(const HeapReentrantPostCallable& other)
+        : state(other.state),
+          payload(other.payload, other.payload.get_allocator().resource()) {
+        state->shutDownLoop();
+    }
+    HeapReentrantPostCallable(HeapReentrantPostCallable&& other) noexcept
+        : state(other.state),
+          payload(std::move(other.payload)) {
+        state->shutDownLoop();
+    }
+    ~HeapReentrantPostCallable() = default;
+
+    void operator()() {
+        state->payloadValid->store(payload.size() == 4096 && payload.front() == 'x' &&
+                                       payload.back() == 'x',
+            std::memory_order_release);
+        state->completion->set_value();
+    }
+
+    ReentrantPostState* state;
+    std::pmr::vector<char> payload;
+};
+
+struct ReentrantWorkerPostState final {
+    std::optional<ruvia::WorkerHandle> worker;
+    std::unique_ptr<ruvia::EventLoopPool> pool;
+    bool retired{false};
+    bool payloadValid{false};
+    bool eraseOnDestroy{false};
+
+    void retire() noexcept {
+        if (retired) {
+            return;
+        }
+        retired = true;
+        worker.reset();
+        pool.reset();
+    }
+};
+
+struct InlineWorkerCallable final {
+    explicit InlineWorkerCallable(ReentrantWorkerPostState& state) noexcept
+        : state(&state) {
+        payload.fill('i');
+    }
+    InlineWorkerCallable(const InlineWorkerCallable&) = delete;
+    InlineWorkerCallable(InlineWorkerCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->retire();
+    }
+    void operator()() {
+        state->payloadValid = payload.front() == 'i' && payload.back() == 'i';
+    }
+    ReentrantWorkerPostState* state;
+    std::array<char, 16> payload{};
+};
+
+struct HeapWorkerCallable final {
+    explicit HeapWorkerCallable(ReentrantWorkerPostState& state, std::pmr::memory_resource* resource)
+        : state(&state),
+          payload(resource) {
+        payload.resize(4096, 'h');
+    }
+    HeapWorkerCallable(const HeapWorkerCallable& other)
+        : state(other.state),
+          payload(other.payload, other.payload.get_allocator().resource()) {
+        state->retire();
+    }
+    HeapWorkerCallable(HeapWorkerCallable&&) noexcept = default;
+    void operator()() {
+        state->payloadValid = payload.size() == 4096 && payload.front() == 'h' &&
+                              payload.back() == 'h';
+    }
+    ReentrantWorkerPostState* state;
+    std::pmr::vector<char> payload;
+};
+
+struct ErasedWorkerCallable final {
+    explicit ErasedWorkerCallable(ReentrantWorkerPostState& state) noexcept
+        : state(&state) {
+        payload.fill('e');
+    }
+    ErasedWorkerCallable(const ErasedWorkerCallable&) = delete;
+    ErasedWorkerCallable(ErasedWorkerCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {}
+    ~ErasedWorkerCallable() {
+        if (state->eraseOnDestroy) {
+            state->retire();
+        }
+    }
+    void operator()() {
+        state->payloadValid = payload.front() == 'e' && payload.back() == 'e';
+    }
+    ReentrantWorkerPostState* state;
+    std::array<char, 16> payload{};
+};
+
+bool testWorkerHandleCallableLifetime() {
+    const auto runRejected = [](ruvia::PostResult rejected, bool& payloadValid) {
+        if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr) {
+            return false;
+        }
+        auto task = std::move(rejected).takeRejected();
+        ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+        recovery.start();
+        recovery.join();
+        return payloadValid;
+    };
+
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        std::optional<InlineWorkerCallable> input;
+        input.emplace(state);
+        auto rejected = state.worker->post(std::move(*input));
+        if (!state.retired || state.worker || state.pool || !runRejected(std::move(rejected), state.payloadValid)) {
+            return false;
+        }
+    }
+
+    CountingResource resource;
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        std::optional<HeapWorkerCallable> input;
+        input.emplace(state, &resource);
+        auto rejected = state.worker->post(*input);
+        input.reset();
+        if (!state.retired || state.worker || state.pool ||
+            !runRejected(std::move(rejected), state.payloadValid) ||
+            resource.allocations != resource.deallocations) {
+            return false;
+        }
+    }
+
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        ruvia::MoveOnlyFunction<void()> input{ErasedWorkerCallable(state)};
+        state.eraseOnDestroy = true;
+        auto rejected = state.worker->post(std::move(input));
+        if (!state.retired || state.worker || state.pool ||
+            !runRejected(std::move(rejected), state.payloadValid)) {
+            return false;
+        }
+    }
+    return resource.allocations == resource.deallocations;
+}
 
 struct MailboxDestructorState final {
     const ruvia::WorkerHandle* worker{nullptr};
@@ -192,6 +436,466 @@ bool testMailboxFactoryCanFinishAfterDetach() {
            destroyed.load() == 1;
 }
 
+bool testEventLoopPostBorrowAndRejectedCallableOwnership() {
+    constexpr std::size_t kRepeatedPosts = 64;
+    CountingResource resource;
+    std::atomic_bool invalidPayloadValid{false};
+    std::atomic_size_t repeatedValid{0};
+    std::atomic_size_t repeatedInvalid{0};
+    std::promise<void> repeatedCompleted;
+    auto repeatedCompletion = repeatedCompleted.get_future();
+    ruvia::EventLoopPool accepting({.loopCount = 1, .mailboxCapacity = kRepeatedPosts + 1});
+    const auto loop = accepting.loop(0);
+
+    auto invalid = ruvia::EventLoop{}.post(
+        [payload = PostPayload(&resource), &invalidPayloadValid]() mutable {
+            invalidPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                                          payload.bytes.back() == 'x',
+                std::memory_order_release);
+        });
+    if (invalid != ruvia::PostStatus::kWorkerStopping || invalid.rejected() == nullptr ||
+        resource.allocations == resource.deallocations) {
+        return false;
+    }
+    auto invalidTask = std::move(invalid).takeRejected();
+    if (resource.allocations == resource.deallocations ||
+        loop.post(std::move(invalidTask)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < kRepeatedPosts; ++i) {
+        auto posted = accepting.loop(0).post([payload = PostPayload(&resource), i, &repeatedValid,
+                                                 &repeatedInvalid, &repeatedCompleted]() mutable {
+            if (payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                payload.bytes.back() == 'x') {
+                repeatedValid.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                repeatedInvalid.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (i + 1 == kRepeatedPosts) {
+                repeatedCompleted.set_value();
+            }
+        });
+        if (!posted.accepted()) {
+            return false;
+        }
+    }
+    accepting.start();
+    repeatedCompletion.wait();
+    accepting.stop();
+    accepting.join();
+    if (!invalidPayloadValid.load(std::memory_order_acquire) ||
+        repeatedValid.load(std::memory_order_relaxed) != kRepeatedPosts ||
+        repeatedInvalid.load(std::memory_order_relaxed) != 0 ||
+        resource.allocations != resource.deallocations) {
+        return false;
+    }
+
+    ruvia::EventLoop closed;
+    {
+        ruvia::EventLoopPool stopped({.loopCount = 1, .mailboxCapacity = 1});
+        closed = stopped.loop(0);
+        stopped.join();
+    }
+    std::atomic_bool closedPayloadValid{false};
+    auto rejected = closed.post(
+        [payload = PostPayload(&resource), &closedPayloadValid]() mutable {
+            closedPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                                         payload.bytes.back() == 'x',
+                std::memory_order_release);
+        });
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        resource.allocations == resource.deallocations) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    if (resource.allocations == resource.deallocations) {
+        return false;
+    }
+    std::promise<void> recovered;
+    auto recoveredFuture = recovered.get_future();
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    auto recoveredPost = recovery.loop(0).post(
+        [task = std::move(retry), &recovered]() mutable {
+            task();
+            recovered.set_value();
+        });
+    if (!recoveredPost.accepted()) {
+        return false;
+    }
+    recovery.start();
+    recoveredFuture.wait();
+    recovery.stop();
+    recovery.join();
+    return closedPayloadValid.load(std::memory_order_acquire) &&
+           resource.allocations == resource.deallocations;
+}
+
+bool testEventLoopPostProtectsReentrantInlineMove() {
+    std::promise<void> completed;
+    auto completion = completed.get_future();
+    std::atomic_bool payloadValid{false};
+    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
+        ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+    auto loop = originalPool->loop(0);
+    ReentrantPostState state{.loop = &loop,
+        .pool = &originalPool,
+        .completion = &completed,
+        .payloadValid = &payloadValid};
+    std::optional<InlineReentrantPostCallable> input;
+    input.emplace(state);
+
+    auto rejected = loop.post(std::move(*input));
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        originalPool != nullptr || loop.valid()) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    input.reset();
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    recovery.start();
+    if (completion.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        recovery.stop();
+        recovery.join();
+        return false;
+    }
+    recovery.stop();
+    recovery.join();
+    return payloadValid.load(std::memory_order_acquire);
+}
+
+bool testEventLoopPostProtectsReentrantHeapCopy() {
+    CountingResource resource;
+    std::promise<void> completed;
+    auto completion = completed.get_future();
+    std::atomic_bool payloadValid{false};
+    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
+        ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+    auto loop = originalPool->loop(0);
+    ReentrantPostState state{.loop = &loop,
+        .pool = &originalPool,
+        .completion = &completed,
+        .payloadValid = &payloadValid};
+    std::optional<HeapReentrantPostCallable> input;
+    input.emplace(state, &resource);
+
+    auto rejected = loop.post(*input);
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        originalPool != nullptr || loop.valid()) {
+        return false;
+    }
+    input.reset();
+    if (resource.allocations != resource.deallocations + 1) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    if (resource.allocations != resource.deallocations + 1) {
+        return false;
+    }
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    recovery.start();
+    if (completion.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        recovery.stop();
+        recovery.join();
+        return false;
+    }
+    recovery.stop();
+    recovery.join();
+    return payloadValid.load(std::memory_order_acquire) &&
+           resource.allocations == resource.deallocations;
+}
+
+bool testWorkerSubmissionViewLifecycleAndRejection() {
+    struct ThrowOnCopy final {
+        explicit ThrowOnCopy(std::pmr::memory_resource* resource)
+            : bytes(resource) {
+            bytes.resize(4096, 'c');
+        }
+        ThrowOnCopy(const ThrowOnCopy& other)
+            : bytes(other.bytes, other.bytes.get_allocator().resource()) {
+            throw std::runtime_error("copy failed");
+        }
+        ThrowOnCopy(ThrowOnCopy&&) noexcept = default;
+        void operator()() const {}
+        std::pmr::vector<char> bytes;
+    };
+    struct ThrowOnMove final {
+        explicit ThrowOnMove(std::pmr::memory_resource* resource)
+            : bytes(resource) {
+            bytes.resize(4096, 'm');
+        }
+        ThrowOnMove(ThrowOnMove&& other)
+            : bytes(std::move(other.bytes)) {
+            throw std::runtime_error("move failed");
+        }
+        void operator()() const {}
+        std::pmr::vector<char> bytes;
+    };
+
+    asio::io_context exceptionContext;
+    ruvia::WorkerRuntimeContext exceptionRuntime(exceptionContext, 1);
+    const auto exceptionView = exceptionRuntime.submission();
+    CountingResource exceptionResource;
+    {
+        ThrowOnCopy copyInput(&exceptionResource);
+        ThrowOnMove moveInput(&exceptionResource);
+        bool copyThrew = false;
+        bool moveThrew = false;
+        try {
+            static_cast<void>(exceptionView.post(copyInput));
+        } catch (const std::runtime_error&) {
+            copyThrew = true;
+        }
+        try {
+            static_cast<void>(exceptionView.post(std::move(moveInput)));
+        } catch (const std::runtime_error&) {
+            moveThrew = true;
+        }
+        const auto afterException = exceptionView.post([] {});
+        if (!copyThrew || !moveThrew || !exceptionView.valid() || !exceptionView.accepting() ||
+            afterException != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+    }
+    if (exceptionResource.allocations != exceptionResource.deallocations) {
+        return false;
+    }
+
+    struct ViewReentryState final {
+        std::optional<ruvia::WorkerSubmissionView>* source;
+        ruvia::WorkerRuntimeContext* runtime;
+        bool detach;
+        bool retired{false};
+        bool payloadValid{false};
+        CountingResource* resource;
+
+        void retire() noexcept {
+            if (retired) {
+                return;
+            }
+            retired = true;
+            source->reset();
+            if (detach) {
+                runtime->detach();
+            } else {
+                runtime->close();
+            }
+        }
+    };
+    struct ReentrantViewCallable final {
+        explicit ReentrantViewCallable(ViewReentryState& state)
+            : state(&state),
+              payload(state.resource) {
+            payload.resize(4096, 'v');
+        }
+        ReentrantViewCallable(const ReentrantViewCallable& other)
+            : state(other.state),
+              payload(other.payload, other.payload.get_allocator().resource()) {
+            state->retire();
+        }
+        ReentrantViewCallable(ReentrantViewCallable&& other) noexcept
+            : state(other.state),
+              payload(std::move(other.payload)) {
+            state->retire();
+        }
+        void operator()() {
+            state->payloadValid = payload.size() == 4096 && payload.front() == 'v' &&
+                                  payload.back() == 'v';
+        }
+        ViewReentryState* state;
+        std::pmr::vector<char> payload;
+    };
+
+    const auto exerciseReentry = [](bool detach, bool useCopy) {
+        CountingResource resource;
+        asio::io_context context;
+        ruvia::WorkerRuntimeContext runtime(context, 1);
+        std::optional<ruvia::WorkerSubmissionView> source;
+        source.emplace(runtime.submission());
+        ViewReentryState state{.source = &source, .runtime = &runtime, .detach = detach, .resource = &resource};
+        std::optional<ReentrantViewCallable> input;
+        input.emplace(state);
+        auto rejected = useCopy ? source->post(*input) : source->post(std::move(*input));
+        if (!state.retired || source || !runtime.submission().valid() ||
+            runtime.submission().accepting() || rejected != ruvia::PostStatus::kWorkerStopping ||
+            rejected.rejected() == nullptr) {
+            return false;
+        }
+        auto task = std::move(rejected).takeRejected();
+        ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+        recovery.start();
+        recovery.join();
+        input.reset();
+        return state.payloadValid && resource.allocations == resource.deallocations;
+    };
+    if (!exerciseReentry(false, true) || !exerciseReentry(true, false)) {
+        return false;
+    }
+
+    struct ReservedMoveState final {
+        ruvia::WorkerRuntimeContext* runtime;
+        CountingResource* resource;
+        bool detach;
+        int moves{0};
+        bool reservationObserved{false};
+        bool ran{false};
+    };
+    struct InlineReservedMoveCallable final {
+        explicit InlineReservedMoveCallable(ReservedMoveState& state)
+            : state(&state),
+              payload(static_cast<char*>(state.resource->allocate(16, alignof(char)))) {
+            std::fill_n(payload, 16, 'r');
+        }
+        InlineReservedMoveCallable(InlineReservedMoveCallable&& other) noexcept
+            : state(other.state),
+              payload(std::exchange(other.payload, nullptr)) {
+            // This move transfers the callable into its already reserved node;
+            // detach may cause additional cleanup moves after this point.
+            if (++state->moves == 3) {
+                state->reservationObserved =
+                    state->runtime->submission().post([] {}) == ruvia::PostStatus::kQueueFull;
+                if (state->detach) {
+                    state->runtime->detach();
+                } else {
+                    state->runtime->close();
+                }
+            }
+        }
+        ~InlineReservedMoveCallable() {
+            if (payload != nullptr) {
+                state->resource->deallocate(payload, 16, alignof(char));
+            }
+        }
+        void operator()() {
+            state->ran = payload != nullptr && payload[0] == 'r' && payload[15] == 'r';
+        }
+
+        ReservedMoveState* state;
+        char* payload;
+    };
+    static_assert(sizeof(InlineReservedMoveCallable) <= 3 * sizeof(void*));
+    static_assert(std::is_nothrow_move_constructible_v<InlineReservedMoveCallable>);
+
+    const auto exerciseReservedMove = [](bool detach) {
+        CountingResource resource;
+        asio::io_context context;
+        ruvia::WorkerRuntimeContext runtime(context, 1);
+        ReservedMoveState state{.runtime = &runtime, .resource = &resource, .detach = detach};
+        InlineReservedMoveCallable input(state);
+        const auto submitted = runtime.submission().post(std::move(input));
+        if (submitted != ruvia::PostStatus::kAccepted || !state.reservationObserved ||
+            resource.allocations != 1) {
+            return false;
+        }
+        if (detach) {
+            if (state.ran || resource.deallocations != 1) {
+                return false;
+            }
+        } else {
+            context.run();
+            if (!state.ran || resource.deallocations != 1) {
+                return false;
+            }
+        }
+        return resource.allocations == resource.deallocations;
+    };
+    if (!exerciseReservedMove(false) || !exerciseReservedMove(true)) {
+        return false;
+    }
+
+    constexpr std::size_t kRepeatedPosts = 64;
+    CountingResource resource;
+    asio::io_context context;
+    ruvia::WorkerRuntimeContext runtime(context, kRepeatedPosts + 2);
+    const auto view = runtime.submission();
+    bool acceptedPayloadValid = false;
+    if (!view.valid() || !view.accepting() || view.post([] {}) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    auto accepted = view.post([payload = PostPayload(&resource), &acceptedPayloadValid]() mutable {
+        acceptedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                               payload.bytes.back() == 'x';
+    });
+    if (accepted != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    for (std::size_t index = 0; index < kRepeatedPosts; ++index) {
+        auto posted = view.post([payload = PostPayload(&resource)]() mutable {
+            if (payload.bytes.size() != 4096 || payload.bytes.front() != 'x') {
+                std::terminate();
+            }
+        });
+        if (!posted.accepted()) {
+            return false;
+        }
+    }
+    context.run();
+    if (!acceptedPayloadValid || resource.allocations != resource.deallocations) {
+        return false;
+    }
+
+    asio::io_context fullContext;
+    ruvia::WorkerRuntimeContext fullRuntime(fullContext, 1);
+    const auto fullView = fullRuntime.submission();
+    CountingResource rejectedResource;
+    bool retainedPayloadValid = false;
+    if (fullView.post([] {}) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    auto full = fullView.post([payload = PostPayload(&rejectedResource), &retainedPayloadValid]() mutable {
+        retainedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                               payload.bytes.back() == 'x';
+    });
+    if (full != ruvia::PostStatus::kQueueFull || full.rejected() == nullptr) {
+        return false;
+    }
+    auto retained = std::move(full).takeRejected();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        auto again = fullView.post(std::move(retained));
+        if (again != ruvia::PostStatus::kQueueFull || again.rejected() == nullptr ||
+            rejectedResource.allocations == rejectedResource.deallocations) {
+            return false;
+        }
+        retained = std::move(again).takeRejected();
+    }
+    fullContext.run();
+    fullContext.restart();
+    const auto retried = fullView.post(std::move(retained));
+    if (retried != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    fullContext.run();
+    if (!retainedPayloadValid || rejectedResource.allocations != rejectedResource.deallocations) {
+        return false;
+    }
+
+    asio::io_context closedContext;
+    ruvia::WorkerRuntimeContext closedRuntime(closedContext, 1);
+    auto closedView = closedRuntime.submission();
+    closedRuntime.close();
+    if (!closedView.valid() || closedView.accepting() ||
+        closedView.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+        return false;
+    }
+    closedRuntime.detach();
+    if (!closedView.valid() || closedView.accepting()) {
+        return false;
+    }
+    ruvia::WorkerSubmissionView invalid;
+    return !invalid.valid() && !invalid.accepting() &&
+           invalid.post([] {}) == ruvia::PostStatus::kWorkerStopping && resource.allocations > 0 &&
+           resource.allocations == resource.deallocations;
+}
+
 bool testPostOutcomeInvariantsAndEmptyCallbacks() {
     bool acceptedTakeRejected = false;
     try {
@@ -224,8 +928,9 @@ bool testPostOutcomeInvariantsAndEmptyCallbacks() {
         emptyPost = true;
     }
     bool emptyStopCallback = false;
+    using NullStopCallback = ruvia::MoveOnlyFunction<ruvia::Task<void>()>;
     try {
-        static_cast<void>(loop.onStop(static_cast<NullCallback>(nullptr)));
+        static_cast<void>(loop.onStop(NullStopCallback{}));
     } catch (const std::invalid_argument&) {
         emptyStopCallback = true;
     }
@@ -367,9 +1072,10 @@ bool testDispatchAndAffinity() {
     auto result = completed.get_future();
     std::atomic_bool stopCallbackRan{false};
     std::atomic_bool stopCallbackOnLoop{false};
-    auto stopRegistration = first.onStop([&] {
+    auto stopRegistration = first.onStop([&]() -> ruvia::Task<void> {
         stopCallbackOnLoop = first.isCurrent();
         stopCallbackRan = true;
+        co_return;
     });
     auto moveOnly = std::make_unique<int>(42);
     if (first.post([worker = first, value = std::move(moveOnly),
@@ -458,9 +1164,10 @@ bool testExternalEventLoopAttachment() {
         auto result = completed.get_future();
         std::atomic_bool stopCallbackRan{false};
         std::atomic_bool stopCallbackOnLoop{false};
-        auto stopRegistration = loop.onStop([&] {
+        auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
             stopCallbackOnLoop = loop.isCurrent();
             stopCallbackRan = true;
+            co_return;
         });
         if (loop.post([loop, completed = std::move(completed)]() mutable {
                 completed.set_value(loop.isCurrent());
@@ -482,7 +1189,8 @@ bool testExternalEventLoopAttachment() {
             throw;
         }
         if (!dispatchedOnExternalThread || !stopRegistration.valid() || !stopCallbackRan ||
-            !stopCallbackOnLoop || loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+            !stopCallbackOnLoop || loop.valid() ||
+            loop.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
             return false;
         }
     }
@@ -503,6 +1211,244 @@ bool testExternalEventLoopAttachment() {
     return false;
 }
 
+ruvia::Task<void> finishShutdownCleanup(
+    ruvia::WorkerHandle worker, std::atomic_bool& finished) {
+    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::milliseconds(1)));
+    finished.store(true, std::memory_order_release);
+    co_return;
+}
+
+bool testPoolReportedFailureStopsEveryLoopAndJoinRethrows() {
+    ruvia::EventLoopPool loops({.loopCount = 2, .mailboxCapacity = 4});
+    const auto first = loops.loop(0);
+    const auto second = loops.loop(1);
+    std::atomic_bool firstCleanupFinished{false};
+    std::atomic_bool secondCleanupFinished{false};
+    auto firstCleanup = first.onStop([&]() -> ruvia::Task<void> {
+        co_await finishShutdownCleanup(first.handle(), firstCleanupFinished);
+    });
+    auto secondCleanup = second.onStop([&]() -> ruvia::Task<void> {
+        co_await finishShutdownCleanup(second.handle(), secondCleanupFinished);
+    });
+    std::promise<void> reported;
+    auto reportedResult = reported.get_future();
+    if (first.post([first, &reported] {
+            first.reportFailure(std::make_exception_ptr(std::runtime_error("reported runtime failure")));
+            reported.set_value();
+        }) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    loops.start();
+    if (reportedResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        loops.stop();
+        loops.join();
+        return false;
+    }
+    const bool allClosed = !first.accepting() && !second.accepting();
+    bool originalFailureRethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        originalFailureRethrown = std::string_view(error.what()) == "reported runtime failure";
+    }
+    return firstCleanup.valid() && secondCleanup.valid() && allClosed &&
+           firstCleanupFinished.load(std::memory_order_acquire) &&
+           secondCleanupFinished.load(std::memory_order_acquire) && originalFailureRethrown;
+}
+
+struct FailureReportGate final {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered{false};
+    bool released{false};
+    std::atomic_size_t calls{0};
+};
+
+class GatedFailure final : public std::exception {
+public:
+    explicit GatedFailure(FailureReportGate& gate) noexcept
+        : gate_(gate) {}
+
+    const char* what() const noexcept override {
+        gate_.calls.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock lock(gate_.mutex);
+        gate_.entered = true;
+        gate_.changed.notify_all();
+        gate_.changed.wait(lock, [this] { return gate_.released; });
+        return "gated first pool failure";
+    }
+
+private:
+    FailureReportGate& gate_;
+};
+
+class CountedFailure final : public std::exception {
+public:
+    explicit CountedFailure(std::shared_ptr<std::atomic_size_t> calls) noexcept
+        : calls_(std::move(calls)) {}
+
+    const char* what() const noexcept override {
+        calls_->fetch_add(1, std::memory_order_relaxed);
+        return "handed-off pool failure";
+    }
+
+private:
+    std::shared_ptr<std::atomic_size_t> calls_;
+};
+
+ruvia::Task<void> reportPoolRootFailure(ruvia::EventLoop loop, FailureReportGate& gate) {
+    std::exception_ptr failure;
+    try {
+        throw GatedFailure(gate);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    loop.reportFailure(std::move(failure));
+    co_return;
+}
+
+bool testPoolFailureHandoffDuringDestructorReport() {
+    FailureReportGate gate;
+    auto secondFailureCalls = std::make_shared<std::atomic_size_t>(0);
+    std::exception_ptr secondFailure;
+    try {
+        throw CountedFailure(secondFailureCalls);
+    } catch (...) {
+        secondFailure = std::current_exception();
+    }
+    auto pool = std::make_unique<ruvia::EventLoopPool>(
+        ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = pool->loop(0);
+    auto root = loop.start(reportPoolRootFailure(loop, gate));
+    pool->start();
+    root.wait();
+    root.get();
+
+    std::thread destroyer([&] { pool.reset(); });
+    bool firstReportEntered = false;
+    {
+        std::unique_lock lock(gate.mutex);
+        firstReportEntered = gate.changed.wait_for(
+            lock, std::chrono::seconds(5), [&] { return gate.entered; });
+    }
+    if (firstReportEntered) {
+        std::thread reporter([&] {
+            loop.reportFailure(secondFailure);
+        });
+        reporter.join();
+    }
+    {
+        const std::lock_guard lock(gate.mutex);
+        gate.released = true;
+    }
+    gate.changed.notify_all();
+    destroyer.join();
+
+    return firstReportEntered && !pool && gate.calls.load(std::memory_order_relaxed) == 1 &&
+           secondFailureCalls->load(std::memory_order_relaxed) == 1;
+}
+
+bool testPoolFailureReportWorksAfterMailboxClosure() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
+    const auto loop = loops.loop(0);
+    std::atomic_bool queuedWorkRan{false};
+    if (loop.post([&] { queuedWorkRan.store(true, std::memory_order_release); }) !=
+        ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    loops.stop();
+    loop.reportFailure(std::make_exception_ptr(std::runtime_error("late runtime failure")));
+    bool failureRethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        failureRethrown = std::string_view(error.what()) == "late runtime failure";
+    }
+    return failureRethrown && queuedWorkRan.load(std::memory_order_acquire) && !loop.valid();
+}
+
+bool testAttachmentReportFailureKeepsNativeRunOwnership() {
+    const auto run = [](bool wrappedRun) {
+        asio::io_context ioContext;
+        auto attachment = ruvia::attachEventLoop(ioContext);
+        const auto loop = attachment.loop();
+        std::atomic_bool cleanupFinished{false};
+        auto cleanup = loop.onStop([&]() -> ruvia::Task<void> {
+            co_await finishShutdownCleanup(loop.handle(), cleanupFinished);
+        });
+        bool reportReturned = false;
+        bool unrelatedWorkRan = false;
+        asio::post(ioContext, [&] {
+            loop.reportFailure(std::make_exception_ptr(std::runtime_error("attached report")));
+            reportReturned = true;
+            asio::post(ioContext, [&] { unrelatedWorkRan = true; });
+        });
+        bool nativeRunThrew = false;
+        try {
+            if (wrappedRun) {
+                attachment.run();
+            } else {
+                ioContext.run();
+            }
+        } catch (...) {
+            nativeRunThrew = true;
+        }
+        return cleanup.valid() && reportReturned && unrelatedWorkRan &&
+               cleanupFinished.load(std::memory_order_acquire) && !nativeRunThrew && !loop.valid();
+    };
+    return run(true) && run(false);
+}
+
+ruvia::Task<void> failedAbandonedAttachmentRoot() {
+    throw std::runtime_error("abandoned attachment root failed");
+    co_return;
+}
+
+bool testAbandonedAttachmentRootFailureRetires(bool wrappedRun) {
+    asio::io_context ioContext;
+    auto attachment = ruvia::attachEventLoop(ioContext);
+    const auto loop = attachment.loop();
+    std::atomic_bool unrelatedWorkRan{false};
+    asio::post(ioContext, [&] { unrelatedWorkRan.store(true, std::memory_order_release); });
+    {
+        auto root = loop.start(failedAbandonedAttachmentRoot());
+    }
+
+    if (wrappedRun) {
+        attachment.run();
+    } else {
+        ioContext.run();
+    }
+
+    bool contextAccessRejected = false;
+    try {
+        static_cast<void>(loop.ioContext());
+    } catch (const std::logic_error&) {
+        contextAccessRejected = true;
+    }
+    return unrelatedWorkRan.load(std::memory_order_acquire) && !attachment.valid() &&
+           !loop.valid() && contextAccessRejected;
+}
+
+bool testAttachmentRunFailureRetiresThroughAsyncCleanup() {
+    asio::io_context ioContext;
+    auto attachment = ruvia::attachEventLoop(ioContext);
+    const auto loop = attachment.loop();
+    bool cleanupRan = false;
+    auto cleanup = loop.onStop([&]() -> ruvia::Task<void> {
+        cleanupRan = true;
+        co_return;
+    });
+    asio::post(ioContext, [] { throw std::runtime_error("attached handler failed"); });
+    bool failurePropagated = false;
+    try {
+        attachment.run();
+    } catch (const std::runtime_error& error) {
+        failurePropagated = std::string_view(error.what()) == "attached handler failed";
+    }
+    return cleanup.valid() && cleanupRan && failurePropagated && !loop.valid();
+}
+
 bool testExternalAttachmentRetainsStateUntilContextCleanup() {
     asio::io_context ioContext;
     std::mutex gateMutex;
@@ -515,8 +1461,10 @@ bool testExternalAttachmentRetainsStateUntilContextCleanup() {
 
     {
         auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 4});
-        stopRegistration = attachment.loop().onStop(
-            [&] { stopCallbackRan.store(true, std::memory_order_release); });
+        stopRegistration = attachment.loop().onStop([&]() -> ruvia::Task<void> {
+            stopCallbackRan.store(true, std::memory_order_release);
+            co_return;
+        });
         asio::post(ioContext, [&] {
             {
                 const std::lock_guard lock(gateMutex);
@@ -604,9 +1552,10 @@ bool testFailurePropagation() {
     const auto loop = loops.loop(0);
     std::atomic_bool stopCallbackRan{false};
     std::atomic_bool stopCallbackOnLoop{false};
-    auto stopRegistration = loop.onStop([&] {
+    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
         stopCallbackOnLoop = loop.isCurrent();
         stopCallbackRan = true;
+        co_return;
     });
     struct Listener final : ruvia::detail::WorkerShutdownListener {
         void workerStopping() noexcept override {
@@ -639,17 +1588,19 @@ bool testJoinBeforeStartDrainsOnOwners() {
     std::atomic_bool tasksOnOwners{true};
     std::atomic_bool stopsOnOwners{true};
 
-    auto firstStop = first.onStop([&] {
+    auto firstStop = first.onStop([&]() -> ruvia::Task<void> {
         if (!first.isCurrent()) {
             stopsOnOwners.store(false, std::memory_order_relaxed);
         }
         stopCalls.fetch_add(1, std::memory_order_relaxed);
+        co_return;
     });
-    auto secondStop = second.onStop([&] {
+    auto secondStop = second.onStop([&]() -> ruvia::Task<void> {
         if (!second.isCurrent()) {
             stopsOnOwners.store(false, std::memory_order_relaxed);
         }
         stopCalls.fetch_add(1, std::memory_order_relaxed);
+        co_return;
     });
     if (first.post([&] {
             if (!first.isCurrent()) {
@@ -680,8 +1631,10 @@ bool testStopBeforeStartPropagatesFailure() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
     const auto loop = loops.loop(0);
     std::atomic_bool stopOnOwner{false};
-    auto stopRegistration =
-        loop.onStop([&] { stopOnOwner.store(loop.isCurrent(), std::memory_order_release); });
+    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
+        stopOnOwner.store(loop.isCurrent(), std::memory_order_release);
+        co_return;
+    });
     if (loop.post([] { throw std::runtime_error("pre-start task failed"); }) !=
         ruvia::PostStatus::kAccepted) {
         return false;
@@ -743,7 +1696,7 @@ bool testExecutorFailureDrainsShutdownOnOwners() {
     std::atomic_bool abandonedMailboxRan{false};
     std::atomic_bool abandonedMailboxDestroyed{false};
 
-    auto failedStop = failedLoop.onStop([&] {
+    auto failedStop = failedLoop.onStop([&]() -> ruvia::Task<void> {
         failedStopOnOwner.store(failedLoop.isCurrent(), std::memory_order_release);
         failedStopCalls.fetch_add(1, std::memory_order_relaxed);
         asio::post(failedLoop.ioContext(),
@@ -751,10 +1704,12 @@ bool testExecutorFailureDrainsShutdownOnOwners() {
         asio::post(failedLoop.ioContext(), [&] {
             shutdownContinuationDrained.store(failedLoop.isCurrent(), std::memory_order_release);
         });
+        co_return;
     });
-    auto peerStop = peerLoop.onStop([&] {
+    auto peerStop = peerLoop.onStop([&]() -> ruvia::Task<void> {
         peerStopOnOwner.store(peerLoop.isCurrent(), std::memory_order_release);
         peerStopCalls.fetch_add(1, std::memory_order_relaxed);
+        co_return;
     });
 
     asio::post(failedLoop.ioContext(), [] { throw std::runtime_error("executor handler failed"); });
@@ -788,7 +1743,13 @@ bool testExpiredHandle() {
         ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 1});
         loop = loops.loop(0);
     }
-    return loop.valid() && !loop.accepting() &&
+    bool contextRejected = false;
+    try {
+        static_cast<void>(loop.ioContext());
+    } catch (const std::logic_error&) {
+        contextRejected = true;
+    }
+    return !loop.valid() && !loop.accepting() && contextRejected &&
            loop.post([] {}) == ruvia::PostStatus::kWorkerStopping;
 }
 
@@ -907,13 +1868,39 @@ bool testDispatcherLifecycleHooksAreWorkerAffine() {
 // A stop callback runs after every caller that could have received its
 // exception is gone. Dropping it would make a failed cleanup invisible, so the
 // pool records it as its first failure and join() rethrows it.
+bool testStopCallbackFactoryFailureDoesNotSkipOtherCallbacks() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    const auto loop = loops.loop(0);
+    std::atomic_bool coroutineCallbackRan{false};
+    auto factoryFailure = loop.onStop([]() -> ruvia::Task<void> {
+        throw std::runtime_error("stop factory failed");
+    });
+    auto coroutineCallback = loop.onStop([&]() -> ruvia::Task<void> {
+        coroutineCallbackRan.store(true, std::memory_order_release);
+        co_return;
+    });
+
+    loops.start();
+    loops.stop();
+    bool rethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        rethrown = std::string_view(error.what()) == "stop factory failed";
+    } catch (...) {
+    }
+    return rethrown && coroutineCallbackRan.load(std::memory_order_acquire) &&
+           factoryFailure.valid() && coroutineCallback.valid();
+}
+
 bool testStopCallbackFailureReachesJoin() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 2});
     const auto loop = loops.loop(0);
     std::atomic<unsigned> stopCalls{0};
-    auto stopRegistration = loop.onStop([&] {
+    auto stopRegistration = loop.onStop([&]() -> ruvia::Task<void> {
         stopCalls.fetch_add(1, std::memory_order_relaxed);
         throw std::runtime_error("stop callback failed");
+        co_return;
     });
 
     loops.start();
@@ -927,6 +1914,251 @@ bool testStopCallbackFailureReachesJoin() {
     } catch (...) {
     }
     return rethrown && stopCalls.load(std::memory_order_relaxed) == 1;
+}
+
+bool testStopListenerArrivalDuringShutdownNotificationBatch() {
+    struct BlockingListener final : ruvia::detail::WorkerShutdownListener {
+        BlockingListener(std::promise<void>& enteredPromise,
+            std::shared_future<void> releaseSignal) noexcept
+            : entered(&enteredPromise),
+              release(std::move(releaseSignal)) {}
+
+        std::promise<void>* entered;
+        std::shared_future<void> release;
+
+        void workerStopping() noexcept override {
+            entered->set_value();
+            release.wait();
+        }
+    };
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    const auto loop = loops.loop(0);
+    std::promise<void> listenerEntered;
+    auto listenerEnteredResult = listenerEntered.get_future();
+    std::promise<void> releaseListener;
+    auto blockingListener = std::make_shared<BlockingListener>(
+        listenerEntered, releaseListener.get_future().share());
+    ruvia::detail::WorkerHandleAccess::registerShutdownListener(loop.handle(), blockingListener);
+
+    std::atomic_bool stopCallbackRan{false};
+    auto stopCallback = loop.onStop([&]() -> ruvia::Task<void> {
+        stopCallbackRan.store(true, std::memory_order_release);
+        co_return;
+    });
+    asio::post(loop.ioContext(), [] { throw std::runtime_error("first shutdown trigger"); });
+    loops.start();
+    if (listenerEnteredResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        loops.stop();
+        releaseListener.set_value();
+        loops.join();
+        return false;
+    }
+
+    loops.stop();
+    const bool loopStillAttachedDuringBatch = loop.valid();
+    bool rootAdmissionClosed = false;
+    try {
+        static_cast<void>(loop.start(failedAbandonedAttachmentRoot()));
+    } catch (const std::runtime_error&) {
+        rootAdmissionClosed = true;
+    }
+    releaseListener.set_value();
+    bool failureRethrown = false;
+    try {
+        loops.join();
+    } catch (const std::runtime_error& error) {
+        failureRethrown = std::string_view(error.what()) == "first shutdown trigger";
+    } catch (...) {
+    }
+    return loopStillAttachedDuringBatch && rootAdmissionClosed && failureRethrown &&
+           stopCallbackRan.load(std::memory_order_acquire) && stopCallback.valid() && !loop.valid();
+}
+
+bool testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive() {
+    struct Callback final {
+        std::atomic<unsigned>* started;
+        std::atomic<unsigned>* finished;
+        ruvia::detail::WorkerSignal* signal;
+        bool notifier;
+        int value;
+        int* observed;
+
+        ruvia::Task<void> operator()() {
+            started->fetch_add(1, std::memory_order_release);
+            if (notifier) {
+                signal->notify();
+            } else {
+                co_await signal->wait();
+            }
+            *observed += value;
+            finished->fetch_add(1, std::memory_order_release);
+            co_return;
+        }
+    };
+
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    const auto loop = loops.loop(0);
+    const auto worker = loop.handle();
+    std::atomic<unsigned> started{0};
+    std::atomic<unsigned> finished{0};
+    ruvia::detail::WorkerSignal signal(worker);
+    int observed = 0;
+    auto first = loop.onStop(Callback{&started, &finished, &signal, false, 1, &observed});
+    auto second = loop.onStop(Callback{&started, &finished, &signal, true, 2, &observed});
+    loops.start();
+    loops.stop();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (started.load(std::memory_order_acquire) != 2 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    first.reset();
+    second.reset();
+    loops.join();
+    return started.load(std::memory_order_acquire) == 2 &&
+           finished.load(std::memory_order_acquire) == 2 && observed == 3;
+}
+
+ruvia::Task<void> waitForShutdownTimer(const ruvia::WorkerHandle& worker, bool& childDone) {
+    static_cast<void>(co_await ruvia::sleepFor(worker, std::chrono::hours(1)));
+    childDone = true;
+    co_return;
+}
+
+ruvia::Task<void> nestedShutdownScope(const ruvia::WorkerHandle& worker, bool& childDone,
+    bool& middleDone) {
+    ruvia::TaskScope scope(worker);
+    scope.spawn(waitForShutdownTimer(worker, childDone));
+    co_await scope.join();
+    middleDone = true;
+}
+
+ruvia::Task<void> rootShutdownScope(const ruvia::WorkerHandle& worker,
+    std::promise<void>& started, bool& childDone, bool& middleDone, bool& rootDone) {
+    ruvia::TaskScope scope(worker);
+    scope.spawn(nestedShutdownScope(worker, childDone, middleDone));
+    started.set_value();
+    co_await scope.join();
+    rootDone = true;
+}
+
+struct RootGetMoveProbe final {
+    std::optional<ruvia::RootTask<RootGetMoveProbe>>* owner{};
+    std::optional<ruvia::RootTask<RootGetMoveProbe>>* replacement{};
+    std::atomic_bool* trigger{};
+    bool* validDuringMove{};
+
+    RootGetMoveProbe() = default;
+    RootGetMoveProbe(std::optional<ruvia::RootTask<RootGetMoveProbe>>* rootOwner,
+        std::optional<ruvia::RootTask<RootGetMoveProbe>>* rootReplacement,
+        std::atomic_bool* moveTrigger, bool* observedValidity)
+        : owner(rootOwner),
+          replacement(rootReplacement),
+          trigger(moveTrigger),
+          validDuringMove(observedValidity) {}
+    RootGetMoveProbe(RootGetMoveProbe&& other) noexcept
+        : owner(other.owner),
+          replacement(other.replacement),
+          trigger(other.trigger),
+          validDuringMove(other.validDuringMove) {
+        if (trigger != nullptr && trigger->exchange(false, std::memory_order_acq_rel)) {
+            *validDuringMove = owner->value().valid();
+            if (replacement != nullptr) {
+                *owner = std::move(*replacement);
+            }
+        }
+    }
+    RootGetMoveProbe& operator=(RootGetMoveProbe&&) = delete;
+    RootGetMoveProbe(const RootGetMoveProbe&) = delete;
+    RootGetMoveProbe& operator=(const RootGetMoveProbe&) = delete;
+};
+
+ruvia::Task<RootGetMoveProbe> returnRootGetMoveProbe(RootGetMoveProbe value) {
+    co_return std::move(value);
+}
+
+struct RootPmrResult final {
+    explicit RootPmrResult(std::pmr::memory_resource* resource)
+        : values(resource) {
+        values.resize(32, 42);
+    }
+    RootPmrResult(RootPmrResult&&) noexcept = default;
+    RootPmrResult(const RootPmrResult&) = delete;
+    std::pmr::vector<int> values;
+};
+
+ruvia::Task<RootPmrResult> makeRootPmrResult(std::pmr::memory_resource* resource) {
+    co_return RootPmrResult(resource);
+}
+
+bool testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 8});
+    const auto loop = loops.loop(0);
+    std::optional<ruvia::RootTask<RootGetMoveProbe>> root;
+    std::optional<ruvia::RootTask<RootGetMoveProbe>> replacement;
+    std::atomic_bool trigger{false};
+    bool validDuringMove = true;
+    root.emplace(loop.start(returnRootGetMoveProbe(
+        RootGetMoveProbe{&root, &replacement, &trigger, &validDuringMove})));
+    replacement.emplace(loop.start(returnRootGetMoveProbe(
+        RootGetMoveProbe{&root, nullptr, &trigger, &validDuringMove})));
+    loops.start();
+    root->wait();
+    replacement->wait();
+    trigger.store(true, std::memory_order_release);
+    static_cast<void>(root->get());
+    const bool replacementSurvived = root->valid();
+    if (replacementSurvived) {
+        static_cast<void>(root->get());
+    }
+    loops.join();
+    return !validDuringMove && replacementSurvived && !root->valid();
+}
+
+bool testRootTaskResultOwnsPmrStoragePastPoolRetirement() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
+    const auto loop = loops.loop(0);
+    CountingResource resource;
+    auto root = loop.start(makeRootPmrResult(&resource));
+    loops.start();
+    root.wait();
+    loops.stop();
+    loops.join();
+    bool retained = false;
+    {
+        auto result = root.get();
+        retained = result.values.size() == 32 && result.values.front() == 42 &&
+                   resource.allocations == 1 && resource.deallocations == 0;
+    }
+    return retained && resource.allocations == resource.deallocations;
+}
+
+bool testRootTasksJoinNestedScopesDuringStop() {
+    ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 8});
+    const auto loop = loops.loop(0);
+    const auto worker = loop.handle();
+    std::promise<void> started;
+    auto startedResult = started.get_future();
+    bool childDone = false;
+    bool middleDone = false;
+    bool rootDone = false;
+    auto root = loop.start(rootShutdownScope(
+        worker, started, childDone, middleDone, rootDone));
+    loops.start();
+    if (startedResult.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        loops.stop();
+        loops.join();
+        return false;
+    }
+    loops.stop();
+    loops.join();
+    try {
+        root.get();
+    } catch (...) {
+        return false;
+    }
+    return childDone && middleDone && rootDone;
 }
 
 bool testLifecycleTransitionsAreMonotonic() {
@@ -1012,8 +2244,17 @@ int main() {
         std::fflush(stdout);
         return passed;
     };
-    return run("post_outcome_invariants_and_empty_callbacks",
-               testPostOutcomeInvariantsAndEmptyCallbacks) &&
+    return run("event_loop_post_borrow_and_rejected_callable_ownership",
+               testEventLoopPostBorrowAndRejectedCallableOwnership) &&
+                   run("event_loop_post_protects_reentrant_inline_move",
+                       testEventLoopPostProtectsReentrantInlineMove) &&
+                   run("event_loop_post_protects_reentrant_heap_copy",
+                       testEventLoopPostProtectsReentrantHeapCopy) &&
+                   run("worker_handle_callable_lifetime", testWorkerHandleCallableLifetime) &&
+                   run("worker_submission_view_lifecycle_and_rejection",
+                       testWorkerSubmissionViewLifecycleAndRejection) &&
+                   run("post_outcome_invariants_and_empty_callbacks",
+                       testPostOutcomeInvariantsAndEmptyCallbacks) &&
                    run("worker_runtime_context_owns_stable_detached_endpoint",
                        testWorkerRuntimeContextOwnsStableDetachedEndpoint) &&
                    run("mailbox_callable_destruction_can_inspect_worker",
@@ -1030,6 +2271,20 @@ int main() {
                    run("dispatch_and_affinity", testDispatchAndAffinity) &&
                    run("bounded_mailbox", testBoundedMailbox) &&
                    run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
+                   run("attachment_run_failure_retires_through_async_cleanup",
+                       testAttachmentRunFailureRetiresThroughAsyncCleanup) &&
+                   run("abandoned_attachment_root_failure_retires_native_run",
+                       [] { return testAbandonedAttachmentRootFailureRetires(false); }) &&
+                   run("abandoned_attachment_root_failure_retires_attachment_run",
+                       [] { return testAbandonedAttachmentRootFailureRetires(true); }) &&
+                   run("pool_reported_failure_stops_every_loop_and_join_rethrows",
+                       testPoolReportedFailureStopsEveryLoopAndJoinRethrows) &&
+                   run("pool_failure_handoff_during_destructor_report",
+                       testPoolFailureHandoffDuringDestructorReport) &&
+                   run("pool_failure_report_works_after_mailbox_closure",
+                       testPoolFailureReportWorksAfterMailboxClosure) &&
+                   run("attachment_report_failure_preserves_native_run_ownership",
+                       testAttachmentReportFailureKeepsNativeRunOwnership) &&
                    run("external_attachment_retains_state_until_cleanup",
                        testExternalAttachmentRetainsStateUntilContextCleanup) &&
                    run("external_attachment_handles_context_destruction",
@@ -1052,6 +2307,18 @@ int main() {
                    run("dispatcher_lifecycle_hooks_are_worker_affine",
                        testDispatcherLifecycleHooksAreWorkerAffine) &&
                    run("stop_callback_failure_reaches_join", testStopCallbackFailureReachesJoin) &&
+                   run("stop_callback_factory_failure_keeps_other_callbacks_running",
+                       testStopCallbackFactoryFailureDoesNotSkipOtherCallbacks) &&
+                   run("stop_listener_arrival_waits_for_shutdown_notification_batch",
+                       testStopListenerArrivalDuringShutdownNotificationBatch) &&
+                   run("async_stop_callbacks_start_together_and_keep_captures_alive",
+                       testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive) &&
+                   run("root_tasks_join_nested_scopes_during_stop",
+                       testRootTasksJoinNestedScopesDuringStop) &&
+                   run("root_result_moves_are_reentrant_and_preserve_owner",
+                       testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner) &&
+                   run("root_result_owns_pmr_storage_past_pool_retirement",
+                       testRootTaskResultOwnsPmrStoragePastPoolRetirement) &&
                    run("lifecycle_transitions_are_monotonic",
                        testLifecycleTransitionsAreMonotonic) &&
                    run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator)

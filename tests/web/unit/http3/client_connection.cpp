@@ -38,7 +38,7 @@
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/http3/Http3ClientConnection.h"
 #include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
