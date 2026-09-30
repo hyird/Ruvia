@@ -13,6 +13,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponseBodyDecoding.h"
+#include "ruvia/web/detail/body/HttpBodyBuffer.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
@@ -169,7 +170,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
             }
         };
 
-        std::array<char, kBodyReadChunkBytes> output{};
+        std::array<char, kHttpBodyBufferBytes> output{};
         bool eof = false;
         Http1ClosePolicy persistence = Http1ClosePolicy::kCloseAfterResponse;
         for (;;) {

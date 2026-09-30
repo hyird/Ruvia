@@ -18,6 +18,7 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequestBodyDecoders.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/web/detail/body/HttpBodyBuffer.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReaderErrors.h"
 
 namespace ruvia::detail {
@@ -65,7 +66,7 @@ private:
     Stream& stream_;
     std::pmr::string buffer_;
     std::pmr::string transferOutput_;
-    std::unique_ptr<TransferCodingDecoder, PmrObjectDeleter<TransferCodingDecoder>>
+    std::unique_ptr<HttpTransferCodingDecoder, PmrObjectDeleter<HttpTransferCodingDecoder>>
         transferDecoder_;
     std::string_view transferInput_;
     std::string_view initialBodyAndPipeline_;

@@ -382,22 +382,22 @@ Http1ClientResponseBodyDecoder::Result Http1ClientResponseBodyDecoder::driveTran
     std::string_view input, std::size_t wirePrefix, std::span<char> scratch) {
     const auto decoded = transfer_->decode(input, scratch);
     const auto consumed = wirePrefix + decoded.consumedBytes();
-    if (decoded.state() == HttpTransferCodingDecoder::State::kOutput) {
-        if (zeroContent_ && !decoded.output().empty()) {
+    if (const auto* output = decoded.output()) {
+        if (zeroContent_ && !output->bytes().empty()) {
             return fail(Http1ClientResponseBodyError::kNonEmpty205, consumed);
         }
         transferPhase_ = TransferPhase::kDrainOutput;
-        return emit(consumed, decoded.output());
+        return emit(consumed, output->bytes());
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kNeedInput) {
+    if (decoded.needInput() != nullptr) {
         transferPhase_ = TransferPhase::kNeedsFramedInput;
         return needInput(consumed);
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kComplete) {
+    if (decoded.complete() != nullptr) {
         transferPhase_ = TransferPhase::kEnded;
         return needInput(consumed);
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kProtocolError) {
+    if (decoded.failure() != nullptr) {
         return fail(Http1ClientResponseBodyError::kInvalidTransferCoding, consumed);
     }
     return decoderFailure(consumed);
@@ -409,35 +409,38 @@ Http1ClientResponseBodyDecoder::Result Http1ClientResponseBodyDecoder::finishTra
         return complete(consumed);
     }
     auto decoded = transfer_->decode({}, scratch);
-    if (decoded.state() == HttpTransferCodingDecoder::State::kOutput) {
-        if (zeroContent_ && !decoded.output().empty()) {
+    if (const auto* output = decoded.output()) {
+        if (zeroContent_ && !output->bytes().empty()) {
             return fail(Http1ClientResponseBodyError::kNonEmpty205, consumed);
         }
         transferPhase_ = TransferPhase::kDrainOutput;
-        return emit(consumed, decoded.output());
+        return emit(consumed, output->bytes());
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kDecoderError) {
+    if (decoded.decoderFailure() != nullptr) {
         return decoderFailure(consumed);
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kProtocolError) {
+    if (decoded.failure() != nullptr) {
         return fail(Http1ClientResponseBodyError::kIncompleteBody, consumed);
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kNeedInput) {
+    if (decoded.needInput() != nullptr) {
         decoded = transfer_->finishInput();
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kComplete) {
+    if (decoded.complete() != nullptr) {
         transferPhase_ = TransferPhase::kEnded;
         return complete(consumed);
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kOutput) {
-        if (zeroContent_ && !decoded.output().empty()) {
+    if (const auto* output = decoded.output()) {
+        if (zeroContent_ && !output->bytes().empty()) {
             return fail(Http1ClientResponseBodyError::kNonEmpty205, consumed);
         }
         transferPhase_ = TransferPhase::kDrainOutput;
-        return emit(consumed, decoded.output());
+        return emit(consumed, output->bytes());
     }
-    if (decoded.state() == HttpTransferCodingDecoder::State::kDecoderError) {
+    if (decoded.decoderFailure() != nullptr) {
         return decoderFailure(consumed);
+    }
+    if (decoded.failure() != nullptr) {
+        return fail(Http1ClientResponseBodyError::kIncompleteBody, consumed);
     }
     return fail(Http1ClientResponseBodyError::kIncompleteBody, consumed);
 }

@@ -12,7 +12,7 @@ StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
     : stream_(stream),
       buffer_(allocator),
       transferOutput_(allocator),
-      transferDecoder_(nullptr, PmrObjectDeleter<TransferCodingDecoder>{allocator.resource()}),
+      transferDecoder_(nullptr, PmrObjectDeleter<HttpTransferCodingDecoder>{allocator.resource()}),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
@@ -21,7 +21,7 @@ StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
     if (chunked != nullptr && !chunked->transferCodings().empty()) {
-        transferDecoder_ = makePmrObject<TransferCodingDecoder>(allocator.resource(),
+        transferDecoder_ = makePmrObject<HttpTransferCodingDecoder>(allocator.resource(),
             chunked->transferCodings().values[0], allocator.resource(), bodyLimit);
     }
 }
@@ -97,20 +97,20 @@ void StreamBodyReader<Stream>::decodeTransferAppend(
     std::string_view input, std::pmr::string& target) {
     for (;;) {
         const auto oldSize = target.size();
-        ::ruvia::resizePmrStringForOverwrite(target, oldSize + kBodyReadChunkBytes);
+        ::ruvia::resizePmrStringForOverwrite(target, oldSize + kHttpBodyBufferBytes);
         const auto result = transferDecoder_->decode(
-            input, std::span<char>(target.data() + oldSize, kBodyReadChunkBytes));
+            input, std::span<char>(target.data() + oldSize, kHttpBodyBufferBytes));
         input.remove_prefix(std::min(input.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {
             target.resize(oldSize + output->bytes().size());
             continue;
         }
         target.resize(oldSize);
-        if (const auto* failure = result.protocolFailure()) {
+        if (const auto* failure = result.failure()) {
             throwTransferCodingProtocolFailure(*failure);
         }
         if (result.decoderFailure() != nullptr) {
-            throwTransferCodingDecoderFailure();
+            throwHttpTransferCodingDecoderFailure();
         }
         if (result.complete() != nullptr) {
             return;
@@ -143,11 +143,11 @@ Task<void> StreamBodyReader<Stream>::readMore() {
     }
     if (oldSize == buffer_.capacity()) {
         const auto nextCapacity = std::min<std::size_t>(
-            std::max<std::size_t>(buffer_.capacity() * 2, oldSize + kBodyReadChunkBytes),
+            std::max<std::size_t>(buffer_.capacity() * 2, oldSize + kHttpBodyBufferBytes),
             hardLimit);
         buffer_.reserve(nextCapacity);
     }
-    const auto writable = std::min<std::size_t>(kBodyReadChunkBytes, hardLimit - oldSize);
+    const auto writable = std::min<std::size_t>(kHttpBodyBufferBytes, hardLimit - oldSize);
     ::ruvia::resizePmrStringForOverwrite(buffer_, oldSize + writable);
 
     scannerEntry_.setPhase(ruvia::ConnectionScanner::Phase::kReadingPayload);

@@ -2429,6 +2429,12 @@ request's key and offered subprotocols. It does not negotiate extensions.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
 
+`HttpTransferCodingDecoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
+provides incremental transfer decoding with caller-owned input and output storage.
+Its typed failures report invalid encoding or a decoded-size limit violation,
+not request-specific HTTP statuses. Request drivers use the HTTP request-body
+error mapping; response drivers retain their own response error contract.
+
 Ordinary HTTP/1 client responses use `Http1ClientResponseBodyDecoder` from
 `<ruvia/http/Http1ClientResponseBodyDecoder.h>`, bound to the final parser plan.
 It owns message-length progression, chunk framing, transfer decoding, validated

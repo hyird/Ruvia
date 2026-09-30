@@ -24,8 +24,8 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpRequestBodyFailure.h"
 #include "ruvia/http/HttpRequestContentDecoding.h"
+#include "ruvia/http/HttpTransferCodingDecoder.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/coding/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 
@@ -52,18 +52,18 @@ using ruvia::HttpRequestContentDecodeProtocolFailure;
 using ruvia::HttpRequestContentDecodeResult;
 using ruvia::HttpRequestContentDecoderFailure;
 using ruvia::HttpTransferCoding;
+using ruvia::HttpTransferCodingDecodeFailure;
+using ruvia::HttpTransferCodingDecodeNeedInput;
+using ruvia::HttpTransferCodingDecodeOutputView;
+using ruvia::HttpTransferCodingDecoder;
+using ruvia::HttpTransferCodingDecodeResult;
+using ruvia::HttpTransferCodingDecoderFailure;
 using ruvia::HttpTransferCodings;
 using ruvia::HttpUnsupportedExpectationPolicy;
 using ruvia::parseHttpContentCoding;
 using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::TransferCodingDecodeNeedInput;
-using ruvia::detail::TransferCodingDecodeOutput;
-using ruvia::detail::TransferCodingDecodeProtocolFailure;
-using ruvia::detail::TransferCodingDecoder;
-using ruvia::detail::TransferCodingDecodeResult;
-using ruvia::detail::TransferCodingDecoderFailure;
 
 inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
 
@@ -118,8 +118,8 @@ struct TransferDecodeObservation final {
 };
 
 inline TransferDecodeObservation appendTransferDecoded(
-    TransferCodingDecoder& decoder, std::string_view input, std::pmr::string& output) {
-    std::array<char, ruvia::detail::kBodyReadChunkBytes> window{};
+    HttpTransferCodingDecoder& decoder, std::string_view input, std::pmr::string& output) {
+    std::array<char, std::size_t{8} * 1024> window{};
     for (;;) {
         const auto result = decoder.decode(input, window);
         input.remove_prefix(std::min(input.size(), result.consumedBytes()));
@@ -127,8 +127,8 @@ inline TransferDecodeObservation appendTransferDecoded(
             output.append(decoded->bytes());
             continue;
         }
-        if (const auto* failure = result.protocolFailure()) {
-            return {true, failure->protocolError()};
+        if (const auto* failure = result.failure()) {
+            return {true, ruvia::httpRequestTransferCodingError(failure->error())};
         }
         if (result.decoderFailure() != nullptr) {
             return {true, std::nullopt};

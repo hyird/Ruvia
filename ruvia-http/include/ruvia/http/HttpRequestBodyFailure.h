@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpTransferCodingDecodeError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 
 namespace ruvia {
@@ -43,6 +44,17 @@ private:
 
     Kind kind_;
 };
+
+[[nodiscard]] inline HttpProtocolError httpRequestTransferCodingError(
+    HttpTransferCodingDecodeError error) noexcept {
+    switch (error) {
+        case HttpTransferCodingDecodeError::kInvalidContent:
+            return HttpProtocolError(http_status::kBadRequest, "invalid transfer-coding body");
+        case HttpTransferCodingDecodeError::kDecodedSizeExceeded:
+            return HttpRequestBodyFailure::tooLarge().protocolError();
+    }
+    return HttpProtocolError(http_status::kBadRequest, "invalid transfer-coding body");
+}
 
 [[nodiscard]] inline std::optional<HttpRequestBodyFailure> httpRequestBodySizeFailure(
     std::size_t size, ProtocolByteLimit limit) noexcept {

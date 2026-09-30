@@ -49,7 +49,7 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
     }
 
     if (transferOutput_.empty()) {
-        ::ruvia::resizePmrStringForOverwrite(transferOutput_, kBodyReadChunkBytes);
+        ::ruvia::resizePmrStringForOverwrite(transferOutput_, kHttpBodyBufferBytes);
     }
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed
@@ -62,11 +62,11 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
         if (const auto* output = result.output()) {
             co_return ::ruvia::asBytes(output->bytes());
         }
-        if (const auto* failure = result.protocolFailure()) {
+        if (const auto* failure = result.failure()) {
             throwTransferCodingProtocolFailure(*failure);
         }
         if (result.decoderFailure() != nullptr) {
-            throwTransferCodingDecoderFailure();
+            throwHttpTransferCodingDecoderFailure();
         }
         if (result.complete() == nullptr && result.needInput() == nullptr) {
             throw std::logic_error("unexpected transfer-coding decode result");
