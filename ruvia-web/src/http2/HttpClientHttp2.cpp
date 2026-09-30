@@ -127,7 +127,13 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 state.status = responseHead.status();
                 state.protocolVersion = responseHead.protocolVersion();
                 state.responseBodyPlan = planHttpResponseBody(state.requestMethod, state.status);
-                state.headers = std::move(responseHead).takeHeaders();
+                auto responseHeaders = std::move(responseHead).takeHeaders();
+                state.headers.clear();
+                state.headers.reserve(responseHeaders.size());
+                for (const auto& header : responseHeaders) {
+                    state.headers.push_back(HttpHeader::copyOf(
+                        header.name(), header.value(), state.resource));
+                }
                 configureHttpClientResponseDecoding(state);
                 state.headReady = true;
                 pending->response->state_->headSignal.notify();
@@ -178,7 +184,14 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 try {
                     const bool contentSemanticsPresent =
                         end->contentSemantics() == Http2MessageContentSemantics::kContent;
-                    pending->response->state_->trailers = std::move(*end).takeTrailers();
+                    auto responseTrailers = std::move(*end).takeTrailers();
+                    auto& state = *pending->response->state_;
+                    state.trailers.clear();
+                    state.trailers.reserve(responseTrailers.size());
+                    for (const auto& trailer : responseTrailers) {
+                        state.trailers.push_back(HttpHeader::copyOf(
+                            trailer.name(), trailer.value(), state.resource));
+                    }
                     if (pending->timeout == nullptr) {
                         std::terminate();
                     }

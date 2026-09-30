@@ -26,6 +26,7 @@
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
+#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
 
 namespace ruvia::detail {
@@ -291,6 +292,7 @@ private:
     std::pmr::memory_resource* resource_;
     HttpClientConfigStorage config_;
     std::shared_ptr<HttpClientResultBudgetDomain> resultBudgetDomain_;
+    HttpClientResponseMemoryDomain::Owner responseMemory_{};
     asio::ssl::context tlsContext_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;

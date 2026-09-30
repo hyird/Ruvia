@@ -24,16 +24,18 @@ namespace {
 
 constexpr std::size_t kResponseBodyReadChunkBytes = std::size_t{16} * 1024;
 
+void checkResponseOperationAffinity(void* target) noexcept {
+    const auto& state = *static_cast<const detail::HttpClientResponseState*>(target);
+    if (auto* domain = state.memoryDomain(); domain != nullptr && !domain->worker().isCurrent()) {
+        std::terminate();
+    }
+}
+
 }  // namespace
 
-HttpClientResponse::HttpClientResponse(
-    std::pmr::memory_resource* resource, const WorkerHandle& worker, detail::HttpClientPool& pool)
-    : state_(detail::constructPmrObject<detail::HttpClientResponseState>(
-          detail::pmrResourceOrDefault(resource), worker, detail::pmrResourceOrDefault(resource))),
-      body_(state_) {
-    state_->pool = &pool;
-    state_->resultBudgetDomain = &pool.resultBudgetDomain_;
-}
+HttpClientResponse::HttpClientResponse(detail::HttpClientPool& pool)
+    : state_(pool.responseMemory_->createState(pool)),
+      body_(state_) {}
 
 HttpClientResponse::HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept
     : state_(state),
@@ -72,6 +74,7 @@ void HttpClientResponse::release() noexcept {
     if (state_ == nullptr) {
         return;
     }
+    checkResponseOperationAffinity(state_);
     auto* state = std::exchange(state_, nullptr);
     body_.state_ = nullptr;
     if (consumer_) {
@@ -104,6 +107,7 @@ std::span<const HttpHeader> HttpClientResponse::trailers() const& noexcept {
 }
 
 void detail::HttpClientResponseState::retainReference() noexcept {
+    checkResponseOperationAffinity(this);
     if (references == std::numeric_limits<std::size_t>::max()) {
         std::terminate();
     }
@@ -111,11 +115,16 @@ void detail::HttpClientResponseState::retainReference() noexcept {
 }
 
 void detail::HttpClientResponseState::releaseReference() noexcept {
+    checkResponseOperationAffinity(this);
     if (references == 0) {
         std::terminate();
     }
     if (--references == 0) {
-        detail::destroyPmrObject(this, resource);
+        if (auto* domain = memoryDomain()) {
+            domain->destroyState(this);
+        } else {
+            detail::destroyPmrObject(this, resource);
+        }
     }
 }
 
@@ -241,14 +250,18 @@ ScopedOperation<std::optional<std::span<const std::byte>>> HttpClientResponseBod
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, state_->read<std::span<const std::byte>>());
+    checkResponseOperationAffinity(state_);
+    return detail::makeScopedOperation(state_->bodyOperationScope,
+        state_->read<std::span<const std::byte>>(), checkResponseOperationAffinity, state_);
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::text() & {
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, state_->read<std::string_view>());
+    checkResponseOperationAffinity(state_);
+    return detail::makeScopedOperation(state_->bodyOperationScope,
+        state_->read<std::string_view>(), checkResponseOperationAffinity, state_);
 }
 
 template <typename View>
@@ -289,7 +302,9 @@ ScopedOperation<HttpClientResponseBytes> HttpClientResponseBody::readAll(std::si
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, state_->readAll(maxBytes));
+    checkResponseOperationAffinity(state_);
+    return detail::makeScopedOperation(state_->bodyOperationScope,
+        state_->readAll(maxBytes), checkResponseOperationAffinity, state_);
 }
 
 Task<HttpClientResponseBytes> detail::HttpClientResponseState::readAll(std::size_t maxBytes) {
@@ -344,7 +359,9 @@ ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& outpu
     if (state_->bodyOperationScope.hasPendingOperations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
-    return detail::makeScopedOperation(state_->bodyOperationScope, state_->pipeTo(output));
+    checkResponseOperationAffinity(state_);
+    return detail::makeScopedOperation(state_->bodyOperationScope,
+        state_->pipeTo(output), checkResponseOperationAffinity, state_);
 }
 
 Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output) {

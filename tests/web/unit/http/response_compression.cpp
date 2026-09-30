@@ -330,13 +330,83 @@ RUVIA_TEST(streaming_compression_selects_unknown_length_representation) {
     response.header("ETag", "\"stream-v1\"");
 
     const auto selection = gzipResponseCoding();
-    RUVIA_CHECK(ruvia::detail::prepareStreamingResponseCompression(
-        selection, HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric));
+    ruvia::detail::HttpStreamingResponseCompression compression(
+        std::pmr::get_default_resource(), selection,
+        ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
+    compression.prepare(
+        HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     RUVIA_CHECK(!response.header("Content-Length").has_value());
     RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"stream-v1\""));
     RUVIA_CHECK(response.header("Vary").value_or(std::string_view{}).find("Accept-Encoding") !=
                 std::string_view::npos);
+}
+
+RUVIA_TEST(streaming_identity_representation_preserves_negotiated_variance) {
+    for (const auto method : {HttpKnownMethod::kGet, HttpKnownMethod::kHead}) {
+        for (const auto kind : {ruvia::detail::ResponseStreamKind::kGeneric,
+                 ruvia::detail::ResponseStreamKind::kSse}) {
+            auto response = responseWithBody(kCompressibleBody);
+            response.header("Vary", "Origin");
+            response.header("ETag", "\"identity-v1\"");
+            ruvia::detail::HttpStreamingResponseCompression compression(
+                std::pmr::get_default_resource(), responseCoding(HttpContentCoding::kIdentity),
+                ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
+            compression.prepare(method, response, kind);
+            RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, Accept-Encoding"));
+            RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("\"identity-v1\""));
+            RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+            compression.activate(ruvia::planHttpResponseBody(method, response.status()));
+            RUVIA_CHECK(!compression.active());
+        }
+    }
+}
+
+RUVIA_TEST(response_coding_preparation_shares_variance_without_transforming_fixed_sources) {
+    using Source = ruvia::detail::HttpResponseCompressionSource;
+    using Decision = ruvia::detail::HttpResponseCompressionDecision;
+    using Availability = ruvia::detail::HttpResponseCodingAvailability;
+    const auto identity = responseCoding(HttpContentCoding::kIdentity);
+    for (const auto source : {Source::kBuffered, Source::kStream, Source::kSse}) {
+        auto response = responseWithBody(kCompressibleBody);
+        response.header("Vary", "Origin, accept-encoding");
+        const auto selected = ruvia::detail::prepareResponseCompression(identity,
+            HttpKnownMethod::kGet, response, source, Availability::kIdentityAndCompression);
+        RUVIA_CHECK(selected == Decision::kNegotiatedIdentity);
+        RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, accept-encoding"));
+        RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+
+        auto disabled = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(ruvia::detail::prepareResponseCompression(gzipResponseCoding(),
+                        HttpKnownMethod::kGet, disabled, source, Availability::kIdentityOnly) ==
+                    Decision::kFixedRepresentation);
+        RUVIA_CHECK(!disabled.header("Vary").has_value());
+
+        for (const auto status : {ruvia::http_status::kNoContent, ruvia::http_status::kNotModified,
+                 ruvia::http_status::kResetContent, ruvia::http_status::kPartialContent}) {
+            auto fixed = responseWithBody(kCompressibleBody);
+            fixed.status(status);
+            RUVIA_CHECK(ruvia::detail::prepareResponseCompression(identity,
+                            HttpKnownMethod::kGet, fixed, source, Availability::kIdentityAndCompression) ==
+                        Decision::kFixedRepresentation);
+            RUVIA_CHECK(!fixed.header("Vary").has_value());
+        }
+        for (const auto field : {"Content-Encoding", "Content-Range", "Cache-Control"}) {
+            auto fixed = responseWithBody(kCompressibleBody);
+            fixed.header(field, std::string_view(field) == "Content-Encoding" ? "gzip" : std::string_view(field) == "Content-Range" ? "bytes 0-9/20"
+                                                                                                                                    : "no-transform");
+            RUVIA_CHECK(ruvia::detail::prepareResponseCompression(identity,
+                            HttpKnownMethod::kGet, fixed, source, Availability::kIdentityAndCompression) ==
+                        Decision::kFixedRepresentation);
+            RUVIA_CHECK(!fixed.header("Vary").has_value());
+        }
+        auto binary = responseWithBody(kCompressibleBody);
+        binary.header("Content-Type", "application/octet-stream");
+        const auto binaryDecision = ruvia::detail::prepareResponseCompression(identity,
+            HttpKnownMethod::kGet, binary, source, Availability::kIdentityAndCompression);
+        RUVIA_CHECK(binaryDecision == (source == Source::kSse ? Decision::kNegotiatedIdentity : Decision::kFixedRepresentation));
+        RUVIA_CHECK(binary.header("Vary").has_value() == (source == Source::kSse));
+    }
 }
 
 RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
@@ -452,34 +522,37 @@ RUVIA_TEST(streaming_compression_respects_encoder_availability_at_representation
 
 RUVIA_TEST(response_compression_preflight_rejects_non_transformable_metadata) {
     const auto selection = gzipResponseCoding();
-    const auto eligible = [](const HttpResponse& response) {
-        return ruvia::detail::httpResponseCompressionEligibility(gzipResponseCoding(),
-                   HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric) ==
-               ruvia::detail::HttpResponseCompressionEligibility::kEligible;
+    const auto eligible = [](HttpResponse response) {
+        return ruvia::detail::prepareResponseCompression(gzipResponseCoding(),
+                   HttpKnownMethod::kGet, response,
+                   ruvia::detail::HttpResponseCompressionSource::kBuffered,
+                   ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression) ==
+               ruvia::detail::HttpResponseCompressionDecision::kEncode;
     };
 
     RUVIA_CHECK(eligible(responseWithBody(kCompressibleBody)));
 
     auto noTransform = responseWithBody(kCompressibleBody);
     noTransform.header("Cache-Control", "no-transform");
-    RUVIA_CHECK(!eligible(noTransform));
+    RUVIA_CHECK(!eligible(std::move(noTransform)));
 
     auto media = responseWithBody(kCompressibleBody);
     media.header("Content-Type", "image/png");
-    RUVIA_CHECK(!eligible(media));
+    RUVIA_CHECK(!eligible(std::move(media)));
 
     auto partial = responseWithBody(kCompressibleBody);
     partial.status(ruvia::http_status::kPartialContent);
-    RUVIA_CHECK(!eligible(partial));
+    RUVIA_CHECK(!eligible(std::move(partial)));
 
     auto encoded = responseWithBody(kCompressibleBody);
     encoded.header("Content-Encoding", "gzip");
-    RUVIA_CHECK(!eligible(encoded));
+    RUVIA_CHECK(!eligible(std::move(encoded)));
 
-    RUVIA_CHECK(
-        ruvia::detail::httpResponseCompressionEligibility(selection, HttpKnownMethod::kGet,
-            responseWithBody(kCompressibleBody), ruvia::detail::ResponseStreamKind::kGeneric) ==
-        ruvia::detail::HttpResponseCompressionEligibility::kEligible);
+    auto response = responseWithBody(kCompressibleBody);
+    RUVIA_CHECK(ruvia::detail::prepareResponseCompression(selection, HttpKnownMethod::kGet,
+                    response, ruvia::detail::HttpResponseCompressionSource::kStream,
+                    ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression) ==
+                ruvia::detail::HttpResponseCompressionDecision::kEncode);
 }
 
 RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {

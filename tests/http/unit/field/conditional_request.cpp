@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <ctime>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/HttpConditionalRequest.h"
@@ -122,6 +123,8 @@ RUVIA_TEST(http_if_range_requires_exact_validator) {
     RUVIA_CHECK(httpIfRangeAllows(date, etag, canonical, true));
     RUVIA_CHECK(!httpIfRangeAllows(date, etag, canonical + 1, true));
     RUVIA_CHECK(!httpIfRangeAllows(date, etag, canonical, false));
+    RUVIA_CHECK(!httpIfRangeAllows(date, etag, std::nullopt, true));
+    RUVIA_CHECK(httpIfRangeAllows(etag, etag, std::nullopt, false));
 }
 
 RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {

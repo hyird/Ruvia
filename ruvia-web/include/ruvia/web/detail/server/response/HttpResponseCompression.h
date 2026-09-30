@@ -32,15 +32,19 @@ enum class HttpResponseCodingAvailability : std::uint8_t {
     kIdentityAndCompression,
 };
 
-// Pure response-policy result. It deliberately does not inspect the body
-// alternative: static files are selected from indexed representations and are
-// skipped by response encoding, while buffered and streaming responses share
-// the same metadata policy. Identity is considered eligible here when the
-// representation may vary; callers that need to create an encoder must still
-// reject identity explicitly.
-enum class HttpResponseCompressionEligibility : std::uint8_t {
-    kIneligible,
-    kEligible,
+// The representation source affects compression eligibility (notably SSE's
+// media type), while static-file representations remain owned by the static
+// response path.
+enum class HttpResponseCompressionSource : std::uint8_t {
+    kBuffered,
+    kStream,
+    kSse,
+};
+
+enum class HttpResponseCompressionDecision : std::uint8_t {
+    kFixedRepresentation,
+    kNegotiatedIdentity,
+    kEncode,
 };
 
 // Compression policy and encoder execution are separate outcomes. A response
@@ -181,14 +185,12 @@ private:
     HttpResponse& response, CompressionConfig options, BlockingPool* pool,
     const WorkerHandle& worker);
 
-[[nodiscard]] HttpResponseCompressionEligibility httpResponseCompressionEligibility(
+// Shared Web response policy. Fixed representations do not vary by coding;
+// eligible representations are annotated before deciding between identity
+// and an encoder. Encoder availability never changes Accept-Encoding parsing.
+[[nodiscard]] HttpResponseCompressionDecision prepareResponseCompression(
     const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
-    const HttpResponse& response, ResponseStreamKind kind) noexcept;
-
-// Select and annotate a streaming representation before the protocol-owned
-// stream head is committed. The returned value tells the runtime whether it
-// should own an incremental encoder for the body bytes.
-[[nodiscard]] bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection,
-    HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind);
+    HttpResponse& response, HttpResponseCompressionSource source,
+    HttpResponseCodingAvailability availability);
 
 }  // namespace ruvia::detail

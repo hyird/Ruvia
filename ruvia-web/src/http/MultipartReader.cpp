@@ -25,25 +25,25 @@ void MultipartReader::expireCapability(detail::ScopedCapabilityNode& capability)
     auto& reader = static_cast<MultipartReader&>(capability);
     reader.operationScope_.close();
     reader.bodyReader_ = nullptr;
-    reader.state_ = State::kFailed;
+    reader.state_.emplace<ExpiredState>();
 }
 
 Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
-    if (state_ == State::kFinished) {
+    if (std::holds_alternative<FinishedState>(state_)) {
         co_return std::nullopt;
     }
-    if (state_ == State::kReading) {
-        throw std::logic_error("multipart body read is already in progress");
-    }
-    if (state_ == State::kFailed) {
+    if (std::holds_alternative<FailedState>(state_)) {
         throw std::logic_error("multipart body consumption previously failed");
     }
-    state_ = State::kReading;
-    ReadGuard readGuard(state_);
+    if (!std::holds_alternative<ReceivingState>(state_)) {
+        throw std::logic_error("multipart body lifetime has expired");
+    }
+
+    ReadGuard readGuard(*this);
     for (;;) {
-        auto result = parser_.poll();
+        auto result = std::get<ReceivingState>(state_).parser.poll();
         if (const auto* part = result.part()) {
-            readGuard.commit(State::kReady);
+            readGuard.commit();
             co_return *part;
         }
         if (result.done() != nullptr) {
@@ -52,15 +52,16 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readTask() {
             // before the connection can be reused.
             while (co_await bodyReader().read()) {
             }
-            readGuard.commit(State::kFinished);
+            state_.emplace<FinishedState>();
+            readGuard.commit();
             co_return std::nullopt;
         }
         if (result.needInput() != nullptr) {
             auto chunk = co_await bodyReader().read();
             if (!chunk) {
-                parser_.finishInput();
+                std::get<ReceivingState>(state_).parser.finishInput();
             } else {
-                parser_.feed(asChars(*chunk));
+                std::get<ReceivingState>(state_).parser.feed(asChars(*chunk));
             }
             continue;
         }

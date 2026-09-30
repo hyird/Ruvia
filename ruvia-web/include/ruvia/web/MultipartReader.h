@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
@@ -15,47 +15,56 @@ namespace ruvia {
 class MultipartReader final : private detail::ScopedCapabilityNode {
 public:
     MultipartReader(BodyReader& bodyReader, MultipartParseOptions options)
-        : detail::ScopedCapabilityNode(
-              bodyReader.operationScope_, &MultipartReader::expireCapability),
-          bodyReader_(&bodyReader),
-          parser_(options) {}
+        : bodyReader_(nullptr),
+          state_(std::in_place_type<ExpiredState>) {
+        if (bodyReader.operationScope_.active()) {
+            state_.emplace<ReceivingState>(options);
+            bodyReader_ = &bodyReader;
+            bind(bodyReader.operationScope_, &MultipartReader::expireCapability);
+        }
+    }
 
     MultipartReader(const MultipartReader&) = delete;
     MultipartReader& operator=(const MultipartReader&) = delete;
     MultipartReader(MultipartReader&&) = delete;
     MultipartReader& operator=(MultipartReader&&) = delete;
 
-    /// Returns one typed chunk of the current multipart part. All views in the
-    /// returned value remain valid only until the next read() call.
+    /// Returns one typed chunk of the current multipart part. All returned views
+    /// remain valid only until the next read() call, parent body-reader expiry, or
+    /// this reader's destruction.
     [[nodiscard]] ScopedOperation<std::optional<MultipartStreamPart>> read() &;
     ScopedOperation<std::optional<MultipartStreamPart>> read() && = delete;
 
 private:
-    enum class State : std::uint8_t {
-        kReady,
-        kReading,
-        kFinished,
-        kFailed,
+    struct ReceivingState final {
+        explicit ReceivingState(MultipartParseOptions options)
+            : parser(options) {}
+
+        MultipartParser parser;
     };
+    struct FinishedState final {};
+    struct FailedState final {};
+    struct ExpiredState final {};
+
+    using State = std::variant<ReceivingState, FinishedState, FailedState, ExpiredState>;
 
     class ReadGuard final {
     public:
-        explicit ReadGuard(State& state) noexcept
-            : state_(state) {}
+        explicit ReadGuard(MultipartReader& reader) noexcept
+            : reader_(reader) {}
 
         ~ReadGuard() {
             if (!committed_) {
-                state_ = State::kFailed;
+                reader_.state_.emplace<FailedState>();
             }
         }
 
-        void commit(State state) noexcept {
-            state_ = state;
+        void commit() noexcept {
             committed_ = true;
         }
 
     private:
-        State& state_;
+        MultipartReader& reader_;
         bool committed_{false};
     };
 
@@ -63,8 +72,7 @@ private:
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     BodyReader* bodyReader_;
-    MultipartParser parser_;
-    State state_{State::kReady};
+    State state_;
     detail::ScopedOperationScope operationScope_;
 
     [[nodiscard]] Task<std::optional<MultipartStreamPart>> readTask();

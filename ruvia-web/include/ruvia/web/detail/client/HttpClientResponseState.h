@@ -31,6 +31,7 @@ class ResponseStreamWriter;
 namespace ruvia::detail {
 
 class HttpClientPool;
+class HttpClientResponseMemoryDomain;
 class HttpClientResultBudgetDomain;
 class Http3ClientConnection;
 
@@ -54,6 +55,7 @@ public:
           trailers(resource),
           buffered(resource),
           pending(resource) {}
+    explicit HttpClientResponseState(HttpClientResponseMemoryDomain& memoryDomain);
     HttpClientResponseState(WorkerHandle&&, std::pmr::memory_resource*) = delete;
 
     // Body algorithms run on the address-stable storage owner. The public
@@ -64,6 +66,9 @@ public:
     [[nodiscard]] Task<void> pipeTo(ResponseStreamWriter& output);
     void retainReference() noexcept;
     void releaseReference() noexcept;
+    [[nodiscard]] HttpClientResponseMemoryDomain* memoryDomain() const noexcept {
+        return memoryDomain_;
+    }
     void notifyProducerSpace() noexcept;
     [[nodiscard]] bool bindHttp3BodyBudget(Http3ClientBodyBudget& budget) noexcept;
     void releaseHttp3BodyBudget() noexcept;
@@ -82,8 +87,8 @@ public:
     WorkerSignal dataSignal;
     WorkerSignal spaceSignal;
     HttpClientPool* pool{nullptr};
-    // Borrows the stable shared_ptr member owned by the client pool. It is only
-    // copied by readAll(), after its single-result byte limit has passed.
+    // Borrows the stable shared_ptr member owned by the response memory domain.
+    // Only readAll() copies it after its single-result byte limit has passed.
     const std::shared_ptr<HttpClientResultBudgetDomain>* resultBudgetDomain{nullptr};
     std::pmr::memory_resource* resource;
     HttpStatusCode status{http_status::kOk};
@@ -127,6 +132,13 @@ public:
 
 private:
     void promotePendingData();
+    void detachTransportBindings() noexcept;
+
+    HttpClientResponseMemoryDomain* memoryDomain_{};
+    HttpClientResponseState* previousMemoryState_{};
+    HttpClientResponseState* nextMemoryState_{};
+
+    friend class HttpClientResponseMemoryDomain;
 };
 
 }  // namespace ruvia::detail

@@ -170,6 +170,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
         }
     }
     cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
+    responseMemory_ = HttpClientResponseMemoryDomain::create(worker_, resultBudgetDomain_);
 }
 
 HttpClientPool::~HttpClientPool() {
@@ -256,6 +257,10 @@ Task<void> HttpClientPool::join() {
         }
         failure = std::current_exception();
     }
+    // Consumers own their response storage independently of transport. Retire
+    // every client borrow, including completed responses, before its owners.
+    responseMemory_->detachTransportBindings(*this);
+    responseMemory_.reset();
     // Destroy QUIC SSL/socket/session owners while the worker loop and its PMR
     // owner are still alive. HttpClientPool itself is later destroyed by the
     // App lifecycle thread after the worker has joined.
@@ -871,9 +876,12 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
 
 Task<HttpClientResponse> HttpClientPool::execute(
     HttpClientRequestStorage request, OperationOptions options) {
+    if (!responseMemory_) {
+        throw HttpClientError(HttpClientError::Code::kClosing, "HTTP client pool is retired");
+    }
     // The request owns all data before transport work can outlive the caller.
     auto ownedRequest = std::move(request).intoResource(resource_);
-    HttpClientResponse response(resource_, worker_, *this);
+    HttpClientResponse response(*this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
     backgroundTasks_.spawn(executeInto(std::move(ownedRequest), std::move(options), state));

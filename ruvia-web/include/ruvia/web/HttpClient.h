@@ -36,8 +36,10 @@ public:
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.
     void close() noexcept;
-    // Requests cancellation, joins worker-owned operations, and completes on
-    // the bound event loop after the client teardown is finished.
+    // Cancels and joins client producers/send operations, then retires their
+    // transport borrows on the bound loop. Response body consumers are owned by
+    // the response, not this shutdown: finish/join them and destroy responses
+    // on the owning worker before the EventLoop retires.
     [[nodiscard]] Task<void> shutdown() &;
     Task<void> shutdown() && = delete;
 
