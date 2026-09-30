@@ -106,7 +106,7 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     RUVIA_CHECK_EQ(chunkedBody->transferCodings().count, std::size_t{1});
 
     auto* resource = std::pmr::get_default_resource();
-    Http1ChunkedBodyDecoder chunks(ProtocolByteLimit::limited(1u << 20));
+    Http1ChunkedBodyDecoder chunks({.bodyLimit = ProtocolByteLimit::limited(1u << 20)});
     HttpTransferCodingDecoder transfer(
         chunkedBody->transferCodings().values[0], resource, ProtocolByteLimit::limited(1u << 20));
     std::pmr::string output(resource);

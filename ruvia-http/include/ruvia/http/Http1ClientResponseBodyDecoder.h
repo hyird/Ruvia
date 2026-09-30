@@ -10,6 +10,7 @@
 
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpResponseBodyDecoding.h"
+#include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
 
@@ -166,6 +167,10 @@ public:
     // EOF is monotonic. Supply any remaining buffered bytes; later calls may
     // drain decoder output but can never request more network input.
     [[nodiscard]] Result finishInput(std::string_view available, std::span<char> scratch);
+    template <detail::HttpTemporaryOwningCharString Input>
+    Result decode(Input&&, std::span<char>) = delete;
+    template <detail::HttpTemporaryOwningCharString Input>
+    Result finishInput(Input&&, std::span<char>) = delete;
 
 private:
     enum class Framing : unsigned char { kNoBody,

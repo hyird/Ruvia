@@ -27,7 +27,7 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readCh
             co_return std::nullopt;
         }
         if (const auto* failure = result.failure()) {
-            throw failure->protocolError();
+            throw httpRequestChunkDecodeError(failure->error());
         }
         if (result.needMore() == nullptr) {
             throw std::logic_error("unexpected HTTP/1 chunk decode result");

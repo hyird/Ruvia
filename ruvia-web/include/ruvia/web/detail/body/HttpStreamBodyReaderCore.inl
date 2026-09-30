@@ -16,7 +16,7 @@ StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
-      chunkDecoder_(bodyLimit),
+      chunkDecoder_(Http1ChunkedBodyDecoderConfig{.bodyLimit = bodyLimit}),
       scannerEntry_(scannerEntry),
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();

@@ -2,9 +2,8 @@
 
 #include <stdexcept>
 
-#include "ruvia/http/HttpRequestBodyDecoders.h"
 #include "ruvia/http/HttpRequestBodyFailure.h"
-
+#include "ruvia/http/HttpTransferCodingDecoder.h"
 namespace ruvia::detail {
 
 [[noreturn]] inline void throwRequestBodyTooLarge() {

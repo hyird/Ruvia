@@ -2435,6 +2435,14 @@ Its typed failures report invalid encoding or a decoded-size limit violation,
 not request-specific HTTP statuses. Request drivers use the HTTP request-body
 error mapping; response drivers retain their own response error contract.
 
+`Http1ChunkedBodyDecoder` from `<ruvia/http/Http1ChunkedBodyDecoder.h>`
+provides zero-copy chunk framing. Its aggregate configuration selects payload
+limits and request or response trailer semantics. Failures report neutral
+framing or limit categories; request-side status mapping remains HTTP-owned.
+`HttpResponseChunkedBodyDecoder` fixes the response role and returns the same
+exclusive typed result. Consume body and trailer views before modifying input,
+retain unconsumed wire bytes, and use a positive per-step body-output budget.
+
 Ordinary HTTP/1 client responses use `Http1ClientResponseBodyDecoder` from
 `<ruvia/http/Http1ClientResponseBodyDecoder.h>`, bound to the final parser plan.
 It owns message-length progression, chunk framing, transfer decoding, validated

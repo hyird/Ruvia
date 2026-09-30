@@ -1,5 +1,6 @@
 #include <array>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -525,6 +526,49 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
         RUVIA_CHECK(complete);
         RUVIA_CHECK_EQ(content, "AAAA");
         RUVIA_CHECK_EQ(input, chunked ? "TAIL" : "");
+    }
+}
+
+RUVIA_TEST(http1_response_chunk_adapter_preserves_typed_views_role_and_wire_prefix) {
+    constexpr std::string_view wire = "1\r\nx\r\n0\r\nAccept-Ranges: bytes\r\n\r\nNEXT";
+    ruvia::HttpResponseChunkedBodyDecoder decoder(ruvia::ProtocolByteLimit::unlimited());
+    bool zeroBudgetRejected = false;
+    try {
+        (void)decoder.decode(wire, 0);
+    } catch (const std::invalid_argument&) {
+        zeroBudgetRejected = true;
+    }
+    RUVIA_CHECK(zeroBudgetRejected);
+    const auto body = decoder.decode(wire, 1);
+    RUVIA_CHECK(body.bodyChunk() != nullptr);
+    RUVIA_CHECK_EQ(body.consumedBytes(), std::size_t{6});
+    if (const auto* chunk = body.bodyChunk()) {
+        RUVIA_CHECK_EQ(chunk->bytes(), "x");
+        RUVIA_CHECK(chunk->bytes().data() == wire.data() + 3);
+    }
+    auto pending = wire.substr(body.consumedBytes());
+    const auto terminal = decoder.decode(pending, 1);
+    RUVIA_CHECK(terminal.complete() != nullptr);
+    if (const auto* complete = terminal.complete()) {
+        RUVIA_CHECK_EQ(complete->trailers(), "Accept-Ranges: bytes");
+    }
+    pending.remove_prefix(terminal.consumedBytes());
+    RUVIA_CHECK_EQ(pending, "NEXT");
+    const auto replay = decoder.decode(pending);
+    RUVIA_CHECK(replay.complete() != nullptr);
+    RUVIA_CHECK_EQ(replay.consumedBytes(), std::size_t{0});
+
+    ruvia::HttpResponseChunkedBodyDecoder invalid(ruvia::ProtocolByteLimit::unlimited());
+    const auto failure = invalid.decode("1\r\nxXX");
+    RUVIA_CHECK(failure.failure() != nullptr);
+    if (const auto* error = failure.failure()) {
+        RUVIA_CHECK(error->error() == ruvia::Http1ChunkDecodeError::kInvalidFraming);
+    }
+    const auto repeatedFailure = invalid.decode("NEXT", 1);
+    RUVIA_CHECK(repeatedFailure.failure() != nullptr);
+    RUVIA_CHECK_EQ(repeatedFailure.consumedBytes(), std::size_t{0});
+    if (const auto* error = repeatedFailure.failure()) {
+        RUVIA_CHECK(error->error() == ruvia::Http1ChunkDecodeError::kInvalidFraming);
     }
 }
 

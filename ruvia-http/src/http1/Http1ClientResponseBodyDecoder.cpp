@@ -295,22 +295,22 @@ Http1ClientResponseBodyDecoder::Result Http1ClientResponseBodyDecoder::step(
                 const auto decoded = chunked_->decode(rest,
                     transfer_ ? (std::numeric_limits<std::size_t>::max)() : scratch.size());
                 const auto childConsumed = decoded.consumedBytes();
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kInvalid) {
+                if (decoded.failure() != nullptr) {
                     return fail(Http1ClientResponseBodyError::kInvalidFraming, consumed + childConsumed);
                 }
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kNeedMore) {
+                if (decoded.needMore() != nullptr) {
                     consumed += childConsumed;
                     if (eof) {
                         return fail(Http1ClientResponseBodyError::kIncompleteBody, consumed);
                     }
                     return needInput(consumed);
                 }
-                if (decoded.state() == HttpResponseChunkedBodyDecoder::State::kComplete) {
+                if (const auto* complete = decoded.complete()) {
                     trailersReported_ = true;
-                    return validatedTrailers(consumed + childConsumed, decoded.trailers());
+                    return validatedTrailers(consumed + childConsumed, complete->trailers());
                 }
 
-                const auto body = decoded.body();
+                const auto body = decoded.bodyChunk()->bytes();
                 if (!transfer_) {
                     if (zeroContent_ && !body.empty()) {
                         return fail(Http1ClientResponseBodyError::kNonEmpty205,
