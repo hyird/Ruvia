@@ -94,12 +94,12 @@ ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& cont
     }
     if (path == "/file") {
         ruvia::HttpResponse response({.resource = context.arena()});
-        response.fileBody("virtual-response.bin", 5, 0, 5, {}, true);
+        response.fileBody("virtual-response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
         co_return response;
     }
     if (path == "/empty-file") {
         ruvia::HttpResponse response({.resource = context.arena()});
-        response.fileBody("virtual-empty-response.bin", 0, 0, 0, {}, true);
+        response.fileBody("virtual-empty-response.bin", 0, 0, 0, ruvia::HttpResponseFileIdentity::checked({}));
         co_return response;
     }
     if (path == "/items") {

@@ -2430,6 +2430,13 @@ are exposed separately and Cookie fields are coalesced. Query lookup is explicit
 `lastRawQueryValue()` compares encoded keys, returns the encoded value, performs
 no form-style `+` conversion, and chooses the last duplicate.
 
+File responses preserve an opaque `HttpResponseFileIdentity` from
+`<ruvia/http/HttpResponseFile.h>`. Pass that token directly to
+`HttpResponse::fileBody(path, size, offset, length, identity)`; the response owns
+its path, while the `HttpResponseFileView` returned by `fileBody()` borrows it.
+The runtime supplies and validates checked identities after opening the file;
+the protocol library does not perform file I/O.
+
 Borrowed outbound-client models say so in their names: `HttpOriginView`,
 `HttpClientRequestView`, `HttpClientRequestContentView`, and
 `HttpClientRequestBytesView`. Their referenced storage must remain alive until

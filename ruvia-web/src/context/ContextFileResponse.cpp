@@ -35,12 +35,12 @@ inline constexpr std::size_t kFileResponseHeaderReserve = 7;
 class FileResponsePath final {
 public:
     [[nodiscard]] static FileResponsePath copying(
-        std::filesystem::path path, detail::ResponseFileIdentity identity) {
+        std::filesystem::path path, HttpResponseFileIdentity identity) {
         return FileResponsePath(std::move(path), identity);
     }
 
     [[nodiscard]] static FileResponsePath copyingNative(
-        const ruvia::NativePathChar* path, detail::ResponseFileIdentity identity) {
+        const ruvia::NativePathChar* path, HttpResponseFileIdentity identity) {
         if (path == nullptr || *path == ruvia::NativePathChar{}) {
             throw std::logic_error("static file entry has no native path");
         }
@@ -51,7 +51,7 @@ public:
         return detail::guessStaticFileContentType(path_);
     }
 
-    [[nodiscard]] detail::ResponseFileIdentity identity() const noexcept {
+    [[nodiscard]] HttpResponseFileIdentity identity() const noexcept {
         return identity_;
     }
 
@@ -70,9 +70,7 @@ public:
 
     void setBody(
         HttpResponse& response, std::uint64_t size, std::uint64_t offset, std::uint64_t length) {
-        const auto identity = identity_;
-        response.fileBody(takePath(), size, offset, length, identity.words(),
-            identity.requiresValidation());
+        response.fileBody(takePath(), size, offset, length, identity_);
     }
 
     void setFullBody(HttpResponse& response, std::uint64_t size) {
@@ -81,7 +79,7 @@ public:
 
 private:
     explicit FileResponsePath(
-        std::filesystem::path path, detail::ResponseFileIdentity identity) noexcept
+        std::filesystem::path path, HttpResponseFileIdentity identity) noexcept
         : path_(std::move(path)),
           identity_(identity) {}
 
@@ -94,7 +92,7 @@ private:
     }
 
     std::filesystem::path path_;
-    detail::ResponseFileIdentity identity_;
+    HttpResponseFileIdentity identity_;
     bool consumed_{false};
 };
 
@@ -115,11 +113,11 @@ public:
         return "application/octet-stream";
     }
 
-    [[nodiscard]] detail::ResponseFileIdentity identity() const noexcept {
+    [[nodiscard]] HttpResponseFileIdentity identity() const noexcept {
         if (const auto* path = std::get_if<FileResponsePath>(&value_)) {
             return path->identity();
         }
-        return detail::ResponseFileIdentity::unchecked();
+        return HttpResponseFileIdentity::unchecked();
     }
 
     void validateCurrent(std::uint64_t size) const {

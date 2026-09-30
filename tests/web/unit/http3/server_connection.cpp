@@ -195,7 +195,7 @@ ruvia::Task<ruvia::HttpResponse> requestHandler(void* raw, ruvia::Context& conte
     }
     if (path == "/file") {
         ruvia::HttpResponse response({.resource = context.arena()});
-        response.fileBody("virtual-response.bin", 5, 0, 5, {}, true);
+        response.fileBody("virtual-response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
         co_return response;
     }
     if (path == "/slow" || path == "/slow-body") {

@@ -203,7 +203,7 @@ inline ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&)
     ruvia::HttpResponse response({.resource = std::pmr::get_default_resource()});
     response.status(ruvia::http_status::kOk);
     response.fileBody(std::filesystem::path(largeFilePath()), kLargeFileBytes, 0,
-        kLargeFileBytes, {}, false);
+        kLargeFileBytes, ruvia::HttpResponseFileIdentity::unchecked());
     co_return response;
 }
 

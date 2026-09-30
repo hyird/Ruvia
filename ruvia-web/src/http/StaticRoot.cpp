@@ -162,7 +162,7 @@ inline constexpr std::size_t kStaticRootLinearLookupLimit = 8;
 
 [[nodiscard]] std::pmr::string makeStaticFileEncodedSnapshotEtag(
     std::pmr::memory_resource* resource, std::uint64_t encodedSize, std::uint64_t modifiedToken,
-    detail::ResponseFileIdentity identity, HttpContentCoding coding) {
+    HttpResponseFileIdentity identity, HttpContentCoding coding) {
     std::pmr::string output(resource);
     output.reserve(144);
     output.push_back('"');
