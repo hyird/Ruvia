@@ -40,10 +40,20 @@ public:
         if (!std::holds_alternative<Unprepared>(state_)) {
             throw std::logic_error("streaming response compression is already prepared");
         }
-        if (selection_.coding() == HttpContentCoding::kIdentity) {
-            // Identity is the negotiated choice, but an application-provided
-            // Content-Encoding is still a separate representation claim. Do
-            // not let this early identity path bypass its acceptability check.
+        HttpResponseCompressionSource source;
+        switch (kind) {
+            case ResponseStreamKind::kGeneric:
+                source = HttpResponseCompressionSource::kStream;
+                break;
+            case ResponseStreamKind::kSse:
+                source = HttpResponseCompressionSource::kSse;
+                break;
+            default:
+                throw std::invalid_argument("invalid response stream kind");
+        }
+        const auto decision = prepareResponseCompression(
+            selection_, requestMethod, response, source, availability_);
+        if (decision != HttpResponseCompressionDecision::kEncode) {
             if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
                 throw HttpError({.status = ruvia::http_status::kNotAcceptable,
                     .code = "not_acceptable",
@@ -53,30 +63,7 @@ public:
             return;
         }
 
-        // Negotiation is intentionally complete before the representation
-        // source is known: a static sidecar may already provide the selected
-        // coding even when this process cannot create a new encoder. Only the
-        // stream representation policy may turn that capability limitation
-        // into an identity fallback or 406.
-        if (availability_ == HttpResponseCodingAvailability::kIdentityOnly) {
-            if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError({.status = ruvia::http_status::kNotAcceptable,
-                    .code = "not_acceptable",
-                    .message = "no acceptable response content coding"});
-            }
-            state_.emplace<Identity>();
-            return;
-        }
-
-        if (!prepareStreamingResponseCompression(selection_, requestMethod, response, kind)) {
-            if (httpResponseCodingFallbackForbidden(selection_, requestMethod, response)) {
-                throw HttpError({.status = ruvia::http_status::kNotAcceptable,
-                    .code = "not_acceptable",
-                    .message = "no acceptable response content coding"});
-            }
-            state_.emplace<Identity>();
-            return;
-        }
+        response.applyContentEncoding(httpContentCodingToken(selection_.coding()));
         state_.emplace<Pending>();
     }
 

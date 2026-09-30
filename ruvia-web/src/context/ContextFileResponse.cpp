@@ -12,12 +12,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/HttpByteRange.h"
-#include "ruvia/http/HttpConditionalRequest.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/HttpDate.h"
+#include "ruvia/http/HttpRepresentationResponsePlan.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextResponseState.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
 #include "ruvia/web/detail/http/static/StaticPathNormalization.h"
@@ -178,7 +178,7 @@ struct FileResponseSource final {
 
 template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(const Context& context, const HttpRequest& request,
-    FileResponseSource source, ApplyResponseState applyResponseState) {
+    HttpStatusCode normalStatus, FileResponseSource source, ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.pool());
     std::array<char, kHttpImfFixdateSize> lastModifiedStorage{};
     std::string_view etag;
@@ -287,94 +287,47 @@ template <typename ApplyResponseState>
         return response;
     };
 
-    const auto method = request.knownMethod();
-    const auto methodPlan = httpConditionalMethodPlan(method);
-    if (method == HttpKnownMethod::kHead) {
+    if (request.knownMethod() == HttpKnownMethod::kHead) {
         validateIndexedFileForBodylessResponse();
     }
-    const auto conditional = httpConditionalHeaders(request);
-    // Response validator generation is optional, but request preconditions are
-    // method semantics. In particular, If-Match / If-None-Match "*" test the
-    // existence of this current representation without needing an ETag, and
-    // date conditions can use the file metadata without emitting Last-Modified.
-    if (methodPlan.evaluatesPreconditions) {
-        const auto rejectPrecondition = [&] {
-            validateIndexedFileForBodylessResponse();
-            throw HttpError({.status = ruvia::http_status::kPreconditionFailed,
-                .code = "precondition_failed",
-                .message = "file precondition failed"});
-        };
-        const auto etagConditions = httpEtagPreconditions(request, etag);
-        if (etagConditions.ifMatch.present && !etagConditions.ifMatch.matches()) {
-            rejectPrecondition();
-        }
-        // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
-        // is absent -- a present If-Match takes precedence and the (weaker) date
-        // condition MUST be ignored, exactly as If-Modified-Since is ignored below
-        // when If-None-Match is present. Presence is tracked separately because an
-        // empty list is still a present field and must take precedence over the date.
-        if (!etagConditions.ifMatch.present && !lastModified.empty() && !conditional.ifUnmodifiedSince.empty() &&
-            !httpDateUnmodified(conditional.ifUnmodifiedSince, validatorModifiedSeconds)) {
-            rejectPrecondition();
-        }
-
-        if (etagConditions.ifNoneMatch.matches()) {
-            if (methodPlan.usesNotModifiedResponse) {
-                return makeHeaderOnlyResponse(http_status::kNotModified);
-            }
-            rejectPrecondition();
-        }
-
-        if (methodPlan.evaluatesIfModifiedSince && !etagConditions.ifNoneMatch.present &&
-            !lastModified.empty() && !conditional.ifModifiedSince.empty() &&
-            httpDateNotModified(conditional.ifModifiedSince, validatorModifiedSeconds)) {
-            return makeHeaderOnlyResponse(http_status::kNotModified);
-        }
+    const auto plan = planHttpRepresentationResponse(request,
+        HttpSelectedRepresentationMetadata{
+            .length = source.size,
+            .etag = etag,
+            .lastModified = lastModified.empty() ? std::nullopt : std::optional(validatorModifiedSeconds),
+            .strongDateValidator = emitResponseValidators && lastModifiedIsActual && !lastModified.empty(),
+        },
+        HttpRepresentationResponseOptions{
+            .normalStatus = normalStatus,
+            .rangePolicy = honorRangeRequests ? HttpRangeRequestPolicy::kHonorSingleByteRange
+                                              : HttpRangeRequestPolicy::kIgnore,
+        });
+    if (plan.preconditionFailed()) {
+        validateIndexedFileForBodylessResponse();
+        throw HttpError({.status = plan.status(),
+            .code = "precondition_failed",
+            .message = "file precondition failed"});
     }
-
-    // RFC 9110 §14.2 defines Range only for GET. In particular, HEAD must
-    // describe the full selected representation rather than returning partial
-    // response metadata for content that will never be sent.
-    if (methodPlan.evaluatesRange && honorRangeRequests && !conditional.range.empty()) {
-        // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
-        // the current representation. When response validators are omitted,
-        // this root exposes no ETag/Last-Modified, so an If-Range can never be
-        // confirmed -- the condition MUST be treated as not matching and the
-        // full representation served, rather than a 206 stitched from bytes the
-        // client cannot verify it still holds. Gating on validator emission (as
-        // before) skipped the check entirely and returned a 206. A range with
-        // no If-Range is still honored without response validator headers.
-        if (conditional.hasIfRange &&
-            (!emitResponseValidators || !httpIfRangeAllows(conditional.ifRange, etag,
-                                            validatorModifiedSeconds, lastModifiedIsActual && !lastModified.empty()))) {
-            return makeFullFileResponse(std::nullopt);
-        }
-
-        const auto rangeResolution = resolveHttpByteRange(conditional.range, source.size);
-        if (rangeResolution.ignored()) {
-            // Unknown units, invalid/unsupported sets, and ranges over an
-            // empty representation follow the RFC 9110 §14.2 ignore policy.
-            return makeFullFileResponse(std::nullopt);
-        }
-        if (rangeResolution.unsatisfiable()) {
-            validateIndexedFileForBodylessResponse();
-            HttpResponse response({.resource = context.arena()});
-            response.contentRangeUnsatisfied(source.size);
-            addFileHeaders(response);
-            applyFileResponseState(response, http_status::kRangeNotSatisfiable);
-            return response;
-        }
-
-        const auto& resolved = *rangeResolution.resolved();
+    if (plan.notModified()) {
+        return makeHeaderOnlyResponse(plan.status());
+    }
+    if (plan.rangeUnsatisfiable()) {
+        validateIndexedFileForBodylessResponse();
         HttpResponse response({.resource = context.arena()});
+        response.contentRangeUnsatisfied(source.size);
         addFileHeaders(response);
-        response.contentRange(resolved.offset(), resolved.length(), source.size);
-        setFileBody(response, resolved.offset(), resolved.length());
-        applyFileResponseState(response, http_status::kPartialContent);
+        applyFileResponseState(response, plan.status());
         return response;
     }
-
-    return makeFullFileResponse(std::nullopt);
+    if (const auto* range = plan.partial()) {
+        HttpResponse response({.resource = context.arena()});
+        addFileHeaders(response);
+        response.contentRange(range->offset(), range->length(), source.size);
+        setFileBody(response, range->offset(), range->length());
+        applyFileResponseState(response, plan.status());
+        return response;
+    }
+    return makeFullFileResponse(plan.status());
 }
 
 }  // namespace
@@ -393,7 +346,7 @@ HttpResponse Context::file(FileResponseOptions options) const {
                                 HttpResponse& response, std::optional<HttpStatusCode> statusCode) {
         applyResponseState(response, statusCode);
     };
-    return makeFileResponse(*this, request_,
+    return makeFileResponse(*this, request_, responseState().activeResponse().status(),
         FileResponseSource{
             .body = FileResponseBodySource::file(
                 FileResponsePath::copying(std::move(options.path), snapshot.identity)),
@@ -492,7 +445,7 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
                                 HttpResponse& response, std::optional<HttpStatusCode> statusCode) {
         applyResponseState(response, statusCode);
     };
-    return makeFileResponse(*this, request_,
+    return makeFileResponse(*this, request_, responseState().activeResponse().status(),
         FileResponseSource{
             .body = memoryVariant == nullptr
                         ? FileResponseBodySource::file(FileResponsePath::copyingNative(

@@ -292,7 +292,15 @@ ruvia::Task<ruvia::HttpResponse> loadData(ruvia::Context& c) {
 
 `HttpClientResponse` owns status, protocol version, headers, trailers, and an
 address-stable linear body state; it does not borrow from the request builder
-or caller stack. `send()` completes when the final response head is available.
+or caller stack. Its worker-affine storage survives client shutdown and destruction
+on that worker. Client shutdown cancels and joins producers and send operations,
+then detaches their transport; it does not join response body consumers (which
+may be waiting on a downstream `pipeTo()` write). Keep the response and downstream
+writer alive until those operations finish, and destroy the response on its bound
+worker before the EventLoop retires. Metadata views borrow the response; body
+chunks expire on the next body operation. Retaining a response also retains its
+storage pool's caches until the last response state is released.
+`send()` completes when the final response head is available.
 `maxResponseBytes` bounds each `readAll()` result and the HTTP/1 queued body
 window, not the total number of bytes that may pass through `read()` or
 `pipeTo()`. Responses with a non-identity `Content-Encoding` are decoded before
@@ -885,9 +893,19 @@ negotiation. `Context::file()` always serves the selected file as identity;
 `Context::staticFile()` and the document-root fallback can negotiate indexed
 variants when the server switch is enabled.
 
+File responses evaluate request preconditions against the selected representation
+and the handler's normal status. Redirects and errors other than `412` retain
+that status instead of becoming `304` or a new precondition failure. A byte range
+is considered only for a GET whose response would otherwise be `200`; HEAD
+retains full-representation metadata. Unsupported multiple ranges are ignored.
+
 `compression()` also enables incremental gzip, Brotli, or zstd for response
 streams; each handler write is flushed through the encoder so SSE and other
 low-latency streams do not wait for a full buffered response.
+Buffered and streaming representations advertise `Vary: Accept-Encoding` when
+this policy can select their coding, including negotiated identity and HEAD
+metadata. Fixed representations such as `no-transform` responses are not marked
+as varying by this policy.
 An application-provided known `Content-Encoding` (including a stack composed only
 of known codings) is treated as an already-built representation and every coding
 must still be acceptable to the request's `Accept-Encoding`; otherwise the response
@@ -2240,6 +2258,10 @@ URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
+`multipartReader()` uses the worker pool for transient parsing state and releases
+it on completion, failure, or body-reader teardown. Part views expire on the next
+read, parent body-reader teardown, or reader destruction; copy values that must
+survive subsequent reads.
 
 Models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 `RUVIA_REGEX` does not accept general `std::regex`: for safe request validation it

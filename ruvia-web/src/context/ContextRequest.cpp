@@ -457,7 +457,7 @@ BodyReader& Context::requestBodyReader() const {
 
 MultipartReader Context::requestMultipartReader() const {
     return MultipartReader(
-        requestBodyReader(), {.boundary = multipartBoundary(), .resource = arena()});
+        requestBodyReader(), {.boundary = multipartBoundary(), .resource = pool()});
 }
 
 MultipartBoundary Context::multipartBoundary() const {

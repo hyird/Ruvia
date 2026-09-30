@@ -78,7 +78,7 @@ bool httpDateUnmodified(std::string_view header, std::time_t modifiedSeconds) no
 }
 
 bool httpIfRangeAllows(std::string_view header, std::string_view etag,
-    std::time_t modifiedSeconds, bool dateValidatorStrong) noexcept {
+    std::optional<std::time_t> modifiedSeconds, bool dateValidatorStrong) noexcept {
     if (header.empty()) {
         return false;
     }
@@ -86,11 +86,11 @@ bool httpIfRangeAllows(std::string_view header, std::string_view etag,
     if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
         return detail::httpStrongEtagEquals(value, etag);
     }
-    if (!dateValidatorStrong) {
+    if (!dateValidatorStrong || !modifiedSeconds) {
         return false;
     }
     const auto date = detail::httpParseHttpDate(value);
-    return date.has_value() && modifiedSeconds == *date;
+    return date.has_value() && *modifiedSeconds == *date;
 }
 
 }  // namespace ruvia

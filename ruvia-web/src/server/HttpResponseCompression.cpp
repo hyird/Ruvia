@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -95,55 +96,64 @@ struct BufferedCompressionAttempt final {
 
 }  // namespace
 
-HttpResponseCompressionEligibility httpResponseCompressionEligibility(
-    const HttpResponseCodingSelection& /*selection*/, HttpKnownMethod requestMethod,
-    const HttpResponse& response, ResponseStreamKind kind) noexcept {
-    const auto bodyPlan = planHttpResponseBody(requestMethod, response.status());
-    if (!bodyPlan.statusAllowsBody()) {
-        return HttpResponseCompressionEligibility::kIneligible;
+HttpResponseCompressionDecision prepareResponseCompression(
+    const HttpResponseCodingSelection& selection, HttpKnownMethod requestMethod,
+    HttpResponse& response, HttpResponseCompressionSource source,
+    HttpResponseCodingAvailability availability) {
+    switch (source) {
+        case HttpResponseCompressionSource::kBuffered:
+        case HttpResponseCompressionSource::kStream:
+        case HttpResponseCompressionSource::kSse:
+            break;
+        default:
+            throw std::invalid_argument("invalid response compression source");
+    }
+    switch (availability) {
+        case HttpResponseCodingAvailability::kIdentityOnly:
+        case HttpResponseCodingAvailability::kIdentityAndCompression:
+            break;
+        default:
+            throw std::invalid_argument("invalid response coding availability");
     }
 
+    if (source == HttpResponseCompressionSource::kBuffered && response.fileBody().has_value()) {
+        return HttpResponseCompressionDecision::kFixedRepresentation;
+    }
+    if (!planHttpResponseBody(requestMethod, response.status()).statusAllowsBody()) {
+        return HttpResponseCompressionDecision::kFixedRepresentation;
+    }
     const auto statusCode = response.status();
-    if (statusCode == http_status::kPartialContent || statusCode == http_status::kResetContent) {
-        return HttpResponseCompressionEligibility::kIneligible;
-    }
-
-    if (responseHasHeaderName(response, "Content-Encoding") ||
+    if (statusCode == http_status::kPartialContent || statusCode == http_status::kResetContent ||
+        responseHasHeaderName(response, "Content-Encoding") ||
         responseHasHeaderName(response, "Content-Range") ||
-        (kind != ResponseStreamKind::kSse &&
+        (source != HttpResponseCompressionSource::kSse &&
             responseContentTypeSkipsCompression(
                 response.header("Content-Type").value_or(std::string_view{}))) ||
-        responseCacheControl(response).has(CacheControlDirective::kNoTransform)) {
-        return HttpResponseCompressionEligibility::kIneligible;
+        responseCacheControl(response).has(CacheControlDirective::kNoTransform) ||
+        availability == HttpResponseCodingAvailability::kIdentityOnly) {
+        return HttpResponseCompressionDecision::kFixedRepresentation;
     }
-    return HttpResponseCompressionEligibility::kEligible;
+
+    response.addVaryToken("Accept-Encoding");
+    if (selection.coding() == HttpContentCoding::kIdentity) {
+        return HttpResponseCompressionDecision::kNegotiatedIdentity;
+    }
+    return HttpResponseCompressionDecision::kEncode;
 }
 
 HttpResponseCompressionResult applyResponseCompression(const HttpResponseCodingSelection& selection,
     HttpKnownMethod requestMethod, HttpResponse& response, const CompressionConfig& options) {
     const auto responseContent = response.bodyBytes();
 
-    // These responses never vary by Accept-Encoding, so they are served identity
-    // with no Vary (RFC 9110 12.5.5 SHOULD NOT list a field that does not affect
-    // the representation): a file body (framed and Vary'd by the static-file path),
-    // an already-chosen Content-Encoding, a Content-Range, an incompressible media
-    // type, or an explicit no-transform.
-    if (response.fileBody().has_value() ||
-        httpResponseCompressionEligibility(selection, requestMethod, response,
-            ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
+    const auto decision = prepareResponseCompression(selection, requestMethod, response,
+        HttpResponseCompressionSource::kBuffered,
+        HttpResponseCodingAvailability::kIdentityAndCompression);
+    if (decision != HttpResponseCompressionDecision::kEncode) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
 
     const auto coding = selection.coding();
-
-    // A compressible representation IS selected by Accept-Encoding, so it varies by
-    // it even when this particular response is left identity -- because the client
-    // accepted no coding we support, or the body is below the size threshold. Set
-    // Vary regardless of the outcome so a shared cache never serves this identity
-    // body to a client that would receive the compressed one (RFC 9110 12.5.5).
-    response.addVaryToken("Accept-Encoding");
-
-    if (coding == HttpContentCoding::kIdentity || responseContent.size() < options.minBytes ||
+    if (responseContent.size() < options.minBytes ||
         responseContent.size() > options.maxBytes || responseContent.size() > options.syncBytes) {
         return HttpResponseCompressionResult::makeNotApplicable();
     }
@@ -184,12 +194,6 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
     HttpResponse& response, CompressionConfig options, BlockingPool* pool,
     const WorkerHandle& worker) {
     const auto responseContent = response.bodyBytes();
-    if (response.fileBody().has_value() ||
-        httpResponseCompressionEligibility(selection, requestMethod, response,
-            ResponseStreamKind::kGeneric) != HttpResponseCompressionEligibility::kEligible) {
-        co_return HttpResponseCompressionResult::makeNotApplicable();
-    }
-
     const auto coding = selection.coding();
     const auto size = responseContent.size();
     if (size <= options.syncBytes) {
@@ -202,8 +206,10 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
         options.syncBytes = options.maxBytes;
         co_return applyResponseCompression(selection, requestMethod, response, options);
     }
-    response.addVaryToken("Accept-Encoding");
-    if (coding == HttpContentCoding::kIdentity || size < options.minBytes ||
+    const auto decision = prepareResponseCompression(selection, requestMethod, response,
+        HttpResponseCompressionSource::kBuffered,
+        HttpResponseCodingAvailability::kIdentityAndCompression);
+    if (decision != HttpResponseCompressionDecision::kEncode || size < options.minBytes ||
         size > options.maxBytes) {
         co_return HttpResponseCompressionResult::makeNotApplicable();
     }
@@ -242,19 +248,6 @@ Task<HttpResponseCompressionResult> applyResponseCompressionAsync(
         // one-shot transport leaves the original identity body intact.
         co_return HttpResponseCompressionResult::makeFailed();
     }
-}
-
-bool prepareStreamingResponseCompression(const HttpResponseCodingSelection& selection,
-    HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {
-    if (selection.coding() == HttpContentCoding::kIdentity ||
-        httpResponseCompressionEligibility(selection, requestMethod, response, kind) !=
-            HttpResponseCompressionEligibility::kEligible) {
-        return false;
-    }
-
-    response.addVaryToken("Accept-Encoding");
-    response.applyContentEncoding(httpContentCodingToken(selection.coding()));
-    return true;
 }
 
 }  // namespace ruvia::detail
