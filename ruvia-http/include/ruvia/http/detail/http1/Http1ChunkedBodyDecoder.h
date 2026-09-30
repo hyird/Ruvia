@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -196,6 +197,11 @@ public:
           trailerRole_(trailerRole) {}
 
     [[nodiscard]] Http1ChunkDecodeResult decode(std::string_view available) {
+        return decode(available, std::numeric_limits<std::size_t>::max());
+    }
+
+    [[nodiscard]] Http1ChunkDecodeResult decode(
+        std::string_view available, std::size_t maxBodyBytes) {
         if (!state_) {
             return Http1ChunkDecodeResult::makeFailure(0, state_.error());
         }
@@ -239,7 +245,11 @@ public:
                     if (cursor == available.size()) {
                         return Http1ChunkDecodeResult::makeNeedMore(cursor);
                     }
-                    const auto bytes = std::min(remaining_, available.size() - cursor);
+                    const auto bytes = std::min(
+                        {remaining_, available.size() - cursor, maxBodyBytes});
+                    if (bytes == 0) {
+                        return Http1ChunkDecodeResult::makeNeedMore(cursor);
+                    }
                     const auto body = available.substr(cursor, bytes);
                     remaining_ -= bytes;
                     cursor += bytes;

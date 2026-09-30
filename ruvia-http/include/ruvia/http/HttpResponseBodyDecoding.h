@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -128,7 +129,11 @@ public:
         : decoder_(bodyLimit, detail::Http1ChunkTrailerRole::kResponse) {}
 
     [[nodiscard]] Result decode(std::string_view input) {
-        const auto decoded = decoder_.decode(input);
+        return decode(input, std::numeric_limits<std::size_t>::max());
+    }
+
+    [[nodiscard]] Result decode(std::string_view input, std::size_t maxBodyBytes) {
+        const auto decoded = decoder_.decode(input, maxBodyBytes);
         if (const auto* body = decoded.bodyChunk()) {
             return {State::kBody, body->consumedBytes(), body->bytes()};
         }

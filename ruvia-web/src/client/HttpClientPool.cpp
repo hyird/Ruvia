@@ -223,6 +223,9 @@ void HttpClientPool::closeNow() noexcept {
     }
     backgroundTasks_.requestStop();
     for (auto& connection : connections_) {
+        if (connection.activeHttp1Response != nullptr) {
+            connection.activeHttp1Response->spaceSignal.notify();
+        }
         connection.abortReason = AbortReason::kClosing;
         auto& runtime = *connection.http2Runtime;
         (void)runtime.connectScheduler.close();
@@ -350,7 +353,7 @@ bool HttpClientPool::armDeadline(
         connection.deadline.reset();
         return false;
     }
-    const auto deadline = workerTimerDeadlineAfter(*remaining);
+    const auto deadline = *timeout.deadline();
     connection.deadline.arm(deadline, kind);
     WorkerHandleAccess::scheduleTimer(worker_, *connection.deadlineTimer, deadline,
         [&connection](WorkerTimerOutcome outcome) noexcept {
@@ -362,10 +365,13 @@ bool HttpClientPool::armDeadline(
                 return;
             }
             connection.abortReason = AbortReason::kTimeout;
+            if (connection.activeHttp1Response != nullptr) {
+                connection.activeHttp1Response->spaceSignal.notify();
+            }
             std::error_code ignored;
             if (*expired == DeadlineKind::kResolve) {
                 connection.resolver.cancel();
-            } else {
+            } else if (*expired == DeadlineKind::kSocket) {
                 (void)connection.stream.lowest_layer().cancel(ignored);
             }
         });
@@ -387,6 +393,9 @@ void HttpClientPool::cancelOperation(
         return;
     }
     connection.abortReason = reason;
+    if (connection.activeHttp1Response != nullptr) {
+        connection.activeHttp1Response->spaceSignal.notify();
+    }
     std::error_code ignored;
     connection.resolver.cancel();
     (void)connection.stream.lowest_layer().cancel(ignored);
@@ -1087,6 +1096,13 @@ Task<void> HttpClientPool::executeRequestInto(
                     if (options.stopToken.stopRequested()) {
                         cancelOperationById(cancellationId);
                     }
+                    connection.activeHttp1Response = state;
+                    struct ActiveHttp1ResponseGuard final {
+                        Connection& connection;
+                        ~ActiveHttp1ResponseGuard() {
+                            connection.activeHttp1Response = nullptr;
+                        }
+                    } activeHttp1ResponseGuard{connection};
                     try {
                         co_await executeHttp1(connection, request, timeout, response);
                     } catch (...) {

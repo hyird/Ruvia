@@ -122,6 +122,71 @@ struct ClosingResolvePool final {
     };
 }
 
+using GuardedLease = std::pmr::string;
+using GuardedLeaseState = ruvia::detail::DbOperationState<GuardedLease>;
+using GuardedLeaseGuard = ruvia::detail::DbOperationGuard<GuardedLease>;
+
+struct GuardedLeaseGate final {
+    [[nodiscard]] bool await_ready() const noexcept {
+        return false;
+    }
+    void await_suspend(std::coroutine_handle<> continuation) noexcept {
+        continuation_ = continuation;
+    }
+    void await_resume() const noexcept {}
+    void resume() noexcept {
+        auto continuation = std::exchange(continuation_, {});
+        continuation.resume();
+    }
+    std::coroutine_handle<> continuation_{};
+};
+
+class GuardedLeaseCapability final : public ruvia::detail::ScopedCapabilityNode {
+public:
+    GuardedLeaseCapability(ruvia::detail::ScopedOperationScope& scope, GuardedLeaseState& state,
+        bool& expired) noexcept
+        : ScopedCapabilityNode(scope, &GuardedLeaseCapability::expire),
+          state_(state),
+          expired_(expired) {}
+
+private:
+    static void expire(ruvia::detail::ScopedCapabilityNode& node) noexcept {
+        auto& capability = static_cast<GuardedLeaseCapability&>(node);
+        capability.state_.reset([](GuardedLease&) noexcept {});
+        capability.expired_ = true;
+    }
+
+    GuardedLeaseState& state_;
+    bool& expired_;
+};
+
+ruvia::Task<void> failGuardedLeaseAfterGate(
+    GuardedLeaseGuard pending, GuardedLeaseGate& gate, std::pmr::string input) {
+    GuardedLeaseGuard operation(std::move(pending));
+    operation.start();
+    co_await gate;
+    (void)input;
+    throw std::runtime_error("scoped database operation failed");
+}
+
+ruvia::Task<void> completeGuardedLease(GuardedLeaseGuard pending, std::pmr::string input) {
+    GuardedLeaseGuard operation(std::move(pending));
+    operation.start();
+    (void)input;
+    operation.finishActive();
+    co_return;
+}
+
+ruvia::Task<void> awaitScopedOperation(ruvia::ScopedOperation<void>& operation) {
+    co_await std::move(operation);
+    co_return;
+}
+
+ruvia::Task<void> joinScopedOperations(ruvia::detail::ScopedOperationScope& scope) {
+    co_await scope.closeAndJoin();
+    co_return;
+}
+
 class DbRegistryTestRuntime final {
 #ifndef _WIN32
     asio::io_context ownedIoContext;
@@ -368,46 +433,104 @@ RUVIA_TEST(db_prepared_statement_rejects_blank_sql_before_io) {
     RUVIA_CHECK_EQ(std::string_view(statement.sql), std::string_view("SELECT 1"));
 }
 
-RUVIA_TEST(database_operation_state_rejects_overlap_and_failed_reuse) {
+RUVIA_TEST(database_operation_state_cold_borrows_and_start_exclusivity) {
     struct Lease final {
         int value;
     };
+    using State = ruvia::detail::DbOperationState<Lease>;
+    using Guard = ruvia::detail::DbOperationGuard<Lease>;
 
-    ruvia::detail::DbOperationState<Lease> state(Lease{7});
+    State state(Lease{7});
+    Guard first(state);
+    Guard second(state);
     RUVIA_CHECK(state.active());
-    state.reserve();
-    RUVIA_CHECK_EQ(state.operationPayload().value, 7);
-    RUVIA_CHECK(!state.active());
-    state.start();
-    RUVIA_CHECK_EQ(state.operationPayload().value, 7);
 
+    first.start();
+    RUVIA_CHECK_EQ(first.lease().value, 7);
+    bool coldLeaseRejected = false;
+    try {
+        (void)second.lease();
+    } catch (const std::logic_error& error) {
+        coldLeaseRejected = std::string_view(error.what()) == "database operation is already in progress";
+    }
+    RUVIA_CHECK(coldLeaseRejected);
     bool overlapRejected = false;
     try {
-        (void)state.reserve();
+        second.start();
     } catch (const std::logic_error& error) {
-        overlapRejected =
-            std::string_view(error.what()) == "database operation is already in progress";
+        overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
     }
     RUVIA_CHECK(overlapRejected);
+    RUVIA_CHECK_EQ(first.lease().value, 7);
+    first.finishActive();
 
-    state.finishFailed();
-    bool failedReuseRejected = false;
-    try {
-        (void)state.reserve();
-    } catch (const std::logic_error& error) {
-        failedReuseRejected = std::string_view(error.what()) == "database resource is not active";
-    }
-    RUVIA_CHECK(failedReuseRejected);
+    second.start();
+    RUVIA_CHECK_EQ(second.lease().value, 7);
+    second.finishActive();
+    RUVIA_CHECK(state.active());
 }
 
-RUVIA_TEST(database_operation_guard_releases_cold_reservation) {
+RUVIA_TEST(database_operation_guard_drops_cold_borrows_without_claiming_lease) {
+    struct Payload final {
+        int value;
+    };
+    using State = ruvia::detail::DbOperationState<Payload>;
+    using Guard = ruvia::detail::DbOperationGuard<Payload>;
+
+    State state(Payload{7});
+    {
+        Guard first(state);
+        Guard second(state);
+        RUVIA_CHECK(state.active());
+    }
+    RUVIA_CHECK(state.active());
+
+    Guard pending(state);
+    Guard failing(state);
+    failing.start();
+    failing.finishFailed();
+    bool failedLeaseRejected = false;
+    try {
+        (void)pending.lease();
+    } catch (const std::logic_error& error) {
+        failedLeaseRejected = std::string_view(error.what()) == "database resource is not active";
+    }
+    RUVIA_CHECK(failedLeaseRejected);
+    bool failedStartRejected = false;
+    try {
+        pending.start();
+    } catch (const std::logic_error& error) {
+        failedStartRejected = std::string_view(error.what()) == "database resource is not active";
+    }
+    RUVIA_CHECK(failedStartRejected);
+
+    State closedState(Payload{9});
+    Guard closedPending(closedState);
+    Guard closer(closedState);
+    closer.start();
+    closer.finishClosed();
+    bool closedLeaseRejected = false;
+    try {
+        (void)closedPending.lease();
+    } catch (const std::logic_error& error) {
+        closedLeaseRejected = std::string_view(error.what()) == "database resource is not active";
+    }
+    RUVIA_CHECK(closedLeaseRejected);
+    bool closedStartRejected = false;
+    try {
+        closedPending.start();
+    } catch (const std::logic_error& error) {
+        closedStartRejected = std::string_view(error.what()) == "database resource is not active";
+    }
+    RUVIA_CHECK(closedStartRejected);
+}
+
+RUVIA_TEST(database_operation_guard_runs_cold_operation) {
     struct Payload final {
         int value;
     };
     struct Owner final {
-        using Lease = Payload;
-
-        ruvia::detail::DbOperationState<Lease> state_{Lease{7}};
+        ruvia::detail::DbOperationState<Payload> state{Payload{7}};
     };
     using Guard = ruvia::detail::DbOperationGuard<Payload>;
     auto operate = [](Guard operation, int& observedValue) -> ruvia::Task<void> {
@@ -420,31 +543,296 @@ RUVIA_TEST(database_operation_guard_releases_cold_reservation) {
     Owner owner;
     int observedValue = 0;
     {
-        Guard reservation(owner.state_);
-        auto cold = operate(std::move(reservation), observedValue);
-        RUVIA_CHECK(!owner.state_.active());
+        Guard coldOne(owner.state);
+        Guard coldTwo(owner.state);
+        auto one = operate(std::move(coldOne), observedValue);
+        auto two = operate(std::move(coldTwo), observedValue);
+        RUVIA_CHECK(owner.state.active());
 
+        asio::io_context io(1);
+        auto first = asio::co_spawn(io, ruvia::asAwaitable(std::move(one)), asio::use_future);
+        io.run();
+        first.get();
+        io.restart();
+        auto second = asio::co_spawn(io, ruvia::asAwaitable(std::move(two)), asio::use_future);
+        io.run();
+        second.get();
+    }
+    RUVIA_CHECK(owner.state.active());
+    RUVIA_CHECK_EQ(observedValue, 7);
+}
+
+RUVIA_TEST(database_operation_guarded_cold_tasks_release_owned_inputs_and_retain_results) {
+    using Lease = std::pmr::string;
+    using State = ruvia::detail::DbOperationState<Lease>;
+    using Guard = ruvia::detail::DbOperationGuard<Lease>;
+    ruvia::test::CountingMemoryResource memory;
+
+    auto operate = [](Guard operation, std::pmr::string input, std::pmr::memory_resource* resource)
+        -> ruvia::Task<std::pmr::string> {
+        operation.start();
+        std::pmr::string result(input, resource);
+        operation.finishActive();
+        co_return result;
+    };
+
+    State state(Lease("lease"));
+    {
+        std::pmr::string firstResult(&memory);
+        std::pmr::string secondResult(&memory);
+        auto first = operate(Guard(state), std::pmr::string(256, 'a', &memory), &memory);
+        auto second = operate(Guard(state), std::pmr::string(256, 'b', &memory), &memory);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        {
+            auto dropped = operate(Guard(state), std::pmr::string(256, 'x', &memory), &memory);
+            RUVIA_CHECK_EQ(memory.liveAllocations(), 3U);
+        }
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        RUVIA_CHECK(state.active());
+
+        asio::io_context io(1);
+        auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
+        io.run();
+        firstResult = firstFuture.get();
+        RUVIA_CHECK_EQ(firstResult.size(), 256U);
+        RUVIA_CHECK_EQ(firstResult.front(), 'a');
+        RUVIA_CHECK_EQ(firstResult.back(), 'a');
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+
+        io.restart();
+        auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
+        io.run();
+        secondResult = secondFuture.get();
+        RUVIA_CHECK_EQ(secondResult.size(), 256U);
+        RUVIA_CHECK_EQ(secondResult.front(), 'b');
+        RUVIA_CHECK_EQ(secondResult.back(), 'b');
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        RUVIA_CHECK(state.active());
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(database_operation_guarded_overlapping_task_does_not_damage_first) {
+    using Lease = std::pmr::string;
+    using State = ruvia::detail::DbOperationState<Lease>;
+    using Guard = ruvia::detail::DbOperationGuard<Lease>;
+    struct Gate final {
+        [[nodiscard]] bool await_ready() const noexcept {
+            return false;
+        }
+        void await_suspend(std::coroutine_handle<> continuation) noexcept {
+            continuation_ = continuation;
+        }
+        void await_resume() const noexcept {}
+        void resume() noexcept {
+            auto continuation = std::exchange(continuation_, {});
+            continuation.resume();
+        }
+        std::coroutine_handle<> continuation_{};
+    };
+    ruvia::test::CountingMemoryResource memory;
+    auto operate = [](Guard operation, Gate& gate, std::pmr::string input,
+                       std::pmr::memory_resource* resource) -> ruvia::Task<std::pmr::string> {
+        operation.start();
+        co_await gate;
+        std::pmr::string result(input, resource);
+        operation.finishActive();
+        co_return result;
+    };
+
+    State state(Lease("lease"));
+    {
+        Gate gate;
+        auto first = operate(Guard(state), gate, std::pmr::string(256, 'a', &memory), &memory);
+        auto second = operate(Guard(state), gate, std::pmr::string(256, 'b', &memory), &memory);
+        asio::io_context io(1);
+        auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
+        io.poll();
+        RUVIA_CHECK(gate.continuation_ != nullptr);
+
+        auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
+        io.restart();
+        // The first co_spawn still owns work while suspended at the gate.
+        // Only drain ready handlers for the rejected overlapping operation.
+        io.poll();
         bool overlapRejected = false;
         try {
-            Guard overlap(owner.state_);
-        } catch (const std::logic_error&) {
-            overlapRejected = true;
+            (void)secondFuture.get();
+        } catch (const std::logic_error& error) {
+            overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
         }
         RUVIA_CHECK(overlapRejected);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+
+        io.restart();
+        gate.resume();
+        io.run();
+        const auto result = firstFuture.get();
+        RUVIA_CHECK_EQ(result.size(), 256U);
+        RUVIA_CHECK_EQ(result.front(), 'a');
+        RUVIA_CHECK(state.active());
     }
-    RUVIA_CHECK(owner.state_.active());
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(database_operation_guarded_failure_rejects_pending_task_and_releases_inputs) {
+    using Lease = std::pmr::string;
+    using State = ruvia::detail::DbOperationState<Lease>;
+    using Guard = ruvia::detail::DbOperationGuard<Lease>;
+    ruvia::test::CountingMemoryResource memory;
+
+    auto fail = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+        operation.start();
+        (void)input;
+        throw std::runtime_error("operation failed");
+        co_return;
+    };
+    auto complete = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+        operation.start();
+        (void)input;
+        operation.finishActive();
+        co_return;
+    };
+
+    State state(Lease("lease"));
+    auto failed = fail(Guard(state), std::pmr::string(256, 'f', &memory));
+    auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
 
     asio::io_context io(1);
-    {
-        Guard reservation(owner.state_);
-        auto future = asio::co_spawn(io,
-            ruvia::asAwaitable(operate(std::move(reservation), observedValue)),
-            asio::use_future);
-        io.run();
-        future.get();
+    auto failedFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(failed)), asio::use_future);
+    io.run();
+    bool failureObserved = false;
+    try {
+        failedFuture.get();
+    } catch (const std::runtime_error& error) {
+        failureObserved = std::string_view(error.what()) == "operation failed";
     }
-    RUVIA_CHECK(owner.state_.active());
-    RUVIA_CHECK_EQ(observedValue, 7);
+    RUVIA_CHECK(failureObserved);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+
+    io.restart();
+    auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
+    io.run();
+    bool pendingRejected = false;
+    try {
+        pendingFuture.get();
+    } catch (const std::logic_error& error) {
+        pendingRejected = std::string_view(error.what()) == "database resource is not active";
+    }
+    RUVIA_CHECK(pendingRejected);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(database_operation_guarded_started_cancellation_fails_lease_and_releases_inputs) {
+    using Lease = std::pmr::string;
+    using State = ruvia::detail::DbOperationState<Lease>;
+    using Guard = ruvia::detail::DbOperationGuard<Lease>;
+    ruvia::test::CountingMemoryResource memory;
+    auto cancel = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+        operation.start();
+        (void)input;
+        throw ruvia::DbError(ruvia::DbError::Code::kCancelled, ruvia::DbDriver::kPostgreSql, "cancelled");
+        co_return;
+    };
+    auto complete = [](Guard operation, std::pmr::string input) -> ruvia::Task<void> {
+        operation.start();
+        (void)input;
+        operation.finishActive();
+        co_return;
+    };
+
+    State state(Lease("lease"));
+    {
+        auto cold = cancel(Guard(state), std::pmr::string(256, 'c', &memory));
+        auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        asio::io_context io(1);
+        auto future = asio::co_spawn(io, ruvia::asAwaitable(std::move(cold)), asio::use_future);
+        io.run();
+        bool cancellationObserved = false;
+        try {
+            future.get();
+        } catch (const ruvia::DbError& error) {
+            cancellationObserved = error.code() == ruvia::DbError::Code::kCancelled;
+        }
+        RUVIA_CHECK(cancellationObserved);
+        RUVIA_CHECK(!state.active());
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+
+        io.restart();
+        auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
+        io.run();
+        bool pendingRejected = false;
+        try {
+            pendingFuture.get();
+        } catch (const std::logic_error& error) {
+            pendingRejected = std::string_view(error.what()) == "database resource is not active";
+        }
+        RUVIA_CHECK(pendingRejected);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+    }
+    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(database_operation_guard_releases_before_scoped_join_expires_owner) {
+    asio::io_context io;
+    ruvia::detail::ScopedOperationScope scope;
+    ruvia::test::CountingMemoryResource memory;
+    GuardedLeaseState state(GuardedLease("lease"));
+    bool ownerExpired = false;
+    GuardedLeaseCapability capability(scope, state, ownerExpired);
+    GuardedLeaseGate gate;
+
+    auto operation = ruvia::detail::makeScopedOperation(scope,
+        failGuardedLeaseAfterGate(GuardedLeaseGuard(state), gate, std::pmr::string(256, 'j', &memory)));
+    auto overlap = ruvia::detail::makeScopedOperation(scope,
+        completeGuardedLease(GuardedLeaseGuard(state), std::pmr::string(256, 'o', &memory)));
+    auto runner = asio::co_spawn(io,
+        ruvia::asAwaitable(awaitScopedOperation(operation)), asio::use_future);
+    io.poll();
+    RUVIA_CHECK(gate.continuation_ != nullptr);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+
+    auto overlapRunner = asio::co_spawn(io,
+        ruvia::asAwaitable(awaitScopedOperation(overlap)), asio::use_future);
+    io.restart();
+    io.poll();
+    bool overlapRejected = false;
+    try {
+        overlapRunner.get();
+    } catch (const std::logic_error& error) {
+        overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
+    }
+    RUVIA_CHECK(overlapRejected);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+
+    auto joiner = asio::co_spawn(io,
+        ruvia::asAwaitable(joinScopedOperations(scope)), asio::use_future);
+    io.restart();
+    io.poll();
+    RUVIA_CHECK(!scope.active());
+    RUVIA_CHECK(!ownerExpired);
+
+    gate.resume();
+    io.restart();
+    io.run();
+    bool operationFailed = false;
+    try {
+        runner.get();
+    } catch (const std::runtime_error& error) {
+        operationFailed = std::string_view(error.what()) == "scoped database operation failed";
+    }
+    joiner.get();
+
+    RUVIA_CHECK(operationFailed);
+    RUVIA_CHECK(ownerExpired);
+    RUVIA_CHECK(!state.active());
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
+    RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
 }
 
 RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) {

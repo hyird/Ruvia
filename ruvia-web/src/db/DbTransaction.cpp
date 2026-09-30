@@ -149,7 +149,8 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
     std::optional<std::chrono::milliseconds> firstDuration,
     std::optional<std::chrono::milliseconds> secondDuration,
     detail::DbQueryCacheState& cache,
-    detail::ScopedOperationScope& scope, OperationGuard operation) {
+    detail::ScopedOperationScope& scope, OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
@@ -188,7 +189,9 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
     }
 }
 
-Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(DbStatement query, DbStatement count, OperationGuard operation) {
+Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(
+    DbStatement query, DbStatement count, OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
@@ -255,7 +258,8 @@ ScopedOperation<DbExecResult> DbTransaction::execute(
 }
 
 Task<DbRows> DbTransaction::queryPrepared(
-    std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation) {
+    std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     auto result = co_await queryTransactionPool(
@@ -265,7 +269,8 @@ Task<DbRows> DbTransaction::queryPrepared(
 }
 
 Task<DbExecResult> DbTransaction::executePrepared(
-    std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard operation) {
+    std::pmr::string sql, std::pmr::vector<DbValue> params, OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     auto result = co_await executeTransactionPool(
@@ -280,7 +285,8 @@ ScopedOperation<void> DbTransaction::commit() & {
         operationScope(), commitTask(OperationGuard(state_->operation)));
 }
 
-Task<void> DbTransaction::commitTask(OperationGuard operation) {
+Task<void> DbTransaction::commitTask(OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     co_await commitPoolTransaction(lease.client, lease.slot, lease.resource, lease.options);
@@ -293,7 +299,8 @@ ScopedOperation<void> DbTransaction::rollback() & {
         operationScope(), rollbackTask(OperationGuard(state_->operation)));
 }
 
-Task<void> DbTransaction::rollbackTask(OperationGuard operation) {
+Task<void> DbTransaction::rollbackTask(OperationGuard pending) {
+    OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
     co_await rollbackPoolTransaction(lease.client, lease.slot, lease.resource, lease.options);
