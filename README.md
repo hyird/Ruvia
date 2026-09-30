@@ -1146,6 +1146,14 @@ uncommitted, read committed, and serializable; access mode can explicitly select
 read-write. The database's isolation semantics still apply. A failed operation
 retires its transaction lease; start a new transaction before issuing more work.
 
+Transaction and database-stream operations acquire their exclusive connection
+lane when awaited, not when the cold operation is created. Multiple cold
+operations may be prepared and then awaited sequentially; overlapping started
+operations are rejected without disturbing the operation already in flight.
+Destroy or consume every pending operation before destroying its transaction
+or stream. A cold operation started after that lease has failed or
+closed is rejected rather than reusing the connection.
+
 `find`, `findOne`, `findAndCount`, `count`, `exists`, `insert`, `update`,
 `increment`, `decrement`, `upsert`, `deleteBy`, and `remove` return cold
 `ScopedOperation` objects for `co_await`. `findOne`
@@ -2420,6 +2428,30 @@ caller-generated random nonce and validates the peer's response against that
 request's key and offered subprotocols. It does not negotiate extensions.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
+
+`HttpTransferCodingDecoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
+provides incremental transfer decoding with caller-owned input and output storage.
+Its typed failures report invalid encoding or a decoded-size limit violation,
+not request-specific HTTP statuses. Request drivers use the HTTP request-body
+error mapping; response drivers retain their own response error contract.
+
+`Http1ChunkedBodyDecoder` from `<ruvia/http/Http1ChunkedBodyDecoder.h>`
+provides zero-copy chunk framing. Its aggregate configuration selects payload
+limits and request or response trailer semantics. Failures report neutral
+framing or limit categories; request-side status mapping remains HTTP-owned.
+`HttpResponseChunkedBodyDecoder` fixes the response role and returns the same
+exclusive typed result. Consume body and trailer views before modifying input,
+retain unconsumed wire bytes, and use a positive per-step body-output budget.
+
+Ordinary HTTP/1 client responses use `Http1ClientResponseBodyDecoder` from
+`<ruvia/http/Http1ClientResponseBodyDecoder.h>`, bound to the final parser plan.
+It owns message-length progression, chunk framing, transfer decoding, validated
+trailers, EOF completion, and the 205 empty-content constraint. The transport
+retains any unconsumed input suffix and consumes returned views before changing
+input or reusing output storage. A nonempty scratch span bounds each output;
+uncompressed content remains zero-copy. Keep the decoder at a stable address
+and its PMR resource alive through destruction. Completion, not merely receiving
+the response head or reaching a gzip member boundary, permits connection reuse.
 
 `Http2Connection` delivers owned response heads and owned request/response
 trailers through its events, using `HttpHeader` values. Move them out with
