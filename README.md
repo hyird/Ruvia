@@ -2378,7 +2378,15 @@ failure throws; abort the connection rather than retrying with a weak key.
 This replaces the former `WebSocketServerConnection` header, type, and options:
 server consumers rename these to `WebSocketConnection` and retain defaults.
 SSE messages are
-formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`.
+formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`. URL
+component and URL-encoded pair helpers are available from
+`<ruvia/http/UrlEncoding.h>`: `UrlDecodeMode::kPercent` leaves `+` literal,
+while `kForm` maps it to a space. `decodeUrlComponent()` returns a PMR string
+using the selected `UrlDecodeOptions::resource` (or the default resource), which
+must outlive the result. `visitUrlEncodedPairs()` supplies raw views borrowing
+the input, can stop early when a bool visitor returns false, and does not validate
+percent escapes. `findUrlEncodedValue()` compares decoded names, selects the
+last duplicate, and returns the still-encoded value as a borrowed view.
 
 `Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a
 caller-generated random nonce and validates the peer's response against that
@@ -2394,6 +2402,12 @@ backpressure, merge credits from the same stream without allocation, and
 acknowledge or destroy them when their bytes have been consumed.
 The supplied PMR resource must outlive the connection and all retained events,
 credits, response heads, and trailers allocated from it.
+
+HTTP/1 persistence uses `Http1RequestConnectionPlan` from
+`<ruvia/http/Http1RequestConnectionPlan.h>`. Parsing establishes its version and
+initial reuse disposition; `applyRequestBodyConsumption()` and `requireClose()`
+can only tighten it to close. Buffered and streaming response drivers consume
+that same plan when finalizing connection semantics.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and
 drive transport I/O themselves. Content-Encoding parsing distinguishes identity,

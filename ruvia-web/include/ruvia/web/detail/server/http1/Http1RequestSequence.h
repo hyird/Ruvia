@@ -39,8 +39,8 @@ public:
     // Buffered response bytes have not been committed yet, so the request
     // budget may still tighten the protocol plan before Connection fields are
     // finalized.
-    [[nodiscard]] Http1ServerConnectionPlan completeUncommittedResponse(
-        Http1ServerConnectionPlan connectionPlan) noexcept {
+    [[nodiscard]] Http1RequestConnectionPlan completeUncommittedResponse(
+        Http1RequestConnectionPlan connectionPlan) noexcept {
         const auto closePolicy = nextResponseClosePolicy();
         recordCompletion();
         return closePolicy == Http1ClosePolicy::kCloseAfterResponse ? connectionPlan.requireClose()
@@ -50,7 +50,7 @@ public:
     // A streamed head already carries the pre-commit close policy. Once bytes
     // are committed the plan cannot be tightened; fail fast if a caller tries
     // to complete a limit-ending response whose wire plan still permits reuse.
-    void completeCommittedResponse(Http1ServerConnectionPlan connectionPlan) noexcept {
+    void completeCommittedResponse(Http1RequestConnectionPlan connectionPlan) noexcept {
         if (nextResponseClosePolicy() == Http1ClosePolicy::kCloseAfterResponse &&
             connectionPlan.disposition() != Http1ClosePolicy::kCloseAfterResponse) {
             std::terminate();

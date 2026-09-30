@@ -434,9 +434,9 @@ HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptio
     // (404). A "%00" would inject a NUL that cannot occur in a filename, so reject
     // it; a malformed escape falls back to the raw bytes (which simply miss).
     std::optional<std::pmr::string> decodedPath;
-    if (detail::hasUrlEncoding(relativePath, detail::UrlDecodeMode::kPercent)) {
-        decodedPath = detail::decodeUrlComponent(
-            relativePath, {.mode = detail::UrlDecodeMode::kPercent, .resource = pool()});
+    if (hasUrlEncoding(relativePath, UrlDecodeMode::kPercent)) {
+        decodedPath = decodeUrlComponent(
+            relativePath, {.mode = UrlDecodeMode::kPercent, .resource = pool()});
     }
     const std::string_view lookupPath =
         decodedPath.has_value() ? std::string_view(*decodedPath) : relativePath;

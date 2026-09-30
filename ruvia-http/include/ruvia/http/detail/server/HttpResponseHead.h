@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
+#include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
 namespace ruvia {

@@ -7,8 +7,8 @@
 #include <variant>
 
 #include "ruvia/http/Http1RequestBodyPlan.h"
+#include "ruvia/http/Http1RequestConnectionPlan.h"
 #include "ruvia/http/Http1RequestParser.h"
-#include "ruvia/http/Http1ServerConnectionPlan.h"
 #include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpParseError.h"
 
@@ -199,7 +199,7 @@ public:
 
     HttpRequest request;
     Http1RequestBodyPlan bodyPlan{Http1RequestBodyPlan(HttpRequestExpectations{})};
-    Http1ServerConnectionPlan connectionPlan{Http1ServerConnectionPlan::http11Close()};
+    Http1RequestConnectionPlan connectionPlan{Http1RequestConnectionPlan::http11Close()};
 
     // Parsed once from the request head. Representation policy consumes this
     // complete client preference later, without rescanning Accept-Encoding.
