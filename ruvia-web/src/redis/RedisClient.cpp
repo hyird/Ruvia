@@ -24,7 +24,7 @@ RedisClientState::RedisClientState(EventLoop loop, const RedisConfig& config)
       worker_(loop_.handle()),
       memory_(),
       runtime_(loop_.ioContext(), worker_, RedisConfigStorage(config, memory_.resource()), memory_.resource()),
-      closeState_(worker_) {}
+      closeState_(loop_, worker_) {}
 
 RedisClientState::~RedisClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
@@ -37,9 +37,9 @@ RedisClientState::~RedisClientState() {
 void RedisClientState::bindStop() {
     try {
         std::weak_ptr<RedisClientState> weak = shared_from_this();
-        stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
+        stopRegistration_ = loop_.onStop([weak = std::move(weak)]() -> Task<void> {
             if (const auto state = weak.lock()) {
-                state->startCloseOnWorker();
+                co_await shutdownOwned(state, ClientCloseState::ObservationMode::kRetirement);
             }
         });
     } catch (...) {
@@ -149,10 +149,11 @@ void RedisClientState::requestClose() noexcept {
 }
 
 Task<void> RedisClientState::shutdown() {
-    return shutdownOwned(shared_from_this());
+    return shutdownOwned(shared_from_this(), ClientCloseState::ObservationMode::kCaller);
 }
 
-Task<void> RedisClientState::shutdownOwned(std::shared_ptr<RedisClientState> state) {
+Task<void> RedisClientState::shutdownOwned(
+    std::shared_ptr<RedisClientState> state, ClientCloseState::ObservationMode mode) {
     if (!state->worker_.isCurrent()) {
         throw std::logic_error("redis client shutdown must run on its bound event loop");
     }
@@ -160,7 +161,7 @@ Task<void> RedisClientState::shutdownOwned(std::shared_ptr<RedisClientState> sta
     while (!state->closeState_.complete()) {
         co_await state->closeState_.wait();
     }
-    state->closeState_.rethrowFailure();
+    state->closeState_.observeFailure(mode);
 }
 
 void RedisClientState::startCloseOnWorker() noexcept {
@@ -198,8 +199,12 @@ Task<void> RedisClientState::closeOnWorker() {
 }
 
 void RedisClientState::finishClose(const TaskCompletionResult<void>& result) {
+    if (connectInFlight_ || operationScope_.hasPendingOperations()) {
+        std::terminate();
+    }
     phase_.store(Phase::kClosed, std::memory_order_release);
-    closeState_.finish(result);
+    const auto* failure = result.failure();
+    closeState_.finish(failure == nullptr ? std::exception_ptr{} : failure->exception());
 }
 
 }  // namespace ruvia::detail

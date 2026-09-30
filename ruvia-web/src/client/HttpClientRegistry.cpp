@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
 
+#include <exception>
+
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
@@ -94,8 +96,18 @@ void HttpClientRegistry::closeNow() noexcept {
 
 Task<void> HttpClientRegistry::join() {
     closeNow();
+    std::exception_ptr failure;
     for (std::size_t i = 0; i < pools_.size(); ++i) {
-        co_await pools_[i]->join();
+        try {
+            co_await pools_[i]->join();
+        } catch (...) {
+            if (failure == nullptr) {
+                failure = std::current_exception();
+            }
+        }
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
     }
 }
 

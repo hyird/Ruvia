@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <atomic>
 #include <exception>
+#include <memory_resource>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <thread>
 #include <utility>
@@ -19,6 +21,7 @@
 #include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/detail/worker/WorkerSelection.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia {
 namespace {
@@ -90,35 +93,144 @@ private:
     bool retained_{false};
 };
 
-// A stop callback runs during shutdown, after the last caller that could have
-// received its exception is gone. Whatever it throws is routed to the loop's
-// failure sink -- the pool's first-failure record, which join() rethrows -- so
-// a failed cleanup is never invisible. Failing to even schedule the callback
-// (the off-worker path) is reported the same way.
-class EventLoopStopListener final : public detail::WorkerShutdownListener {
+class EventLoopRetirement final {
 public:
-    EventLoopStopListener(WorkerHandle worker, MoveOnlyFunction<void()> callback,
-        detail::EventLoopFailureSink failureSink)
+    EventLoopRetirement() = default;
+
+    void setFinalize(MoveOnlyFunction<void()> finalize) noexcept {
+        const std::lock_guard lock(mutex_);
+        finalize_ = std::move(finalize);
+    }
+
+    [[nodiscard]] bool tryBegin() noexcept {
+        const std::lock_guard lock(mutex_);
+        if (sealed_ || finalized_) {
+            return false;
+        }
+        ++pending_;
+        return true;
+    }
+
+    void begin() noexcept {
+        if (!tryBegin()) {
+            std::terminate();
+        }
+    }
+
+    [[nodiscard]] std::shared_ptr<void> tryAcquire() {
+        {
+            const std::lock_guard lock(mutex_);
+            if (rootAdmissionClosed_ || sealed_ || finalized_) {
+                return {};
+            }
+            ++pending_;
+        }
+        try {
+            auto token = std::make_shared<LeaseToken>(this);
+            return std::shared_ptr<void>(std::move(token), this);
+        } catch (...) {
+            finish();
+            throw;
+        }
+    }
+
+    void finish() noexcept {
+        MoveOnlyFunction<void()> finalize;
+        {
+            const std::lock_guard lock(mutex_);
+            if (pending_ == 0) {
+                std::terminate();
+            }
+            --pending_;
+            if (sealed_ && pending_ == 0 && !finalized_) {
+                finalized_ = true;
+                finalize = std::move(finalize_);
+            }
+        }
+        if (finalize) {
+            finalize();
+        }
+    }
+
+    [[nodiscard]] std::size_t pending() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return pending_;
+    }
+
+    void closeRootAdmission() noexcept {
+        const std::lock_guard lock(mutex_);
+        rootAdmissionClosed_ = true;
+    }
+
+    void closeAdmission() noexcept {
+        const std::lock_guard lock(mutex_);
+        rootAdmissionClosed_ = true;
+        sealed_ = true;
+    }
+
+    void seal() noexcept {
+        MoveOnlyFunction<void()> finalize;
+        {
+            const std::lock_guard lock(mutex_);
+            sealed_ = true;
+            if (pending_ == 0 && !finalized_) {
+                finalized_ = true;
+                finalize = std::move(finalize_);
+            }
+        }
+        if (finalize) {
+            finalize();
+        }
+    }
+
+private:
+    struct LeaseToken final {
+        explicit LeaseToken(EventLoopRetirement* owner) noexcept
+            : owner_(owner) {}
+        ~LeaseToken() {
+            owner_->finish();
+        }
+        EventLoopRetirement* owner_;
+    };
+
+    mutable std::mutex mutex_;
+    std::size_t pending_{0};
+    bool rootAdmissionClosed_{false};
+    bool sealed_{false};
+    bool finalized_{false};
+    MoveOnlyFunction<void()> finalize_;
+};
+
+// The callback owner is kept alive by the completion handler until both the
+// returned Task frame and its completion chain have retired.
+class EventLoopStopListener final : public detail::WorkerShutdownListener,
+                                    public std::enable_shared_from_this<EventLoopStopListener> {
+public:
+    EventLoopStopListener(WorkerHandle worker, asio::io_context::executor_type executor,
+        MoveOnlyFunction<Task<void>()> callback, detail::EventLoopFailureSink failureSink,
+        std::shared_ptr<EventLoopRetirement> retirement)
         : worker_(std::move(worker)),
+          executor_(std::move(executor)),
           callback_(std::move(callback)),
-          failureSink_(std::move(failureSink)) {}
+          failureSink_(std::move(failureSink)),
+          retirement_(std::move(retirement)) {}
 
     void workerStopping() noexcept override {
         if (!callback_) {
             return;
         }
-        auto callback = std::move(callback_);
+        retirement_->begin();
+        auto self = shared_from_this();
         if (worker_.isCurrent()) {
-            runCallback(callback, failureSink_);
+            startCallback(std::move(self));
             return;
         }
         try {
             detail::WorkerHandleAccess::defer(worker_,
-                [callback = std::move(callback), failureSink = failureSink_]() mutable noexcept {
-                    runCallback(callback, failureSink);
-                });
+                [self = std::move(self)]() mutable noexcept { self->startCallback(std::move(self)); });
         } catch (...) {
             report(failureSink_, std::current_exception());
+            std::terminate();
         }
     }
 
@@ -133,25 +245,46 @@ private:
         detail::reportUnhandledFailure("event loop stop callback", failure);
     }
 
-    static void runCallback(
-        MoveOnlyFunction<void()>& callback, const detail::EventLoopFailureSink& sink) noexcept {
+    void startCallback(std::shared_ptr<EventLoopStopListener> self) noexcept {
+        std::optional<Task<void>> task;
         try {
-            callback();
+            task.emplace(callback_());
+        } catch (const std::bad_alloc&) {
+            report(failureSink_, std::current_exception());
+            std::terminate();
         } catch (...) {
-            report(sink, std::current_exception());
+            report(failureSink_, std::current_exception());
+            retirement_->finish();
+            return;
+        }
+
+        try {
+            detail::asyncStartTask(std::move(*task), asio::bind_executor(executor_,
+                                                         [self = std::move(self)](detail::TaskCompletionResult<void> result) mutable {
+                                                             if (const auto* failure = result.failure()) {
+                                                                 report(self->failureSink_, failure->exception());
+                                                             }
+                                                             self->retirement_->finish();
+                                                         }));
+        } catch (...) {
+            report(failureSink_, std::current_exception());
+            std::terminate();
         }
     }
 
     WorkerHandle worker_;
-    MoveOnlyFunction<void()> callback_;
+    asio::io_context::executor_type executor_;
+    MoveOnlyFunction<Task<void>()> callback_;
     detail::EventLoopFailureSink failureSink_;
+    std::shared_ptr<EventLoopRetirement> retirement_;
 };
 
 }  // namespace
 
 namespace detail {
 
-struct EventLoopState final {
+struct EventLoopState final : WorkerShutdownListener,
+                              std::enable_shared_from_this<EventLoopState> {
     using ContextOwnership = std::variant<std::unique_ptr<asio::io_context>, ExternalContextClaim>;
 
     explicit EventLoopState(std::size_t mailboxCapacity)
@@ -159,12 +292,14 @@ struct EventLoopState final {
               std::make_unique<asio::io_context>()),
           ioContext(
               std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
+          executor(ioContext->get_executor()),
           work(asio::make_work_guard(*ioContext)),
           runtime(*ioContext, mailboxCapacity) {}
 
     EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
         : contextOwnership(std::in_place_type<ExternalContextClaim>, externalContext),
           ioContext(std::addressof(externalContext)),
+          executor(externalContext.get_executor()),
           work(asio::make_work_guard(*ioContext)),
           // WorkerDispatcher::Impl is the single authority that validates the
           // mailbox capacity: it throws std::invalid_argument for a zero
@@ -178,56 +313,143 @@ struct EventLoopState final {
         }
     }
 
+    void installLifecycleListener() {
+        WorkerHandleAccess::registerShutdownListener(runtime.handle(), shared_from_this());
+    }
+
+    void workerStopping() noexcept override {}
+
+    void workerStoppingComplete() noexcept override {
+        stop(true, shared_from_this());
+    }
+
+    void reportFailure(std::exception_ptr failure) noexcept {
+        if (!failure) {
+            return;
+        }
+        if (failureSink) {
+            failureSink(std::move(failure));
+            return;
+        }
+        reportUnhandledFailure("attached event loop failure", failure);
+        stop(true, shared_from_this());
+    }
+
+    void reportAttachedFailure(std::exception_ptr failure) noexcept {
+        if (!failure) {
+            return;
+        }
+        reportUnhandledFailure("attached event loop failure", failure);
+        stop(true, shared_from_this());
+    }
+
+    [[nodiscard]] std::shared_ptr<void> acquireRootLease() {
+        return retirement->tryAcquire();
+    }
+
+    [[noreturn]] void failTeardownStart(std::exception_ptr failure) noexcept {
+        if (failureSink) {
+            failureSink(std::move(failure));
+        } else {
+            reportUnhandledFailure("event loop teardown startup", std::move(failure));
+        }
+        std::terminate();
+    }
+
     void stop(bool runtimeStarted, std::shared_ptr<EventLoopState> keepAlive) noexcept {
         if (stopping.exchange(true, std::memory_order_acq_rel)) {
             return;
         }
-        runtime.close();
-        const bool externalContext = std::holds_alternative<ExternalContextClaim>(contextOwnership);
-        if (!runtimeStarted || runtime.handle().isCurrent()) {
-            runtime.stopTimers();
-            if (externalContext) {
-                finishExternalStop();
-            }
-        } else if (externalContext) {
-            runtime.deferOrTerminate([keepAlive = std::move(keepAlive)] {
-                keepAlive->runtime.stopTimers();
-                keepAlive->finishExternalStop();
-            });
-        } else {
-            runtime.deferOrTerminate([runtime = &runtime] { runtime->stopTimers(); });
-        }
-        work.reset();
-    }
-
-    void finishExternalStop() noexcept {
-        if (!std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+        retirement->closeRootAdmission();
+        if (!retirement->tryBegin()) {
             return;
         }
-        runtime.detach();
-        ioContext = nullptr;
-        std::get<ExternalContextClaim>(contextOwnership).service()->releaseState(this);
+        std::weak_ptr<EventLoopState> weak = keepAlive;
+        retirement->setFinalize([weak] {
+            auto state = weak.lock();
+            if (!state) {
+                return;
+            }
+            try {
+                detail::WorkerHandleAccess::whenIdle(state->runtime.handle(), [weak] {
+                    auto idleState = weak.lock();
+                    if (!idleState) {
+                        return;
+                    }
+                    auto failureOwner = idleState;
+                    const auto worker = idleState->runtime.handle();
+                    auto finalizationKeepAlive = std::move(idleState);
+                    try {
+                        detail::WorkerHandleAccess::defer(worker,
+                            [state = std::move(finalizationKeepAlive)] { state->finalizeStop(); });
+                    } catch (...) {
+                        failureOwner->failTeardownStart(std::current_exception());
+                    }
+                });
+            } catch (...) {
+                state->failTeardownStart(std::current_exception());
+            }
+        });
+        runtime.close();
+        if (!runtimeStarted || runtime.handle().isCurrent()) {
+            runtime.stopTimers();
+        } else {
+            try {
+                detail::WorkerHandleAccess::defer(runtime.handle(),
+                    [keepAlive = std::move(keepAlive)] { keepAlive->runtime.stopTimers(); });
+            } catch (...) {
+                failTeardownStart(std::current_exception());
+            }
+        }
+        // close() can lose the race to a dispatcher that already set
+        // accepting=false but has not yet called every shutdown listener. Do
+        // not seal the retirement gate until that first notification batch is
+        // fully complete, so every listener can acquire its cleanup lease.
+        try {
+            detail::WorkerHandleAccess::whenShutdownNotificationsComplete(runtime.handle(),
+                [retirement = retirement] {
+                    retirement->seal();
+                    retirement->finish();
+                });
+        } catch (...) {
+            failTeardownStart(std::current_exception());
+        }
+    }
+
+    void finalizeStop() noexcept {
+        work.reset();
+        if (std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+            runtime.detach();
+            std::get<ExternalContextClaim>(contextOwnership).service()->releaseState(this);
+        }
     }
 
     void shutdownExternalContext() noexcept {
         if (!std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
             return;
         }
+        retirement->closeAdmission();
+        if (retirement->pending() != 0) {
+            std::terminate();
+        }
         stopping.store(true, std::memory_order_release);
+        runtime.stopTimers();
         work.reset();
         runtime.detach();
-        ioContext = nullptr;
+        detail::WorkerHandleAccess::waitForReservations(runtime.handle());
     }
 
     ContextOwnership contextOwnership;
-    asio::io_context* ioContext;
+    asio::io_context* const ioContext;
+    asio::io_context::executor_type executor;
     asio::executor_work_guard<asio::io_context::executor_type> work;
     WorkerRuntimeContext runtime;
     std::thread thread;
     std::atomic_bool stopping{false};
-    // Set by the owning pool; empty for an attached loop. Read only while
-    // registering a stop callback, which the owner does before start().
+    // Bound once before publication to the stable pool owner or weak attachment
+    // owner. Failure reporting and stop registration only read this channel.
     EventLoopFailureSink failureSink;
+    std::shared_ptr<EventLoopRetirement> retirement{std::make_shared<EventLoopRetirement>()};
 };
 
 }  // namespace detail
@@ -277,6 +499,120 @@ void ExternalContextAttachmentService::shutdown() {
 
 }  // namespace
 
+class EventLoopPoolOwner final : public std::enable_shared_from_this<EventLoopPoolOwner> {
+public:
+    struct FailureRecord final {
+        std::mutex mutex;
+        std::exception_ptr first;
+        bool observed{true};
+
+        void record(std::exception_ptr failure) noexcept {
+            if (!failure) {
+                return;
+            }
+            {
+                const std::lock_guard lock(mutex);
+                if (observed) {
+                    if (!first) {
+                        first = std::move(failure);
+                    }
+                    return;
+                }
+            }
+            detail::reportUnhandledFailure("event loop failure after pool retirement", failure);
+        }
+
+        void detachObserver() noexcept {
+            std::exception_ptr remaining;
+            {
+                const std::lock_guard lock(mutex);
+                observed = false;
+                remaining = std::exchange(first, nullptr);
+            }
+            if (remaining) {
+                detail::reportUnhandledFailure("event loop failure during pool retirement", remaining);
+            }
+        }
+
+        [[nodiscard]] std::exception_ptr take() noexcept {
+            const std::lock_guard lock(mutex);
+            return std::exchange(first, nullptr);
+        }
+    };
+
+    explicit EventLoopPoolOwner(std::size_t loopCount) {
+        loops_.reserve(loopCount);
+    }
+
+    void addLoop(const std::shared_ptr<detail::EventLoopState>& loop) {
+        loops_.emplace_back(loop);
+    }
+
+    void recordFailure(std::exception_ptr failure) noexcept {
+        if (!failure) {
+            return;
+        }
+        failureRecord_.record(std::move(failure));
+    }
+
+    void reportFailure(std::exception_ptr failure) noexcept {
+        if (!failure) {
+            return;
+        }
+        recordFailure(failure);
+        stop();
+    }
+
+    void stop() noexcept {
+        const bool runtimeStarted = lifecycle_.state() != detail::RuntimeLifecycle::State::kReady;
+        if (!lifecycle_.requestStop()) {
+            return;
+        }
+        for (const auto& weakLoop : loops_) {
+            if (auto loop = weakLoop.lock()) {
+                loop->stop(runtimeStarted, std::move(loop));
+            }
+        }
+    }
+
+    void run(const std::shared_ptr<detail::EventLoopState>& loop) noexcept {
+        const auto self = shared_from_this();
+        try {
+            loop->runtime.run([self](std::exception_ptr failure) noexcept {
+                self->reportFailure(std::move(failure));
+            });
+        } catch (...) {
+            reportFailure(std::current_exception());
+        }
+        loop->runtime.detach();
+    }
+
+    [[nodiscard]] bool start() noexcept {
+        return lifecycle_.start();
+    }
+
+    [[nodiscard]] detail::RuntimeLifecycle::State state() const noexcept {
+        return lifecycle_.state();
+    }
+
+    void completeStop() noexcept {
+        lifecycle_.completeStop();
+    }
+
+    [[nodiscard]] std::exception_ptr takeFailure() noexcept {
+        return failureRecord_.take();
+    }
+
+    void detachPoolObserver() noexcept {
+        failureRecord_.detachObserver();
+    }
+
+private:
+    std::pmr::vector<std::weak_ptr<detail::EventLoopState>> loops_{detail::processResource()};
+    detail::RuntimeLifecycle lifecycle_;
+    FailureRecord failureRecord_;
+};
+
 EventLoopStopRegistration::EventLoopStopRegistration(
     std::shared_ptr<detail::WorkerShutdownListener> listener) noexcept
     : listener_(std::move(listener)) {}
@@ -309,7 +645,7 @@ WorkerId EventLoop::id() const noexcept {
 }
 
 asio::io_context& EventLoop::ioContext() const& {
-    if (!state_ || state_->ioContext == nullptr) {
+    if (!state_ || !state_->runtime.handle().valid()) {
         if (state_) {
             throw std::logic_error("event loop execution context is detached");
         }
@@ -319,7 +655,8 @@ asio::io_context& EventLoop::ioContext() const& {
 }
 
 asio::io_context::executor_type EventLoop::executor() const {
-    return ioContext().get_executor();
+    static_cast<void>(ioContext());
+    return state_->executor;
 }
 
 const WorkerHandle& EventLoop::dispatchHandle() const noexcept {
@@ -334,6 +671,17 @@ WorkerHandle EventLoop::handle() const noexcept {
     return dispatchHandle();
 }
 
+void EventLoop::reportFailure(std::exception_ptr failure) const noexcept {
+    if (!failure) {
+        return;
+    }
+    if (state_) {
+        state_->reportFailure(std::move(failure));
+    } else {
+        detail::reportUnhandledFailure("invalid event loop failure", std::move(failure));
+    }
+}
+
 detail::EventLoopFailureSink EventLoop::failureSink() const {
     if (!state_) {
         throw std::logic_error("cannot start a task on an invalid event loop");
@@ -341,15 +689,27 @@ detail::EventLoopFailureSink EventLoop::failureSink() const {
     return state_->failureSink;
 }
 
-EventLoopStopRegistration EventLoop::registerStopCallback(MoveOnlyFunction<void()> callback) const {
+std::shared_ptr<void> EventLoop::acquireRootLease() const {
+    if (!state_) {
+        return {};
+    }
+    return state_->acquireRootLease();
+}
+
+EventLoopStopRegistration EventLoop::registerStopCallback(
+    MoveOnlyFunction<Task<void>()> callback) const {
     if (!state_) {
         throw std::logic_error("cannot register a stop callback on an invalid event loop");
     }
     if (!callback) {
         throw std::invalid_argument("event loop stop callback must be callable");
     }
-    auto listener = std::make_shared<EventLoopStopListener>(
-        state_->runtime.handle(), std::move(callback), state_->failureSink);
+    if (!state_->runtime.handle().accepting()) {
+        throw std::runtime_error("cannot register a stop callback on a stopping event loop");
+    }
+    auto listener = std::make_shared<EventLoopStopListener>(state_->runtime.handle(),
+        state_->executor, std::move(callback), state_->failureSink,
+        state_->retirement);
     detail::WorkerHandleAccess::registerShutdownListener(state_->runtime.handle(), listener);
     return EventLoopStopRegistration(std::move(listener));
 }
@@ -377,7 +737,7 @@ void EventLoopAttachment::run() {
     if (!state) {
         throw std::logic_error("cannot run an invalid event loop attachment");
     }
-    if (state->ioContext == nullptr) {
+    if (!state->runtime.handle().valid()) {
         throw std::logic_error("event loop execution context is detached");
     }
     state->runtime.run();
@@ -392,6 +752,18 @@ void EventLoopAttachment::stop() noexcept {
 EventLoopAttachment attachEventLoop(
     asio::io_context& ioContext, EventLoopAttachmentOptions options) {
     auto state = std::make_shared<detail::EventLoopState>(ioContext, options.mailboxCapacity);
+    const std::weak_ptr<detail::EventLoopState> weakState = state;
+    // RootTask uses this sink directly; it must not call EventLoopState::reportFailure,
+    // which would route back through this same sink.
+    state->failureSink = [weakState](std::exception_ptr failure) {
+        if (const auto lockedState = weakState.lock()) {
+            lockedState->reportAttachedFailure(std::move(failure));
+        } else {
+            detail::reportUnhandledFailure(
+                "attached event loop failure after retirement", std::move(failure));
+        }
+    };
+    state->installLifecycleListener();
     state->retainExternalContext(state);
     return EventLoopAttachment(std::move(state));
 }
@@ -402,85 +774,41 @@ struct EventLoopPool::Impl {
         if (options.mailboxCapacity == 0) {
             throw std::invalid_argument("event loop mailbox capacity must be greater than zero");
         }
+        owner = std::make_shared<EventLoopPoolOwner>(count);
         loops.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
             loops.push_back(std::make_shared<detail::EventLoopState>(options.mailboxCapacity));
-            // Failures with no caller left (a stop callback that throws during
-            // shutdown) become the pool's first failure, which join() rethrows.
-            // The sink holds the record, not the pool: a loop handle may outlive
-            // this Impl, and a sink capturing `this` would outlive it too.
-            loops.back()->failureSink = [record = failureRecord](std::exception_ptr failure) {
-                record->record(std::move(failure));
+            loops.back()->installLifecycleListener();
+            owner->addLoop(loops.back());
+            loops.back()->failureSink = [stableOwner = owner](std::exception_ptr failure) {
+                stableOwner->reportFailure(std::move(failure));
             };
         }
     }
 
-    void recordFailure(std::exception_ptr exception) noexcept {
-        failureRecord->record(std::move(exception));
-    }
-
     void stop() noexcept {
-        const bool runtimeStarted = lifecycle.state() != detail::RuntimeLifecycle::State::kReady;
-        if (!lifecycle.requestStop()) {
-            return;
-        }
-        for (const auto& loop : loops) {
-            loop->stop(runtimeStarted, loop);
-        }
-    }
-
-    void run(const std::shared_ptr<detail::EventLoopState>& loop) noexcept {
-        try {
-            loop->runtime.run([this](std::exception_ptr failure) noexcept {
-                recordFailure(std::move(failure));
-                stop();
-            });
-        } catch (...) {
-            recordFailure(std::current_exception());
-            stop();
-        }
+        owner->stop();
     }
 
     void launch(const std::shared_ptr<detail::EventLoopState>& loop) {
-        loop->thread = std::thread([this, loop] { run(loop); });
+        auto stableOwner = owner;
+        loop->thread = std::thread(
+            [stableOwner = std::move(stableOwner), loop] { stableOwner->run(loop); });
     }
 
     void drainUnlaunched() noexcept {
-        // A partial thread-launch failure must not strand work that was
-        // accepted before start(), nor owner-affine stop callbacks queued by
-        // stop(). The caller is not one of this pool's workers, so it can act
-        // as a short-lived owner for every loop that never acquired a thread.
+        // A partial thread-launch failure must not strand accepted mailbox work
+        // or owner-affine cleanup; missing workers are drained synchronously.
         for (const auto& loop : loops) {
             if (!loop->thread.joinable()) {
-                run(loop);
+                owner->run(loop);
             }
         }
     }
 
-    // The pool's first failure, shared so a loop's failure sink can outlive the
-    // pool without dangling. Only the first is kept: it is the one that caused
-    // the shutdown, and the ones behind it are usually its consequences.
-    struct FailureRecord final {
-        std::mutex mutex;
-        std::exception_ptr first;
-
-        void record(std::exception_ptr failure) noexcept {
-            const std::lock_guard lock(mutex);
-            if (!first) {
-                first = std::move(failure);
-            }
-        }
-
-        [[nodiscard]] std::exception_ptr take() noexcept {
-            const std::lock_guard lock(mutex);
-            return std::exchange(first, nullptr);
-        }
-    };
-
-    std::vector<std::shared_ptr<detail::EventLoopState>> loops;
-    detail::RuntimeLifecycle lifecycle;
+    std::pmr::vector<std::shared_ptr<detail::EventLoopState>> loops{detail::processResource()};
+    std::shared_ptr<EventLoopPoolOwner> owner;
     std::atomic<std::size_t> nextIndex{0};
-    std::shared_ptr<FailureRecord> failureRecord{std::make_shared<FailureRecord>()};
 };
 
 EventLoopPool::EventLoopPool(EventLoopPoolOptions options)
@@ -496,10 +824,11 @@ EventLoopPool::~EventLoopPool() {
         // cannot rethrow it further. Report rather than end here.
         detail::reportUnhandledFailure("event loop pool", std::current_exception());
     }
+    impl_->owner->detachPoolObserver();
 }
 
 void EventLoopPool::start() {
-    if (!impl_->lifecycle.start()) {
+    if (!impl_->owner->start()) {
         throw std::logic_error("event loop pool can only be started once");
     }
     try {
@@ -515,7 +844,7 @@ void EventLoopPool::start() {
                 loop->thread.join();
             }
         }
-        impl_->lifecycle.completeStop();
+        impl_->owner->completeStop();
         std::rethrow_exception(launchFailure);
     }
 }
@@ -530,7 +859,7 @@ void EventLoopPool::join() {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();
-    if (impl_->lifecycle.state() == detail::RuntimeLifecycle::State::kStopping) {
+    if (impl_->owner->state() == detail::RuntimeLifecycle::State::kStopping) {
         try {
             // stop() before start() still owes accepted mailbox work and
             // owner-affine stop callbacks a real execution context. Launch
@@ -541,7 +870,7 @@ void EventLoopPool::join() {
                 }
             }
         } catch (...) {
-            impl_->recordFailure(std::current_exception());
+            impl_->owner->recordFailure(std::current_exception());
             impl_->drainUnlaunched();
         }
     }
@@ -549,10 +878,12 @@ void EventLoopPool::join() {
         if (loop->thread.joinable()) {
             loop->thread.join();
         }
+        detail::WorkerHandleAccess::waitForReservations(loop->runtime.handle());
+        loop->runtime.detach();
     }
-    impl_->lifecycle.completeStop();
+    impl_->owner->completeStop();
 
-    if (const auto failure = impl_->failureRecord->take()) {
+    if (const auto failure = impl_->owner->takeFailure()) {
         std::rethrow_exception(failure);
     }
 }

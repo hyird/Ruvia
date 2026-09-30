@@ -232,6 +232,13 @@ WebWorkerStats WebWorkerDispatch::stats() const noexcept {
 }
 
 void WebWorkerDispatch::start(Task task) {
+    // Closing abandons factories that have not started. Runtime retirement now
+    // drains reserved mailbox publication before detach; it must not turn that
+    // quiescence drain into new application work against retired capabilities.
+    if (stopSource_.stopRequested() || !worker_.accepting()) {
+        abandon();
+        return;
+    }
     activeStarted_.fetch_add(1, std::memory_order_acq_rel);
     try {
         auto operation = run(std::move(task));

@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <ranges>
@@ -240,12 +241,26 @@ Task<void> HttpClientPool::join() {
         co_return;
     }
     backgroundJoined_ = true;
-    co_await backgroundTasks_.join();
+    std::exception_ptr failure;
+    try {
+        co_await backgroundTasks_.join();
+    } catch (...) {
+        // A child failure is observable only after join retired every child.
+        // If join itself could not start, its live drivers still borrow the
+        // transport owners below: this is a terminal ownership violation.
+        if (backgroundTasks_.size() != 0) {
+            std::terminate();
+        }
+        failure = std::current_exception();
+    }
     // Destroy QUIC SSL/socket/session owners while the worker loop and its PMR
     // owner are still alive. HttpClientPool itself is later destroyed by the
     // App lifecycle thread after the worker has joined.
     for (auto& connection : http3Connections_) {
         connection.reset();
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
     }
 }
 

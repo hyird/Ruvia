@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -98,16 +99,21 @@ struct WorkerDispatcher::Impl {
     };
     std::pmr::vector<Node> nodes;
     std::mutex mutex;
+    std::condition_variable pendingChanged;
     std::size_t freeHead{kNoTimerSlot};
     std::size_t readyHead{kNoTimerSlot};
     std::size_t readyTail{kNoTimerSlot};
     std::size_t pendingCount{0};
+    std::size_t activeCount{0};
+    IdleCallbacks idleWaiters{detail::processResource()};
     WorkerId workerId{0};
     std::atomic_bool accepting{true};
     std::atomic_bool contextAttached{true};
     bool drainScheduled{false};
     bool abandonDrain{false};
-    std::vector<std::weak_ptr<WorkerShutdownListener>> shutdownListeners;
+    bool shutdownNotificationActive{false};
+    IdleCallbacks shutdownNotificationWaiters{detail::processResource()};
+    ShutdownListeners shutdownListeners{detail::processResource()};
     std::pmr::vector<TimerEntry> timers;
     std::pmr::vector<TimerSlot> timerSlots;
     std::size_t freeTimerSlot{kNoTimerSlot};

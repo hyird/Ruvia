@@ -17,6 +17,7 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/detail/redis/RedisClientRuntime.h"
@@ -325,6 +326,14 @@ ruvia::Task<void> checkReconnectAfterBudgetRejection(ruvia::RedisClient& client,
 ruvia::Task<void> blockedCommand(ruvia::RedisClient& client) {
     co_await client.connect();
     (void)co_await client.command("STALL");
+}
+
+ruvia::Task<void> connectUntilStopped(ruvia::RedisClient& client, bool& cancelled) {
+    try {
+        co_await client.connect();
+    } catch (const ruvia::RedisError&) {
+        cancelled = true;
+    }
 }
 
 ruvia::Task<void> checkExpiration(ruvia::RedisClient& client,
@@ -648,6 +657,32 @@ RUVIA_TEST(redis_client_close_from_another_thread_cancels_pending_commands) {
     pool.stop();
     pool.join();
     RUVIA_CHECK(cancelled);
+}
+
+RUVIA_TEST(redis_client_event_loop_stop_awaits_retirement_of_pending_authentication) {
+    for (const bool useAttachmentRun : {false, true}) {
+        RedisPeer peer;
+        auto config = peer.config();
+        config.password = "stall-authentication";
+        asio::io_context io;
+        auto attachment = ruvia::attachEventLoop(io);
+        ruvia::RedisClient client(attachment.loop(), config);
+        bool cancelled = false;
+        auto root = attachment.loop().start(connectUntilStopped(client, cancelled));
+        std::thread driver([&] {
+            if (useAttachmentRun) {
+                attachment.run();
+            } else {
+                io.run();
+            }
+        });
+        peer.waitForBlockedCommand();
+        attachment.stop();
+        driver.join();
+        root.get();
+        RUVIA_CHECK(cancelled);
+        RUVIA_CHECK(!client.worker().accepting());
+    }
 }
 
 RUVIA_TEST(redis_client_shutdown_joins_an_inflight_connect) {

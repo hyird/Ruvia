@@ -24,7 +24,7 @@ HttpClientState::HttpClientState(EventLoop loop, const HttpClientConfig& config,
       worker_(loop_.handle()),
       memory_(),
       clients_(loop_.ioContext(), worker_, memory_.resource(), config, resultBudget),
-      closeState_(worker_) {}
+      closeState_(loop_, worker_) {}
 
 HttpClientState::~HttpClientState() {
     if (phase_.load(std::memory_order_acquire) != Phase::kClosed || !closeState_.complete() ||
@@ -36,9 +36,9 @@ HttpClientState::~HttpClientState() {
 void HttpClientState::bindStop() {
     try {
         std::weak_ptr<HttpClientState> weak = shared_from_this();
-        stopRegistration_ = loop_.onStop([weak = std::move(weak)] {
+        stopRegistration_ = loop_.onStop([weak = std::move(weak)]() -> Task<void> {
             if (const auto state = weak.lock()) {
-                state->startCloseOnWorker();
+                co_await shutdownOwned(state, ClientCloseState::ObservationMode::kRetirement);
             }
         });
     } catch (...) {
@@ -113,10 +113,11 @@ void HttpClientState::requestClose() noexcept {
 }
 
 Task<void> HttpClientState::shutdown() {
-    return shutdownOwned(shared_from_this());
+    return shutdownOwned(shared_from_this(), ClientCloseState::ObservationMode::kCaller);
 }
 
-Task<void> HttpClientState::shutdownOwned(std::shared_ptr<HttpClientState> state) {
+Task<void> HttpClientState::shutdownOwned(
+    std::shared_ptr<HttpClientState> state, ClientCloseState::ObservationMode mode) {
     if (!state->worker_.isCurrent()) {
         throw std::logic_error("HTTP client shutdown must run on its bound event loop");
     }
@@ -124,7 +125,7 @@ Task<void> HttpClientState::shutdownOwned(std::shared_ptr<HttpClientState> state
     while (!state->closeState_.complete()) {
         co_await state->closeState_.wait();
     }
-    state->closeState_.rethrowFailure();
+    state->closeState_.observeFailure(mode);
 }
 
 void HttpClientState::startCloseOnWorker() noexcept {
@@ -151,13 +152,31 @@ void HttpClientState::startCloseOnWorker() noexcept {
 }
 
 Task<void> HttpClientState::closeOnWorker() {
-    co_await clients_.join();
-    co_await operationScope_.closeAndJoin();
+    std::exception_ptr failure;
+    try {
+        co_await clients_.join();
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    try {
+        co_await operationScope_.closeAndJoin();
+    } catch (...) {
+        if (failure == nullptr) {
+            failure = std::current_exception();
+        }
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 
 void HttpClientState::finishClose(const TaskCompletionResult<void>& result) {
+    if (operationScope_.hasPendingOperations()) {
+        std::terminate();
+    }
     phase_.store(Phase::kClosed, std::memory_order_release);
-    closeState_.finish(result);
+    const auto* failure = result.failure();
+    closeState_.finish(failure == nullptr ? std::exception_ptr{} : failure->exception());
 }
 
 }  // namespace ruvia::detail

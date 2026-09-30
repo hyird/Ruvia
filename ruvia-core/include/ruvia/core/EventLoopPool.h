@@ -26,10 +26,11 @@ public:
 
     void start();
     void stop() noexcept;
-    // Stops the pool and waits for every worker to finish. If join() happens
-    // before start(), it creates short-lived owner threads to drain work accepted
-    // before shutdown and to run owner-affine stop callbacks. Calling join() from
-    // any worker owned by this pool throws logic_error before stopping the pool.
+    // Stops the pool and waits for every worker to finish its managed cleanup.
+    // If join() happens before start(), it creates short-lived owner threads to
+    // drain accepted work and run stop callbacks. Loop handles become invalid
+    // once joined. Calling join() from a pool worker throws logic_error before
+    // stopping the pool.
     void join();
 
     [[nodiscard]] std::size_t loopCount() const noexcept;

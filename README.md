@@ -477,21 +477,36 @@ if (!posted.accepted()) {
     // Retry or persist the rejected callable.
 }
 
-auto stopRegistration = loop.onStop([&socket] {
+auto stopRegistration = loop.onStop([&socket]() -> ruvia::Task<void> {
     std::error_code ignored;
     socket.close(ignored);
+    co_return;
 });
 
 loops.stop();
 loops.join();
 ```
 
-Keep the stop registration alive while its resource is active. The callback
-runs on the owning event-loop thread before that loop exits. Do not call
-`run()`, `stop()`, or `restart()` on a pool-owned `io_context`; lifecycle
-control belongs to `EventLoopPool`. Cross-thread application work uses bounded
-`EventLoop::post()`. Web workers expose `WorkerHandle`/`WebWorkerHandle`, not
-their `io_context` or executor.
+Keep the stop registration alive while its resource is active. `onStop()`
+callbacks return `Task<void>` and run on the owning event-loop thread. All
+callbacks are started before awaiting their completion. Cancel resource work
+and join its pending operations before returning, including exception paths;
+stopping does not wait for a graceful application-request drain. A callback
+already started remains owned until completion even if its registration is reset.
+
+Stopping closes external submission and cancels timers, but retains the runtime
+until its stop callbacks and admitted root tasks finish. Once retired, escaped
+`EventLoop` and `WorkerHandle` values are invalid; `ioContext()` and `executor()`
+throw `std::logic_error`. Do not call `run()`, `stop()`, or `restart()` on a
+pool-owned `io_context`; lifecycle control belongs to `EventLoopPool`.
+Cross-thread application work uses bounded `EventLoop::post()`. Web workers
+expose `WorkerHandle`/`WebWorkerHandle`, not their `io_context` or executor.
+
+Native completion handlers can submit terminal failures with
+`loop.reportFailure(std::exception_ptr)`. This requests runtime-owner stop
+without throwing through the native handler or stopping an external context.
+A pool records its first failure and rethrows it from `join()`; an attachment
+reports the failure through its diagnostic outlet while retiring its runtime.
 
 Integrations that own a `WorkerRuntimeContext` can use its `submission()` to
 obtain a `WorkerSubmissionView` for bounded submission without retaining endpoint
@@ -523,7 +538,9 @@ loops.join();
 ```
 
 Keep the `RootTask` and consume it before stopping resources the task may still
-use. `get()` waits and rethrows the task exception. Destroying an in-flight
+use. Register resource cancellation with `onStop()` so admitted roots can finish
+when the loop stops; a root waiting indefinitely without a cancellation path
+prevents retirement. `get()` waits and rethrows the task exception. Destroying an in-flight
 `RootTask` never destroys its suspended coroutine frame; an eventual unobserved
 failure is routed to the loop failure sink and a pooled loop rethrows it from
 `join()`. This setup-time root ownership does not replace bounded
@@ -543,19 +560,24 @@ auto loop = attachment.loop();
 std::thread thread([&] { io.run(); });
 loop.post([] { /* runs on the external context */ });
 
-attachment.stop(); // closes the mailbox, runs onStop hooks, releases its work guard
+attachment.stop(); // requests cancellation and asynchronous runtime retirement
 thread.join();
 ```
 
 The attachment may be stopped or destroyed while another thread is inside
-`run()`: its context service retains the worker state until the terminal
-cleanup handler drains. The external owner still retains ownership of
-`run()`, `stop()`, `restart()`, and the thread; the attachment never calls
-`io_context::stop()` because the context may host unrelated work. If the
-context is destroyed first, returned `EventLoop` handles become terminal and
-their `ioContext()`/`executor()` access throws `std::logic_error`. A second
-attachment is rejected until the first attachment's terminal cleanup has
-completed.
+`run()`: its context service retains the worker state and work guard until
+asynchronous cleanup and admitted roots finish. Continue driving the external
+context until that retirement completes, using either its native `run()` or
+`EventLoopAttachment::run()`. The external owner retains ownership of `stop()`,
+`restart()`, and the thread; the attachment never calls `io_context::stop()` or
+waits for unrelated native work. A second attachment is rejected until the
+first runtime has retired.
+
+Complete managed tasks and resource cleanup before destroying the external
+context. Destroying it with active structured obligations is a contract
+violation. Without those obligations, destroying the context first safely
+invalidates escaped handles; `ioContext()` and `executor()` then throw
+`std::logic_error`.
 
 Outbound HTTP clients are first-class event-loop objects too. A client owns one
 origin's worker-local DNS, TCP/TLS, connection pool, HTTP/1.1 and HTTP/2 state;
@@ -591,8 +613,13 @@ connects lazily on the bound loop; retries, cancellation, timeouts and protocol
 selection use the same runtime as `Context::httpClient()`. Operations must be
 created and awaited on that loop. `close()` is idempotent, may be called from any
 thread, and immediately requests cancellation without waiting. Use
-`co_await client.shutdown()` on the bound loop when the client teardown must be
-complete before the loop or its owning memory is destroyed.
+`co_await client.shutdown()` on the bound loop to complete teardown before
+releasing a client's resources. HTTP, database, Redis, and WebSocket clients
+also participate in their loop's asynchronous stop, using that same shutdown
+path; no separate manual shutdown is required merely to stop the loop. An
+internal teardown failure is terminal and is reported to the loop even without
+a shutdown waiter. Explicit `shutdown()` still rethrows that same failure;
+ordinary request or connection-attempt errors are not teardown failures.
 
 Database clients are first-class event-loop objects. They do not require an HTTP
 `App`, request `Context`, server worker, or an aggregate worker service. Bind

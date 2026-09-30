@@ -61,6 +61,10 @@ struct WorkerHandleAccess {
         const WorkerHandle& worker, MoveOnlyFunction<void()> task) noexcept;
     static void registerShutdownListener(
         const WorkerHandle& worker, const std::shared_ptr<WorkerShutdownListener>& listener);
+    static void whenShutdownNotificationsComplete(
+        const WorkerHandle& worker, MoveOnlyFunction<void()> callback);
+    static void whenIdle(const WorkerHandle& worker, MoveOnlyFunction<void()> callback);
+    static void waitForReservations(const WorkerHandle& worker) noexcept;
     static void scheduleTimer(const WorkerHandle& worker, ::ruvia::WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
         MoveOnlyFunction<void(::ruvia::WorkerTimerOutcome)> completion);

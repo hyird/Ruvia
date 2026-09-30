@@ -4,12 +4,14 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <vector>
 
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia::detail {
 
@@ -17,6 +19,7 @@ class WorkerShutdownListener {
 public:
     virtual ~WorkerShutdownListener() = default;
     virtual void workerStopping() noexcept = 0;
+    virtual void workerStoppingComplete() noexcept {}
 };
 
 class WorkerDispatcher final : public std::enable_shared_from_this<WorkerDispatcher> {
@@ -33,6 +36,10 @@ public:
     [[nodiscard]] bool deferIfAttached(MoveOnlyFunction<void()> task);
     void deferOrTerminate(MoveOnlyFunction<void()> task) noexcept;
     void registerShutdownListener(const std::shared_ptr<WorkerShutdownListener>& listener);
+    // Runs after the first stopping batch has notified every listener, or now if
+    // no batch is active. The active bit is published with accepting=false.
+    void whenShutdownNotificationsComplete(MoveOnlyFunction<void()> callback);
+    void whenIdle(MoveOnlyFunction<void()> callback);
     void scheduleTimer(WorkerTimerRegistration& registration,
         std::chrono::steady_clock::time_point deadline,
         MoveOnlyFunction<void(WorkerTimerOutcome)> completion);
@@ -61,16 +68,24 @@ public:
     // pool thread, an attached context's terminal handler, or its context
     // service). Handles remain safe terminal endpoints.
     void detachContext() noexcept;
+    void waitForReservations() noexcept;
     [[nodiscard]] bool attached() const noexcept;
     [[nodiscard]] bool isCurrent() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
 
 private:
-    using ShutdownListeners = std::vector<std::weak_ptr<WorkerShutdownListener>>;
+    using ShutdownListeners = std::pmr::vector<std::weak_ptr<WorkerShutdownListener>>;
+    using IdleCallbacks = std::pmr::vector<MoveOnlyFunction<void()>>;
+    struct ShutdownBatch final {
+        ShutdownListeners listeners{processResource()};
+        bool active{false};
+    };
 
-    [[nodiscard]] ShutdownListeners beginStopping(bool abandonDrain) noexcept;
-    static void notifyStopping(const ShutdownListeners& listeners) noexcept;
+    [[nodiscard]] IdleCallbacks takeIdleCallbacksLocked();
+    static void notifyIdle(IdleCallbacks callbacks) noexcept;
+    [[nodiscard]] ShutdownBatch beginStopping(bool abandonDrain) noexcept;
+    void notifyStopping(ShutdownBatch batch) noexcept;
     void abandonQueued() noexcept;
     void publish(std::size_t index);
     void rollbackReserved(std::size_t index) noexcept;

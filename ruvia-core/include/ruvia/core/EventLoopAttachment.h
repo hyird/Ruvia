@@ -23,8 +23,9 @@ struct EventLoopAttachmentOptions final {
 // destroyed. The attachment never calls io_context::stop() and does not join a
 // context it does not own.
 //
-// If the external io_context is destroyed first, attached EventLoop handles
-// become terminal; ioContext() and executor() then throw std::logic_error.
+// After attachment retirement, EventLoop handles become invalid; ioContext()
+// and executor() throw std::logic_error. The external io_context remains owned
+// by its caller and is never stopped, restarted, or joined by the attachment.
 class EventLoopAttachment final {
 public:
     ~EventLoopAttachment();
@@ -53,7 +54,8 @@ private:
 
 // Attach a Ruvia worker to a caller-owned io_context. The caller drives the
 // context with run() on exactly one thread and retains ownership of its
-// unrelated work and stop/restart policy.
+// unrelated work and stop/restart policy. stop() retires only Ruvia-managed
+// cleanup and never cancels the caller's unrelated operations.
 [[nodiscard]] EventLoopAttachment attachEventLoop(
     asio::io_context& ioContext, EventLoopAttachmentOptions options = {});
 

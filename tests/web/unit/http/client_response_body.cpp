@@ -1,9 +1,11 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -20,9 +22,12 @@
 #include <asio/co_spawn.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
+#include <asio/read.hpp>
 #include <asio/read_until.hpp>
+#include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/streambuf.hpp>
+#include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/AsioTask.h"
@@ -32,6 +37,8 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
@@ -169,15 +176,141 @@ private:
         .protocol = ruvia::HttpClientProtocol::kHttp1Only};
 }
 
+class Http2PartialBodyPeer final {
+public:
+    explicit Http2PartialBodyPeer(asio::io_context& io)
+        : io_(io),
+          acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          responseSent_(responseSentPromise_.get_future()) {}
+
+    void start() {
+        asio::co_spawn(io_, serve(), [this](std::exception_ptr failure) {
+            failure_ = failure;
+        });
+    }
+
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+
+    void waitForPartialResponse() {
+        if (responseSent_.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            throw std::runtime_error("HTTP/2 peer did not send the partial response");
+        }
+        responseSent_.get();
+    }
+
+    [[nodiscard]] bool observedClientClose() const noexcept {
+        return observedClientClose_;
+    }
+
+    void rethrowFailure() const {
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+private:
+    asio::awaitable<void> sendPending(asio::ip::tcp::socket& socket,
+        ruvia::Http2Connection& connection) {
+        const auto output = connection.pendingOutput();
+        if (!output.empty()) {
+            co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            (void)connection.consumeOutput(output.size());
+        }
+    }
+
+    asio::awaitable<void> serve() {
+        auto socket = co_await acceptor_.async_accept(asio::use_awaitable);
+        auto connection = ruvia::Http2Connection::server();
+        co_await sendPending(socket, connection);
+
+        std::array<char, ruvia::kHttp2ClientPreface.size()> preface{};
+        co_await asio::async_read(socket, asio::buffer(preface), asio::use_awaitable);
+        if (connection.feed(std::string_view(preface.data(), preface.size())) !=
+            ruvia::Http2FeedResult::kAccepted) {
+            throw std::runtime_error("HTTP/2 peer rejected the client preface");
+        }
+
+        std::uint32_t requestStream = 0;
+        std::string requestFrame;
+        std::optional<ruvia::Http2RequestHeadEvent> requestLease;
+        while (requestStream == 0) {
+            std::array<char, ruvia::kHttp2FrameHeaderBytes> header{};
+            co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
+            const auto frameHeader = ruvia::parseHttp2FrameHeader(std::span<const char>(header));
+            if (!frameHeader.has_value()) {
+                throw std::runtime_error("HTTP/2 peer received an incomplete frame header");
+            }
+            requestFrame.assign(header.data(), header.size());
+            requestFrame.resize(header.size() + frameHeader->length);
+            if (frameHeader->length != 0) {
+                co_await asio::async_read(socket,
+                    asio::buffer(requestFrame.data() + header.size(), frameHeader->length),
+                    asio::use_awaitable);
+            }
+            if (connection.feed(requestFrame) == ruvia::Http2FeedResult::kProtocolFailure) {
+                throw std::runtime_error("HTTP/2 peer rejected client frames");
+            }
+            while (auto event = connection.nextEvent()) {
+                if (auto* request = event->requestHead()) {
+                    requestStream = request->streamId();
+                    requestLease.emplace(std::move(*request));
+                }
+            }
+            co_await sendPending(socket, connection);
+        }
+
+        ruvia::HttpResponse response;
+        response.status(ruvia::http_status::kOk);
+        if (connection.submitStreamingResponseHead(requestStream, std::move(response)) !=
+            ruvia::Http2SubmitStatus::kAccepted) {
+            throw std::runtime_error("HTTP/2 peer could not submit response headers");
+        }
+        if (connection.submitData(requestStream, "partial-body", ruvia::Http2EndStream::kKeepOpen) !=
+            ruvia::Http2DataSubmitStatus::kAccepted) {
+            throw std::runtime_error("HTTP/2 peer could not submit partial response data");
+        }
+        // Retain the stream owner while the response remains open. Releasing
+        // it here would legally send RST_STREAM and invalidate this test setup.
+        co_await sendPending(socket, connection);
+        responseSentPromise_.set_value();
+
+        std::array<char, 1024> input{};
+        std::error_code error;
+        while (co_await socket.async_read_some(asio::buffer(input),
+            asio::redirect_error(asio::use_awaitable, error))) {
+        }
+        observedClientClose_ = static_cast<bool>(error);
+        if (!requestLease.has_value() || connection.release(std::move(*requestLease)) !=
+                                             ruvia::Http2ServerRequestReleaseStatus::kReleased) {
+            throw std::runtime_error("HTTP/2 peer could not release its request lease");
+        }
+        requestFrame.clear();
+    }
+
+    asio::io_context& io_;
+    asio::ip::tcp::acceptor acceptor_;
+    std::promise<void> responseSentPromise_;
+    std::future<void> responseSent_;
+    std::exception_ptr failure_;
+    bool observedClientClose_{false};
+};
+
 template <typename Operation>
 void runOperation(TestWorker& worker, asio::io_context& io, Operation&& operation) {
     std::exception_ptr failure;
-    asio::co_spawn(io, ruvia::asAwaitable(operation()),
-        [&worker, &failure](std::exception_ptr error) {
-            failure = error;
-            worker.attachment.stop();
-        });
+    auto run = [&]() -> ruvia::Task<void> {
+        try {
+            co_await operation();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        worker.attachment.stop();
+    };
+    auto root = worker.attachment.loop().start(run());
     worker.attachment.run();
+    root.get();
     io.restart();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
@@ -326,6 +459,38 @@ RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_opera
         auto& io = ruvia::test::newTestIoContext();
         TestWorker worker(io);
         LoopbackResponseServer server(
+            io, worker.handle, {"retiring"}, std::chrono::milliseconds(350));
+        ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(server.port()));
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            asio::steady_timer stopTimer(io);
+            stopTimer.expires_after(std::chrono::milliseconds(50));
+            stopTimer.async_wait([&worker](const std::error_code& error) {
+                if (!error) {
+                    worker.attachment.stop();
+                }
+            });
+            bool cancelled = false;
+            try {
+                (void)co_await client.send({.target = "/event-loop-stop"});
+            } catch (const ruvia::HttpClientError& error) {
+                cancelled = error.code() == ruvia::HttpClientError::Code::kClosing;
+            }
+            RUVIA_CHECK(cancelled);
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // Retirement closes the in-flight TCP exchange.
+            }
+        };
+        runOperation(worker, io, operation);
+    }
+
+    {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(
             io, worker.handle, {"closing"}, std::chrono::milliseconds(350));
         ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(server.port()));
         server.start();
@@ -355,6 +520,45 @@ RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_opera
         };
         runOperation(worker, io, operation);
     }
+}
+
+RUVIA_TEST(http2_event_loop_stop_joins_reader_writer_with_a_partial_response_body) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    Http2PartialBodyPeer peer(io);
+    peer.start();
+    auto config = localHttpClientConfig(peer.port());
+    config.protocol = ruvia::HttpClientProtocol::kHttp2Only;
+    ruvia::HttpClient client(worker.attachment.loop(), config);
+
+    auto operation = [&]() -> ruvia::Task<void> {
+        auto response = co_await client.send({.target = "/partial"});
+        RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(200));
+        asio::steady_timer stopTimer(io);
+        stopTimer.expires_after(std::chrono::milliseconds(100));
+        stopTimer.async_wait([&worker](const std::error_code& error) {
+            if (!error) {
+                worker.attachment.stop();
+            }
+        });
+        bool cancelled = false;
+        try {
+            (void)co_await response.body().readAll();
+        } catch (const ruvia::HttpClientError& error) {
+            // A started body operation can observe its client stop token before
+            // the pool-close outcome. Both are terminal cancellation, not a
+            // protocol failure from the peer's deliberately open stream.
+            cancelled = error.code() == ruvia::HttpClientError::Code::kCancelled ||
+                        error.code() == ruvia::HttpClientError::Code::kClosing;
+        }
+        RUVIA_CHECK(cancelled);
+    };
+    runOperation(worker, io, operation);
+    peer.waitForPartialResponse();
+    peer.rethrowFailure();
+    RUVIA_CHECK(peer.observedClientClose());
+    RUVIA_CHECK(!client.worker().valid());
+    RUVIA_CHECK(!client.worker().accepting());
 }
 
 RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations) {
