@@ -1,13 +1,17 @@
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <future>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -29,6 +33,244 @@
 #include "ruvia/core/detail/worker/WorkerSignal.h"
 
 namespace {
+
+class CountingResource final : public std::pmr::memory_resource {
+public:
+    std::size_t allocations{};
+    std::size_t deallocations{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocations;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        ++deallocations;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
+
+struct PostPayload final {
+    explicit PostPayload(std::pmr::memory_resource* resource)
+        : bytes(resource) {
+        bytes.resize(4096, 'x');
+    }
+    PostPayload(PostPayload&&) noexcept = default;
+    PostPayload(const PostPayload&) = delete;
+    std::pmr::vector<char> bytes;
+};
+
+struct ReentrantPostState final {
+    ruvia::EventLoop* loop;
+    std::unique_ptr<ruvia::EventLoopPool>* pool;
+    std::promise<void>* completion;
+    std::atomic_bool* payloadValid;
+
+    void shutDownLoop() noexcept {
+        *loop = ruvia::EventLoop{};
+        pool->reset();
+    }
+};
+
+struct InlineReentrantPostCallable final {
+    explicit InlineReentrantPostCallable(ReentrantPostState& state) noexcept
+        : state(&state) {
+        payload.fill('x');
+    }
+    InlineReentrantPostCallable(const InlineReentrantPostCallable& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->shutDownLoop();
+    }
+    InlineReentrantPostCallable(InlineReentrantPostCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->shutDownLoop();
+    }
+    ~InlineReentrantPostCallable() {
+        payload.fill('\0');
+    }
+
+    void operator()() {
+        state->payloadValid->store(payload.size() == 16 && payload.front() == 'x' &&
+                                       payload.back() == 'x',
+            std::memory_order_release);
+        state->completion->set_value();
+    }
+
+    ReentrantPostState* state;
+    std::array<char, 16> payload{};
+};
+
+struct HeapReentrantPostCallable final {
+    explicit HeapReentrantPostCallable(ReentrantPostState& state,
+        std::pmr::memory_resource* resource)
+        : state(&state),
+          payload(resource) {
+        payload.resize(4096, 'x');
+    }
+    HeapReentrantPostCallable(const HeapReentrantPostCallable& other)
+        : state(other.state),
+          payload(other.payload, other.payload.get_allocator().resource()) {
+        state->shutDownLoop();
+    }
+    HeapReentrantPostCallable(HeapReentrantPostCallable&& other) noexcept
+        : state(other.state),
+          payload(std::move(other.payload)) {
+        state->shutDownLoop();
+    }
+    ~HeapReentrantPostCallable() = default;
+
+    void operator()() {
+        state->payloadValid->store(payload.size() == 4096 && payload.front() == 'x' &&
+                                       payload.back() == 'x',
+            std::memory_order_release);
+        state->completion->set_value();
+    }
+
+    ReentrantPostState* state;
+    std::pmr::vector<char> payload;
+};
+
+struct ReentrantWorkerPostState final {
+    std::optional<ruvia::WorkerHandle> worker;
+    std::unique_ptr<ruvia::EventLoopPool> pool;
+    bool retired{false};
+    bool payloadValid{false};
+    bool eraseOnDestroy{false};
+
+    void retire() noexcept {
+        if (retired) {
+            return;
+        }
+        retired = true;
+        worker.reset();
+        pool.reset();
+    }
+};
+
+struct InlineWorkerCallable final {
+    explicit InlineWorkerCallable(ReentrantWorkerPostState& state) noexcept
+        : state(&state) {
+        payload.fill('i');
+    }
+    InlineWorkerCallable(const InlineWorkerCallable&) = delete;
+    InlineWorkerCallable(InlineWorkerCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {
+        state->retire();
+    }
+    void operator()() {
+        state->payloadValid = payload.front() == 'i' && payload.back() == 'i';
+    }
+    ReentrantWorkerPostState* state;
+    std::array<char, 16> payload{};
+};
+
+struct HeapWorkerCallable final {
+    explicit HeapWorkerCallable(ReentrantWorkerPostState& state, std::pmr::memory_resource* resource)
+        : state(&state),
+          payload(resource) {
+        payload.resize(4096, 'h');
+    }
+    HeapWorkerCallable(const HeapWorkerCallable& other)
+        : state(other.state),
+          payload(other.payload, other.payload.get_allocator().resource()) {
+        state->retire();
+    }
+    HeapWorkerCallable(HeapWorkerCallable&&) noexcept = default;
+    void operator()() {
+        state->payloadValid = payload.size() == 4096 && payload.front() == 'h' &&
+                              payload.back() == 'h';
+    }
+    ReentrantWorkerPostState* state;
+    std::pmr::vector<char> payload;
+};
+
+struct ErasedWorkerCallable final {
+    explicit ErasedWorkerCallable(ReentrantWorkerPostState& state) noexcept
+        : state(&state) {
+        payload.fill('e');
+    }
+    ErasedWorkerCallable(const ErasedWorkerCallable&) = delete;
+    ErasedWorkerCallable(ErasedWorkerCallable&& other) noexcept
+        : state(other.state),
+          payload(other.payload) {}
+    ~ErasedWorkerCallable() {
+        if (state->eraseOnDestroy) {
+            state->retire();
+        }
+    }
+    void operator()() {
+        state->payloadValid = payload.front() == 'e' && payload.back() == 'e';
+    }
+    ReentrantWorkerPostState* state;
+    std::array<char, 16> payload{};
+};
+
+bool testWorkerHandleCallableLifetime() {
+    const auto runRejected = [](ruvia::PostResult rejected, bool& payloadValid) {
+        if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr) {
+            return false;
+        }
+        auto task = std::move(rejected).takeRejected();
+        ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+        recovery.start();
+        recovery.join();
+        return payloadValid;
+    };
+
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        std::optional<InlineWorkerCallable> input;
+        input.emplace(state);
+        auto rejected = state.worker->post(std::move(*input));
+        if (!state.retired || state.worker || state.pool || !runRejected(std::move(rejected), state.payloadValid)) {
+            return false;
+        }
+    }
+
+    CountingResource resource;
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        std::optional<HeapWorkerCallable> input;
+        input.emplace(state, &resource);
+        auto rejected = state.worker->post(*input);
+        input.reset();
+        if (!state.retired || state.worker || state.pool ||
+            !runRejected(std::move(rejected), state.payloadValid) ||
+            resource.allocations != resource.deallocations) {
+            return false;
+        }
+    }
+
+    {
+        ReentrantWorkerPostState state;
+        state.pool = std::make_unique<ruvia::EventLoopPool>(
+            ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+        state.worker.emplace(state.pool->loop(0).handle());
+        ruvia::MoveOnlyFunction<void()> input{ErasedWorkerCallable(state)};
+        state.eraseOnDestroy = true;
+        auto rejected = state.worker->post(std::move(input));
+        if (!state.retired || state.worker || state.pool ||
+            !runRejected(std::move(rejected), state.payloadValid)) {
+            return false;
+        }
+    }
+    return resource.allocations == resource.deallocations;
+}
 
 struct MailboxDestructorState final {
     const ruvia::WorkerHandle* worker{nullptr};
@@ -190,6 +432,466 @@ bool testMailboxFactoryCanFinishAfterDetach() {
     context.run();
     return retainedWhileReserved && status == ruvia::PostStatus::kAccepted && !ran &&
            destroyed.load() == 1;
+}
+
+bool testEventLoopPostBorrowAndRejectedCallableOwnership() {
+    constexpr std::size_t kRepeatedPosts = 64;
+    CountingResource resource;
+    std::atomic_bool invalidPayloadValid{false};
+    std::atomic_size_t repeatedValid{0};
+    std::atomic_size_t repeatedInvalid{0};
+    std::promise<void> repeatedCompleted;
+    auto repeatedCompletion = repeatedCompleted.get_future();
+    ruvia::EventLoopPool accepting({.loopCount = 1, .mailboxCapacity = kRepeatedPosts + 1});
+    const auto loop = accepting.loop(0);
+
+    auto invalid = ruvia::EventLoop{}.post(
+        [payload = PostPayload(&resource), &invalidPayloadValid]() mutable {
+            invalidPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                                          payload.bytes.back() == 'x',
+                std::memory_order_release);
+        });
+    if (invalid != ruvia::PostStatus::kWorkerStopping || invalid.rejected() == nullptr ||
+        resource.allocations == resource.deallocations) {
+        return false;
+    }
+    auto invalidTask = std::move(invalid).takeRejected();
+    if (resource.allocations == resource.deallocations ||
+        loop.post(std::move(invalidTask)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < kRepeatedPosts; ++i) {
+        auto posted = accepting.loop(0).post([payload = PostPayload(&resource), i, &repeatedValid,
+                                                 &repeatedInvalid, &repeatedCompleted]() mutable {
+            if (payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                payload.bytes.back() == 'x') {
+                repeatedValid.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                repeatedInvalid.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (i + 1 == kRepeatedPosts) {
+                repeatedCompleted.set_value();
+            }
+        });
+        if (!posted.accepted()) {
+            return false;
+        }
+    }
+    accepting.start();
+    repeatedCompletion.wait();
+    accepting.stop();
+    accepting.join();
+    if (!invalidPayloadValid.load(std::memory_order_acquire) ||
+        repeatedValid.load(std::memory_order_relaxed) != kRepeatedPosts ||
+        repeatedInvalid.load(std::memory_order_relaxed) != 0 ||
+        resource.allocations != resource.deallocations) {
+        return false;
+    }
+
+    ruvia::EventLoop closed;
+    {
+        ruvia::EventLoopPool stopped({.loopCount = 1, .mailboxCapacity = 1});
+        closed = stopped.loop(0);
+        stopped.join();
+    }
+    std::atomic_bool closedPayloadValid{false};
+    auto rejected = closed.post(
+        [payload = PostPayload(&resource), &closedPayloadValid]() mutable {
+            closedPayloadValid.store(payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                                         payload.bytes.back() == 'x',
+                std::memory_order_release);
+        });
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        resource.allocations == resource.deallocations) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    if (resource.allocations == resource.deallocations) {
+        return false;
+    }
+    std::promise<void> recovered;
+    auto recoveredFuture = recovered.get_future();
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    auto recoveredPost = recovery.loop(0).post(
+        [task = std::move(retry), &recovered]() mutable {
+            task();
+            recovered.set_value();
+        });
+    if (!recoveredPost.accepted()) {
+        return false;
+    }
+    recovery.start();
+    recoveredFuture.wait();
+    recovery.stop();
+    recovery.join();
+    return closedPayloadValid.load(std::memory_order_acquire) &&
+           resource.allocations == resource.deallocations;
+}
+
+bool testEventLoopPostProtectsReentrantInlineMove() {
+    std::promise<void> completed;
+    auto completion = completed.get_future();
+    std::atomic_bool payloadValid{false};
+    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
+        ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+    auto loop = originalPool->loop(0);
+    ReentrantPostState state{.loop = &loop,
+        .pool = &originalPool,
+        .completion = &completed,
+        .payloadValid = &payloadValid};
+    std::optional<InlineReentrantPostCallable> input;
+    input.emplace(state);
+
+    auto rejected = loop.post(std::move(*input));
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        originalPool != nullptr || loop.valid()) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    input.reset();
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    recovery.start();
+    if (completion.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        recovery.stop();
+        recovery.join();
+        return false;
+    }
+    recovery.stop();
+    recovery.join();
+    return payloadValid.load(std::memory_order_acquire);
+}
+
+bool testEventLoopPostProtectsReentrantHeapCopy() {
+    CountingResource resource;
+    std::promise<void> completed;
+    auto completion = completed.get_future();
+    std::atomic_bool payloadValid{false};
+    auto originalPool = std::make_unique<ruvia::EventLoopPool>(
+        ruvia::EventLoopPoolOptions{.loopCount = 1, .mailboxCapacity = 1});
+    auto loop = originalPool->loop(0);
+    ReentrantPostState state{.loop = &loop,
+        .pool = &originalPool,
+        .completion = &completed,
+        .payloadValid = &payloadValid};
+    std::optional<HeapReentrantPostCallable> input;
+    input.emplace(state, &resource);
+
+    auto rejected = loop.post(*input);
+    if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
+        originalPool != nullptr || loop.valid()) {
+        return false;
+    }
+    input.reset();
+    if (resource.allocations != resource.deallocations + 1) {
+        return false;
+    }
+    auto retry = std::move(rejected).takeRejected();
+    if (resource.allocations != resource.deallocations + 1) {
+        return false;
+    }
+    ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+    if (recovery.loop(0).post(std::move(retry)) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    recovery.start();
+    if (completion.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+        recovery.stop();
+        recovery.join();
+        return false;
+    }
+    recovery.stop();
+    recovery.join();
+    return payloadValid.load(std::memory_order_acquire) &&
+           resource.allocations == resource.deallocations;
+}
+
+bool testWorkerSubmissionViewLifecycleAndRejection() {
+    struct ThrowOnCopy final {
+        explicit ThrowOnCopy(std::pmr::memory_resource* resource)
+            : bytes(resource) {
+            bytes.resize(4096, 'c');
+        }
+        ThrowOnCopy(const ThrowOnCopy& other)
+            : bytes(other.bytes, other.bytes.get_allocator().resource()) {
+            throw std::runtime_error("copy failed");
+        }
+        ThrowOnCopy(ThrowOnCopy&&) noexcept = default;
+        void operator()() const {}
+        std::pmr::vector<char> bytes;
+    };
+    struct ThrowOnMove final {
+        explicit ThrowOnMove(std::pmr::memory_resource* resource)
+            : bytes(resource) {
+            bytes.resize(4096, 'm');
+        }
+        ThrowOnMove(ThrowOnMove&& other)
+            : bytes(std::move(other.bytes)) {
+            throw std::runtime_error("move failed");
+        }
+        void operator()() const {}
+        std::pmr::vector<char> bytes;
+    };
+
+    asio::io_context exceptionContext;
+    ruvia::WorkerRuntimeContext exceptionRuntime(exceptionContext, 1);
+    const auto exceptionView = exceptionRuntime.submission();
+    CountingResource exceptionResource;
+    {
+        ThrowOnCopy copyInput(&exceptionResource);
+        ThrowOnMove moveInput(&exceptionResource);
+        bool copyThrew = false;
+        bool moveThrew = false;
+        try {
+            static_cast<void>(exceptionView.post(copyInput));
+        } catch (const std::runtime_error&) {
+            copyThrew = true;
+        }
+        try {
+            static_cast<void>(exceptionView.post(std::move(moveInput)));
+        } catch (const std::runtime_error&) {
+            moveThrew = true;
+        }
+        const auto afterException = exceptionView.post([] {});
+        if (!copyThrew || !moveThrew || !exceptionView.valid() || !exceptionView.accepting() ||
+            afterException != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+    }
+    if (exceptionResource.allocations != exceptionResource.deallocations) {
+        return false;
+    }
+
+    struct ViewReentryState final {
+        std::optional<ruvia::WorkerSubmissionView>* source;
+        ruvia::WorkerRuntimeContext* runtime;
+        bool detach;
+        bool retired{false};
+        bool payloadValid{false};
+        CountingResource* resource;
+
+        void retire() noexcept {
+            if (retired) {
+                return;
+            }
+            retired = true;
+            source->reset();
+            if (detach) {
+                runtime->detach();
+            } else {
+                runtime->close();
+            }
+        }
+    };
+    struct ReentrantViewCallable final {
+        explicit ReentrantViewCallable(ViewReentryState& state)
+            : state(&state),
+              payload(state.resource) {
+            payload.resize(4096, 'v');
+        }
+        ReentrantViewCallable(const ReentrantViewCallable& other)
+            : state(other.state),
+              payload(other.payload, other.payload.get_allocator().resource()) {
+            state->retire();
+        }
+        ReentrantViewCallable(ReentrantViewCallable&& other) noexcept
+            : state(other.state),
+              payload(std::move(other.payload)) {
+            state->retire();
+        }
+        void operator()() {
+            state->payloadValid = payload.size() == 4096 && payload.front() == 'v' &&
+                                  payload.back() == 'v';
+        }
+        ViewReentryState* state;
+        std::pmr::vector<char> payload;
+    };
+
+    const auto exerciseReentry = [](bool detach, bool useCopy) {
+        CountingResource resource;
+        asio::io_context context;
+        ruvia::WorkerRuntimeContext runtime(context, 1);
+        std::optional<ruvia::WorkerSubmissionView> source;
+        source.emplace(runtime.submission());
+        ViewReentryState state{.source = &source, .runtime = &runtime, .detach = detach, .resource = &resource};
+        std::optional<ReentrantViewCallable> input;
+        input.emplace(state);
+        auto rejected = useCopy ? source->post(*input) : source->post(std::move(*input));
+        if (!state.retired || source || !runtime.submission().valid() ||
+            runtime.submission().accepting() || rejected != ruvia::PostStatus::kWorkerStopping ||
+            rejected.rejected() == nullptr) {
+            return false;
+        }
+        auto task = std::move(rejected).takeRejected();
+        ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
+        if (recovery.loop(0).post(std::move(task)) != ruvia::PostStatus::kAccepted) {
+            return false;
+        }
+        recovery.start();
+        recovery.join();
+        input.reset();
+        return state.payloadValid && resource.allocations == resource.deallocations;
+    };
+    if (!exerciseReentry(false, true) || !exerciseReentry(true, false)) {
+        return false;
+    }
+
+    struct ReservedMoveState final {
+        ruvia::WorkerRuntimeContext* runtime;
+        CountingResource* resource;
+        bool detach;
+        int moves{0};
+        bool reservationObserved{false};
+        bool ran{false};
+    };
+    struct InlineReservedMoveCallable final {
+        explicit InlineReservedMoveCallable(ReservedMoveState& state)
+            : state(&state),
+              payload(static_cast<char*>(state.resource->allocate(16, alignof(char)))) {
+            std::fill_n(payload, 16, 'r');
+        }
+        InlineReservedMoveCallable(InlineReservedMoveCallable&& other) noexcept
+            : state(other.state),
+              payload(std::exchange(other.payload, nullptr)) {
+            // This move transfers the callable into its already reserved node;
+            // detach may cause additional cleanup moves after this point.
+            if (++state->moves == 3) {
+                state->reservationObserved =
+                    state->runtime->submission().post([] {}) == ruvia::PostStatus::kQueueFull;
+                if (state->detach) {
+                    state->runtime->detach();
+                } else {
+                    state->runtime->close();
+                }
+            }
+        }
+        ~InlineReservedMoveCallable() {
+            if (payload != nullptr) {
+                state->resource->deallocate(payload, 16, alignof(char));
+            }
+        }
+        void operator()() {
+            state->ran = payload != nullptr && payload[0] == 'r' && payload[15] == 'r';
+        }
+
+        ReservedMoveState* state;
+        char* payload;
+    };
+    static_assert(sizeof(InlineReservedMoveCallable) <= 3 * sizeof(void*));
+    static_assert(std::is_nothrow_move_constructible_v<InlineReservedMoveCallable>);
+
+    const auto exerciseReservedMove = [](bool detach) {
+        CountingResource resource;
+        asio::io_context context;
+        ruvia::WorkerRuntimeContext runtime(context, 1);
+        ReservedMoveState state{.runtime = &runtime, .resource = &resource, .detach = detach};
+        InlineReservedMoveCallable input(state);
+        const auto submitted = runtime.submission().post(std::move(input));
+        if (submitted != ruvia::PostStatus::kAccepted || !state.reservationObserved ||
+            resource.allocations != 1) {
+            return false;
+        }
+        if (detach) {
+            if (state.ran || resource.deallocations != 1) {
+                return false;
+            }
+        } else {
+            context.run();
+            if (!state.ran || resource.deallocations != 1) {
+                return false;
+            }
+        }
+        return resource.allocations == resource.deallocations;
+    };
+    if (!exerciseReservedMove(false) || !exerciseReservedMove(true)) {
+        return false;
+    }
+
+    constexpr std::size_t kRepeatedPosts = 64;
+    CountingResource resource;
+    asio::io_context context;
+    ruvia::WorkerRuntimeContext runtime(context, kRepeatedPosts + 2);
+    const auto view = runtime.submission();
+    bool acceptedPayloadValid = false;
+    if (!view.valid() || !view.accepting() || view.post([] {}) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    auto accepted = view.post([payload = PostPayload(&resource), &acceptedPayloadValid]() mutable {
+        acceptedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                               payload.bytes.back() == 'x';
+    });
+    if (accepted != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    for (std::size_t index = 0; index < kRepeatedPosts; ++index) {
+        auto posted = view.post([payload = PostPayload(&resource)]() mutable {
+            if (payload.bytes.size() != 4096 || payload.bytes.front() != 'x') {
+                std::terminate();
+            }
+        });
+        if (!posted.accepted()) {
+            return false;
+        }
+    }
+    context.run();
+    if (!acceptedPayloadValid || resource.allocations != resource.deallocations) {
+        return false;
+    }
+
+    asio::io_context fullContext;
+    ruvia::WorkerRuntimeContext fullRuntime(fullContext, 1);
+    const auto fullView = fullRuntime.submission();
+    CountingResource rejectedResource;
+    bool retainedPayloadValid = false;
+    if (fullView.post([] {}) != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    auto full = fullView.post([payload = PostPayload(&rejectedResource), &retainedPayloadValid]() mutable {
+        retainedPayloadValid = payload.bytes.size() == 4096 && payload.bytes.front() == 'x' &&
+                               payload.bytes.back() == 'x';
+    });
+    if (full != ruvia::PostStatus::kQueueFull || full.rejected() == nullptr) {
+        return false;
+    }
+    auto retained = std::move(full).takeRejected();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        auto again = fullView.post(std::move(retained));
+        if (again != ruvia::PostStatus::kQueueFull || again.rejected() == nullptr ||
+            rejectedResource.allocations == rejectedResource.deallocations) {
+            return false;
+        }
+        retained = std::move(again).takeRejected();
+    }
+    fullContext.run();
+    fullContext.restart();
+    const auto retried = fullView.post(std::move(retained));
+    if (retried != ruvia::PostStatus::kAccepted) {
+        return false;
+    }
+    fullContext.run();
+    if (!retainedPayloadValid || rejectedResource.allocations != rejectedResource.deallocations) {
+        return false;
+    }
+
+    asio::io_context closedContext;
+    ruvia::WorkerRuntimeContext closedRuntime(closedContext, 1);
+    auto closedView = closedRuntime.submission();
+    closedRuntime.close();
+    if (!closedView.valid() || closedView.accepting() ||
+        closedView.post([] {}) != ruvia::PostStatus::kWorkerStopping) {
+        return false;
+    }
+    closedRuntime.detach();
+    if (!closedView.valid() || closedView.accepting()) {
+        return false;
+    }
+    ruvia::WorkerSubmissionView invalid;
+    return !invalid.valid() && !invalid.accepting() &&
+           invalid.post([] {}) == ruvia::PostStatus::kWorkerStopping && resource.allocations > 0 &&
+           resource.allocations == resource.deallocations;
 }
 
 bool testPostOutcomeInvariantsAndEmptyCallbacks() {
@@ -1012,8 +1714,17 @@ int main() {
         std::fflush(stdout);
         return passed;
     };
-    return run("post_outcome_invariants_and_empty_callbacks",
-               testPostOutcomeInvariantsAndEmptyCallbacks) &&
+    return run("event_loop_post_borrow_and_rejected_callable_ownership",
+               testEventLoopPostBorrowAndRejectedCallableOwnership) &&
+                   run("event_loop_post_protects_reentrant_inline_move",
+                       testEventLoopPostProtectsReentrantInlineMove) &&
+                   run("event_loop_post_protects_reentrant_heap_copy",
+                       testEventLoopPostProtectsReentrantHeapCopy) &&
+                   run("worker_handle_callable_lifetime", testWorkerHandleCallableLifetime) &&
+                   run("worker_submission_view_lifecycle_and_rejection",
+                       testWorkerSubmissionViewLifecycleAndRejection) &&
+                   run("post_outcome_invariants_and_empty_callbacks",
+                       testPostOutcomeInvariantsAndEmptyCallbacks) &&
                    run("worker_runtime_context_owns_stable_detached_endpoint",
                        testWorkerRuntimeContextOwnsStableDetachedEndpoint) &&
                    run("mailbox_callable_destruction_can_inspect_worker",

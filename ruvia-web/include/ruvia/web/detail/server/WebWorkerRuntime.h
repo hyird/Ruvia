@@ -20,6 +20,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/WorkerSignal.h"
+#include "ruvia/core/WorkerSubmissionView.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/WebWorker.h"
@@ -89,6 +90,10 @@ public:
     void acceptTransferredConnection(NativeAcceptedSocketTicket&& ticket) noexcept;
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] HttpServerStats stats() const noexcept;
+    [[nodiscard]] WorkerSubmissionView networkSubmission() const& noexcept {
+        return workerRuntime_.submission();
+    }
+    WorkerSubmissionView networkSubmission() const&& = delete;
     [[nodiscard]] const WorkerHandle& worker() const& noexcept {
         return workerRuntime_.handle();
     }

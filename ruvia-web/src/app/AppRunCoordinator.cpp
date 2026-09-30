@@ -228,7 +228,7 @@ private:
                 throw std::logic_error("HTTP/3 listener has no worker-side server");
             }
             runtime->networkTargets.push_back({
-                .worker = &target->worker(),
+                .submission = target->networkSubmission(),
                 .object = target,
                 .available = &networkTargetAvailable,
                 .accept = &networkTargetAccept,

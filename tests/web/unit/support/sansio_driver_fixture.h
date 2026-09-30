@@ -282,7 +282,7 @@ inline std::string windowUpdate(std::uint32_t streamId, std::uint32_t increment)
 // A server-initiated RFC 6455 Close is not itself RFC 8441 transport EOF. The first
 // DATA carries only the Close frame and keeps the h2 send half open; after the client
 // replies with Close+END_STREAM, the server emits its separate empty DATA+END_STREAM.
-// This pins the typed WsOutputPlan -> Http2EndStream mapping and prevents a runtime
+// This pins the typed WebSocketOutputPlan -> Http2EndStream mapping and prevents a runtime
 // from reconstructing END_STREAM from "we sent a Close" again.
 
 // An Extended CONNECT to a WebSocket route with a bad sec-websocket-version must be

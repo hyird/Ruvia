@@ -1,3 +1,5 @@
+#include "ruvia/web/detail/client/HttpClientPool.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -20,7 +22,6 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
 #include "ruvia/web/detail/http3/Http3ClientConnection.h"

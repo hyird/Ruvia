@@ -54,7 +54,7 @@ HttpClientHandle HttpClientState::handle(OperationOptions options) {
     options = mergeOperationOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
         std::move(options));
-    return clients_.get(operationScope_).withOptions(std::move(options));
+    return clients_.get(operationScope_, std::move(options));
 }
 
 HttpClientStats HttpClientState::stats() {

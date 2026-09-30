@@ -21,6 +21,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
 #include <asio/read_until.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/write.hpp>
 
@@ -35,7 +36,7 @@
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
 #include "ruvia/web/detail/http3/Http3ClientBodyBudget.h"
@@ -59,15 +60,21 @@ public:
 class LoopbackResponseServer final {
 public:
     LoopbackResponseServer(asio::io_context& ioContext, const ruvia::WorkerHandle& worker,
-        std::vector<std::string> bodies)
+        std::vector<std::string> bodies,
+        std::chrono::milliseconds responseDelay = std::chrono::milliseconds::zero(),
+        bool closeWithoutResponse = false,
+        std::size_t responsesBeforeClose = 0)
         : ioContext_(ioContext),
           acceptor_(ioContext, {asio::ip::tcp::v4(), std::uint16_t{0}}),
-          done_(worker) {
+          done_(worker),
+          responseDelay_(responseDelay),
+          closeWithoutResponse_(closeWithoutResponse),
+          responsesBeforeClose_(responsesBeforeClose) {
         responses_.reserve(bodies.size());
         for (const auto& body : bodies) {
             responses_.push_back("HTTP/1.1 200 OK\r\nContent-Length: " +
                                  std::to_string(body.size()) +
-                                 "\r\nConnection: close\r\n\r\n" + body);
+                                 "\r\nX-Peer: retained\r\nConnection: close\r\n\r\n" + body);
         }
     }
 
@@ -101,19 +108,38 @@ private:
                         fail(readError);
                         return;
                     }
+                    if (closeWithoutResponse_ && nextResponse_ >= responsesBeforeClose_) {
+                        std::error_code ignored;
+                        socket->close(ignored);
+                        done_.notify();
+                        return;
+                    }
                     const auto responseIndex = nextResponse_++;
-                    asio::async_write(*socket, asio::buffer(responses_[responseIndex]),
-                        [this, socket](const std::error_code& writeError, std::size_t) {
-                            if (writeError) {
-                                fail(writeError);
-                                return;
-                            }
-                            if (nextResponse_ == responses_.size()) {
-                                done_.notify();
-                            } else {
-                                acceptNext();
+                    auto writeResponse = [this, socket, responseIndex] {
+                        asio::async_write(*socket, asio::buffer(responses_[responseIndex]),
+                            [this, socket](const std::error_code& writeError, std::size_t) {
+                                if (writeError) {
+                                    fail(writeError);
+                                    return;
+                                }
+                                if (nextResponse_ == responses_.size()) {
+                                    done_.notify();
+                                } else {
+                                    acceptNext();
+                                }
+                            });
+                    };
+                    if (responseDelay_ == std::chrono::milliseconds::zero()) {
+                        writeResponse();
+                    } else {
+                        auto timer = std::make_shared<asio::steady_timer>(ioContext_, responseDelay_);
+                        timer->async_wait([timer, writeResponse = std::move(writeResponse)](
+                                              const std::error_code& timerError) mutable {
+                            if (!timerError) {
+                                writeResponse();
                             }
                         });
+                    }
                 });
         });
     }
@@ -131,6 +157,9 @@ private:
     ruvia::WorkerSignal done_;
     std::exception_ptr failure_;
     std::size_t nextResponse_{0};
+    std::chrono::milliseconds responseDelay_;
+    bool closeWithoutResponse_;
+    std::size_t responsesBeforeClose_;
 };
 
 [[nodiscard]] ruvia::HttpClientConfig localHttpClientConfig(std::uint16_t port) {
@@ -188,6 +217,296 @@ RUVIA_TEST(client_body_chunks_preserve_octets_and_pending_data_does_not_invalida
         runOperation(worker, io, operation);
     }
     RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_operation_runs) {
+    {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(
+            io, worker.handle, {"slow"}, std::chrono::milliseconds(350));
+        auto config = localHttpClientConfig(server.port());
+        config.requestTimeout = std::chrono::milliseconds(50);
+        ruvia::HttpClient client(worker.attachment.loop(), config);
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto handle = client.withOptions({.timeout = std::chrono::seconds(2)});
+            auto cold = handle.send({.target = "/pool-timeout-override"});
+            (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(250));
+            const auto start = std::chrono::steady_clock::now();
+            auto response = co_await std::move(cold);
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            RUVIA_CHECK_EQ(response.status(), ruvia::HttpStatusCode::fromValue(200));
+            RUVIA_CHECK(elapsed >= std::chrono::milliseconds(50));
+            RUVIA_CHECK(elapsed < std::chrono::seconds(2));
+            co_await server.wait();
+            co_await client.shutdown();
+        };
+        runOperation(worker, io, operation);
+    }
+
+    {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(
+            io, worker.handle, {"late"}, std::chrono::milliseconds(350));
+        auto config = localHttpClientConfig(server.port());
+        config.requestTimeout = std::chrono::seconds(5);
+        ruvia::HttpClient client(worker.attachment.loop(), config);
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto base = client.withOptions({.timeout = std::chrono::seconds(5)});
+            auto shortened = base.withOptions({.timeout = std::chrono::milliseconds(100)});
+            auto extended = shortened.withOptions({.timeout = std::chrono::seconds(5)});
+            auto cold = extended.send({.target = "/successive-minimum"});
+            (void)co_await ruvia::sleepFor(worker.handle, std::chrono::milliseconds(250));
+            const auto start = std::chrono::steady_clock::now();
+            bool timedOut = false;
+            try {
+                (void)co_await std::move(cold);
+            } catch (const ruvia::HttpClientError& error) {
+                timedOut = error.code() == ruvia::HttpClientError::Code::kTimeout;
+            }
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            RUVIA_CHECK(timedOut);
+            RUVIA_CHECK(elapsed >= std::chrono::milliseconds(50));
+            RUVIA_CHECK(elapsed < std::chrono::seconds(2));
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // The peer's delayed response is expected to hit the timed-out socket.
+            }
+            co_await client.shutdown();
+        };
+        runOperation(worker, io, operation);
+    }
+
+    for (const bool stopBase : {true, false}) {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(
+            io, worker.handle, {"cancelled"}, std::chrono::milliseconds(350));
+        ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(server.port()));
+        ruvia::StopSource baseStop;
+        ruvia::StopSource derivedStop;
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            asio::steady_timer stopTimer(io);
+            stopTimer.expires_after(std::chrono::milliseconds(50));
+            stopTimer.async_wait([&baseStop, &derivedStop, stopBase](const std::error_code& error) {
+                if (!error) {
+                    (stopBase ? baseStop : derivedStop).requestStop();
+                }
+            });
+            auto base = client.withOptions({.stopToken = baseStop.token()});
+            auto copied = base;
+            auto derived = copied.withOptions({.stopToken = derivedStop.token()});
+            bool cancelled = false;
+            try {
+                (void)co_await derived.send({.target = stopBase ? "/stop-base" : "/stop-derived"});
+            } catch (const ruvia::HttpClientError& error) {
+                cancelled = error.code() == ruvia::HttpClientError::Code::kCancelled;
+            }
+            RUVIA_CHECK(cancelled);
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // The peer's delayed response is expected to hit the cancelled socket.
+            }
+            co_await client.shutdown();
+        };
+        runOperation(worker, io, operation);
+    }
+
+    {
+        auto& io = ruvia::test::newTestIoContext();
+        TestWorker worker(io);
+        LoopbackResponseServer server(
+            io, worker.handle, {"closing"}, std::chrono::milliseconds(350));
+        ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(server.port()));
+        server.start();
+
+        auto operation = [&]() -> ruvia::Task<void> {
+            asio::steady_timer closeTimer(io);
+            closeTimer.expires_after(std::chrono::milliseconds(50));
+            closeTimer.async_wait([&client](const std::error_code& error) {
+                if (!error) {
+                    client.close();
+                }
+            });
+            auto cold = client.withOptions({}).send({.target = "/active-close"});
+            bool closing = false;
+            try {
+                (void)co_await std::move(cold);
+            } catch (const ruvia::HttpClientError& error) {
+                closing = error.code() == ruvia::HttpClientError::Code::kClosing;
+            }
+            RUVIA_CHECK(closing);
+            co_await client.shutdown();
+            try {
+                co_await server.wait();
+            } catch (const std::system_error&) {
+                // Pool shutdown closes the in-flight TCP exchange before its delayed reply.
+            }
+        };
+        runOperation(worker, io, operation);
+    }
+}
+
+RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    ruvia::test::CountingMemoryResource resource;
+    LoopbackResponseServer server(io, worker.handle, {"one", "two", "three", "four"});
+    auto config = localHttpClientConfig(server.port());
+    const ruvia::detail::HttpClientDefinition definitions[]{
+        {std::pmr::string("default", &resource),
+            ruvia::detail::HttpClientConfigStorage(config, &resource)},
+    };
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 64});
+    std::optional<ruvia::HttpClientResponse> retainedResponse;
+    std::optional<ruvia::HttpClientResponseBytes> retainedBody;
+    {
+        ruvia::detail::HttpClientRegistry registry(
+            io, worker.handle, &resource, definitions, budget);
+        ruvia::detail::ScopedOperationScope scope;
+        server.start();
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto handle = registry.get(scope, {.timeout = std::chrono::seconds(2)});
+            auto response = co_await handle.send({.target = "/retained"});
+            retainedBody.emplace(co_await response.body().readAll(64));
+            retainedResponse.emplace(std::move(response));
+            RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{3});
+            const auto headerBaseline = resource.liveAllocations();
+            const auto peerHeader = std::ranges::find_if(
+                retainedResponse->headers(), [](const auto& header) {
+                    return header.name() == "X-Peer";
+                });
+            RUVIA_CHECK(peerHeader != retainedResponse->headers().end());
+            if (peerHeader != retainedResponse->headers().end()) {
+                RUVIA_CHECK_EQ(peerHeader->value(), std::string_view("retained"));
+            }
+
+            const std::array repeatedResponses{
+                std::pair{"/repeat-1", std::string_view("two")},
+                std::pair{"/repeat-2", std::string_view("three")},
+                std::pair{"/repeat-3", std::string_view("four")},
+            };
+            for (const auto& [target, expectedBody] : repeatedResponses) {
+                {
+                    auto repeated = co_await registry.get(
+                                                         scope, {.timeout = std::chrono::seconds(2)})
+                                        .send({.target = target});
+                    auto result = co_await repeated.body().readAll(64);
+                    RUVIA_CHECK_EQ(std::string_view(
+                                       reinterpret_cast<const char*>(result.bytes().data()),
+                                       result.bytes().size()),
+                        expectedBody);
+                }
+                RUVIA_CHECK_EQ(resource.liveAllocations(), headerBaseline);
+                RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{3});
+                RUVIA_CHECK(peerHeader != retainedResponse->headers().end());
+                if (peerHeader != retainedResponse->headers().end()) {
+                    RUVIA_CHECK_EQ(peerHeader->value(), std::string_view("retained"));
+                }
+                RUVIA_CHECK_EQ(std::string_view(
+                                   reinterpret_cast<const char*>(retainedBody->bytes().data()),
+                                   retainedBody->bytes().size()),
+                    std::string_view("one"));
+            }
+            co_await server.wait();
+
+            const auto coldBaseline = resource.liveAllocations();
+            {
+                const std::string target = "/" + std::string(4096, 'c');
+                auto cold = registry.get(scope, {.timeout = std::chrono::seconds(2)})
+                                .send({.target = target});
+                RUVIA_CHECK(resource.liveAllocations() > coldBaseline);
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), coldBaseline);
+
+            retainedBody.reset();
+            RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
+            const auto beforeHeaderRelease = resource.liveAllocations();
+            retainedResponse.reset();
+            RUVIA_CHECK(resource.liveAllocations() < beforeHeaderRelease);
+            scope.close();
+            co_await scope.closeAndJoin();
+            registry.closeNow();
+            co_await registry.join();
+        };
+        runOperation(worker, io, operation);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
+}
+
+RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    ruvia::test::CountingMemoryResource resource;
+    LoopbackResponseServer server(
+        io, worker.handle, {"warm", "unused"}, std::chrono::milliseconds::zero(), true, 1);
+    auto config = localHttpClientConfig(server.port());
+    const ruvia::detail::HttpClientDefinition definitions[]{
+        {std::pmr::string("default", &resource),
+            ruvia::detail::HttpClientConfigStorage(config, &resource)},
+    };
+    {
+        ruvia::detail::HttpClientRegistry registry(
+            io, worker.handle, &resource, definitions);
+        ruvia::detail::ScopedOperationScope scope;
+        ruvia::StopSource preCancelled;
+        preCancelled.requestStop();
+        server.start();
+        auto operation = [&]() -> ruvia::Task<void> {
+            auto handle = registry.get(scope, {.timeout = std::chrono::seconds(2)});
+            {
+                auto warm = co_await handle.send({.target = "/warm"});
+                auto body = co_await warm.body().readAll(64);
+                RUVIA_CHECK_EQ(body.bytes().size(), std::size_t{4});
+            }
+            const auto warmBaseline = resource.liveAllocations();
+            {
+                const std::string target = "/" + std::string(4096, 'c');
+                auto cold = handle.send({.target = target});
+                RUVIA_CHECK(resource.liveAllocations() > warmBaseline);
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), warmBaseline);
+
+            bool ioFailed = false;
+            try {
+                (void)co_await handle.send({.target = "/peer-closes"});
+            } catch (const ruvia::HttpClientError& error) {
+                ioFailed = error.code() == ruvia::HttpClientError::Code::kIoError;
+            }
+            RUVIA_CHECK(ioFailed);
+            co_await server.wait();
+            const auto failureBaseline = resource.liveAllocations();
+            RUVIA_CHECK(failureBaseline > 0);
+
+            auto stoppedHandle = registry.get(
+                scope, {.timeout = std::chrono::seconds(2), .stopToken = preCancelled.token()});
+            bool cancelled = false;
+            try {
+                (void)co_await stoppedHandle.send({.target = "/pre-cancelled"});
+            } catch (const ruvia::HttpClientError& error) {
+                cancelled = error.code() == ruvia::HttpClientError::Code::kCancelled;
+            }
+            RUVIA_CHECK(cancelled);
+            scope.close();
+            co_await scope.closeAndJoin();
+            registry.closeNow();
+            co_await registry.join();
+            RUVIA_CHECK(resource.liveAllocations() <= failureBaseline);
+        };
+        runOperation(worker, io, operation);
+    }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 

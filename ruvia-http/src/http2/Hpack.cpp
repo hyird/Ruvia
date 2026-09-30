@@ -1,34 +1,42 @@
 #include "ruvia/http/Hpack.h"
 
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
+#include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia {
 
 class HpackDecoder::Impl final {
 public:
-    explicit Impl(std::pmr::memory_resource* resource)
-        : decoder({.resource = resource}) {}
-    detail::HpackDecoder decoder;
+    explicit Impl(std::pmr::memory_resource* memory)
+        : resource_(memory),
+          decoder_({.resource = memory}) {}
+
+    std::pmr::memory_resource* resource_;
+    detail::HpackDecoder decoder_;
 };
 
-HpackDecoder::HpackDecoder(HpackDecoderOptions options)
-    : impl_(std::make_unique<Impl>(options.resource)) {}
+void HpackDecoder::ImplDeleter::operator()(Impl* value) const noexcept {
+    if (value != nullptr) {
+        detail::destroyHttpPmrObject(value, value->resource_);
+    }
+}
+
+HpackDecoder::HpackDecoder(HpackDecoderOptions options) {
+    auto* resource = detail::httpPmrResourceOrDefault(options.resource);
+    impl_.reset(detail::constructHttpPmrObject<Impl>(resource, resource));
+}
 HpackDecoder::~HpackDecoder() = default;
 HpackDecoder::HpackDecoder(HpackDecoder&&) noexcept = default;
 HpackDecoder& HpackDecoder::operator=(HpackDecoder&&) noexcept = default;
 
 void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
-    impl_->decoder.setMaxDynamicTableSize(bytes);
+    impl_->decoder_.setMaxDynamicTableSize(bytes);
 }
 
 HpackDecodeResult HpackDecoder::decodeWithCallback(
     std::string_view block, void* target, HeaderCallback callback) {
-    const auto result = impl_->decoder.decode(block, target, callback);
-    const auto* failure = result.failure();
-    return HpackDecodeResult(
-        failure == nullptr
-            ? std::nullopt
-            : std::optional<HpackDecodeError>(static_cast<HpackDecodeError>(failure->error())));
+    return impl_->decoder_.decode(block, target, callback);
 }
 
 void HpackEncoder::encodeIndexed(std::pmr::string& output, std::uint32_t index) {

@@ -322,8 +322,16 @@ asio::io_context::executor_type EventLoop::executor() const {
     return ioContext().get_executor();
 }
 
+const WorkerHandle& EventLoop::dispatchHandle() const noexcept {
+    if (state_) {
+        return state_->runtime.handle();
+    }
+    static const WorkerHandle emptyHandle;
+    return emptyHandle;
+}
+
 WorkerHandle EventLoop::handle() const noexcept {
-    return state_ ? state_->runtime.handle() : WorkerHandle{};
+    return dispatchHandle();
 }
 
 detail::EventLoopFailureSink EventLoop::failureSink() const {

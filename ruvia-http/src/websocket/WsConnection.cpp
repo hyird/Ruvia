@@ -9,7 +9,7 @@
 namespace ruvia::detail {
 
 WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLimit,
-    WebSocketCompression compression, WsConnectionRole role, WsMaskKeyGenerator maskKeyGenerator,
+    WebSocketCompression compression, WebSocketConnectionRole role, WebSocketMaskKeyGenerator maskKeyGenerator,
     void* maskKeyContext, int compressionLevel)
     : input_(&input),
       messageLimit_(messageLimit),
@@ -20,7 +20,17 @@ WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLim
       role_(role),
       maskKeyGenerator_(maskKeyGenerator),
       maskKeyContext_(maskKeyContext) {
-    if (role_ == WsConnectionRole::kClient && maskKeyGenerator_ == nullptr) {
+    if (role_ != WebSocketConnectionRole::kServer && role_ != WebSocketConnectionRole::kClient) {
+        throw std::invalid_argument("invalid WebSocket connection role");
+    }
+    if (compression != WebSocketCompression::kDisabled &&
+        compression != WebSocketCompression::kPermessageDeflate &&
+        compression != WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits &&
+        compression != WebSocketCompression::kPermessageDeflateContextTakeover &&
+        compression != WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits) {
+        throw std::invalid_argument("invalid WebSocket compression mode");
+    }
+    if (role_ == WebSocketConnectionRole::kClient && maskKeyGenerator_ == nullptr) {
         throw std::invalid_argument("WebSocket client connection requires a mask key generator");
     }
     if (compressionLevel < 0 || compressionLevel > 9) {
@@ -33,38 +43,38 @@ WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLim
     }
 }
 
-WsOutputPlan WsConnection::outputPlan() const& noexcept {
+WebSocketOutputPlan WsConnection::outputPlan() const& noexcept {
     // EOF/abort may race an async transport write. Keep the backing allocation
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
     if (closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
-        return WsOutputPlan({}, closePhase_ == ClosePhase::kTransportEndReady
-                                    ? WsTransportDisposition::kEndTransport
-                                    : WsTransportDisposition::kKeepOpen);
+        return WebSocketOutputPlan({}, closePhase_ == ClosePhase::kTransportEndReady
+                                           ? WebSocketTransportDisposition::kEndTransport
+                                           : WebSocketTransportDisposition::kKeepOpen);
     }
     const auto bytes =
         std::string_view(outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
     const auto disposition = closePhase_ == ClosePhase::kFinalOutputQueued
-                                 ? WsTransportDisposition::kEndTransport
-                                 : WsTransportDisposition::kKeepOpen;
-    return WsOutputPlan(bytes, disposition);
+                                 ? WebSocketTransportDisposition::kEndTransport
+                                 : WebSocketTransportDisposition::kKeepOpen;
+    return WebSocketOutputPlan(bytes, disposition);
 }
 
-WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
+WebSocketOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
     // EOF/abort makes unsent bytes unreachable without clearing their storage:
     // an async write may still borrow it. A zero-byte transport-end write has
     // no output left to consume, regardless of those discarded backing bytes.
     if (n == 0 &&
         (closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed)) {
-        return WsOutputConsumeStatus::kDrained;
+        return WebSocketOutputConsumeStatus::kDrained;
     }
     const auto remaining = outBuffer_.size() - outOffset_;
     if (n > remaining) {
-        return WsOutputConsumeStatus::kOutOfRange;
+        return WebSocketOutputConsumeStatus::kOutOfRange;
     }
     if (n < remaining) {
         outOffset_ += n;
-        return WsOutputConsumeStatus::kPending;
+        return WebSocketOutputConsumeStatus::kPending;
     }
 
     outBuffer_.clear();
@@ -74,7 +84,7 @@ WsOutputConsumeStatus WsConnection::consumeOutput(std::size_t n) noexcept {
     } else if (closePhase_ == ClosePhase::kFinalOutputQueued) {
         closePhase_ = ClosePhase::kTransportEndReady;
     }
-    return WsOutputConsumeStatus::kDrained;
+    return WebSocketOutputConsumeStatus::kDrained;
 }
 
 void WsConnection::commitTransportEnd() noexcept {
@@ -90,12 +100,12 @@ void WsConnection::notifyTransportEof() noexcept {
     closePhase_ = ClosePhase::kTransportEndReady;
 }
 
-WsAbortDisposition WsConnection::abort() noexcept {
+WebSocketAbortDisposition WsConnection::abort() noexcept {
     if (closePhase_ == ClosePhase::kClosed) {
-        return WsAbortDisposition::kNoTransportAction;
+        return WebSocketAbortDisposition::kNoTransportAction;
     }
     closePhase_ = ClosePhase::kClosed;
-    return WsAbortDisposition::kAbortTransport;
+    return WebSocketAbortDisposition::kAbortTransport;
 }
 
 WebSocketLivenessMode WsConnection::livenessMode() const noexcept {
@@ -126,8 +136,8 @@ void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload,
         }
     }
     WebSocketFrameHeader header;
-    const bool masked = role_ == WsConnectionRole::kClient;
-    WsMaskKey mask{};
+    const bool masked = role_ == WebSocketConnectionRole::kClient;
+    WebSocketMaskKey mask{};
     if (masked && !maskKeyGenerator_(maskKeyContext_, mask)) {
         throw std::runtime_error("failed to generate WebSocket client mask key");
     }
@@ -181,24 +191,24 @@ void WsConnection::receivePeerClose() noexcept {
     }
 }
 
-WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress) {
+WebSocketFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress) {
     if (closePhase_ != ClosePhase::kOpen) {
-        return WsFrameSubmitStatus::kNotOpen;
+        return WebSocketFrameSubmitStatus::kNotOpen;
     }
 
     const bool dataFrame = opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary;
     const bool controlFrame = opcode == WebSocketOpcode::kPing || opcode == WebSocketOpcode::kPong;
     if (!dataFrame && !controlFrame) {
-        return WsFrameSubmitStatus::kInvalidOpcode;
+        return WebSocketFrameSubmitStatus::kInvalidOpcode;
     }
     if (dataFrame && webSocketMessageExceedsLimit(payload.size(), messageLimit_)) {
-        return WsFrameSubmitStatus::kMessageTooLarge;
+        return WebSocketFrameSubmitStatus::kMessageTooLarge;
     }
     if (opcode == WebSocketOpcode::kText && !isValidUtf8(payload)) {
-        return WsFrameSubmitStatus::kInvalidTextPayload;
+        return WebSocketFrameSubmitStatus::kInvalidTextPayload;
     }
     if (controlFrame && payload.size() > 125) {
-        return WsFrameSubmitStatus::kControlFrameTooLarge;
+        return WebSocketFrameSubmitStatus::kControlFrameTooLarge;
     }
     bool rsv1 = false;
     if (dataFrame && compress && deflate_.has_value()) {
@@ -212,40 +222,40 @@ WsFrameSubmitStatus WsConnection::submitFrame(WebSocketOpcode opcode, std::strin
         }
     }
     appendFrame(opcode, payload, rsv1);
-    return WsFrameSubmitStatus::kAccepted;
+    return WebSocketFrameSubmitStatus::kAccepted;
 }
 
-WsCloseSubmitStatus WsConnection::submitClose(std::uint16_t code, std::string_view reason) {
+WebSocketCloseSubmitStatus WsConnection::submitClose(std::uint16_t code, std::string_view reason) {
     if (closePhase_ == ClosePhase::kClosed) {
-        return WsCloseSubmitStatus::kClosed;
+        return WebSocketCloseSubmitStatus::kClosed;
     }
     if (closePhase_ != ClosePhase::kOpen) {
-        return WsCloseSubmitStatus::kAlreadyClosing;
+        return WebSocketCloseSubmitStatus::kAlreadyClosing;
     }
     // RFC 6455 §7.4.1 reserves 1010 for a client reporting extensions that
     // were absent from the server handshake. This core emits server frames;
     // a server must reject that mismatch during the opening handshake rather
     // than initiate a Close frame with the client-only status code.
-    if (role_ == WsConnectionRole::kServer && code == 1010) {
-        return WsCloseSubmitStatus::kInvalidCode;
+    if (role_ == WebSocketConnectionRole::kServer && code == 1010) {
+        return WebSocketCloseSubmitStatus::kInvalidCode;
     }
     const auto payload = encodeWebSocketClosePayload(code, reason);
     if (const auto* failure = payload.failure()) {
         switch (failure->error()) {
             case WebSocketClosePayloadEncodeError::kInvalidCode:
-                return WsCloseSubmitStatus::kInvalidCode;
+                return WebSocketCloseSubmitStatus::kInvalidCode;
             case WebSocketClosePayloadEncodeError::kInvalidReason:
-                return WsCloseSubmitStatus::kInvalidReason;
+                return WebSocketCloseSubmitStatus::kInvalidReason;
             case WebSocketClosePayloadEncodeError::kReasonTooLarge:
-                return WsCloseSubmitStatus::kReasonTooLarge;
+                return WebSocketCloseSubmitStatus::kReasonTooLarge;
         }
     }
     appendFrame(WebSocketOpcode::kClose, payload.encoded()->bytes());
     closePhase_ = ClosePhase::kLocalCloseQueued;
-    return WsCloseSubmitStatus::kAccepted;
+    return WebSocketCloseSubmitStatus::kAccepted;
 }
 
-std::optional<WsEvent> WsConnection::poll() & {
+std::optional<WebSocketEvent> WsConnection::poll() & {
     try {
         return pollImpl();
     } catch (...) {
@@ -257,22 +267,22 @@ std::optional<WsEvent> WsConnection::poll() & {
     }
 }
 
-std::optional<WsEvent> WsConnection::pollImpl() & {
+std::optional<WebSocketEvent> WsConnection::pollImpl() & {
     inboundInflated_.clear();
     if (closePhase_ == ClosePhase::kFinalOutputQueued ||
         closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
-        return WsEvent::makeTransportEnd();
+        return WebSocketEvent::makeTransportEnd();
     }
 
     const auto protocolFailureEvent = [this](WebSocketProtocolFailure failure) {
         const auto closeCode = webSocketProtocolFailureCloseCode(failure);
         fail(closeCode);
-        return WsEvent::protocolError(closeCode);
+        return WebSocketEvent::protocolError(closeCode);
     };
 
     for (;;) {
         const auto read = webSocketTryReadFrame(*input_, inputOffset_, pendingCompactUntil_,
-            messageLimit_, deflate_.has_value(), role_ == WsConnectionRole::kServer);
+            messageLimit_, deflate_.has_value(), role_ == WebSocketConnectionRole::kServer);
         if (read.needInput() != nullptr) {
             return std::nullopt;
         }
@@ -295,10 +305,10 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
                 // is a control frame, so it remains legal while a locally
                 // initiated Close waits for its peer response.
                 appendFrame(WebSocketOpcode::kPong, payload);
-                return WsEvent::ping(payload);
+                return WebSocketEvent::ping(payload);
             }
             if (control->opcode() == WebSocketOpcode::kPong) {
-                return WsEvent::pong(payload);
+                return WebSocketEvent::pong(payload);
             }
             if (control->opcode() == WebSocketOpcode::kClose) {
                 std::uint16_t code = 1005;
@@ -312,7 +322,7 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
                 } else {
                     receivePeerClose();
                 }
-                return WsEvent::close(code, reason);
+                return WebSocketEvent::close(code, reason);
             }
             return protocolFailureEvent(WebSocketProtocolFailure::kProtocolError);
         }
@@ -323,7 +333,7 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
             if (closePhase_ != ClosePhase::kOpen) {
                 continue;
             }
-            return WsEvent::message(message.opcode(), message.payload());
+            return WebSocketEvent::message(message.opcode(), message.payload());
         }
 
         // decompress() only appends, so the buffer must be emptied per MESSAGE, not
@@ -348,7 +358,7 @@ std::optional<WsEvent> WsConnection::pollImpl() & {
         if (closePhase_ != ClosePhase::kOpen) {
             continue;
         }
-        return WsEvent::message(message.opcode(), view);
+        return WebSocketEvent::message(message.opcode(), view);
     }
 }
 

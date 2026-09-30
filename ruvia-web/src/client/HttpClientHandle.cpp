@@ -12,7 +12,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 #include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
@@ -395,6 +395,14 @@ HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
     : detail::ScopedCapabilityNode(scope, &HttpClientHandle::expireCapability),
       pool_(&pool),
       resource_(resource) {}
+
+HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
+    std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope,
+    OperationOptions options) noexcept
+    : detail::ScopedCapabilityNode(scope, &HttpClientHandle::expireCapability),
+      pool_(&pool),
+      resource_(resource),
+      options_(std::move(options)) {}
 
 HttpClientHandle::HttpClientHandle(const HttpClientHandle& other) = default;
 

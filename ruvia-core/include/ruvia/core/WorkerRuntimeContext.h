@@ -8,6 +8,7 @@
 
 #include "ruvia/core/MoveOnlyFunction.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/WorkerSubmissionView.h"
 
 namespace ruvia {
 
@@ -25,6 +26,8 @@ public:
 
     [[nodiscard]] asio::io_context& ioContext() const noexcept;
     [[nodiscard]] const WorkerHandle& handle() const noexcept;
+    [[nodiscard]] WorkerSubmissionView submission() const& noexcept;
+    WorkerSubmissionView submission() const&& = delete;
 
     void run();
     void run(MoveOnlyFunction<void(std::exception_ptr)> failureHandler);

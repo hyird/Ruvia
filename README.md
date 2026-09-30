@@ -493,6 +493,15 @@ control belongs to `EventLoopPool`. Cross-thread application work uses bounded
 `EventLoop::post()`. Web workers expose `WorkerHandle`/`WebWorkerHandle`, not
 their `io_context` or executor.
 
+Integrations that own a `WorkerRuntimeContext` can use its `submission()` to
+obtain a `WorkerSubmissionView` for bounded submission without retaining endpoint
+ownership. The runtime must outlive the entire synchronous `post()` call,
+including callable construction, movement, and rejection cleanup. A closed or
+detached runtime that remains alive rejects submissions; the view is invalid
+once its runtime is destroyed. Use `WorkerHandle` when endpoint ownership must
+escape the runtime's lifetime. Queued callables must independently preserve any
+data they borrow until execution or destruction.
+
 A lazy `Task<T>` needs an explicit root owner. `EventLoop::start()` schedules it
 on that loop and returns a move-only `RootTask<T>` completion owner:
 

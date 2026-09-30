@@ -39,6 +39,8 @@ private:
     friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource,
         detail::ScopedOperationScope& scope) noexcept;
+    HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource,
+        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
     static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};

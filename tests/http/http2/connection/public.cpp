@@ -682,6 +682,12 @@ RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_
 
     ruvia::HttpResponse response({.resource = &resource});
     response.body("payload");
+    const auto wrongPlan = ruvia::planBufferedHttpResponseWrite(
+        ruvia::HttpKnownMethod::kHead, response);
+    const auto mismatch = server.submitResponseHead(1, response, wrongPlan);
+    RUVIA_CHECK(mismatch.failure() != nullptr);
+    RUVIA_CHECK(mismatch.failure() && mismatch.failure()->error() ==
+                                          ruvia::Http2ResponseHeadSubmitError::kResponsePlanMismatch);
     const auto writePlan = ruvia::planBufferedHttpResponseWrite(
         ruvia::HttpKnownMethod::kPost, response);
     const auto submitted = server.submitResponseHead(1, response, writePlan);
@@ -705,18 +711,30 @@ RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_
                 ruvia::Http2ServerRequestReleaseStatus::kReleased);
 }
 
-RUVIA_TEST(http2_public_streaming_response_head_maps_submission_failures) {
+RUVIA_TEST(http2_public_response_head_submit_exposes_shared_failure_values) {
     std::pmr::monotonic_buffer_resource resource;
 
     auto closed = ruvia::Http2Connection::server({.resource = &resource});
     ruvia::HttpResponse closedResponse({.resource = &resource});
-    RUVIA_CHECK(closed.submitStreamingResponseHead(1, std::move(closedResponse)) ==
-                ruvia::Http2SubmitStatus::kClosed);
+    const auto closedBuffered = closed.submitResponseHead(1, closedResponse,
+        ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, closedResponse));
+    RUVIA_CHECK(closedBuffered.failure() != nullptr);
+    RUVIA_CHECK(closedBuffered.failure() && closedBuffered.failure()->error() ==
+                                                ruvia::Http2ResponseHeadSubmitError::kClosed);
+    const auto closedStreaming = closed.submitStreamingResponseHead(1,
+        ruvia::HttpResponse({.resource = &resource}), ruvia::ResponseStreamKind::kGeneric,
+        ruvia::ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(closedStreaming.failure() != nullptr);
+    RUVIA_CHECK(closedStreaming.failure() && closedStreaming.failure()->error() ==
+                                                 ruvia::Http2ResponseHeadSubmitError::kClosed);
 
     auto client = preparedClient(&resource);
     ruvia::HttpResponse clientResponse({.resource = &resource});
-    RUVIA_CHECK(client.submitStreamingResponseHead(1, std::move(clientResponse)) ==
-                ruvia::Http2SubmitStatus::kInvalidState);
+    const auto invalidState = client.submitStreamingResponseHead(1, std::move(clientResponse),
+        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(invalidState.failure() != nullptr);
+    RUVIA_CHECK(invalidState.failure() && invalidState.failure()->error() ==
+                                              ruvia::Http2ResponseHeadSubmitError::kInvalidState);
 
     auto server = ruvia::Http2Connection::server({.resource = &resource});
     (void)server.consumeOutput(server.pendingOutput().size());
@@ -731,8 +749,12 @@ RUVIA_TEST(http2_public_streaming_response_head_maps_submission_failures) {
 
     ruvia::HttpResponse invalidResponse({.resource = &resource});
     invalidResponse.header("Content-Length", "invalid");
-    RUVIA_CHECK(server.submitStreamingResponseHead(1, std::move(invalidResponse)) ==
-                ruvia::Http2SubmitStatus::kInvalidMessage);
+    const auto invalidMessage = server.submitStreamingResponseHead(1,
+        std::move(invalidResponse), ruvia::ResponseStreamKind::kGeneric,
+        ruvia::ResponseTrailerIntent::kNone);
+    RUVIA_CHECK(invalidMessage.failure() != nullptr);
+    RUVIA_CHECK(invalidMessage.failure() && invalidMessage.failure()->error() ==
+                                                ruvia::Http2ResponseHeadSubmitError::kInvalidMessage);
     RUVIA_CHECK(server.pendingOutput().empty());
     RUVIA_CHECK(server.release(std::move(*requestHead)) ==
                 ruvia::Http2ServerRequestReleaseStatus::kReleased);

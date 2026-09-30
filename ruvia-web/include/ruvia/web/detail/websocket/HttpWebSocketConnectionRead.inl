@@ -59,7 +59,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::readOwned(
                 continue;
             }
             if (event->close() != nullptr || event->protocolError() != nullptr || event->transportEnd() != nullptr) {
-                // These observations terminate the application read side. WsOutputPlan
+                // These observations terminate the application read side. WebSocketOutputPlan
                 // remains the sole authority for flushing Close bytes and mapping
                 // orderly transport completion.
                 livenessState_ = WebSocketLivenessIdle{};

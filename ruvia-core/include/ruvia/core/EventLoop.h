@@ -64,7 +64,7 @@ public:
     template <typename Fn>
         requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return handle().post(std::forward<Fn>(fn));
+        return dispatchHandle().post(std::forward<Fn>(fn));
     }
 
     // Starts one lazy Task on this loop and returns its structured completion
@@ -139,6 +139,7 @@ public:
 
 private:
     explicit EventLoop(std::shared_ptr<detail::EventLoopState> state) noexcept;
+    [[nodiscard]] const WorkerHandle& dispatchHandle() const noexcept;
     [[nodiscard]] EventLoopStopRegistration registerStopCallback(
         MoveOnlyFunction<void()> callback) const;
     [[nodiscard]] detail::EventLoopFailureSink failureSink() const;

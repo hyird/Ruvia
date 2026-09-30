@@ -15,7 +15,6 @@
 // not be reconstructed by a runtime from a loose `close` boolean. The runtime only
 // flushes the plan and owns coroutine I/O, timeout and write-exclusion policy.
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -24,51 +23,34 @@
 #include <string_view>
 
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/WebSocketServerProtocolTypes.h"
-#include "ruvia/http/detail/websocket/WsEvent.h"
+#include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketInboundAssembler.h"
 #include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 namespace ruvia::detail {
-
-using WsTransportDisposition = ::ruvia::WebSocketServerTransportDisposition;
-using WsFrameSubmitStatus = ::ruvia::WebSocketServerFrameSubmitStatus;
-using WsCloseSubmitStatus = ::ruvia::WebSocketServerCloseSubmitStatus;
-using WsAbortDisposition = ::ruvia::WebSocketServerAbortDisposition;
-using WsOutputConsumeStatus = ::ruvia::WebSocketServerOutputConsumeStatus;
-
-enum class WsConnectionRole : std::uint8_t {
-    kServer,
-    kClient,
-};
-
-using WsMaskKey = std::array<char, 4>;
-using WsMaskKeyGenerator = bool (*)(void*, WsMaskKey&) noexcept;
-
-using WsOutputPlan = ::ruvia::WebSocketServerOutputPlan;
 
 class WsConnection final {
 public:
     explicit WsConnection(std::pmr::string& input,
         ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
         WebSocketCompression compression = WebSocketCompression::kDisabled,
-        WsConnectionRole role = WsConnectionRole::kServer,
-        WsMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr,
+        WebSocketConnectionRole role = WebSocketConnectionRole::kServer,
+        WebSocketMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr,
         int compressionLevel = 6);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
     // typed payload. Application data received after a local Close is validated
     // but not delivered while the peer Close is awaited.
-    [[nodiscard]] std::optional<WsEvent> poll() &;
-    [[nodiscard]] std::optional<WsEvent> poll() && = delete;
+    [[nodiscard]] std::optional<WebSocketEvent> poll() &;
+    [[nodiscard]] std::optional<WebSocketEvent> poll() && = delete;
 
-    [[nodiscard]] WsOutputPlan outputPlan() const& noexcept;
-    [[nodiscard]] WsOutputPlan outputPlan() const&& = delete;
-    [[nodiscard]] WsOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
+    [[nodiscard]] WebSocketOutputPlan outputPlan() const& noexcept;
+    [[nodiscard]] WebSocketOutputPlan outputPlan() const&& = delete;
+    [[nodiscard]] WebSocketOutputConsumeStatus consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
-    [[nodiscard]] WsAbortDisposition abort() noexcept;
+    [[nodiscard]] WebSocketAbortDisposition abort() noexcept;
     [[nodiscard]] WebSocketLivenessMode livenessMode() const noexcept;
 
     // Submit one complete logical message/control payload. Role-correct masking,
@@ -76,8 +58,8 @@ public:
     // wire header encoding stay inside the core.
     // Close has a separate typed entry because it owns code/reason validation
     // and close-handshake state rather than accepting a pre-encoded payload.
-    [[nodiscard]] WsFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
-    [[nodiscard]] WsCloseSubmitStatus submitClose(std::uint16_t code, std::string_view reason);
+    [[nodiscard]] WebSocketFrameSubmitStatus submitFrame(WebSocketOpcode opcode, std::string_view payload, bool compress = true);
+    [[nodiscard]] WebSocketCloseSubmitStatus submitClose(std::uint16_t code, std::string_view reason);
 
 private:
     enum class ClosePhase : std::uint8_t {
@@ -97,7 +79,7 @@ private:
     void appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1 = false);
     void fail(std::uint16_t code, std::string_view reason = {});
     void receivePeerClose() noexcept;
-    [[nodiscard]] std::optional<WsEvent> pollImpl() &;
+    [[nodiscard]] std::optional<WebSocketEvent> pollImpl() &;
 
     std::pmr::string* input_;
     ProtocolByteLimit messageLimit_;
@@ -113,8 +95,8 @@ private:
     std::pmr::string inboundInflated_;
     std::pmr::string outboundDeflated_;
 
-    WsConnectionRole role_{WsConnectionRole::kServer};
-    WsMaskKeyGenerator maskKeyGenerator_{nullptr};
+    WebSocketConnectionRole role_{WebSocketConnectionRole::kServer};
+    WebSocketMaskKeyGenerator maskKeyGenerator_{nullptr};
     void* maskKeyContext_{nullptr};
 
     ClosePhase closePhase_{ClosePhase::kOpen};

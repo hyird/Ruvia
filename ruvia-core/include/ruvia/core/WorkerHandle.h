@@ -1,96 +1,16 @@
 #pragma once
 
 #include <chrono>
-#include <concepts>
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/MoveOnlyFunction.h"
+#include "ruvia/core/WorkerPostTypes.h"
 #include "ruvia/core/WorkerTimer.h"
 
 namespace ruvia {
 
 using WorkerId = std::uint64_t;
-
-enum class PostStatus : std::uint8_t {
-    kAccepted,
-    kQueueFull,
-    kWorkerStopping,
-};
-
-template <typename Signature>
-class PostOutcome final {
-public:
-    using Task = MoveOnlyFunction<Signature>;
-
-    PostOutcome(const PostOutcome&) = delete;
-    PostOutcome& operator=(const PostOutcome&) = delete;
-    PostOutcome(PostOutcome&&) noexcept = default;
-    PostOutcome& operator=(PostOutcome&&) noexcept = default;
-
-    [[nodiscard]] PostStatus status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] bool accepted() const noexcept {
-        return status_ == PostStatus::kAccepted;
-    }
-
-    [[nodiscard]] Task* rejected() & noexcept {
-        return rejected_ ? &rejected_ : nullptr;
-    }
-
-    [[nodiscard]] const Task* rejected() const& noexcept {
-        return rejected_ ? &rejected_ : nullptr;
-    }
-
-    Task* rejected() && = delete;
-    const Task* rejected() const&& = delete;
-
-    [[nodiscard]] Task takeRejected() && {
-        if (status_ == PostStatus::kAccepted || !rejected_) {
-            throw std::logic_error("accepted post outcome has no rejected task");
-        }
-        return std::move(rejected_);
-    }
-
-    [[nodiscard]] static PostOutcome accept() noexcept {
-        return PostOutcome(PostStatus::kAccepted);
-    }
-
-    [[nodiscard]] static PostOutcome reject(PostStatus status, Task task) {
-        if (status == PostStatus::kAccepted) {
-            throw std::invalid_argument("rejected post outcome requires a rejection status");
-        }
-        if (!task) {
-            throw std::invalid_argument("rejected post outcome requires a callable task");
-        }
-        return PostOutcome(status, std::move(task));
-    }
-
-    friend bool operator==(const PostOutcome& outcome, PostStatus status) noexcept {
-        return outcome.status_ == status;
-    }
-
-    friend bool operator==(PostStatus status, const PostOutcome& outcome) noexcept {
-        return outcome == status;
-    }
-
-private:
-    explicit PostOutcome(PostStatus status) noexcept
-        : status_(status) {}
-
-    PostOutcome(PostStatus status, Task task) noexcept
-        : status_(status),
-          rejected_(std::move(task)) {}
-
-    PostStatus status_;
-    Task rejected_;
-};
-
-using PostResult = PostOutcome<void()>;
 
 namespace detail {
 class WorkerDispatcher;
@@ -110,14 +30,20 @@ public:
     template <typename Fn>
         requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
-        return postTask(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
+        if constexpr (detail::MoveOnlyFunctionBorrowSafeInput<void(), Fn>) {
+            return postTask(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
+        } else {
+            // Snapshot the endpoint before invoking any user-controlled construction/move.
+            const WorkerHandle snapshot = *this;
+            return snapshot.postTask(MoveOnlyFunction<void()>(std::forward<Fn>(fn)));
+        }
     }
 
 private:
     explicit WorkerHandle(std::shared_ptr<detail::WorkerDispatcher> dispatcher) noexcept;
     [[nodiscard]] PostResult postTask(MoveOnlyFunction<void()> task) const;
 
-    // A handle owns the stable dispatcher endpoint, not the worker's io_context.
+    // Owns the stable dispatcher endpoint, not the worker's io_context.
     // The worker detaches that endpoint before destroying its execution context.
     std::shared_ptr<detail::WorkerDispatcher> dispatcher_;
     friend struct detail::WorkerHandleAccess;

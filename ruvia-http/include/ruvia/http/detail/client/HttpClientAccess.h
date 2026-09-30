@@ -5,8 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/HttpClient.h"
-#include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpClientResponseHead.h"
 
 namespace ruvia::detail {
 

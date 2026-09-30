@@ -1,25 +1,13 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <span>
 
+#include "ruvia/core/memory/MemoryPoolConfig.h"
+
 namespace ruvia {
-
-// Default initial bump-block size for a request arena. Runtime integrations size
-// their connection-private dispatch blocks to this same constant, so configured
-// defaults and compile-time blocks stay in lockstep: a request whose allocations
-// fit within it touches no heap at all.
-//
-// Configuring requestInitialBufferBytes larger than this constant stays correct
-// but spills the arena's first block to the worker resource on every request,
-// because the in-block fast path is sized at compile time. Prefer raising
-// kRequestArenaInitialBytes itself if a larger zero-heap default is wanted.
-inline constexpr std::size_t kRequestArenaInitialBytes = std::size_t{4} * 1024;
-
-struct MemoryPoolConfig {
-    std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};
-};
 
 // Explicit worker-local owner, not thread_local storage. All allocations and
 // deallocations are worker-affine; this pool has no internal synchronization.
@@ -33,27 +21,40 @@ public:
     // continues to use Ruvia's process resource, never the global PMR default.
     explicit WorkerMemory(std::pmr::memory_resource& upstream,
         const MemoryPoolConfig& config = {});
+    ~WorkerMemory();
 
     WorkerMemory(const WorkerMemory&) = delete;
     WorkerMemory& operator=(const WorkerMemory&) = delete;
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() & noexcept {
-        return std::pmr::polymorphic_allocator<T>(&resource_);
+        return std::pmr::polymorphic_allocator<T>(resource_);
     }
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() && = delete;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() & noexcept;
-    [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept;
+    [[nodiscard]] std::pmr::memory_resource* resource() & noexcept {
+        return resource_;
+    }
+    [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept {
+        return resource_;
+    }
     [[nodiscard]] std::pmr::memory_resource* resource() && = delete;
     [[nodiscard]] std::pmr::memory_resource* resource() const&& = delete;
-    [[nodiscard]] std::size_t requestInitialBufferBytes() const noexcept;
+    [[nodiscard]] std::size_t requestInitialBufferBytes() const noexcept {
+        return requestInitialBufferBytes_;
+    }
 
 private:
-    MemoryPoolConfig config_;
-    std::pmr::unsynchronized_pool_resource resource_;
+    class Impl;
+    struct ImplDeleter {
+        void operator()(Impl* impl) const noexcept;
+    };
+    std::unique_ptr<Impl, ImplDeleter> impl_;
+    // Cache the resource borrow and configuration without a hot-path Impl lookup.
+    std::pmr::memory_resource* resource_;
+    std::size_t requestInitialBufferBytes_;
 };
 
 // Request/handshake lifetime arena borrowing its worker and optional initial
@@ -96,7 +97,7 @@ public:
 private:
     struct ChildArena {};
     RequestMemory(ChildArena, std::pmr::memory_resource* upstream);
-    std::pmr::monotonic_buffer_resource arena_;
+    mutable std::pmr::monotonic_buffer_resource arena_;
 };
 
 }  // namespace ruvia

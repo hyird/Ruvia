@@ -103,7 +103,7 @@ RedisHandle RedisClientState::handle(OperationOptions options) {
     options = mergeOperationOptions(
         OperationOptions{.timeout = std::nullopt, .stopToken = stopSource_.token()},
         std::move(options));
-    return runtime_.handle(operationScope_).withOptions(std::move(options));
+    return runtime_.handle(operationScope_, std::move(options));
 }
 
 void RedisClientState::requireConnectedOnWorker() const {

@@ -113,7 +113,7 @@ private:
     [[nodiscard]] static PreparedConstruction prepareConstruction(
         const std::filesystem::path& root, detail::StaticRootConfigStorage&& config);
 
-    struct StateDeleter final {
+    struct StateDeleter {
         void operator()(detail::StaticRootState* state) const noexcept;
     };
 

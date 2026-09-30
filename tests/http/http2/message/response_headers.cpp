@@ -88,7 +88,7 @@ bool decodeResponseHeaders(const HttpResponse& response, Collector& out,
 
     HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
-    return result.decoded() != nullptr;
+    return result.decoded();
 }
 
 bool decodeInterimResponseHeaders(const HttpInterimResponseHead& response, Collector& out) {
@@ -100,7 +100,7 @@ bool decodeInterimResponseHeaders(const HttpInterimResponseHead& response, Colle
 
     HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
     const auto result = decoder.decode(stream.localHeaderBlock(), &out, &collect);
-    return result.decoded() != nullptr;
+    return result.decoded();
 }
 
 bool hasHeader(const Collector& headers, std::string_view name, std::string_view value) {

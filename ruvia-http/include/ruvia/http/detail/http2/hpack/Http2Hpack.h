@@ -2,77 +2,19 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/HpackProtocolTypes.h"
 #include "ruvia/http/HttpStatus.h"
 
 namespace ruvia::detail {
 
 struct HpackDecoderOptions final {
     std::pmr::memory_resource* resource{nullptr};
-};
-
-class HpackDecodeResult;
-
-enum class HpackDecodeError : std::uint8_t {
-    kNeedMore,
-    kIntegerOverflow,
-    kInvalidIndex,
-    kInvalidString,
-    kInvalidHuffman,
-    kDynamicTableSize,
-    kCallbackRejected
-};
-
-class HpackDecoded final {
-private:
-    friend class HpackDecodeResult;
-
-    constexpr HpackDecoded() noexcept = default;
-};
-
-class HpackDecodeFailure final {
-public:
-    [[nodiscard]] constexpr HpackDecodeError error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class HpackDecodeResult;
-
-    explicit constexpr HpackDecodeFailure(HpackDecodeError error) noexcept
-        : error_(error) {}
-
-    HpackDecodeError error_;
-};
-
-class HpackDecodeResult final {
-public:
-    [[nodiscard]] constexpr const HpackDecoded* decoded() const& noexcept {
-        return state_ ? &*state_ : nullptr;
-    }
-    [[nodiscard]] constexpr const HpackDecoded* decoded() const&& = delete;
-
-    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const& noexcept {
-        return state_ ? nullptr : &state_.error();
-    }
-    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const&& = delete;
-
-private:
-    friend class HpackDecoder;
-
-    constexpr HpackDecodeResult() noexcept
-        : state_(HpackDecoded()) {}
-
-    explicit constexpr HpackDecodeResult(HpackDecodeError error) noexcept
-        : state_(std::unexpected(HpackDecodeFailure(error))) {}
-
-    std::expected<HpackDecoded, HpackDecodeFailure> state_;
 };
 
 struct HpackStaticIndex final {
@@ -162,8 +104,40 @@ private:
     using StepResult = std::optional<HpackDecodeError>;
 
     struct Entry final {
-        std::pmr::string name;
-        std::pmr::string value;
+        static constexpr std::size_t kInlineCapacity = 48;
+
+        union Storage final {
+            constexpr Storage() noexcept
+                : inlineBytes_{} {}
+            char inlineBytes_[kInlineCapacity];
+            char* heap_;
+        };
+
+        Entry() noexcept = default;
+        Entry(std::pmr::memory_resource* resource, std::string_view name, std::string_view value);
+        Entry(const Entry&) = delete;
+        Entry& operator=(const Entry&) = delete;
+        Entry(Entry&& other) noexcept;
+        Entry& operator=(Entry&&) = delete;
+        ~Entry();
+
+        [[nodiscard]] std::string_view name() const noexcept;
+        [[nodiscard]] std::string_view value() const noexcept;
+        [[nodiscard]] std::size_t tableSize() const noexcept {
+            return nameLength_ + valueLength_ + 32;
+        }
+
+    private:
+        [[nodiscard]] bool isInline() const noexcept {
+            return nameLength_ <= kInlineCapacity &&
+                   valueLength_ <= kInlineCapacity - nameLength_;
+        }
+        void restoreInlineEmpty() noexcept;
+
+        std::pmr::memory_resource* resource_{nullptr};
+        std::size_t nameLength_{0};
+        std::size_t valueLength_{0};
+        Storage storage_;
     };
 
     struct HeaderView final {
@@ -171,8 +145,6 @@ private:
         std::string_view value;
     };
 
-    [[nodiscard]] static std::size_t entrySize(
-        std::string_view name, std::string_view value) noexcept;
     [[nodiscard]] HpackDecodeResult decodeBlock(
         std::string_view block, void* target, HeaderCallback callback);
     [[nodiscard]] StepResult decodeInteger(const unsigned char*& cursor, const unsigned char* end,
@@ -198,7 +170,7 @@ private:
     void clearDynamic() noexcept;
     void evictDynamicToFit(std::size_t entrySize);
     void evictDynamic();
-    void compactDynamic();
+    void compactDynamic() noexcept;
     void beginDecodeTransaction() noexcept;
     void commitDecodeTransaction() noexcept;
     void rollbackDecodeTransaction() noexcept;

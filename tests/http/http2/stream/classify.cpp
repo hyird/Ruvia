@@ -4,6 +4,7 @@
 
 #include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
+#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 
 #include "test_harness.h"
 
