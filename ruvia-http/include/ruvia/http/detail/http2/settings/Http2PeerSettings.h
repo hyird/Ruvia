@@ -17,7 +17,8 @@ enum class Http2PeerSettingError : std::uint8_t {
     kInvalidInitialWindow,
     kInvalidMaxFrameSize,
     kInvalidEnableConnectProtocol,
-    kInvalidEnableConnectProtocolTransition
+    kInvalidEnableConnectProtocolTransition,
+    kInvalidPrioritySetting
 };
 
 class Http2PeerSettingApplyResult;
@@ -139,6 +140,8 @@ struct Http2SettingEntry final {
 [[nodiscard]] inline std::string_view http2PeerSettingErrorMessage(
     Http2PeerSettingError error) noexcept {
     switch (error) {
+        case Http2PeerSettingError::kInvalidPrioritySetting:
+            return "invalid NO_RFC7540_PRIORITIES";
         case Http2PeerSettingError::kInvalidEnablePush:
             return "invalid ENABLE_PUSH";
         case Http2PeerSettingError::kInvalidInitialWindow:
@@ -177,10 +180,21 @@ public:
         return enableConnectProtocol_;
     }
 
+    void completeFrame() noexcept {
+        firstFrame_ = false;
+    }
+
+    [[nodiscard]] bool enablePush() const noexcept {
+        return enablePush_;
+    }
+
     // A complete SETTINGS frame is validated against a detached candidate and
     // committed only after every entry has passed. The local role is immutable,
     // so only the peer-controlled values need to be copied into the live state.
     void replaceValuesFrom(const Http2PeerSettings& candidate) noexcept {
+        firstFrame_ = candidate.firstFrame_;
+        noRfc7540Priorities_ = candidate.noRfc7540Priorities_;
+        enablePush_ = candidate.enablePush_;
         maxFrameSize_ = candidate.maxFrameSize_;
         initialWindowSize_ = candidate.initialWindowSize_;
         maxConcurrentStreams_ = candidate.maxConcurrentStreams_;
@@ -192,6 +206,12 @@ public:
     [[nodiscard]] Http2PeerSettingApplyResult apply(
         Http2SettingId id, std::uint32_t value) noexcept {
         switch (id) {
+            case Http2SettingId::kNoRfc7540Priorities:
+                if (value > 1 || (!firstFrame_ && (value != (noRfc7540Priorities_ ? 1u : 0u)))) {
+                    return Http2PeerSettingApplyResult::makeFailure(Http2PeerSettingError::kInvalidPrioritySetting);
+                }
+                noRfc7540Priorities_ = value != 0;
+                return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kHeaderTableSize:
                 headerTableSize_ = value;
                 return Http2PeerSettingApplyResult::makeApplied();
@@ -200,6 +220,7 @@ public:
                     return Http2PeerSettingApplyResult::makeFailure(
                         Http2PeerSettingError::kInvalidEnablePush);
                 }
+                enablePush_ = value != 0;
                 return Http2PeerSettingApplyResult::makeApplied();
             case Http2SettingId::kMaxConcurrentStreams:
                 maxConcurrentStreams_ = value;
@@ -251,7 +272,10 @@ private:
     std::uint32_t maxConcurrentStreams_{std::numeric_limits<std::uint32_t>::max()};
     std::uint32_t maxHeaderListSize_{std::numeric_limits<std::uint32_t>::max()};
     std::int32_t initialWindowSize_{kHttp2DefaultInitialWindowSize};
+    bool firstFrame_{true};
+    bool noRfc7540Priorities_{false};
     bool enableConnectProtocol_{false};
+    bool enablePush_{localRole_ == Http2Role::kServer};
 };
 
 }  // namespace ruvia::detail

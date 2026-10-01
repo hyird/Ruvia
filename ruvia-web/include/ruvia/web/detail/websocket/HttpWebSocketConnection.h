@@ -40,7 +40,7 @@ public:
         ruvia::ConnectionScanner::Entry& scannerEntry, WebSocketLifecycleOptions lifecycleOptions,
         ProtocolByteLimit messageLimit, std::pmr::memory_resource* resource,
         std::string_view initialBytes = {},
-        WebSocketCompression compression = WebSocketCompression::kDisabled,
+        WebSocketCompression compression = (WebSocketCompression{}),
         int compressionLevel = 6)
         : transport_(std::move(transport)),
           worker_(&worker),
@@ -57,7 +57,7 @@ public:
 
     WebSocketConnection(Transport, WorkerHandle&&, ruvia::ConnectionScanner::Entry&,
         WebSocketLifecycleOptions, ProtocolByteLimit, std::pmr::memory_resource*,
-        std::string_view = {}, WebSocketCompression = WebSocketCompression::kDisabled, int = 6) = delete;
+        std::string_view = {}, WebSocketCompression = (WebSocketCompression{}), int = 6) = delete;
 
     ~WebSocketConnection() = default;
 

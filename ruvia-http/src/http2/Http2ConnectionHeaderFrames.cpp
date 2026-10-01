@@ -33,6 +33,9 @@ bool Http2Connection::completeDecodedHeaderBlock(Http2StreamState& stream) {
     }
     transaction.commit();
     hpackTransaction.commit();
+    if constexpr (Kind == Http2HeaderBlockKind::kInitial) {
+        stream.activatePush();
+    }
     http2ResetHeaderBlock(stream);
     return true;
 }
@@ -42,7 +45,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         appendGoaway(Http2ErrorCode::kProtocolError, "HEADERS stream id must be nonzero");
         return false;
     }
-    if ((header.streamId & 1U) == 0) {
+    if ((header.streamId & 1U) == 0 && (role_ == Http2Role::kServer || header.streamId > lastPeerPushStreamId_)) {
         appendGoaway(Http2ErrorCode::kProtocolError,
             role_ == Http2Role::kClient ? "HEADERS on even stream id" : "invalid client stream id");
         return false;
@@ -141,6 +144,21 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // buffer append must leave the complete frame retryable; advancing the
             // high-water mark before that point would turn the retry into a false
             // "stream id is not increasing" connection error.
+            std::size_t prioritizedIdle = 0, active = 0;
+            for (const auto& [id, priority] : priorities_) {
+                if (id > header.streamId && isIdleStreamId(id)) {
+                    ++prioritizedIdle;
+                }
+            }
+            streams_.forEach([&](const auto& item) {
+                if (!http2StreamIsClosed(item) && item.pushReservation() == Http2PushReservation::kNone) {
+                    ++active;
+                }
+            });
+            if (prioritizedIdle + active + 1 > Http2LocalSettings::kMaxConcurrentStreams) {
+                appendGoaway(Http2ErrorCode::kProtocolError, "idle priorities and active streams exceed concurrency");
+                return false;
+            }
             newPeerStream = true;
             const auto* gracefulDrain = localConnectionState_.gracefulDrain();
             const bool drainRefused =
@@ -276,6 +294,9 @@ bool Http2Connection::processContinuation(
         return false;
     }
     const auto kind = headerContinuation_.kind();
+    if (kind == Http2HeaderBlockKind::kPushPromise) {
+        return processPushContinuation(header, payload);
+    }
     Http2StreamState* stream = nullptr;
     if (kind == Http2HeaderBlockKind::kDiscarded) {
         if (!discardedHeaderStream_ || discardedHeaderStream_->id() != header.streamId) {

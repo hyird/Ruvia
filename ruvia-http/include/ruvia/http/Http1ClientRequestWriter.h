@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -33,6 +34,32 @@ namespace detail {
 struct Http1ClientRequestPrepareResultAccess;
 
 }  // namespace detail
+
+struct Http1ClientRequestHeadView final {
+    BorrowedText method{"GET"};
+    BorrowedText target{"/"};
+    std::span<const HttpHeaderView> headers{};
+    // A value sends Content-Length; absent sends Transfer-Encoding: chunked.
+    std::optional<std::uint64_t> contentLength{};
+};
+
+class Http1ClientStreamingRequestContent final {
+public:
+    [[nodiscard]] std::optional<std::uint64_t> contentLength() const noexcept {
+        return length_;
+    }
+    [[nodiscard]] bool continueGated() const noexcept {
+        return gated_;
+    }
+
+private:
+    friend struct detail::Http1ClientRequestPrepareResultAccess;
+    Http1ClientStreamingRequestContent(std::optional<std::uint64_t> length, bool gated) noexcept
+        : length_(length),
+          gated_(gated) {}
+    std::optional<std::uint64_t> length_;
+    bool gated_;
+};
 
 class Http1ClientRequestWithoutContent final {
 private:
@@ -95,11 +122,18 @@ public:
     }
     const Http1ClientContinueGatedRequestContent* continueGated() const&& = delete;
 
+    [[nodiscard]] constexpr const Http1ClientStreamingRequestContent* streaming() const& noexcept {
+        return std::get_if<Http1ClientStreamingRequestContent>(&content_);
+    }
+    const Http1ClientStreamingRequestContent* streaming() const&& = delete;
+
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
+    explicit Http1ClientRequestContentPlan(Http1ClientStreamingRequestContent content) noexcept
+        : content_(content) {}
     using Content = std::variant<Http1ClientRequestWithoutContent,
-        Http1ClientImmediateRequestContent, Http1ClientContinueGatedRequestContent>;
+        Http1ClientImmediateRequestContent, Http1ClientContinueGatedRequestContent, Http1ClientStreamingRequestContent>;
 
     explicit constexpr Http1ClientRequestContentPlan(
         Http1ClientRequestWithoutContent content) noexcept
@@ -271,6 +305,10 @@ public:
 
     [[nodiscard]] Http1ClientRequestPrepareResult prepare(const HttpOriginView& origin,
         const HttpClientRequestView& request, std::span<char> headBuffer,
+        Http1ClientRequestWirePolicy policy = {}) const;
+
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareStreaming(const HttpOriginView& origin,
+        const Http1ClientRequestHeadView& request, std::span<char> headBuffer,
         Http1ClientRequestWirePolicy policy = {}) const;
 
     [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin,

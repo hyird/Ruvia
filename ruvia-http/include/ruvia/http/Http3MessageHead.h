@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
@@ -60,6 +61,16 @@ struct Http3MessageHeadLimits final {
 [[nodiscard]] std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
     std::span<const char> fieldSection, Http3MessageHeadKind kind,
     std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
+    Http3MessageHeadLimits limits = {});
+
+class Http3QpackDecoder;
+struct Http3QpackBlocked final {};
+using Http3DecodedMessageHead = std::variant<Http3QpackBlocked, Http3MessageHead>;
+// The shared decoder handles RFC 9204 state and acknowledgments. A blocked
+// result contains no head: retain the section and retry after encoder input.
+[[nodiscard]] std::expected<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+    Http3QpackDecoder& decoder, std::uint64_t streamId, std::span<const char> fieldSection,
+    Http3MessageHeadKind kind, std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
     Http3MessageHeadLimits limits = {});
 
 }  // namespace ruvia

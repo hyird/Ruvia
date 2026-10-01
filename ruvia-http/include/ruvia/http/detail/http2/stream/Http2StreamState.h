@@ -30,10 +30,15 @@ enum class Http2LocalRequestContentGate : std::uint8_t {
     kCanceled,
 };
 
+enum class Http2PushReservation : std::uint8_t { kNone,
+    kLocal,
+    kRemote };
+
 class Http2StreamState final {
     friend class Http2StreamHeaderDecodeTransaction;
 
     std::uint32_t id_{0};
+    Http2PushReservation pushReservation_{Http2PushReservation::kNone};
     Http2RemoteContentState remoteContent_;
     Http2LocalContentState localContent_;
     Http2StreamLifecycle lifecycle_;
@@ -52,6 +57,16 @@ public:
         : id_(streamId),
           headerBlocks_(resource),
           messageData_(resource) {}
+
+    void reservePush(Http2PushReservation reservation) noexcept {
+        pushReservation_ = reservation;
+    }
+    void activatePush() noexcept {
+        pushReservation_ = Http2PushReservation::kNone;
+    }
+    [[nodiscard]] Http2PushReservation pushReservation() const noexcept {
+        return pushReservation_;
+    }
 
     [[nodiscard]] std::uint32_t id() const noexcept {
         return id_;

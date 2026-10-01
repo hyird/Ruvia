@@ -2403,38 +2403,92 @@ Use `QueryModel<T>` for structured request validation; use `and_then()` and
 
 ## HTTP Protocol Library
 
-`ruvia::http` can be used without the runtime or Web framework. It provides
-HTTP message types and helpers, HTTP/1 request and response parsing/writing,
-multipart parsing, range and conditional-request helpers, cookies, content
-negotiation, redirects, and content coding. Parse `Content-Encoding` with
-`ruvia::parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>`, and
-use the bounded complete-buffer codecs in `<ruvia/http/HttpContentCodec.h>`.
-`ruvia::parseMultipartBoundary()` and the multipart parsers are declared by
-`<ruvia/http/MultipartParser.h>`. The HTTP/3 sans-I/O building blocks
-include varints, frames, SETTINGS, incremental request/control stream framing,
-and QPACK static/literal field sections plus zero-capacity instruction streams.
-They include the sans-I/O connection state machine in
-`<ruvia/http/Http3Connection.h>`, but no dynamic QPACK table. `ruvia::web`
-drives these primitives with OpenSSL 3.6.4 or newer to provide the automatic
-HTTPS HTTP/3 server and `HttpClientProtocol::kHttp3Only` outbound client
-described above. HTTP/3 Extended CONNECT WebSocket validation and response-head
-construction are exposed by `<ruvia/http/Http3WebSocketHandshake.h>`. Other
-supported protocol-driver entry points are
-`<ruvia/http/Http2Connection.h>` and
-`<ruvia/http/Http2Framing.h>` for HTTP/2, `<ruvia/http/Hpack.h>` for HPACK,
-`<ruvia/http/WebSocketHandshake.h>` for the HTTP/1.1 server handshake,
-`<ruvia/http/Http1WebSocketClientHandshake.h>` for client handshake request
-preparation and response validation, and
-`<ruvia/http/WebSocketConnection.h>` for the WebSocket driver and its typed
-events. `WebSocketConnectionOptions::role` selects server (default) or client
-masking and inbound validation. Client connections require `maskKeyGenerator`
-and an optional borrowed `maskKeyContext`; the transport supplies a fresh
+`ruvia::http` is a standalone sans-I/O protocol library. Both client and
+server drivers supply their own transport, clocks, cancellation, TLS identity,
+and QUIC streams. The library owns HTTP message validation, wire framing,
+compression, connection rules, and protocol failures; it has no dependency on
+`ruvia::core`, Asio, sockets, or OpenSSL.
+
+| Protocol | Client entry points | Server entry points |
+| --- | --- | --- |
+| HTTP/1.0 and HTTP/1.1 | `Http1ClientRequestWriter`, `Http1RequestContentWriter`, `Http1ClientResponseParser`, `Http1ClientResponseBodyDecoder`, `Http1ClientExchangeState` | `Http1ServerRequestParser`, request body/connection plans, `Http1ResponseHeadPlan`, `Http1ResponseStreamPlan`, response serialization |
+| HTTP/2 | `Http2Connection::client()`: request heads, DATA, request trailers, responses, cancellation, flow-control credits, push and GOAWAY | `Http2Connection::server()`: request events, interim/final/streaming responses, trailers, push promises, cancellation and connection control |
+| HTTP/3 | `Http3Connection` with client role, `Http3ClientRequestHead`, `Http3RequestWriter`, `Http3ClientResponse`, `Http3DataWritePlan` | `Http3Connection` with server role, `Http3MessageHead`, `Http3ResponseWriter`, `Http3DataWritePlan` |
+| WebSocket | `Http1WebSocketClientHandshake` or `WebSocketClientNegotiation`, then `WebSocketConnection` with client role | HTTP/1 Upgrade or HTTP/2/3 Extended CONNECT handshake helpers, then `WebSocketConnection` with server role |
+
+The protocol interfaces implement HTTP semantics/framing from RFC 9110, 9112, 9113, and 9114,
+HPACK (RFC 7541), QPACK (RFC 9204), WebSocket (RFC 6455), and these published
+optional extensions:
+
+- HTTP/2 and HTTP/3 server push, including promise metadata and cancellation.
+  HTTP/2 clients opt in with `Http2ConnectionOptions::enablePush`; HTTP/3 clients
+  send `prepareMaxPushId()` before accepting pushes. Pushed origins still require
+  transport authority validation before use.
+- Extensible priorities (RFC 9218): `HttpPriority`, typed priority-update events,
+  and connection submission/preparation methods. Scheduling remains a driver choice.
+- WebSocket permessage-deflate (RFC 7692), including independent send/receive
+  windows of 8–15 bits and context takeover. Client offers and server selections
+  are validated before configuring the frame connection.
+- Extended CONNECT (RFC 8441/9220), including WebSocket over HTTP/2 and HTTP/3.
+  Client helpers require the peer's `SETTINGS_ENABLE_CONNECT_PROTOCOL`;
+  HTTP/3 servers configure their advertised receive capability explicitly.
+- HTTP Datagrams and Capsule Protocol (RFC 9297), and CONNECT-UDP (RFC 9298):
+  `<ruvia/http/HttpDatagram.h>` provides framing and a tunnel session that checks
+  negotiation, context IDs, payload limits, and half-close state;
+  `<ruvia/http/HttpConnectUdp.h>` validates HTTP/1.1 Upgrade and HTTP/2/3
+  handshakes and handles the default UDP URI template. QUIC DATAGRAM use requires
+  both HTTP SETTINGS values and QUIC negotiation; capsules provide reliable delivery.
+- ORIGIN (RFC 8336/9412) and HTTP/2 ALTSVC (RFC 7838):
+  `<ruvia/http/HttpConnectionAdvertisement.h>` provides codecs; the connection
+  APIs send advertisements and deliver typed events. Enable ORIGIN reception only
+  for an authenticated origin connection, outside an explicit proxy. The runtime
+  applies certificate checks, connection coalescing, and alternative-service policy.
+
+`Http3QpackEncoder` and `Http3QpackDecoder` from
+`<ruvia/http/Http3QpackConnection.h>` share dynamic tables across streams, handle
+all instruction representations, blocked sections, acknowledgments, cancellation,
+and bounded critical-stream output. `Http3Connection` owns both contexts and
+configures its encoder from peer SETTINGS. Construct local critical-stream
+prefixes from `connection.localSettings()` using `Http3LocalCriticalStreams`.
+When `feed()` returns `kQpackBlocked`, retain the unconsumed suffix and FIN, feed
+encoder-stream bytes, and retry the blocked stream. Drain encoder and decoder
+output on their respective critical streams and keep those streams open.
+The independent request/response encoders also have dynamic QPACK overloads;
+share one encoder across the whole connection when using them separately.
+
+HTTP/3 stream I/O, flow control, and resets belong to the QUIC transport.
+Message writers produce field sections and scatter-gather DATA plans; drivers
+preserve write ordering and commit plans only after successful transmission.
+For trailing HEADERS, complete the body plan, write the trailer section, then
+commit the finishing plan and FIN. `cancelRequest()` queues QPACK cancellation
+before releasing a parser. Returned PMR results can survive later operations;
+the supplied resource must outlive every retained result. Callback views expire
+on callback return.
+
+`Http1ClientRequestWriter::prepareStreaming()` accepts either a known body length
+or chunked framing. `Http1RequestContentWriter` plans borrowed payload segments,
+validates request trailers, enforces the declared length, and gates upload on
+`100 Continue` or the driver's timeout. A final response aborts unfinished upload.
+
+`WebSocketConnectionOptions::role` selects server (default) or client masking
+and inbound validation. Client connections require `maskKeyGenerator` and an
+optional borrowed `maskKeyContext`; the transport supplies a fresh
 cryptographically random four-byte key for every frame, including automatic
 Pong and Close responses. The context must outlive the connection. Generator
-failure throws; abort the connection rather than retrying with a weak key.
-This replaces the former `WebSocketServerConnection` header, type, and options:
-server consumers rename these to `WebSocketConnection` and retain defaults.
-SSE messages are
+failure throws; abort the connection. `WebSocketClientNegotiation` owns offered
+headers, subprotocols, and compression parameters, and prepares HTTP/2/3 requests.
+Use the negotiated `WebSocketCompression` value when constructing the connection.
+
+The Web runtime uses these protocol primitives with its own enabled capabilities;
+protocol-library extension support does not enable an App transport feature by
+itself. `ruvia::web` drives HTTP/3 with OpenSSL 3.6.4 or newer, as described above.
+
+HTTP message helpers also cover multipart, ranges, conditional requests, cookies,
+content negotiation, redirects, and content coding. Parse `Content-Encoding`
+with `parseHttpContentCoding()` from `<ruvia/http/HttpContentCoding.h>` and use
+bounded buffer codecs from `<ruvia/http/HttpContentCodec.h>`.
+`parseMultipartBoundary()` and multipart parsers are declared by
+`<ruvia/http/MultipartParser.h>`. SSE messages are
 formatted through `ruvia::formatSseMessage()` from `<ruvia/http/Sse.h>`. URL
 component and URL-encoded pair helpers are available from
 `<ruvia/http/UrlEncoding.h>`: `UrlDecodeMode::kPercent` leaves `+` literal,
@@ -2447,7 +2501,7 @@ last duplicate, and returns the still-encoded value as a borrowed view.
 
 `Http1WebSocketClientHandshake` prepares an HTTP/1.1 upgrade request from a
 caller-generated random nonce and validates the peer's response against that
-request's key and offered subprotocols. It does not negotiate extensions.
+request's key, offered subprotocols, and permessage-deflate parameters.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
 

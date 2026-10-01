@@ -436,7 +436,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                 break;
             }
 
-            headerSearchOffset = usedBytes > 3 ? usedBytes - 3 : 0;
+            headerSearchOffset = usedBytes;
 
             // With no request bytes yet on a reused connection this read is the
             // keepalive idle wait (idleTimeout); once any header bytes are

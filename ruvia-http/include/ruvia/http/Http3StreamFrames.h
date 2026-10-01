@@ -19,6 +19,7 @@ enum class Http3StreamKind : std::uint8_t {
 
 enum class Http3StreamFrameStatus : std::uint8_t {
     kNeedMoreData,
+    kPaused,
     kMessageEnd,
     kFrameUnexpected,
     kPushPromise,
@@ -36,11 +37,15 @@ http3ConnectionErrorCodeForStreamFrameStatus(Http3StreamFrameStatus status) noex
 
 enum class Http3StreamFrameEventKind : std::uint8_t {
     kHeaders,
+    kPushPromise,
     kData,
     kSettings,
     kCancelPush,
     kGoaway,
     kMaxPushId,
+    kRequestPriorityUpdate,
+    kPushPriorityUpdate,
+    kOrigin,
 };
 
 struct Http3StreamFrameEvent final {
@@ -56,6 +61,7 @@ using Http3StreamFrameCallback = void (*)(void*, Http3StreamFrameEvent);
 struct Http3StreamFramesConfig final {
     std::size_t maxFieldSectionSize{64 * 1024};
     std::size_t maxSettingsPayloadBytes{64 * 1024};
+    bool allowPush{false};
 };
 
 // Incrementally decodes one HTTP/3 message direction or control stream. A
@@ -73,6 +79,21 @@ public:
     [[nodiscard]] Http3StreamFrameStatus feed(std::span<const char> input, bool fin,
         Http3StreamFrameCallback callback, void* context);
 
+    // Called by a HEADERS callback to retain the complete section and stop
+    // consuming input. The next feed retries that callback before new bytes.
+    void allowPush() noexcept {
+        config_.allowPush = true;
+    }
+    void pause() noexcept {
+        paused_ = true;
+    }
+    [[nodiscard]] bool paused() const noexcept {
+        return paused_;
+    }
+    [[nodiscard]] std::size_t consumedBytes() const noexcept {
+        return consumed_;
+    }
+
     [[nodiscard]] const Http3StreamFramesConfig& config() const noexcept {
         return config_;
     }
@@ -86,6 +107,7 @@ private:
     };
 
     [[nodiscard]] Http3StreamFrameStatus beginFrame();
+    [[nodiscard]] std::size_t fieldSectionBufferLimit() const noexcept;
     Http3StreamFrameStatus finishFrame() noexcept;
 
     Http3StreamKind kind_;
@@ -100,6 +122,8 @@ private:
     std::size_t headerBytesNeeded_{0};
     std::size_t headerBytesUsed_{0};
     char header_[16]{};
+    bool paused_{false};
+    std::size_t consumed_{0};
     bool firstFrame_{true};
     bool headersSeen_{false};
     bool trailersSeen_{false};

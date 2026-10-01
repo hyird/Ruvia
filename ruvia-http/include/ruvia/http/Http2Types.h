@@ -8,6 +8,15 @@
 
 namespace ruvia {
 
+enum class Http2FinishRequestStatus : std::uint8_t {
+    kAccepted,
+    kQueued,
+    kClosed,
+    kInvalidState,
+    kContentLengthIncomplete,
+    kInvalidTrailer,
+};
+
 enum class Http2Role : std::uint8_t {
     kServer,
     kClient,
@@ -130,6 +139,7 @@ enum class Http2RequestHeadSubmitError : std::uint8_t {
 };
 
 enum class Http2ResponseHeadSubmitError : std::uint8_t {
+    kPeerStreamLimitReached,
     kClosed,
     kInvalidState,
     kResponsePlanMismatch,

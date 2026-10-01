@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace ruvia {
@@ -16,15 +19,16 @@ enum class WebSocketOpcode : std::uint8_t {
     kPing = 0x9,
     kPong = 0xA
 };
-// One negotiated permessage-deflate outcome. Keeping the echoed
-// server_max_window_bits alternative explicit prevents response metadata and
-// frame compression from being configured independently.
-enum class WebSocketCompression : std::uint8_t {
-    kDisabled,
-    kPermessageDeflate,
-    kPermessageDeflateWithServerMaxWindowBits,
-    kPermessageDeflateContextTakeover,
-    kPermessageDeflateContextTakeoverWithServerMaxWindowBits,
+// Exact RFC 7692 negotiation, including independent sender dictionaries and
+// windows. Omitted max-window parameters imply 15; presence also controls the
+// negotiated extension's wire metadata.
+struct WebSocketCompression final {
+    bool enabled{false};
+    bool serverNoContextTakeover{true};
+    bool clientNoContextTakeover{true};
+    std::optional<int> serverMaxWindowBits{};
+    std::optional<int> clientMaxWindowBits{};
+    bool operator==(const WebSocketCompression&) const = default;
 };
 
 struct WebSocketDeflateConfig final {
@@ -36,22 +40,56 @@ struct WebSocketDeflateConfig final {
 };
 
 namespace detail {
-[[nodiscard]] constexpr std::string_view webSocketCompressionExtension(
-    WebSocketCompression compression) noexcept {
-    switch (compression) {
-        case WebSocketCompression::kDisabled:
-            return {};
-        case WebSocketCompression::kPermessageDeflate:
-            return "permessage-deflate; server_no_context_takeover; client_no_context_takeover";
-        case WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits:
-            return "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
-                   "server_max_window_bits=15";
-        case WebSocketCompression::kPermessageDeflateContextTakeover:
-            return "permessage-deflate";
-        case WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits:
-            return "permessage-deflate; server_max_window_bits=15";
+class WebSocketCompressionExtension final {
+public:
+    explicit constexpr WebSocketCompressionExtension(WebSocketCompression compression) noexcept {
+        if (!compression.enabled) {
+            return;
+        }
+        append("permessage-deflate");
+        if (compression.serverNoContextTakeover) {
+            append("; server_no_context_takeover");
+        }
+        if (compression.clientNoContextTakeover) {
+            append("; client_no_context_takeover");
+        }
+        if (compression.serverMaxWindowBits) {
+            append("; server_max_window_bits=");
+            number(*compression.serverMaxWindowBits);
+        }
+        if (compression.clientMaxWindowBits) {
+            append("; client_max_window_bits=");
+            number(*compression.clientMaxWindowBits);
+        }
     }
-    return {};
+    [[nodiscard]] constexpr std::string_view view() const& noexcept {
+        return {bytes_.data(), size_};
+    }
+    std::string_view view() const&& = delete;
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return size_ == 0;
+    }
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return size_;
+    }
+
+private:
+    constexpr void append(std::string_view text) noexcept {
+        for (char ch : text) {
+            bytes_[size_++] = ch;
+        }
+    }
+    constexpr void number(int value) noexcept {
+        if (value >= 10) {
+            bytes_[size_++] = '1';
+        }
+        bytes_[size_++] = static_cast<char>('0' + value % 10);
+    }
+    std::array<char, 160> bytes_{};
+    std::size_t size_{0};
+};
+[[nodiscard]] constexpr WebSocketCompressionExtension webSocketCompressionExtension(WebSocketCompression compression) noexcept {
+    return WebSocketCompressionExtension(compression);
 }
 
 struct WebSocketMessageAccess;

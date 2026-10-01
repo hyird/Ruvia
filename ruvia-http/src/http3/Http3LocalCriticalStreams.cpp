@@ -7,16 +7,12 @@ namespace ruvia {
 
 std::expected<Http3LocalCriticalStreams, Http3LocalCriticalStreamsError>
 Http3LocalCriticalStreams::create(const Http3Settings& settings) noexcept {
-    if (settings.qpackMaxTableCapacity != 0 || settings.qpackBlockedStreams != 0) {
-        return std::unexpected(Http3LocalCriticalStreamsError::kUnsupportedQpackConfiguration);
-    }
-
     Http3LocalCriticalStreams streams;
     const auto streamType = encodeHttp3VarInt(streams.control_, 0);
     if (!streamType) {
         return std::unexpected(Http3LocalCriticalStreamsError::kSettingsEncodingError);
     }
-    std::array<char, 4 * 2 * kHttp3VarIntMaxBytes> settingsPayload{};
+    std::array<char, 5 * 2 * kHttp3VarIntMaxBytes> settingsPayload{};
     const auto settingsSize = encodeHttp3Settings(settingsPayload, settings);
     if (!settingsSize) {
         return std::unexpected(Http3LocalCriticalStreamsError::kSettingsEncodingError);

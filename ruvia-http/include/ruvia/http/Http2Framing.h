@@ -24,7 +24,10 @@ enum class Http2FrameType : std::uint8_t {
     kPing = 0x6,
     kGoaway = 0x7,
     kWindowUpdate = 0x8,
-    kContinuation = 0x9
+    kContinuation = 0x9,
+    kAlternativeService = 0xa,
+    kOrigin = 0xc,
+    kPriorityUpdate = 0x10
 };
 enum class Http2ErrorCode : std::uint32_t {
     kNoError = 0x0,
@@ -49,7 +52,8 @@ enum class Http2SettingId : std::uint16_t {
     kInitialWindowSize = 0x4,
     kMaxFrameSize = 0x5,
     kMaxHeaderListSize = 0x6,
-    kEnableConnectProtocol = 0x8
+    kEnableConnectProtocol = 0x8,
+    kNoRfc7540Priorities = 0x9
 };
 
 struct Http2FrameHeader final {

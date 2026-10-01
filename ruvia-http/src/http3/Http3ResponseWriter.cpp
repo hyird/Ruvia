@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
@@ -114,9 +115,9 @@ bool addDecodedFieldSize(std::size_t& decodedSize, std::string_view name, std::s
 
 }  // namespace
 
-std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
+static std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(
     std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits,
-    std::pmr::memory_resource* resource) {
+    std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
     if (fields.size() > limits.maxFields) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
             Http3FieldSectionError::kTooManyFields});
@@ -172,7 +173,7 @@ std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3Re
         }
         normalized.push_back({name, field.value, true});
     }
-    auto encoded = encodeHttp3FieldSection(normalized, memory);
+    auto encoded = detail::encodeHttp3Fields(normalized, memory, limits, encoder, streamId);
     if (!encoded) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, encoded.error()});
     }
@@ -183,10 +184,10 @@ std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3Re
     return Http3ResponseFieldSection(std::move(*encoded), decodedBytes);
 }
 
-std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(
     HttpStatusCode status, HttpKnownMethod requestMethod,
     std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits,
-    std::pmr::memory_resource* resource) {
+    std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
     if (status == http_status::kSwitchingProtocols) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus});
     }
@@ -231,7 +232,7 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
                 Http3FieldSectionError::kFieldListTooLarge});
         }
     }
-    auto encoded = encodeHttp3FieldSection(outputFields, resource);
+    auto encoded = detail::encodeHttp3Fields(outputFields, resource ? resource : std::pmr::get_default_resource(), limits, encoder, streamId);
     if (!encoded) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, encoded.error()});
     }
@@ -242,9 +243,9 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
     return Http3ResponseHead(std::move(*encoded), bodyPlan, decodedBytes);
 }
 
-std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(
     const HttpResponse& response, HttpBufferedResponseWritePlan writePlan,
-    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
     const auto status = response.status();
     if (status == http_status::kSwitchingProtocols) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus});
@@ -370,12 +371,44 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHe
     if (synthesizeLength) {
         projected.push_back({"content-length", std::string_view(lengthBytes.data(), canonicalLengthSize), false});
     }
-    auto encoded = encodeHttp3ResponseHead(status, writePlan.requestMethod(), projected, limits, memory);
+    auto encoded = encodeResponseHead(status, writePlan.requestMethod(), projected, limits, memory, encoder, streamId);
     if (!encoded) {
         return encoded;
     }
     return Http3ResponseHead(std::move(encoded->fieldSection), writePlan.bodyPlan(),
         encoded->decodedFieldSectionSize());
+}
+
+std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    HttpStatusCode status, HttpKnownMethod method, std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseHead(status, method, fields, limits, resource, nullptr, 0);
+}
+std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    const HttpResponse& response, HttpBufferedResponseWritePlan plan,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseHead(response, plan, limits, resource, nullptr, 0);
+}
+std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
+    std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseTrailers(fields, limits, resource, nullptr, 0);
+}
+
+std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, HttpStatusCode status, HttpKnownMethod method, std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseHead(status, method, fields, limits, resource, &encoder, streamId);
+}
+std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseHead(response, plan, limits, resource, &encoder, streamId);
+}
+std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeResponseTrailers(fields, limits, resource, &encoder, streamId);
 }
 
 }  // namespace ruvia

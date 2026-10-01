@@ -296,7 +296,7 @@ std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset)
         return std::string_view::npos;
     }
 
-    auto cursor = searchOffset >= limit ? limit : std::max<std::size_t>(3, searchOffset + 3);
+    auto cursor = searchOffset >= limit ? limit : std::max<std::size_t>(3, searchOffset);
     while (cursor < limit) {
         const auto* hit =
             static_cast<const char*>(std::memchr(buffer.data() + cursor, '\n', limit - cursor));

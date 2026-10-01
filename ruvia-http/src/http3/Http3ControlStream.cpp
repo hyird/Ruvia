@@ -1,6 +1,7 @@
 #include "ruvia/http/Http3ControlStream.h"
 
 #include <array>
+#include <stdexcept>
 
 #include "ruvia/http/Http3VarInt.h"
 
@@ -19,6 +20,49 @@ void Http3ControlStream::onFrame(void* context, Http3StreamFrameEvent event) {
 
 void Http3ControlStream::consume(Http3StreamFrameEvent event) {
     if (error_ != Http3ControlStreamStatus::kNeedMoreData) {
+        return;
+    }
+    if (event.kind == Http3StreamFrameEventKind::kOrigin) {
+        if (role_ != Http3ControlRole::kClient) {
+            return;
+        }
+        settingsPayload_.insert(settingsPayload_.end(), event.payload.begin(), event.payload.end());
+        if (!event.endFrame) {
+            return;
+        }
+        const auto advertisement = decodeHttpOriginAdvertisement(settingsPayload_, resource_);
+        if (advertisement && callback_) {
+            callback_(context_, {.kind = event.kind, .id = 0, .originAdvertisement = &*advertisement});
+        }
+        settingsPayload_.clear();
+        return;
+    }
+    if (event.kind == Http3StreamFrameEventKind::kRequestPriorityUpdate || event.kind == Http3StreamFrameEventKind::kPushPriorityUpdate) {
+        if (role_ != Http3ControlRole::kServer) {
+            error_ = Http3ControlStreamStatus::kFrameUnexpected;
+            return;
+        }
+        settingsPayload_.insert(settingsPayload_.end(), event.payload.begin(), event.payload.end());
+        if (!event.endFrame) {
+            return;
+        }
+        const auto id = decodeHttp3VarInt(settingsPayload_);
+        const bool push = event.kind == Http3StreamFrameEventKind::kPushPriorityUpdate;
+        if (!id) {
+            error_ = Http3ControlStreamStatus::kFrameError;
+            return;
+        }
+        if ((!push && (id->value & 3) != 0) || (push && (!maxPushId_ || id->value > *maxPushId_))) {
+            error_ = Http3ControlStreamStatus::kIdError;
+            return;
+        }
+        auto fields = parseHttpPriority(std::string_view(settingsPayload_.data() + id->encodedBytes,
+            settingsPayload_.size() - id->encodedBytes));
+        if (callback_) {
+            callback_(context_, {event.kind, id->value,
+                                    fields ? std::optional(HttpPriorityUpdate{id->value, push, *fields}) : std::nullopt});
+        }
+        settingsPayload_.clear();
         return;
     }
     if (event.kind == Http3StreamFrameEventKind::kSettings) {
@@ -99,19 +143,41 @@ void Http3ControlStream::consume(Http3StreamFrameEvent event) {
         default:
             break;
     }
+    if (error_ == Http3ControlStreamStatus::kNeedMoreData && callback_) {
+        callback_(context_, {fixedKind_, value});
+    }
     fixedPayloadSize_ = 0;
 }
 
-Http3ControlStreamStatus Http3ControlStream::feed(std::span<const char> input, bool fin) {
+Http3ControlStreamStatus Http3ControlStream::feed(std::span<const char> input, bool fin, Http3ControlStreamCallback callback, void* context) {
+    if (feeding_) {
+        throw std::logic_error("recursive Http3ControlStream::feed()");
+    }
     if (error_ != Http3ControlStreamStatus::kNeedMoreData) {
         return error_;
     }
+    struct Guard {
+        Http3ControlStream& owner;
+        int exceptions{std::uncaught_exceptions()};
+        ~Guard() {
+            owner.feeding_ = false;
+            owner.callback_ = nullptr;
+            owner.context_ = nullptr;
+            if (std::uncaught_exceptions() > exceptions) {
+                owner.error_ = Http3ControlStreamStatus::kFrameError;
+            }
+        }
+    } guard{*this};
+    feeding_ = true;
+    callback_ = callback;
+    context_ = context;
     const auto status = frames_.feed(input, fin, onFrame, this);
     if (error_ != Http3ControlStreamStatus::kNeedMoreData) {
         return error_;
     }
     switch (status) {
         case Http3StreamFrameStatus::kNeedMoreData:
+        case Http3StreamFrameStatus::kPaused:
         case Http3StreamFrameStatus::kMessageEnd:
             return Http3ControlStreamStatus::kNeedMoreData;
         case Http3StreamFrameStatus::kClosedCriticalStream:

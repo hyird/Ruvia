@@ -33,15 +33,22 @@ enum class WebSocketInflateResult : std::uint8_t {
 class WebSocketDeflate final {
 public:
     explicit WebSocketDeflate(int compressionLevel = 6, bool contextTakeover = false)
-        : contextTakeover_(contextTakeover) {
+        : WebSocketDeflate(compressionLevel, contextTakeover, contextTakeover, 15, 15) {}
+
+    WebSocketDeflate(int compressionLevel, bool sendTakeover, bool receiveTakeover, int sendWindow, int receiveWindow)
+        : sendTakeover_(sendTakeover),
+          receiveTakeover_(receiveTakeover) {
+        if (sendWindow < 8 || sendWindow > 15 || receiveWindow < 8 || receiveWindow > 15) {
+            throw std::invalid_argument("invalid WebSocket DEFLATE window");
+        }
         if (compressionLevel < 0 || compressionLevel > 9) {
             throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
         }
         if (deflateInit2(
-                &deflate_, compressionLevel, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+                &deflate_, compressionLevel, Z_DEFLATED, -std::max(sendWindow, 9), 8, sendWindow == 8 ? Z_HUFFMAN_ONLY : Z_DEFAULT_STRATEGY) != Z_OK) {
             throw std::runtime_error("failed to initialize WebSocket deflate encoder");
         }
-        if (inflateInit2(&inflate_, -15) != Z_OK) {
+        if (inflateInit2(&inflate_, -receiveWindow) != Z_OK) {
             (void)deflateEnd(&deflate_);
             throw std::runtime_error("failed to initialize WebSocket deflate decoder");
         }
@@ -58,7 +65,7 @@ public:
     // Compresses a whole message, appending the raw-DEFLATE block to `out` with
     // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
     bool compress(std::string_view input, std::pmr::string& out) {
-        if (!contextTakeover_ && deflateReset(&deflate_) != Z_OK) {
+        if (!sendTakeover_ && deflateReset(&deflate_) != Z_OK) {
             return false;
         }
         // Messages can exceed zlib's 32-bit avail_in, so supply the input in
@@ -101,7 +108,7 @@ public:
     // message limit to defuse decompression bombs (RFC 7692 §7.2.2).
     WebSocketInflateResult decompress(
         std::string_view input, std::pmr::string& out, ProtocolByteLimit messageLimit) {
-        if (!contextTakeover_ && inflateReset(&inflate_) != Z_OK) {
+        if (!receiveTakeover_ && inflateReset(&inflate_) != Z_OK) {
             return WebSocketInflateResult::kError;
         }
         static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
@@ -163,27 +170,16 @@ private:
 
     z_stream deflate_{};
     z_stream inflate_{};
-    bool contextTakeover_{false};
+    bool sendTakeover_{false};
+    bool receiveTakeover_{false};
 };
 
 [[nodiscard]] constexpr bool webSocketDeflateNegotiated(WebSocketCompression negotiation) noexcept {
-    return negotiation == WebSocketCompression::kPermessageDeflate ||
-           negotiation == WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits ||
-           negotiation == WebSocketCompression::kPermessageDeflateContextTakeover ||
-           negotiation == WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits;
+    return negotiation.enabled;
 }
 
-// Decide whether the client offered permessage-deflate in a form we can honor. We
-// run a fixed 32 KiB (15-bit) server window. Context takeover is opt-in and
-// falls back to independent messages when either peer hint requires it. A bare
-// offer and client_max_window_bits are fine (our 15-bit inflate handles smaller
-// client windows). An offer that pins
-// server_max_window_bits is honored only when it permits 15: a smaller bound would
-// require shrinking our compressor, so those offers are skipped (fall back to the
-// next offer / no compression). RFC 7692 §7.1.2.1.
-// Scan one Sec-WebSocket-Extensions field-line value (a comma list of offers) and
-// return the first honorable permessage-deflate offer, or a disabled negotiation
-// if the line carries none we can accept.
+// Decode RFC 7692 window parameters (8 through 15), including quoted tokens.
+// The negotiated send and receive bounds are independent of takeover policy.
 [[nodiscard]] inline std::optional<int> webSocketDeflateWindowBits(
     std::string_view value) noexcept {
     value = httpTrimOws(value);
@@ -290,15 +286,12 @@ private:
         start = end;
     }
 
-    if (serverWindowSeen && serverWindow != 15) {
-        return std::nullopt;
-    }
     if (contextTakeover && !serverNoContextTakeover && !clientNoContextTakeover) {
-        return serverWindowSeen ? WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits
-                                : WebSocketCompression::kPermessageDeflateContextTakeover;
+        return serverWindowSeen ? (WebSocketCompression{.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false, .serverMaxWindowBits = serverWindow})
+                                : (WebSocketCompression{.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false});
     }
-    return serverWindowSeen ? WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits
-                            : WebSocketCompression::kPermessageDeflate;
+    return serverWindowSeen ? (WebSocketCompression{.enabled = true, .serverMaxWindowBits = serverWindow})
+                            : (WebSocketCompression{.enabled = true});
 }
 
 [[nodiscard]] inline WebSocketCompression webSocketScanDeflateOffers(
@@ -311,7 +304,7 @@ private:
         accepted = webSocketParseDeflateOffer(offer, contextTakeover);
         return !accepted.has_value();
     });
-    return accepted.value_or(WebSocketCompression::kDisabled);
+    return accepted.value_or((WebSocketCompression{}));
 }
 
 [[nodiscard]] inline WebSocketCompression webSocketNegotiatePermessageDeflate(
@@ -320,7 +313,7 @@ private:
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
     }
     if (!config.enabled || !webSocketExtensionOffersValid(request)) {
-        return WebSocketCompression::kDisabled;
+        return (WebSocketCompression{});
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
     // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
@@ -339,7 +332,7 @@ private:
             return negotiation;
         }
     }
-    return WebSocketCompression::kDisabled;
+    return (WebSocketCompression{});
 }
 
 }  // namespace ruvia::detail

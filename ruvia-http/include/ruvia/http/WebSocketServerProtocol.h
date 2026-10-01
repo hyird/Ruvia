@@ -14,7 +14,7 @@
 namespace ruvia {
 
 struct WebSocketServerProtocolOptions final {
-    WebSocketCompression compression{WebSocketCompression::kDisabled};
+    WebSocketCompression compression{(WebSocketCompression{})};
     int compressionLevel{6};
 };
 
@@ -25,7 +25,7 @@ class WebSocketServerProtocol final {
 public:
     explicit WebSocketServerProtocol(std::pmr::string& input,
         ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
-        WebSocketCompression compression = WebSocketCompression::kDisabled);
+        WebSocketCompression compression = (WebSocketCompression{}));
     WebSocketServerProtocol(std::pmr::string& input, ProtocolByteLimit messageLimit,
         WebSocketServerProtocolOptions options);
     ~WebSocketServerProtocol();

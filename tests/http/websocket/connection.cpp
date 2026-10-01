@@ -97,7 +97,7 @@ std::pmr::string unmaskedFrame(
 RUVIA_TEST(ws_client_role_masks_outbound_and_accepts_unmasked_server_frames) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection client(input, ProtocolByteLimit::limited(1024), WebSocketCompression::kDisabled,
+    WsConnection client(input, ProtocolByteLimit::limited(1024), (WebSocketCompression{}),
         WebSocketConnectionRole::kClient, &fixedMask, nullptr);
 
     RUVIA_CHECK(client.submitFrame(WebSocketOpcode::kText, "hi") == WebSocketFrameSubmitStatus::kAccepted);
@@ -119,7 +119,7 @@ RUVIA_TEST(ws_client_role_masks_outbound_and_accepts_unmasked_server_frames) {
 RUVIA_TEST(ws_client_role_rejects_masked_server_frames) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection client(input, ProtocolByteLimit::limited(1024), WebSocketCompression::kDisabled,
+    WsConnection client(input, ProtocolByteLimit::limited(1024), (WebSocketCompression{}),
         WebSocketConnectionRole::kClient, &fixedMask, nullptr);
     const auto serverViolation = maskedFrame(&resource, 0x1, "bad");
     const auto event = pollBytes(client, input, serverViolation);
@@ -336,7 +336,7 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
     WsConnection conn(
-        input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
+        input, ProtocolByteLimit::unlimited(), (WebSocketCompression{.enabled = true}));
 
     ruvia::detail::WebSocketDeflate encoder;
     std::pmr::string compressed(&resource);
@@ -358,7 +358,7 @@ RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_taint_next_utf8)
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
     WsConnection conn(
-        input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
+        input, ProtocolByteLimit::unlimited(), (WebSocketCompression{.enabled = true}));
 
     RUVIA_CHECK(conn.submitClose(1000, "") == WebSocketCloseSubmitStatus::kAccepted);
     const auto plan = conn.outputPlan();
@@ -405,7 +405,7 @@ RUVIA_TEST(ws_connection_suppressed_compressed_message_does_not_charge_next_limi
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
     WsConnection conn(
-        input, ProtocolByteLimit::limited(1000), WebSocketCompression::kPermessageDeflate);
+        input, ProtocolByteLimit::limited(1000), (WebSocketCompression{.enabled = true}));
 
     RUVIA_CHECK(conn.submitClose(1000, "") == WebSocketCloseSubmitStatus::kAccepted);
     const auto plan = conn.outputPlan();
@@ -452,7 +452,7 @@ RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
     WsConnection conn(
-        input, ProtocolByteLimit::unlimited(), WebSocketCompression::kPermessageDeflate);
+        input, ProtocolByteLimit::unlimited(), (WebSocketCompression{.enabled = true}));
 
     const std::pmr::string repetitive(200, 'a', &resource);
     RUVIA_CHECK(conn.submitFrame(WebSocketOpcode::kText,

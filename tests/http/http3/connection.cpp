@@ -12,6 +12,8 @@
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/Http3QpackConnection.h"
+#include "ruvia/http/Http3VarInt.h"
 
 #include "test_harness.h"
 
@@ -108,6 +110,10 @@ void capture(void* opaque, const ruvia::Http3ConnectionEvent& event) {
             result.bodyIndex[event.streamId] = result.bodies.size();
             result.bodies.emplace_back();
             break;
+        case ruvia::Http3ConnectionEventKind::kPushPromise:
+        case ruvia::Http3ConnectionEventKind::kPushCanceled:
+        case ruvia::Http3ConnectionEventKind::kOriginAdvertisement:
+        case ruvia::Http3ConnectionEventKind::kPriorityUpdate:
         case ruvia::Http3ConnectionEventKind::kInformationalHead:
         case ruvia::Http3ConnectionEventKind::kFinalHead:
             break;
@@ -191,7 +197,7 @@ RUVIA_TEST(http3_connection_demultiplexes_fragmented_parallel_requests_and_prese
 
 RUVIA_TEST(http3_connection_delivers_extended_connect_request_heads) {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource);
+    ruvia::Http3Connection connection(ruvia::Http3PeerRole::kServer, &resource, {.enableConnectProtocol = true});
     Captured captured;
     const std::array fields{
         ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
@@ -213,6 +219,9 @@ RUVIA_TEST(http3_connection_delivers_extended_connect_request_heads) {
     }
     std::vector<char> wire(prefix.begin(), prefix.begin() + static_cast<std::ptrdiff_t>(*prefixSize));
     wire.insert(wire.end(), section->begin(), section->end());
+    ruvia::Http3Connection disabled(ruvia::Http3PeerRole::kServer, &resource);
+    RUVIA_CHECK(disabled.feed(0, wire, false, false, ignoreEvent, nullptr).code ==
+                ruvia::Http3ConnectionErrorCode::kMessageError);
     RUVIA_CHECK(connection.feed(0, wire, false, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kNeedMoreData);
     RUVIA_CHECK(connection.feed(0, {}, true, false, capture, &captured).status ==
@@ -714,7 +723,7 @@ RUVIA_TEST(http3_connection_client_bridge_preserves_final_response_body_plans) {
 
 RUVIA_TEST(http3_connection_server_extended_connect_emits_tunnel_data_and_rejects_trailers) {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource, {.enableConnectProtocol = true});
     Captured captured;
     const std::array fields{
         ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
@@ -1004,12 +1013,13 @@ RUVIA_TEST(http3_connection_unprocessed_evidence_excludes_observed_responses_and
 RUVIA_TEST(http3_connection_client_does_not_admit_requests_past_peer_goaway) {
     std::pmr::monotonic_buffer_resource resource;
     ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource);
+    RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope ==
+                ruvia::Http3ConnectionErrorScope::kNone);
     constexpr std::array<char, 6> control{0x00, 0x04, 0x00, 0x07, 0x01, 0x04};
     RUVIA_CHECK(client.feed(3, control, false, false, ignoreEvent, nullptr).scope ==
                 ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(client.peerGoawayId() == 4);
-    RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope ==
-                ruvia::Http3ConnectionErrorScope::kNone);
+
     const auto rejected = client.registerClientRequest(4, ruvia::HttpKnownMethod::kGet);
     RUVIA_CHECK(rejected.scope == ruvia::Http3ConnectionErrorScope::kStream);
     RUVIA_CHECK(rejected.code == ruvia::Http3ConnectionErrorCode::kRequestRejected);
@@ -1060,4 +1070,275 @@ RUVIA_TEST(http3_connection_exposes_peer_goaway_after_settings_for_both_roles) {
         RUVIA_CHECK(invalid.code == ruvia::Http3ConnectionErrorCode::kIdError);
         RUVIA_CHECK(server.peerGoawayId() == 3);
     }
+}
+
+RUVIA_TEST(http3_connection_dynamic_headers_pause_at_frame_boundary_for_both_roles) {
+    for (const auto role : {ruvia::Http3PeerRole::kServer, ruvia::Http3PeerRole::kClient}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::Http3Connection connection(role, &resource,
+            {.qpackMaxTableCapacity = 512, .qpackBlockedStreams = 2});
+        ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 512, .maxBlockedStreams = 2}, &resource);
+        const std::array requestFields{ruvia::Http3FieldSectionFieldView{":method", "POST"},
+            ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+            ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+            ruvia::Http3FieldSectionFieldView{":path", "/dynamic"},
+            ruvia::Http3FieldSectionFieldView{"content-length", "2"}};
+        const std::array responseFields{ruvia::Http3FieldSectionFieldView{":status", "200"},
+            ruvia::Http3FieldSectionFieldView{"content-length", "2"}};
+        if (role == ruvia::Http3PeerRole::kClient) {
+            RUVIA_CHECK(connection.registerClientRequest(0, ruvia::HttpKnownMethod::kPost).scope ==
+                        ruvia::Http3ConnectionErrorScope::kNone);
+        }
+        auto fields = role == ruvia::Http3PeerRole::kServer
+                          ? std::span<const ruvia::Http3FieldSectionFieldView>(requestFields)
+                          : std::span<const ruvia::Http3FieldSectionFieldView>(responseFields);
+        auto section = encoder.encode(0, fields);
+        RUVIA_CHECK(section.has_value());
+        std::array<char, 16> header{};
+        const auto headerSize = ruvia::encodeHttp3FrameHeader(header, 1, section->size());
+        std::vector<char> wire(header.begin(), header.begin() + *headerSize);
+        wire.insert(wire.end(), section->begin(), section->end());
+        const auto boundary = wire.size();
+        const auto dataSize = ruvia::encodeHttp3FrameHeader(header, 0, 2);
+        wire.insert(wire.end(), header.begin(), header.begin() + *dataSize);
+        wire.insert(wire.end(), {'o', 'k'});
+        ClientCaptured captured;
+        const auto blocked = connection.feed(0, wire, true, false, captureClient, &captured);
+        RUVIA_CHECK(blocked.status == ruvia::Http3ConnectionStatus::kQpackBlocked);
+        RUVIA_CHECK_EQ(blocked.consumedBytes, boundary);
+        RUVIA_CHECK(captured.kinds.empty());
+        const auto encoderStream = role == ruvia::Http3PeerRole::kServer ? 2u : 3u;
+        std::vector<char> instructions{char(2)};
+        const auto output = encoder.pendingEncoderOutput();
+        instructions.insert(instructions.end(), output.begin(), output.end());
+        RUVIA_CHECK(connection.feed(encoderStream, instructions, false, false, captureClient, &captured).scope ==
+                    ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(connection.feed(0, std::span(wire).subspan(boundary), true, false, captureClient, &captured).status ==
+                    ruvia::Http3ConnectionStatus::kMessageEnd);
+        RUVIA_CHECK(captured.bodies[0] == "ok");
+        RUVIA_CHECK_EQ(connection.activeRequestCount(), 0u);
+        RUVIA_CHECK(encoder.consumeDecoder(connection.pendingQpackDecoderOutput()).has_value());
+        RUVIA_CHECK(connection.consumeQpackDecoderOutput(connection.pendingQpackDecoderOutput().size()));
+    }
+}
+
+namespace {
+std::vector<char> controlSettings(ruvia::Http3Settings settings) {
+    std::array<char, 128> bytes{};
+    const auto size = ruvia::encodeHttp3Settings(std::span(bytes).subspan(16), settings);
+    const auto frame = ruvia::encodeHttp3FrameHeader(bytes, 4, *size);
+    std::vector<char> wire{0};
+    wire.insert(wire.end(), bytes.begin(), bytes.begin() + *frame);
+    wire.insert(wire.end(), bytes.begin() + 16, bytes.begin() + 16 + *size);
+    return wire;
+}
+std::vector<char> idFrame(std::uint64_t type, std::uint64_t id) {
+    std::array<char, 24> bytes{};
+    const auto frame = ruvia::encodeHttp3FrameHeader(bytes, type, ruvia::http3VarIntEncodedSize(id));
+    const auto encoded = ruvia::encodeHttp3VarInt(std::span(bytes).subspan(*frame), id);
+    return {bytes.begin(), bytes.begin() + *frame + *encoded};
+}
+}  // namespace
+RUVIA_TEST(http3_push_stream_before_promise_resumes_without_buffering_body) {
+    CountingResource resource;
+    ClientCaptured captured;
+    {
+        ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource, {.maxPushId = 0});
+        ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+        auto control = controlSettings({});
+        const auto maximum = idFrame(0xd, 0);
+        control.insert(control.end(), maximum.begin(), maximum.end());
+        RUVIA_CHECK(server.feed(2, control, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
+        RUVIA_CHECK(promise.has_value());
+        RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        auto pushed = responseWire(&resource, 200, "asset");
+        pushed.insert(pushed.begin(), {1, 0});
+        const auto blocked = client.feed(3, pushed, true, false, captureClient, &captured);
+        RUVIA_CHECK(blocked.status == ruvia::Http3ConnectionStatus::kPushPromisePending);
+        RUVIA_CHECK_EQ(blocked.consumedBytes, 2u);
+        RUVIA_CHECK(client.feed(0, *promise, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPushPromise);
+        RUVIA_CHECK(client.feed(3, std::span(pushed).subspan(blocked.consumedBytes), true, false, captureClient, &captured).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+        RUVIA_CHECK_EQ(captured.bodies[3], "asset");
+        RUVIA_CHECK_EQ(client.activeRequestCount(), 1u);
+        RUVIA_CHECK(client.feed(0, responseWire(&resource, 200, "root"), true, false, captureClient, &captured).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
+}
+RUVIA_TEST(http3_push_cancellation_can_precede_promise_on_client) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource, {.maxPushId = 0});
+    auto control = controlSettings({});
+    const auto cancel = idFrame(3, 0);
+    control.insert(control.end(), cancel.begin(), cancel.end());
+    ClientCaptured captured;
+    RUVIA_CHECK(client.feed(3, control, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPushCanceled);
+    const std::array<char, 2> prefix{1, 0};
+    const auto result = client.feed(7, prefix, false, false, captureClient, &captured);
+    RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kStream && result.code == ruvia::Http3ConnectionErrorCode::kRequestCancelled);
+    RUVIA_CHECK_EQ(client.activeRequestCount(), 0u);
+}
+RUVIA_TEST(http3_connection_owned_qpack_encoder_accepts_decoder_acknowledgments) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+    ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource, {.qpackMaxTableCapacity = 512, .qpackBlockedStreams = 2});
+    auto settings = controlSettings({.qpackMaxTableCapacity = 512, .qpackBlockedStreams = 2});
+    RUVIA_CHECK(server.feed(2, settings, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-reused", "value"}};
+    const auto section = server.encodeFieldSection(0, fields);
+    RUVIA_CHECK(section.has_value());
+    std::array<char, 16> frame{};
+    const auto size = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
+    std::vector<char> wire(frame.begin(), frame.begin() + *size);
+    wire.insert(wire.end(), section->begin(), section->end());
+    RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(client.feed(0, wire, true, false, ignoreEvent, nullptr).status == ruvia::Http3ConnectionStatus::kQpackBlocked);
+    const auto pending = server.pendingQpackEncoderOutput();
+    std::vector<char> instructions{2};
+    instructions.insert(instructions.end(), pending.begin(), pending.end());
+    RUVIA_CHECK(client.feed(7, instructions, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(server.consumeQpackEncoderOutput(pending.size()));
+    RUVIA_CHECK(client.feed(0, {}, true, false, ignoreEvent, nullptr).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    const auto acknowledgments = client.pendingQpackDecoderOutput();
+    instructions.assign(1, 3);
+    instructions.insert(instructions.end(), acknowledgments.begin(), acknowledgments.end());
+    RUVIA_CHECK(server.feed(6, instructions, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(client.consumeQpackDecoderOutput(acknowledgments.size()));
+    RUVIA_CHECK(server.encodeFieldSection(4, fields).has_value());
+}
+
+RUVIA_TEST(http3_control_output_updates_push_authorization_cancellation_and_priorities) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource);
+    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+    ClientCaptured captured;
+    auto control = controlSettings({});
+    RUVIA_CHECK(server.feed(2, control, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const auto maximum = client.prepareMaxPushId(2);
+    RUVIA_CHECK(maximum.has_value());
+    RUVIA_CHECK(server.feed(2, *maximum, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(server.peerMaxPushId() == 2);
+    RUVIA_CHECK(!client.prepareMaxPushId(1));
+    const auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
+    RUVIA_CHECK(promise.has_value());
+    RUVIA_CHECK(client.feed(0, *promise, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const auto priority = client.preparePriorityUpdate({.elementId = 0, .push = true, .fields = {.urgency = 1}});
+    RUVIA_CHECK(priority.has_value());
+    RUVIA_CHECK(server.feed(2, *priority, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPriorityUpdate);
+    auto stream = server.preparePushStream(3, 0);
+    RUVIA_CHECK(stream && stream->size() == 2);
+    RUVIA_CHECK(!server.preparePushStream(7, 0));
+    const auto cancel = client.prepareCancelPush(0);
+    RUVIA_CHECK(cancel.has_value());
+    RUVIA_CHECK(server.feed(2, *cancel, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(captured.kinds[3].back() == ruvia::Http3ConnectionEventKind::kPushCanceled);
+    RUVIA_CHECK(!server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"}));
+    RUVIA_CHECK(server.prepareGoaway(4));
+    RUVIA_CHECK(!server.prepareGoaway(8));
+    const auto result = server.feed(4, requestWire(&resource, "GET", "/", ""), true, false, ignoreEvent, nullptr);
+    RUVIA_CHECK(result.code == ruvia::Http3ConnectionErrorCode::kRequestRejected);
+}
+RUVIA_TEST(http3_priority_update_requires_client_control_stream_and_promised_push) {
+    std::pmr::unsynchronized_pool_resource resource;
+    for (const bool clientRole : {false, true}) {
+        ruvia::Http3Connection receiver(clientRole ? ruvia::Http3PeerRole::kClient : ruvia::Http3PeerRole::kServer, &resource);
+        auto wire = controlSettings({});
+        const auto maximum = idFrame(0xd, 1);
+        if (!clientRole) {
+            wire.insert(wire.end(), maximum.begin(), maximum.end());
+        }
+        std::array<char, 32> output{};
+        const auto size = ruvia::encodeHttp3PriorityUpdate(output, {.elementId = 0, .push = true, .fields = {.urgency = 0}});
+        RUVIA_CHECK(size.has_value());
+        wire.insert(wire.end(), output.begin(), output.begin() + *size);
+        const auto result = receiver.feed(clientRole ? 3 : 2, wire, false, false, ignoreEvent, nullptr);
+        RUVIA_CHECK(result.scope == ruvia::Http3ConnectionErrorScope::kConnection);
+        RUVIA_CHECK(result.code == (clientRole ? ruvia::Http3ConnectionErrorCode::kFrameUnexpected : ruvia::Http3ConnectionErrorCode::kIdError));
+    }
+}
+
+RUVIA_TEST(http3_connection_ordinary_connect_uses_tunnel_events_without_extended_negotiation) {
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+    const std::array fields{ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test:443"}};
+    const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
+    RUVIA_CHECK(section.has_value());
+    std::array<char, 16> prefix{};
+    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 1, section->size());
+    std::vector<char> bytes(prefix.begin(), prefix.begin() + *size);
+    bytes.insert(bytes.end(), section->begin(), section->end());
+    const auto dataSize = ruvia::encodeHttp3FrameHeader(prefix, 0, 6);
+    bytes.insert(bytes.end(), prefix.begin(), prefix.begin() + *dataSize);
+    bytes.insert(bytes.end(), {'t', 'u', 'n', 'n', 'e', 'l'});
+    struct Events {
+        std::size_t tunnel{0};
+        std::size_t body{0};
+        std::size_t end{0};
+    } events;
+    const auto captureEvents = [](void* opaque, const ruvia::Http3ConnectionEvent& event) {
+        auto& result = *static_cast<Events*>(opaque);
+        result.tunnel += event.kind == ruvia::Http3ConnectionEventKind::kTunnelData;
+        result.body += event.kind == ruvia::Http3ConnectionEventKind::kBody;
+        result.end += event.kind == ruvia::Http3ConnectionEventKind::kMessageEnd;
+    };
+    RUVIA_CHECK(server.feed(0, bytes, true, false, captureEvents, &events).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(events.tunnel, 1u);
+    RUVIA_CHECK_EQ(events.body, 0u);
+    RUVIA_CHECK_EQ(events.end, 1u);
+}
+
+RUVIA_TEST(http3_connection_origin_advertisement_is_incremental_and_requires_origin_context) {
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &resource);
+    const auto frame = server.prepareOriginAdvertisement(std::array<std::string_view, 1>{"https://example.test"});
+    RUVIA_CHECK(frame.has_value());
+    for (const bool enabled : {false, true}) {
+        ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource, {.receiveOriginAdvertisements = enabled});
+        const std::array<char, 3> prefix{0, 4, 0};
+        RUVIA_CHECK(client.feed(3, prefix, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        std::vector<std::string> origins;
+        const auto callback = [](void* opaque, const ruvia::Http3ConnectionEvent& event) {
+            if (event.kind != ruvia::Http3ConnectionEventKind::kOriginAdvertisement) {
+                return;
+            }
+            auto& result = *static_cast<std::vector<std::string>*>(opaque);
+            for (const auto& origin : event.originAdvertisement->origins) {
+                result.emplace_back(origin);
+            }
+        };
+        for (const auto& byte : *frame) {
+            RUVIA_CHECK(client.feed(3, {&byte, 1}, false, false, callback, &origins).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        }
+        RUVIA_CHECK_EQ(origins.size(), static_cast<std::size_t>(enabled));
+        if (enabled) {
+            RUVIA_CHECK_EQ(origins.front(), std::string("https://example.test"));
+        }
+    }
+}
+
+RUVIA_TEST(http3_push_promise_field_section_limit_excludes_its_varint_push_identifier) {
+    std::pmr::monotonic_buffer_resource resource;
+    const std::array fields{ruvia::Http3FieldSectionFieldView{":method", "GET"},
+        ruvia::Http3FieldSectionFieldView{":scheme", "https"},
+        ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
+        ruvia::Http3FieldSectionFieldView{":path", "/"}};
+    const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
+    RUVIA_CHECK(section.has_value());
+    ruvia::Http3Connection client(ruvia::Http3PeerRole::kClient, &resource,
+        {.maxEncodedFieldSectionBytes = section->size(), .maxPushId = 0});
+    RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    std::array<char, 16> prefix{};
+    const auto size = ruvia::encodeHttp3FrameHeader(prefix, 5, 8 + section->size());
+    std::vector<char> wire(prefix.begin(), prefix.begin() + *size);
+    // The same Push ID zero may legally occupy eight bytes.
+    wire.insert(wire.end(), {static_cast<char>(0xc0), 0, 0, 0, 0, 0, 0, 0});
+    wire.insert(wire.end(), section->begin(), section->end());
+    ClientCaptured captured;
+    RUVIA_CHECK(client.feed(0, wire, false, false, captureClient, &captured).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(captured.kinds[0].back() == ruvia::Http3ConnectionEventKind::kPushPromise);
 }

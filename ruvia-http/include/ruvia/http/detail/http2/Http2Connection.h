@@ -34,6 +34,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -243,6 +244,8 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
 [[nodiscard]] inline std::string_view http2ResponseHeadSubmitErrorMessage(
     Http2ResponseHeadSubmitError error) noexcept {
     switch (error) {
+        case Http2ResponseHeadSubmitError::kPeerStreamLimitReached:
+            return "peer concurrent stream limit reached";
         case Http2ResponseHeadSubmitError::kClosed:
             return "HTTP/2 response stream is closed";
         case Http2ResponseHeadSubmitError::kInvalidState:
@@ -281,7 +284,7 @@ class Http2Connection final {
 
 public:
     explicit Http2Connection(
-        std::pmr::memory_resource* resource, Http2Role role = Http2Role::kServer);
+        std::pmr::memory_resource* resource, Http2Role role = Http2Role::kServer, bool enablePush = false, bool receiveOriginAdvertisements = false);
 
     [[nodiscard]] Http2Role role() const noexcept {
         return role_;
@@ -389,8 +392,17 @@ public:
     // An incomplete declared Content-Length is rejected without changing the
     // body-open phase. A flow-control-blocked body keeps the
     // terminal marker queued behind it once the full length is core-owned.
+    [[nodiscard]] std::expected<std::uint32_t, Http2PushSubmitError> submitPushPromise(
+        std::uint32_t associatedStreamId, HttpPushRequestView request);
+    [[nodiscard]] Http2FinishRequestStatus finishRequest(std::uint32_t streamId,
+        std::span<const HttpHeaderView> trailers = {});
     [[nodiscard]] Http2FinishSubmitStatus finishResponse(
         std::uint32_t streamId, const HttpResponseTrailerSection& trailers);
+    [[nodiscard]] Http2SubmitStatus submitOriginAdvertisement(std::span<const std::string_view> origins);
+    [[nodiscard]] Http2SubmitStatus submitAlternativeServiceAdvertisement(std::uint32_t streamId,
+        std::string_view origin, std::string_view fieldValue);
+    [[nodiscard]] Http2SubmitStatus submitPriorityUpdate(std::uint32_t streamId, HttpPriorityFields fields);
+
     [[nodiscard]] Http2SubmitStatus submitReset(std::uint32_t streamId, Http2ErrorCode error);
 
     // Returns streams whose core-owned DATA remainder just fully drained after a
@@ -576,6 +588,11 @@ private:
     [[nodiscard]] bool processWindowUpdate(
         const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processRstStream(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processPushPromise(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool finishPushPromise();
+    [[nodiscard]] bool processPushContinuation(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processAdvertisement(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processPriorityUpdate(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPriority(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processGoaway(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processHeaders(const Http2FrameHeader& header, std::string_view payload);
@@ -667,6 +684,7 @@ private:
         return publishLocalRequestHead(*stream);
     }
     void releaseLocalRequestStreamIfClosed(Http2StreamState& stream) noexcept;
+    void retireCompletedLocalPush(std::uint32_t streamId);
     void releaseLocalRequestStream(Http2StreamState& stream) noexcept;
     [[nodiscard]] bool isPinned(std::uint32_t streamId) const noexcept;
 
@@ -704,6 +722,7 @@ private:
 
     // pure protocol state (all reused as-is)
     Http2StreamTable streams_;
+    std::pmr::unordered_map<std::uint32_t, HttpPriorityFields> priorities_;
     Http2ClosedStreamHistory closedStreams_;
     Http2ReadyQueue readyQueue_;
     HpackDecoder decoder_;
@@ -714,6 +733,12 @@ private:
     // be acknowledged on the wire at the beginning of the next field block.
     std::uint32_t encoderDynamicTableSize_{Http2LocalSettings::kHeaderTableSize};
     bool encoderTableSizeUpdatePending_{false};
+    std::optional<Http2StreamState> pushHeaderStream_;
+    std::uint32_t pushAssociatedStreamId_{0};
+    bool enablePush_{false};
+    bool receiveOriginAdvertisements_{false};
+    std::uint32_t lastPeerPushStreamId_{0};
+    std::uint32_t nextPushStreamId_{2};
     std::optional<Http2StreamState> discardedHeaderStream_;
     DiscardedHeaderAction discardedHeaderAction_{DiscardedHeaderAction::kIgnore};
 

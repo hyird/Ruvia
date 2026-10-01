@@ -8,6 +8,9 @@
 #include <variant>
 
 #include "ruvia/http/HttpClientResponseHead.h"
+#include "ruvia/http/HttpConnectionAdvertisement.h"
+#include "ruvia/http/HttpPriority.h"
+#include "ruvia/http/HttpPush.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamCloseSource.h"
 
@@ -46,7 +49,11 @@ enum class Http2EventKind : std::uint8_t {
     kTunnelEnd,
     kStreamClosed,
     kRequestUnprocessed,
-    kGoaway
+    kGoaway,
+    kPushPromise,
+    kPriorityUpdate,
+    kOriginAdvertisement,
+    kAlternativeServiceAdvertisement
 };
 
 class Http2InformationalHeadEvent final {
@@ -263,6 +270,8 @@ public:
             [streamId](const auto& event) noexcept {
                 if constexpr (requires { event.streamId(); }) {
                     return event.streamId() == streamId;
+                } else if constexpr (std::is_same_v<std::decay_t<decltype(event)>, Http2PushPromiseEvent>) {
+                    return event.promisedStreamId == streamId || event.associatedStreamId == streamId;
                 } else {
                     return false;
                 }
@@ -322,15 +331,42 @@ public:
     }
     [[nodiscard]] const Http2GoawayEvent* goaway() const&& = delete;
 
+    [[nodiscard]] Http2PushPromiseEvent* pushPromise() & noexcept {
+        return std::get_if<Http2PushPromiseEvent>(&value_);
+    }
+    [[nodiscard]] HttpOriginAdvertisement* originAdvertisement() & noexcept {
+        return std::get_if<HttpOriginAdvertisement>(&value_);
+    }
+    [[nodiscard]] const HttpOriginAdvertisement* originAdvertisement() const& noexcept {
+        return std::get_if<HttpOriginAdvertisement>(&value_);
+    }
+    const HttpOriginAdvertisement* originAdvertisement() const&& = delete;
+    [[nodiscard]] HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() & noexcept {
+        return std::get_if<HttpAlternativeServiceAdvertisement>(&value_);
+    }
+    [[nodiscard]] const HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() const& noexcept {
+        return std::get_if<HttpAlternativeServiceAdvertisement>(&value_);
+    }
+    const HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() const&& = delete;
+    [[nodiscard]] const HttpPriorityUpdate* priorityUpdate() const& noexcept {
+        return std::get_if<HttpPriorityUpdate>(&value_);
+    }
+    const HttpPriorityUpdate* priorityUpdate() const&& = delete;
+
+    [[nodiscard]] const Http2PushPromiseEvent* pushPromise() const& noexcept {
+        return std::get_if<Http2PushPromiseEvent>(&value_);
+    }
+    const Http2PushPromiseEvent* pushPromise() const&& = delete;
+
 private:
     friend class Http2Connection;
 
     using Value = std::variant<Http2InformationalHeadEvent, Http2MessageHeadEvent,
         Http2MessageBodyChunkEvent, Http2MessageEndEvent, Http2TunnelDataEvent, Http2TunnelEndEvent,
-        Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent>;
+        Http2StreamClosedEvent, Http2RequestUnprocessedEvent, Http2GoawayEvent, Http2PushPromiseEvent, HttpPriorityUpdate, HttpOriginAdvertisement, HttpAlternativeServiceAdvertisement>;
 
     static_assert(
-        std::to_underlying(Http2EventKind::kGoaway) + 1 == std::variant_size_v<Value>);
+        std::to_underlying(Http2EventKind::kAlternativeServiceAdvertisement) + 1 == std::variant_size_v<Value>);
 
     template <typename Event>
     explicit Http2Event(Event event) noexcept
@@ -378,6 +414,19 @@ private:
 
     [[nodiscard]] static Http2Event goaway(Http2PeerGoaway peerGoaway) noexcept {
         return Http2Event(Http2GoawayEvent(peerGoaway));
+    }
+
+    static Http2Event originAdvertisement(HttpOriginAdvertisement event) noexcept {
+        return Http2Event(std::move(event));
+    }
+    static Http2Event alternativeServiceAdvertisement(HttpAlternativeServiceAdvertisement event) noexcept {
+        return Http2Event(std::move(event));
+    }
+    static Http2Event priorityUpdate(HttpPriorityUpdate event) noexcept {
+        return Http2Event(event);
+    }
+    static Http2Event pushPromise(Http2PushPromiseEvent event) noexcept {
+        return Http2Event(std::move(event));
     }
 
     Value value_;

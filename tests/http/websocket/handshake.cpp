@@ -363,7 +363,7 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
                                          "server_max_window_bits=15\r\n"
                                          "\r\n"));
     RUVIA_CHECK(handshake.compression() ==
-                ruvia::WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits);
+                (ruvia::WebSocketCompression{.enabled = true, .serverMaxWindowBits = 15}));
     RUVIA_CHECK_EQ(handshake.subprotocol(), "chat");
 }
 

@@ -353,4 +353,70 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
     });
 }
 
+std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
+    std::uint32_t associatedStreamId, HttpPushRequestView request) {
+    using Error = Http2PushSubmitError;
+    const auto* parent = findStream(associatedStreamId);
+    if (role_ != Http2Role::kServer || prefacePhase_ != PrefacePhase::kReady ||
+        localConnectionState_.open() == nullptr || peerGoaway_ || !parent || parent->isAborted() ||
+        (associatedStreamId & 1U) == 0 || parent->localSend().endStreamCommitted() ||
+        parent->localSend().endStreamQueued() || nextPushStreamId_ > 0x7fffffffU) {
+        return std::unexpected(Error::kInvalidState);
+    }
+    if (!peerSettings_.enablePush()) {
+        return std::unexpected(Error::kPushDisabled);
+    }
+    if ((request.method != "GET" && request.method != "HEAD") ||
+        !http2IsValidOutboundRegularRequestHead(request.method, request.scheme, request.authority, request.path,
+            request.headers, false, HttpRequestContentIndication::kNoContent, {}, HttpClientRequestExpectation::kNone)) {
+        return std::unexpected(Error::kInvalidRequest);
+    }
+    std::pmr::string block(resource_);
+    // PUSH_PROMISE begins a field block and therefore carries pending HPACK
+    // table-size updates, just like HEADERS.
+    if (encoderTableSizeUpdatePending_) {
+        HpackEncoder::encodeDynamicTableSizeUpdate(block, encoderDynamicTableSize_);
+    }
+    HpackEncoder::encodeHeader(block, ":method", request.method);
+    HpackEncoder::encodeHeader(block, ":scheme", request.scheme);
+    HpackEncoder::encodeHeader(block, ":authority", request.authority);
+    HpackEncoder::encodeHeader(block, ":path", request.path);
+    http2EncodeOutboundRequestHeaders(block, request.headers);
+    auto* stream = createStream(nextPushStreamId_);
+    if (!stream) {
+        return std::unexpected(Error::kStreamLimit);
+    }
+    const auto checkpoint = output_.checkpoint();
+    try {
+        stream->assignRequestMethod(request.method);
+        stream->assignRequestScheme(request.scheme);
+        stream->assignRequestAuthority(request.authority);
+        stream->assignRequestPath(request.path);
+        (void)stream->recordRemoteHeadEndStream();
+        (void)stream->finalizeRemoteContentHead();
+        stream->reservePush(Http2PushReservation::kLocal);
+        std::array<char, 4> promised{};
+        http2Write32(promised.data(), nextPushStreamId_);
+        std::size_t offset = 0;
+        bool first = true;
+        while (offset < block.size()) {
+            const auto prefix = first ? std::string_view(promised.data(), promised.size()) : std::string_view{};
+            const auto count = std::min<std::size_t>(block.size() - offset, peerSettings_.maxFrameSize() - prefix.size());
+            output_.appendFrame(first ? Http2FrameType::kPushPromise : Http2FrameType::kContinuation,
+                offset + count == block.size() ? kHttp2FlagEndHeaders : 0, associatedStreamId,
+                prefix, std::string_view(block).substr(offset, count));
+            first = false;
+            offset += count;
+        }
+    } catch (...) {
+        output_.rollbackTo(checkpoint);
+        streams_.remove(nextPushStreamId_);
+        throw;
+    }
+    encoderTableSizeUpdatePending_ = false;
+    const auto id = nextPushStreamId_;
+    nextPushStreamId_ += 2;
+    return id;
+}
+
 }  // namespace ruvia::detail

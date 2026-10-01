@@ -20,7 +20,7 @@ struct Http2LocalSettings final {
     static constexpr std::uint32_t kMaxHeaderListSize =
         static_cast<std::uint32_t>(kMaxHttpHeaderBytes);
     static constexpr std::uint32_t kEnableConnectProtocol = 1;
-    static constexpr std::uint32_t kEntryCount = 7;
+    static constexpr std::uint32_t kEntryCount = 8;
     static constexpr std::uint32_t kPayloadBytes = kEntryCount * 6;
     static constexpr std::size_t kFrameBytes = kHttp2FrameHeaderBytes + kPayloadBytes;
 };
@@ -31,13 +31,13 @@ static_assert(Http2LocalSettings::kInitialWindowSize <= 0x7fffffffU);
 static_assert(Http2LocalSettings::kMaxFrameSize >= kHttp2DefaultMaxFrameSize);
 static_assert(Http2LocalSettings::kMaxFrameSize <= kHttp2MaxFrameSizeLimit);
 
-inline char* http2WriteLocalSettingsFrame(char* out) noexcept {
+inline char* http2WriteLocalSettingsFrame(char* out, bool enablePush = false) noexcept {
     out = http2WriteFrameHeader(
         out, Http2LocalSettings::kPayloadBytes, Http2FrameType::kSettings, 0, 0);
     out = http2WriteSettingsEntry(
         out, Http2SettingId::kHeaderTableSize, Http2LocalSettings::kHeaderTableSize);
     out =
-        http2WriteSettingsEntry(out, Http2SettingId::kEnablePush, Http2LocalSettings::kEnablePush);
+        http2WriteSettingsEntry(out, Http2SettingId::kEnablePush, enablePush ? 1u : 0u);
     out = http2WriteSettingsEntry(
         out, Http2SettingId::kMaxConcurrentStreams, Http2LocalSettings::kMaxConcurrentStreams);
     out = http2WriteSettingsEntry(
@@ -46,8 +46,9 @@ inline char* http2WriteLocalSettingsFrame(char* out) noexcept {
         out, Http2SettingId::kMaxFrameSize, Http2LocalSettings::kMaxFrameSize);
     out = http2WriteSettingsEntry(
         out, Http2SettingId::kMaxHeaderListSize, Http2LocalSettings::kMaxHeaderListSize);
-    return http2WriteSettingsEntry(
+    out = http2WriteSettingsEntry(
         out, Http2SettingId::kEnableConnectProtocol, Http2LocalSettings::kEnableConnectProtocol);
+    return http2WriteSettingsEntry(out, Http2SettingId::kNoRfc7540Priorities, 1);
 }
 
 }  // namespace ruvia::detail

@@ -715,7 +715,7 @@ RUVIA_TEST(http2_connect_open_tunnel_rejects_headers_and_unknown_stream_frames) 
         Http2Connection server(&resource);
         handshake(server);
         openStandardTunnel(server, &resource);
-        const auto unknown = frame(&resource, static_cast<Http2FrameType>(0xa), 0, 1);
+        const auto unknown = frame(&resource, static_cast<Http2FrameType>(0x20), 0, 1);
         (void)server.feed(std::string_view(unknown.data(), unknown.size()));
         const auto out = server.pendingOutput();
         const auto reset = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));

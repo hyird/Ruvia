@@ -23,12 +23,9 @@ WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLim
     if (role_ != WebSocketConnectionRole::kServer && role_ != WebSocketConnectionRole::kClient) {
         throw std::invalid_argument("invalid WebSocket connection role");
     }
-    if (compression != WebSocketCompression::kDisabled &&
-        compression != WebSocketCompression::kPermessageDeflate &&
-        compression != WebSocketCompression::kPermessageDeflateWithServerMaxWindowBits &&
-        compression != WebSocketCompression::kPermessageDeflateContextTakeover &&
-        compression != WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits) {
-        throw std::invalid_argument("invalid WebSocket compression mode");
+    if (compression.serverMaxWindowBits.value_or(15) < 8 || compression.serverMaxWindowBits.value_or(15) > 15 ||
+        compression.clientMaxWindowBits.value_or(15) < 8 || compression.clientMaxWindowBits.value_or(15) > 15) {
+        throw std::invalid_argument("invalid WebSocket compression window");
     }
     if (role_ == WebSocketConnectionRole::kClient && maskKeyGenerator_ == nullptr) {
         throw std::invalid_argument("WebSocket client connection requires a mask key generator");
@@ -37,9 +34,12 @@ WsConnection::WsConnection(std::pmr::string& input, ProtocolByteLimit messageLim
         throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
     }
     if (webSocketDeflateNegotiated(compression)) {
-        const bool takeover = compression == WebSocketCompression::kPermessageDeflateContextTakeover ||
-                              compression == WebSocketCompression::kPermessageDeflateContextTakeoverWithServerMaxWindowBits;
-        deflate_.emplace(compressionLevel, takeover);
+        const bool server = role_ == WebSocketConnectionRole::kServer;
+        const bool sendTakeover = !(server ? compression.serverNoContextTakeover : compression.clientNoContextTakeover);
+        const bool receiveTakeover = !(server ? compression.clientNoContextTakeover : compression.serverNoContextTakeover);
+        const int sendWindow = (server ? compression.serverMaxWindowBits : compression.clientMaxWindowBits).value_or(15);
+        const int receiveWindow = (server ? compression.clientMaxWindowBits : compression.serverMaxWindowBits).value_or(15);
+        deflate_.emplace(compressionLevel, sendTakeover, receiveTakeover, sendWindow, receiveWindow);
     }
 }
 

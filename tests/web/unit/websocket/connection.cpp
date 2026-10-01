@@ -708,7 +708,7 @@ RUVIA_TEST(websocket_write_honors_per_frame_compression_choice) {
     ruvia::WorkerMemory memory;
     WebSocketConnection<RecordingTransport> connection(RecordingTransport(io, state), workerHandle,
         scannerEntry, {}, ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {},
-        WebSocketCompression::kPermessageDeflate);
+        (WebSocketCompression{.enabled = true}));
     const std::string payload(200, 'x');
     std::string uncompressedFrame;
     std::string compressedFrame;
@@ -751,7 +751,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
             SocketWebSocketConnection<tcp::socket> connection(
                 WebSocketSocketTransport<tcp::socket>(socket), workerHandle, scannerEntry, {},
                 ruvia::ProtocolByteLimit::limited(1024), memory.resource(), {},
-                WebSocketCompression::kPermessageDeflate);
+                (WebSocketCompression{.enabled = true}));
             const auto message = co_await ruvia::asAwaitable(connection.read());
             serverDecoded = message.has_value() && message->payload() == original;
             if (message) {
@@ -769,7 +769,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
             co_await socket.async_connect(endpoint, asio::use_awaitable);
             ruvia::WebSocketConnection client({
                 .messageLimit = ruvia::ProtocolByteLimit::limited(1024),
-                .compression = WebSocketCompression::kPermessageDeflate,
+                .compression = (WebSocketCompression{.enabled = true}),
                 .role = ruvia::WebSocketConnectionRole::kClient,
                 .maskKeyGenerator = +[](void*, ruvia::WebSocketMaskKey& key) noexcept {
                     key = {'\x11', '\x22', '\x33', '\x44'};

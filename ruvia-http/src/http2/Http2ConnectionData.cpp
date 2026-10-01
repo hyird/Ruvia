@@ -19,7 +19,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         appendGoaway(Http2ErrorCode::kProtocolError, "DATA stream id must be nonzero");
         return false;
     }
-    if ((header.streamId & 1U) == 0) {
+    if ((header.streamId & 1U) == 0 && (role_ == Http2Role::kServer || header.streamId > lastPeerPushStreamId_)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "DATA on invalid client stream id");
         return false;
     }

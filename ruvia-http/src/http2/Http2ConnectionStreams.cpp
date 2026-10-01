@@ -150,6 +150,7 @@ bool Http2Connection::closeStreamImpl(std::uint32_t streamId, Http2StreamCloseSo
     }
 
     releaseLocalRequestStream(*stream);
+    priorities_.erase(streamId);
     (void)stream->abort(source);
     if (notification == CloseNotification::kEmitEvent) {
         events_.push_back(Http2Event::streamClosed(streamId, source, error));
@@ -308,13 +309,21 @@ void Http2Connection::releaseLocalRequestStreamIfClosed(Http2StreamState& stream
     }
 }
 
+void Http2Connection::retireCompletedLocalPush(std::uint32_t streamId) {
+    if (role_ != Http2Role::kServer || (streamId & 1U) != 0 || isPinned(streamId) || hasPendingEvents(streamId)) {
+        return;
+    }
+    const auto* stream = findStream(streamId);
+    if (stream != nullptr && http2StreamIsClosed(*stream)) {
+        unpinStream(streamId);
+    }
+}
+
 bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
     if (role_ == Http2Role::kClient) {
-        // No server-initiated streams exist (push is never enabled), so every even id
-        // is idle, as is any odd id this endpoint has not opened yet.
-        return (streamId & 1U) == 0 || streamId >= nextLocalStreamId_;
+        return (streamId & 1U) == 0 ? streamId > lastPeerPushStreamId_ : streamId >= nextLocalStreamId_;
     }
-    return http2IsIdleStream(streamId, lastStreamId_);
+    return (streamId & 1U) == 0 ? streamId >= nextPushStreamId_ : http2IsIdleStream(streamId, lastStreamId_);
 }
 
 Http2StreamState* Http2Connection::stream(std::uint32_t streamId) & noexcept {

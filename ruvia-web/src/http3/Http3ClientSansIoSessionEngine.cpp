@@ -230,6 +230,10 @@ void Http3ClientSansIoSessionEngine::onEvent(void* context, const Http3Connectio
                 response.sink.callback(response.sink.context, event);
             }
             return;
+        case Http3ConnectionEventKind::kPushPromise:
+        case Http3ConnectionEventKind::kPushCanceled:
+        case Http3ConnectionEventKind::kOriginAdvertisement:
+        case Http3ConnectionEventKind::kPriorityUpdate:
         case Http3ConnectionEventKind::kRequestHead:
             return;
     }
@@ -334,6 +338,10 @@ Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::stop() no
 Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::fromConnection(
     Http3ConnectionResult result) const noexcept {
     switch (result.status) {
+        case Http3ConnectionStatus::kQpackBlocked:
+        case Http3ConnectionStatus::kPushPromisePending:
+            return {Http3ClientSansIoSessionStatus::kConnectionError, Http3ConnectionErrorScope::kConnection,
+                Http3ConnectionErrorCode::kInternalError};
         case Http3ConnectionStatus::kNeedMoreData:
             return {};
         case Http3ConnectionStatus::kMessageEnd:

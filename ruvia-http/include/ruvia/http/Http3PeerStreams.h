@@ -119,6 +119,9 @@ public:
     [[nodiscard]] static std::expected<void, Http3PeerStreamError> acceptBidirectional(
         Http3PeerRole localRole, std::uint64_t streamId) noexcept;
 
+    // Called only after transport retirement; critical streams cannot retire
+    // independently of the connection.
+    [[nodiscard]] bool retireNonCriticalStream(std::uint64_t streamId) noexcept;
     [[nodiscard]] std::size_t activeStreamCount() const noexcept;
 
 private:

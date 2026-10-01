@@ -24,6 +24,8 @@ add_library(ruvia-http ${RUVIA_HTTP_SOURCES}
     include/ruvia/http/Http3MessageBody.h
     include/ruvia/http/Http3MessageHead.h
     include/ruvia/http/Http3PeerStreams.h
+    include/ruvia/http/Http3QpackConnection.h
+    include/ruvia/http/Http3RequestWriter.h
     include/ruvia/http/Http3Qpack.h
     include/ruvia/http/Http3QpackStreams.h
     include/ruvia/http/Http3ResponseWriter.h

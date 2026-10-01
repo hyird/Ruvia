@@ -52,7 +52,7 @@ bool httpAcceptsEncoding(std::string_view acceptEncoding, std::string_view codin
     }
     HttpAcceptedEncodingQuality quality;
     quality.update(acceptEncoding, coding);
-    return quality.accepts();
+    return quality.accepts(detail::httpAsciiEqualsIgnoreCase(coding, "identity"));
 }
 
 void HttpResponseCodingQualities::update(std::string_view acceptEncoding) noexcept {

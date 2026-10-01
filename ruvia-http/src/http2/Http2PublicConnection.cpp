@@ -118,18 +118,18 @@ namespace {
 class Http2Connection::Impl final {
 public:
     struct Storage final {
-        Storage(std::pmr::memory_resource* requested, Http2Role publicRole)
+        Storage(std::pmr::memory_resource* requested, Http2Role publicRole, bool enablePush, bool receiveOriginAdvertisements)
             : resource(detail::httpPmrResourceOrDefault(requested)),
               role(publicRole),
-              connection(resource, publicRole) {}
+              connection(resource, publicRole, enablePush, receiveOriginAdvertisements) {}
 
         std::pmr::memory_resource* resource;
         Http2Role role;
         detail::Http2Connection connection;
     };
 
-    Impl(std::pmr::memory_resource* requested, Http2Role publicRole)
-        : storage(detail::makeHttpPmrObject<Storage>(requested, requested, publicRole)),
+    Impl(std::pmr::memory_resource* requested, Http2Role publicRole, bool enablePush, bool receiveOriginAdvertisements)
+        : storage(detail::makeHttpPmrObject<Storage>(requested, requested, publicRole, enablePush, receiveOriginAdvertisements)),
           resource(storage->resource),
           role(publicRole),
           connection(storage->connection),
@@ -421,16 +421,16 @@ void Http2Connection::ImplDeleter::operator()(Impl* value) const noexcept {
     detail::destroyHttpPmrObject(value, resource);
 }
 
-Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role) {
+Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role, bool enablePush, bool receiveOriginAdvertisements) {
     auto* resolved = detail::httpPmrResourceOrDefault(resource);
-    impl_.reset(detail::constructHttpPmrObject<Impl>(resolved, resolved, role));
+    impl_.reset(detail::constructHttpPmrObject<Impl>(resolved, resolved, role, enablePush, receiveOriginAdvertisements));
     impl_->connection.beginConnection();
 }
 Http2Connection Http2Connection::server(Http2ConnectionOptions options) {
-    return Http2Connection(options.resource, Http2Role::kServer);
+    return Http2Connection(options.resource, Http2Role::kServer, false, false);
 }
 Http2Connection Http2Connection::client(Http2ConnectionOptions options) {
-    return Http2Connection(options.resource, Http2Role::kClient);
+    return Http2Connection(options.resource, Http2Role::kClient, options.enablePush, options.receiveOriginAdvertisements);
 }
 Http2Connection::~Http2Connection() = default;
 Http2Connection::Http2Connection(Http2Connection&&) noexcept = default;
@@ -508,6 +508,27 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     auto* event = impl_->connection.peekEvent();
     if (event == nullptr) {
         return std::nullopt;
+    }
+    if (auto* value = event->originAdvertisement()) {
+        auto result = Http2Event(std::move(*value));
+        impl_->connection.consumeEvent();
+        return std::optional<Http2Event>(std::move(result));
+    }
+    if (auto* value = event->alternativeServiceAdvertisement()) {
+        auto result = Http2Event(std::move(*value));
+        impl_->connection.consumeEvent();
+        return std::optional<Http2Event>(std::move(result));
+    }
+    if (const auto* value = event->priorityUpdate()) {
+        auto result = Http2Event(*value);
+        impl_->connection.consumeEvent();
+        return std::optional<Http2Event>(std::move(result));
+    }
+    if (auto* value = event->pushPromise()) {
+        impl_->connection.pinStream(value->promisedStreamId);
+        auto result = Http2Event(std::move(*value));
+        impl_->connection.consumeEvent();
+        return std::optional<Http2Event>(std::move(result));
     }
     if (auto* value = event->informationalHead()) {
         const auto streamId = value->streamId();
@@ -697,6 +718,8 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
     const auto result = impl_->connection.submitResponseHead(streamId, response, plan);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {
+            case Http2ResponseHeadSubmitError::kPeerStreamLimitReached:
+                return Http2SubmitStatus::kPeerCapabilityUnavailable;
             case Http2ResponseHeadSubmitError::kClosed:
                 return Http2SubmitStatus::kClosed;
             case Http2ResponseHeadSubmitError::kInvalidState:
@@ -730,6 +753,8 @@ Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
         ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {
+            case Http2ResponseHeadSubmitError::kPeerStreamLimitReached:
+                return Http2SubmitStatus::kPeerCapabilityUnavailable;
             case Http2ResponseHeadSubmitError::kClosed:
                 return Http2SubmitStatus::kClosed;
             case Http2ResponseHeadSubmitError::kInvalidState:
@@ -740,6 +765,11 @@ Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
         }
     }
     return Http2SubmitStatus::kAccepted;
+}
+
+Http2FinishRequestStatus Http2Connection::finishRequest(std::uint32_t streamId,
+    std::span<const HttpHeaderView> trailers) {
+    return impl_->connection.finishRequest(streamId, trailers);
 }
 
 Http2FinishResponseStatus Http2Connection::finishResponse(
@@ -757,6 +787,22 @@ Http2FinishResponseStatus Http2Connection::finishResponse(
             return Http2FinishResponseStatus::kContentLengthIncomplete;
     }
     std::terminate();
+}
+
+std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPromise(
+    std::uint32_t associatedStreamId, HttpPushRequestView request) {
+    return impl_->connection.submitPushPromise(associatedStreamId, request);
+}
+
+Http2SubmitStatus Http2Connection::submitOriginAdvertisement(std::span<const std::string_view> origins) {
+    return impl_->connection.submitOriginAdvertisement(origins);
+}
+Http2SubmitStatus Http2Connection::submitAlternativeServiceAdvertisement(std::uint32_t streamId,
+    std::string_view origin, std::string_view fieldValue) {
+    return impl_->connection.submitAlternativeServiceAdvertisement(streamId, origin, fieldValue);
+}
+Http2SubmitStatus Http2Connection::submitPriorityUpdate(std::uint32_t streamId, HttpPriorityFields fields) {
+    return impl_->connection.submitPriorityUpdate(streamId, fields);
 }
 
 Http2SubmitStatus Http2Connection::submitReset(std::uint32_t streamId, Http2ErrorCode error) {

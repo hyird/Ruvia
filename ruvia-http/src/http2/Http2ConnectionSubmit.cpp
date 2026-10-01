@@ -8,6 +8,7 @@
 #include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
@@ -118,6 +119,10 @@ void Http2Connection::appendResponseHeaderFrames(
         stream.localHeaderBlock().clear();
         throw;
     }
+    if (stream.pushReservation() == Http2PushReservation::kLocal && stream.holdPeerConcurrencySlot()) {
+        ++activeLocalRequestStreams_;
+    }
+    stream.activatePush();
 }
 
 void Http2Connection::commitConnectResponseHead(
@@ -146,6 +151,10 @@ Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
     if (writePlan.requestMethod() != stream->requestKnownMethod() ||
         !writePlan.matchesResponse(response)) {
         return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+    }
+    if (stream->pushReservation() == Http2PushReservation::kLocal &&
+        activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
+        return Http2ResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kPeerStreamLimitReached);
     }
     const bool successfulConnect =
         response.status().isSuccessful() && stream->tunnel().pending() != nullptr;
@@ -189,6 +198,8 @@ Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
         (void)stream->rejectConnect();
     }
     http2ReleaseLocalHeaderBlock(*stream);
+    releaseLocalRequestStreamIfClosed(*stream);
+    retireCompletedLocalPush(streamId);
     return Http2ResponseHeadSubmitResult::makeSubmitted(std::move(writePlan));
 }
 
@@ -198,6 +209,10 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kClosed);
+    }
+    if (stream->pushReservation() == Http2PushReservation::kLocal &&
+        activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kPeerStreamLimitReached);
     }
     const bool successfulConnect =
         head.status().isSuccessful() && stream->tunnel().pending() != nullptr;
@@ -256,6 +271,8 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         (void)stream->rejectConnect();
     }
     http2ReleaseLocalHeaderBlock(*stream);
+    releaseLocalRequestStreamIfClosed(*stream);
+    retireCompletedLocalPush(streamId);
     return Http2StreamingResponseHeadSubmitResult::makeSubmitted(commitPlan);
 }
 
@@ -268,6 +285,10 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr) {
         return Http2SubmitStatus::kInvalidState;
+    }
+    if (stream->pushReservation() == Http2PushReservation::kLocal &&
+        activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
+        return Http2SubmitStatus::kPeerCapabilityUnavailable;
     }
     if (appendHttp2InterimResponseHeaders(*stream, response) !=
         Http2InterimResponseHeaderEncodeStatus::kOk) {
@@ -350,6 +371,7 @@ Http2DataSubmitStatus Http2Connection::submitData(
             (void)stream->commitLocalEndStream();
             releaseLocalRequestStreamIfClosed(*stream);
         }
+        retireCompletedLocalPush(streamId);
         return Http2DataSubmitStatus::kAccepted;
     }
     const auto consumed = sendDataUpToWindow(*stream, chunk, 0, endStream);
@@ -366,6 +388,7 @@ Http2DataSubmitStatus Http2Connection::submitData(
         (void)stream->commitLocalEndStream();
         releaseLocalRequestStreamIfClosed(*stream);
     }
+    retireCompletedLocalPush(streamId);
     return Http2DataSubmitStatus::kAccepted;
 }
 
@@ -460,6 +483,51 @@ Http2WebSocketHandshakeSubmitResult Http2Connection::submitWebSocketHandshake(
     return submitWebSocketHandshake(streamId, validation, std::move(negotiation));
 }
 
+Http2FinishRequestStatus Http2Connection::finishRequest(std::uint32_t streamId,
+    std::span<const HttpHeaderView> trailers) {
+    using Status = Http2FinishRequestStatus;
+    auto* stream = findStream(streamId);
+    if (!stream || stream->isAborted()) {
+        return Status::kClosed;
+    }
+    if (role_ != Http2Role::kClient || stream->localSend().requestContentOpen() == nullptr ||
+        stream->requestContinuePending() || stream->requestContentCanceled()) {
+        return Status::kInvalidState;
+    }
+    if (!stream->localContent().lengthComplete()) {
+        return Status::kContentLengthIncomplete;
+    }
+    if (trailers.size() > kMaxHttpHeaderFields) {
+        return Status::kInvalidTrailer;
+    }
+    HttpHeaderSectionSize size;
+    for (const auto& field : trailers) {
+        if (!http2IsValidRegularHeader(field.name(), field.value()) ||
+            isForbiddenHttpRequestTrailerName(field.name()) || !size.add(field.name(), field.value())) {
+            return Status::kInvalidTrailer;
+        }
+    }
+    std::pmr::string block(resource_);
+    for (const auto& field : trailers) {
+        HpackEncoder::encodeHeader(block, field.name(), field.value());
+    }
+    for (auto& pending : pendingSends_) {
+        if (pending.streamId == streamId) {
+            pending.endStream = block.empty() ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen;
+            pending.trailerBlock.swap(block);
+            (void)stream->queueLocalEndStream();
+            return Status::kQueued;
+        }
+    }
+    if (block.empty()) {
+        output_.appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
+    } else {
+        appendResponseHeaderFrames(*stream, block, Http2EndStream::kEndStream);
+    }
+    (void)stream->commitLocalEndStream();
+    return Status::kAccepted;
+}
+
 Http2FinishSubmitStatus Http2Connection::finishResponse(
     std::uint32_t streamId, const HttpResponseTrailerSection& trailers) {
     auto* stream = findStream(streamId);
@@ -502,10 +570,12 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(
     if (trailerBlock.empty()) {
         output_.appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
         (void)stream->commitLocalEndStream();
+        retireCompletedLocalPush(streamId);
         return Http2FinishSubmitStatus::kAccepted;
     }
     appendResponseHeaderFrames(*stream, std::string_view(trailerBlock), Http2EndStream::kEndStream);
     (void)stream->commitLocalEndStream();
+    retireCompletedLocalPush(streamId);
     return Http2FinishSubmitStatus::kAccepted;
 }
 
