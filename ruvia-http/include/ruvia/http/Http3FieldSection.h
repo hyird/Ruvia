@@ -24,6 +24,7 @@ enum class Http3FieldSectionError : std::uint8_t {
     kTooManyFields,
     kOutputTooSmall,
     kCallbackStopped,
+    kQpackEncodingFailed,
 };
 
 struct Http3FieldSectionFieldView final {

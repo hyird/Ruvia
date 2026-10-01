@@ -40,7 +40,7 @@ namespace {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
     const auto extension = webSocketCompressionExtension(compression);
-    if (!extension.empty() && !size.add("sec-websocket-extensions", extension)) {
+    if (!extension.empty() && !size.add("sec-websocket-extensions", extension.view())) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
     std::pmr::vector<HttpHeader> result(resource);
@@ -302,7 +302,11 @@ WebSocketServerNegotiation::WebSocketServerNegotiation(std::string_view subproto
     std::pmr::memory_resource* resource)
     : subprotocol_(subprotocol, httpPmrResourceOrDefault(resource)),
       compression_(compression),
-      responseHeaders_(copyWebSocketResponseHeaders(responseHeaders, subprotocol, compression, httpPmrResourceOrDefault(resource))) {}
+      extensions_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+      responseHeaders_(copyWebSocketResponseHeaders(responseHeaders, subprotocol, compression, httpPmrResourceOrDefault(resource))) {
+    const auto extension = webSocketCompressionExtension(compression);
+    extensions_.assign(extension.view());
+}
 
 WebSocketServerNegotiation makeWebSocketServerNegotiation(
     const HttpRequest& request, WebSocketServerNegotiationOptions options) {

@@ -90,7 +90,7 @@ private:
           headersFrame_(resource) {}
 
     std::pmr::string subprotocol_;
-    WebSocketCompression compression_{WebSocketCompression::kDisabled};
+    WebSocketCompression compression_{(WebSocketCompression{})};
     std::pmr::vector<char> headersFrame_;
 };
 

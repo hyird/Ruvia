@@ -21,6 +21,10 @@ struct Http3ClientRequestHeadView final {
     std::string_view path{};
     std::span<const Http3FieldSectionFieldView> fields{};
     std::optional<std::uint64_t> bodyLength{};
+    // RFC 9220 Extended CONNECT; only valid with method CONNECT.
+    std::string_view protocol{};
+    // Must come from the received peer SETTINGS, not local configuration.
+    bool peerEnableConnectProtocol{false};
 };
 
 enum class Http3ClientRequestHeadError : std::uint8_t {
@@ -30,6 +34,8 @@ enum class Http3ClientRequestHeadError : std::uint8_t {
     kInvalidField,
     kForbiddenField,
     kInvalidContentLength,
+    kInvalidProtocol,
+    kConnectProtocolDisabled,
     kFieldSectionError,
 };
 
@@ -60,5 +66,10 @@ struct Http3ClientRequestHeadFailure final {
 encodeHttp3ClientRequestHead(Http3ClientRequestHeadView view,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
+class Http3QpackEncoder;
+[[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, Http3ClientRequestHeadView view,
+    Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 }  // namespace ruvia

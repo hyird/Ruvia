@@ -133,6 +133,15 @@ std::expected<void, Http3PeerStreamError> Http3PeerStreams::acceptBidirectional(
     return {};
 }
 
+bool Http3PeerStreams::retireNonCriticalStream(std::uint64_t streamId) noexcept {
+    const auto found = streams_.find(streamId);
+    if (found == streams_.end() || isCritical(found->second.kind)) {
+        return false;
+    }
+    streams_.erase(found);
+    return true;
+}
+
 std::size_t Http3PeerStreams::activeStreamCount() const noexcept {
     return streams_.size();
 }

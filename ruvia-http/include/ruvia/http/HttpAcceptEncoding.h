@@ -20,6 +20,13 @@ struct HttpAcceptedEncodingQuality {
     [[nodiscard]] bool accepts() const noexcept {
         return explicitQuality >= 0 ? explicitQuality > 0 : wildcardQuality > 0;
     }
+
+    [[nodiscard]] bool accepts(bool isIdentity) const noexcept {
+        if (isIdentity) {
+            return explicitQuality >= 0 ? explicitQuality > 0 : wildcardQuality != 0;
+        }
+        return accepts();
+    }
 };
 
 [[nodiscard]] bool httpAcceptsEncoding(

@@ -78,4 +78,39 @@ RUVIA_TEST(http3_control_stream_requires_settings_and_reports_critical_fin) {
     RUVIA_CHECK(fin.feed(settings, true) == Http3ControlStreamStatus::kClosedCriticalStream);
     RUVIA_CHECK(fin.peerSettings().has_value());
 }
+
+RUVIA_TEST(http3_control_stream_server_goaway_push_id_rules) {
+    std::pmr::monotonic_buffer_resource resource;
+    constexpr std::array<char, 2> settings{0x4, 0x0};
+    constexpr std::array<char, 3> goaway0{0x7, 0x1, 0x0};
+    constexpr std::array<char, 3> maxPush1{0xd, 0x1, 0x1};
+    constexpr std::array<char, 3> goaway1{0x7, 0x1, 0x1};
+    constexpr std::array<char, 3> goaway2{0x7, 0x1, 0x2};
+
+    // GOAWAY may reject all pushes even when push has not been enabled.
+    {
+        Http3ControlStream server(Http3ControlRole::kServer, &resource);
+        RUVIA_CHECK(server.feed(settings, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.feed(goaway0, false) == Http3ControlStreamStatus::kNeedMoreData);
+    }
+
+    // A shutdown boundary may exceed MAX_PUSH_ID (RFC 9114 section 5.2).
+    {
+        Http3ControlStream server(Http3ControlRole::kServer, &resource);
+        RUVIA_CHECK(server.feed(settings, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.feed(maxPush1, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.feed(goaway2, false) == Http3ControlStreamStatus::kNeedMoreData);
+    }
+
+    // Server receiving GOAWAY with Push ID <= MAX_PUSH_ID succeeds
+    {
+        Http3ControlStream server(Http3ControlRole::kServer, &resource);
+        RUVIA_CHECK(server.feed(settings, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.feed(maxPush1, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.feed(goaway1, false) == Http3ControlStreamStatus::kNeedMoreData);
+        RUVIA_CHECK(server.goawayId() == 1);
+        // Subsequent GOAWAY with greater ID must fail with kIdError
+        RUVIA_CHECK(server.feed(goaway2, false) == Http3ControlStreamStatus::kIdError);
+    }
+}
 }  // namespace

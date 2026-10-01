@@ -4,6 +4,8 @@ Ruvia 项目协作说明。默认用中文回复。本文件只记录稳定的�
 
 README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡献者，说明目录、分层、性能和验证规则。不要在两个文件中重复记录同一内部实现。
 
+命名、错误返回、智能指针和配置封装借鉴 [cpp-coding-standards](https://github.com/affaan-m/ECC/blob/main/skills/cpp-coding-standards/SKILL.md) 及其依据的 [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)，具体规则由本文件和 `STYLE.md` 明确。其他领域继续遵守本仓库约束；采用这四项规则也不得改变 PMR、线程亲和、请求热路径、协议边界和协程生命周期契约。
+
 ## 项目定位
 
 Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
@@ -28,7 +30,8 @@ ruvia-web   -> ruvia-core + ruvia-http
 - 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
 - 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
 - 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
-- 公开配置数据统一使用可直接 designated initialization 的普通聚合；所有可默认构造字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。能够由字段表达的配置不得增加静态工厂、builder、链式子配置或 identity wrapper。配置由职责 owner 在消费时整体校验并一次性归一化到所属 PMR 存储；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
+- 配置封装按不变量归属选择：字段可以独立赋值、只表达待消费输入时，使用可直接 designated initialization 的普通聚合；类型自身承诺始终有效、必须维护跨字段不变量时，使用封装类，由构造函数完成校验并建立不变量，构造失败通过异常报告。单参数构造函数保持 `explicit`，不为普通字段增加无必要的静态工厂、builder、链式子配置或 identity wrapper。
+- 所有可默认构造的配置字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。职责 owner 在消费配置时校验依赖运行时的整体约束，并一次性归一化到所属 PMR 存储，在发布或使用运行时对象前建立其不变量；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
 - 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2、HTTP/3 相关 RFC 和标准优先。
 - 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
 - README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
@@ -163,7 +166,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 `ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、HTTP/3、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。
 
-outbound client 中借用调用方存储的公开类型必须以 `View` 结尾；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，不得恢复不表达生命周期的旧名或兼容别名。
+outbound client 中借用调用方存储的公开类型必须以 `view` 单词结尾，具体拼写遵循 `STYLE.md`；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，命名迁移须同步定义和使用方，不得恢复不表达生命周期的名字或兼容别名。
 
 `ruvia-web` 拥有 HTTP 之上的 App、Context、Router、middleware、controller、validation、session、CSRF、JWT、rate limit、CORS、安全头、静态文件产品策略、AutoHTTPS、DB/Redis 和 WebSocket route 绑定。读取或设置 HTTP header 不等于拥有协议语义。
 
@@ -219,6 +222,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## 内存规则
 
+- 优先作用域对象和值所有权；确需独占动态对象时优先 `std::unique_ptr`，只有真实共享寿命才使用 `std::shared_ptr`。普通分配优先 `std::make_unique` / `std::make_shared`；要求所属 PMR 存储时，使用匹配的 allocator、deleter 或 typed RAII owner，不改用普通堆分配。裸指针和引用只表达借用，底层分配与释放封装在资源 owner 内；这些选择仍受请求热路径及 worker 所有权限制。
 - 框架内部拥有动态内存的对象默认使用 PMR 容器。
 - 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
 - 公开启动配置的拥有型字段使用标准 `std::string`/`std::vector`，不得要求调用方提供 PMR allocator；App/worker 留存时再复制到所属 PMR 存储。

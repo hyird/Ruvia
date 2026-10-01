@@ -33,7 +33,7 @@ class WsConnection final {
 public:
     explicit WsConnection(std::pmr::string& input,
         ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
-        WebSocketCompression compression = WebSocketCompression::kDisabled,
+        WebSocketCompression compression = (WebSocketCompression{}),
         WebSocketConnectionRole role = WebSocketConnectionRole::kServer,
         WebSocketMaskKeyGenerator maskKeyGenerator = nullptr, void* maskKeyContext = nullptr,
         int compressionLevel = 6);

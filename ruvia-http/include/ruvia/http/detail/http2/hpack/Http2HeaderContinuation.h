@@ -10,6 +10,7 @@ namespace ruvia::detail {
 enum class Http2HeaderBlockKind : std::uint8_t {
     kInitial,
     kTrailers,
+    kPushPromise,
     // The block must still be fully HPACK-decoded for connection-state
     // synchronization, but its HTTP fields do not mutate a live stream.
     kDiscarded

@@ -152,6 +152,11 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
         return;
     }
     switch (event.kind) {
+        case Http3ConnectionEventKind::kPushPromise:
+        case Http3ConnectionEventKind::kPushCanceled:
+        case Http3ConnectionEventKind::kPriorityUpdate:
+        case Http3ConnectionEventKind::kOriginAdvertisement:
+            return;
         case Http3ConnectionEventKind::kFinalHead: {
             if (event.head == nullptr || state_.headReady) {
                 requestRetirement(RetirementReason::kProtocolError);

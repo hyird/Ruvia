@@ -28,6 +28,7 @@ constexpr std::array<ExpectedSetting, Http2LocalSettings::kEntryCount> kExpected
     {Http2SettingId::kMaxFrameSize, Http2LocalSettings::kMaxFrameSize},
     {Http2SettingId::kMaxHeaderListSize, Http2LocalSettings::kMaxHeaderListSize},
     {Http2SettingId::kEnableConnectProtocol, Http2LocalSettings::kEnableConnectProtocol},
+    {Http2SettingId::kNoRfc7540Priorities, 1},
 }};
 
 }  // namespace

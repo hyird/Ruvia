@@ -462,3 +462,14 @@ RUVIA_TEST(header_block_content_length_edge_cases) {
                       "Content-Length: 99999999999999999999999999\r\n\r\n")
                     .error == HttpParseError::kInvalidContentLength);
 }
+
+RUVIA_TEST(find_http_header_end_incremental_search) {
+    const std::string_view req = "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n";
+    // Total size is 38 bytes. Delimiter \r\n\r\n is at indices 34, 35, 36, 37.
+    // If the server read previousBufferLength bytes (anywhere from 0 up to 37),
+    // and then more bytes arrive so the buffer now contains all 38 bytes,
+    // findHttpHeaderEnd(req, previousBufferLength) MUST find the header end at 38!
+    for (std::size_t offset = 0; offset < req.size(); ++offset) {
+        RUVIA_CHECK_EQ(findHttpHeaderEnd(req, offset), req.size());
+    }
+}

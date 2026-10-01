@@ -24,6 +24,8 @@ struct Http3Settings final {
     std::uint64_t qpackBlockedStreams{0};
     // RFC 9220 SETTINGS_ENABLE_CONNECT_PROTOCOL; false is the omitted default.
     bool enableConnectProtocol{false};
+    // RFC 9297 SETTINGS_H3_DATAGRAM.
+    bool h3Datagram{false};
 };
 
 // Decodes a complete SETTINGS payload (RFC 9114 §7.2.4.1). Unknown settings are

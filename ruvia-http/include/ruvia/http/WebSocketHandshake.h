@@ -146,7 +146,7 @@ public:
         const auto extension = detail::webSocketCompressionExtension(compression_);
         if (!extension.empty()) {
             visitor(kExtensionsHeaderPrefix);
-            visitor(extension);
+            visitor(extension.view());
             visitor(kCrlf);
         }
         for (const auto& header : responseHeaders_) {

@@ -69,8 +69,8 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
     CountingResource memory;
     {
         MaskSource mask;
-        WebSocketConnection sender({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = WebSocketCompression::kPermessageDeflateContextTakeover, .role = WebSocketConnectionRole::kClient, .maskKeyGenerator = &MaskSource::generate, .maskKeyContext = &mask, .compressionLevel = 9});
-        WebSocketConnection receiver({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = WebSocketCompression::kPermessageDeflateContextTakeover, .compressionLevel = 9});
+        WebSocketConnection sender({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = (WebSocketCompression{.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false}), .role = WebSocketConnectionRole::kClient, .maskKeyGenerator = &MaskSource::generate, .maskKeyContext = &mask, .compressionLevel = 9});
+        WebSocketConnection receiver({.resource = &memory, .messageLimit = ProtocolByteLimit::limited(16384), .compression = (WebSocketCompression{.enabled = true, .serverNoContextTakeover = false, .clientNoContextTakeover = false}), .compressionLevel = 9});
         std::string noise(1024, '\0');
         std::uint32_t state = 1234567;
         for (auto& byte : noise) {
@@ -208,7 +208,7 @@ RUVIA_TEST(ws_public_server_protocol_reports_protocol_error_as_public_value) {
 RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
     std::pmr::string input;
     WebSocketServerProtocol protocol(input, ProtocolByteLimit::unlimited(),
-        WebSocketServerProtocolOptions{WebSocketCompression::kPermessageDeflate, 6});
+        WebSocketServerProtocolOptions{(WebSocketCompression{.enabled = true}), 6});
     const std::string payload(200, 'x');
 
     RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, payload, false) ==
@@ -514,7 +514,7 @@ RUVIA_TEST(ws_public_driver_implementation_lifetime_and_construction_failures) {
     }));
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        WebSocketConnection invalid({.resource = &memory, .compression = static_cast<WebSocketCompression>(255)});
+        WebSocketConnection invalid({.resource = &memory, .compression = WebSocketCompression{.enabled = true, .serverMaxWindowBits = 7}});
     }));
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
     {
@@ -527,7 +527,7 @@ RUVIA_TEST(ws_public_driver_implementation_lifetime_and_construction_failures) {
         RUVIA_CHECK_EQ(memory.liveBytes, inputBytes);
         RUVIA_CHECK(ruvia::testing::throwsOn([&] {
             WebSocketServerProtocol invalid(input, ProtocolByteLimit::unlimited(),
-                WebSocketServerProtocolOptions{.compression = static_cast<WebSocketCompression>(255)});
+                WebSocketServerProtocolOptions{.compression = WebSocketCompression{.enabled = true, .serverMaxWindowBits = 7}});
         }));
         RUVIA_CHECK_EQ(memory.liveBytes, inputBytes);
         RUVIA_CHECK(ruvia::testing::throwsOn([&] {
