@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
+#include "ruvia/http/WebSocketClientNegotiation.h"
 
 namespace ruvia {
 
@@ -22,6 +23,7 @@ struct Http1WebSocketClientHandshakeConfigView final {
     std::span<const HttpHeaderView> headers{};
     std::span<const std::string_view> subprotocols{};
     std::string_view userAgent{};
+    WebSocketClientDeflateOffer deflate{};
 };
 
 enum class Http1WebSocketClientHandshakeError : std::uint8_t {
@@ -36,6 +38,7 @@ enum class Http1WebSocketClientHandshakeError : std::uint8_t {
 struct Http1WebSocketClientHandshakeResultView final {
     // Borrows the parsed response head passed to validateResponse().
     std::string_view selectedSubprotocol{};
+    WebSocketCompression compression{};
 };
 
 // Owns one opening handshake's key and configured fields in the supplied
@@ -66,8 +69,8 @@ public:
 private:
     std::pmr::memory_resource* resource_;
     std::pmr::string key_;
-    std::pmr::string subprotocolHeader_;
-    std::pmr::vector<std::pair<std::size_t, std::size_t>> subprotocolRanges_;
+    WebSocketClientNegotiation negotiation_;
+
     struct StoredHeader final {
         std::pmr::string name;
         std::pmr::string value;

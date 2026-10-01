@@ -204,6 +204,11 @@ void Http3ClientConnection::onResponseEvent(void* context, const Http3Connection
     auto& request = *static_cast<Request*>(context);
     if (request.responseState_ != nullptr) {
         switch (event.kind) {
+            case Http3ConnectionEventKind::kPushPromise:
+            case Http3ConnectionEventKind::kPushCanceled:
+            case Http3ConnectionEventKind::kPriorityUpdate:
+            case Http3ConnectionEventKind::kOriginAdvertisement:
+                break;
             case Http3ConnectionEventKind::kInformationalHead:
             case Http3ConnectionEventKind::kFinalHead:
             case Http3ConnectionEventKind::kBody:

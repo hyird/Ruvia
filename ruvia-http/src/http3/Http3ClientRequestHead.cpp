@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
+#include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 namespace ruvia {
@@ -115,15 +116,22 @@ bool authorityValid(std::string_view authority, std::string_view scheme) noexcep
 
 }  // namespace
 
-std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
-    Http3ClientRequestHeadView view, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
+    Http3ClientRequestHeadView view, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
     auto* memory = resource != nullptr ? resource : std::pmr::get_default_resource();
     const bool connect = view.method == "CONNECT";
+    const bool extendedConnect = !view.protocol.empty();
     const bool trace = view.method == "TRACE";
     if (!token(view.method)) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidMethod));
     }
-    if (connect) {
+    if (extendedConnect && (!connect || !token(view.protocol))) {
+        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidProtocol));
+    }
+    if (extendedConnect && !view.peerEnableConnectProtocol) {
+        return std::unexpected(failure(Http3ClientRequestHeadError::kConnectProtocolDisabled));
+    }
+    if (connect && !extendedConnect) {
         const auto tunnel = detail::parseHttpAuthority(view.authority);
         if (!tunnel || tunnel->portKind() != detail::HttpAuthorityPortKind::kValue || *tunnel->port() == 0 ||
             !view.scheme.empty() || !view.path.empty()) {
@@ -139,11 +147,14 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidTarget));
     }
 
+    if (connect && view.bodyLength) {
+        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
+    }
     if (trace && view.bodyLength && *view.bodyLength != 0) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
     }
 
-    std::size_t projectedCount = (connect ? 2 : 4);
+    std::size_t projectedCount = (connect && !extendedConnect ? 2 : 4) + (extendedConnect ? 1 : 0);
     std::size_t decodedBytes = 0;
     const auto countField = [&](std::string_view name, std::string_view value) noexcept {
         if (name.size() > std::numeric_limits<std::size_t>::max() - 32 ||
@@ -154,10 +165,10 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
         decodedBytes += name.size() + value.size() + 32;
         return true;
     };
-    if (!countField(":method", view.method) ||
-        (!connect && !countField(":scheme", view.scheme)) ||
+    if ((extendedConnect && !countField(":protocol", view.protocol)) || !countField(":method", view.method) ||
+        ((!connect || extendedConnect) && !countField(":scheme", view.scheme)) ||
         !countField(":authority", view.authority) ||
-        (!connect && !countField(":path", view.path))) {
+        ((!connect || extendedConnect) && !countField(":path", view.path))) {
         return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
     }
     std::size_t lowercaseBytes = 0;
@@ -278,7 +289,10 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
     std::pmr::vector<Http3FieldSectionFieldView> fields(memory);
     fields.reserve(projectedCount);
     fields.push_back({":method", view.method, false});
-    if (!connect) {
+    if (extendedConnect) {
+        fields.push_back({":protocol", view.protocol, false});
+    }
+    if (!connect || extendedConnect) {
         fields.push_back({":scheme", view.scheme, false});
         fields.push_back({":authority", view.authority, false});
         fields.push_back({":path", view.path, false});
@@ -303,7 +317,7 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
     if (emitLength) {
         fields.push_back({"content-length", {lengthBytes.data(), lengthSize}, false});
     }
-    const auto encoded = encodeHttp3FieldSection(fields, memory);
+    auto encoded = detail::encodeHttp3Fields(fields, memory, limits, encoder, streamId);
     if (!encoded) {
         return std::unexpected(fieldFailure(encoded.error()));
     }
@@ -318,6 +332,16 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3
                                      : lengthSeen      ? std::optional{contentLength}
                                                        : std::nullopt;
     return result;
+}
+
+std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+    Http3ClientRequestHeadView view, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeRequestHead(view, limits, resource, nullptr, 0);
+}
+std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeHttp3ClientRequestHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, Http3ClientRequestHeadView view,
+    Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    return encodeRequestHead(view, limits, resource, &encoder, streamId);
 }
 
 }  // namespace ruvia

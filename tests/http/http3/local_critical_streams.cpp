@@ -105,19 +105,15 @@ RUVIA_TEST(http3_local_critical_streams_encode_absent_and_explicit_zero_limits) 
     }
 }
 
-RUVIA_TEST(http3_local_critical_streams_reject_nonzero_qpack_limits) {
-    const auto capacity = ruvia::Http3LocalCriticalStreams::create(
-        {.qpackMaxTableCapacity = 1});
-    const auto blocked = ruvia::Http3LocalCriticalStreams::create(
-        {.qpackBlockedStreams = 1});
-    RUVIA_CHECK(!capacity.has_value());
-    RUVIA_CHECK(!blocked.has_value());
-    if (!capacity) {
-        RUVIA_CHECK(capacity.error() ==
-                    ruvia::Http3LocalCriticalStreamsError::kUnsupportedQpackConfiguration);
-    }
-    if (!blocked) {
-        RUVIA_CHECK(blocked.error() ==
-                    ruvia::Http3LocalCriticalStreamsError::kUnsupportedQpackConfiguration);
-    }
+RUVIA_TEST(http3_local_critical_streams_advertise_dynamic_qpack_and_datagrams) {
+    const auto prefixes = ruvia::Http3LocalCriticalStreams::create(
+        {.qpackMaxTableCapacity = 4096, .qpackBlockedStreams = 16, .enableConnectProtocol = true, .h3Datagram = true});
+    RUVIA_CHECK(prefixes.has_value());
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::Http3ControlStream control(ruvia::Http3ControlRole::kClient, &resource);
+    RUVIA_CHECK(control.feed(prefixes->controlPrefix().subspan(1), false) == ruvia::Http3ControlStreamStatus::kNeedMoreData);
+    RUVIA_CHECK(control.peerSettings().has_value());
+    RUVIA_CHECK_EQ(control.peerSettings()->qpackMaxTableCapacity, 4096u);
+    RUVIA_CHECK_EQ(control.peerSettings()->qpackBlockedStreams, 16u);
+    RUVIA_CHECK(control.peerSettings()->h3Datagram);
 }

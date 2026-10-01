@@ -40,11 +40,12 @@ constexpr std::uint32_t kHttp2MaxUndrainedSettings = 1000;
 }
 }  // namespace
 
-Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role)
+Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role role, bool enablePush, bool receiveOriginAdvertisements)
     : resource_(resource),
       input_(std::string_view{}, resource),
       output_(resource),
       streams_(resource),
+      priorities_(resource),
       decoder_({.resource = resource}),
       peerSettings_(role),
       events_(std::make_move_iterator(static_cast<Http2Event*>(nullptr)),
@@ -56,6 +57,8 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2Role 
       role_(role),
       connectionSendWindow_(kHttp2DefaultInitialWindowSize),
       connectionReceiveWindow_(static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)) {
+    enablePush_ = role == Http2Role::kClient && enablePush;
+    receiveOriginAdvertisements_ = role == Http2Role::kClient && receiveOriginAdvertisements;
     decoder_.setMaxDynamicTableSize(Http2LocalSettings::kHeaderTableSize);
 }
 
@@ -228,6 +231,7 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
         encoderDynamicTableSize_ = 0;
         encoderTableSizeUpdatePending_ = true;
     }
+    candidate.completeFrame();
     peerSettings_.replaceValuesFrom(candidate);
     return true;
 }
@@ -368,7 +372,7 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
     if (role_ == Http2Role::kClient) {
         bool responseStartedAboveLast = false;
         streams_.forEach([&](Http2StreamState& stream) {
-            if (stream.id() <= goaway.lastStreamId() || stream.isAborted()) {
+            if ((stream.id() & 1U) == 0 || stream.id() <= goaway.lastStreamId() || stream.isAborted()) {
                 return;
             }
             // A response head proves that the peer acted on this request. Claiming
@@ -384,6 +388,12 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
             return false;
         }
         std::ranges::sort(std::span(unprocessedStreamIds).first(unprocessedCount));
+    } else {
+        streams_.forEach([&](Http2StreamState& stream) {
+            if ((stream.id() & 1U) == 0 && stream.id() > goaway.lastStreamId() && !stream.isAborted()) {
+                unprocessedStreamIds[unprocessedCount++] = stream.id();
+            }
+        });
     }
 
     // Reserve every event that this frame can publish before changing peer or local
@@ -402,6 +412,10 @@ bool Http2Connection::processGoaway(const Http2FrameHeader& header, std::string_
     events_.push_back(Http2Event::goaway(goaway));
 
     if (role_ == Http2Role::kServer) {
+        for (std::size_t i = 0; i < unprocessedCount; ++i) {
+            (void)closeStreamImpl(unprocessedStreamIds[i], Http2StreamCloseSource::kPeerGoaway,
+                goaway.error(), CloseNotification::kEmitEvent);
+        }
         return true;
     }
 
@@ -447,6 +461,76 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
     return true;
 }
 
+Http2SubmitStatus Http2Connection::submitPriorityUpdate(std::uint32_t streamId, HttpPriorityFields fields) {
+    if (role_ != Http2Role::kClient || localConnectionState_.open() == nullptr || !streamId ||
+        streamId > 0x7fffffffU || ((streamId & 1) == 0 && isIdleStreamId(streamId))) {
+        return Http2SubmitStatus::kInvalidState;
+    }
+    std::array<char, 32> encoded{};
+    const auto size = encodeHttp2PriorityUpdate(encoded, streamId, fields);
+    if (!size) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
+    output_.appendFrame(Http2FrameType::kPriorityUpdate, 0, 0,
+        std::string_view(encoded.data() + kHttp2FrameHeaderBytes, *size - kHttp2FrameHeaderBytes));
+    return Http2SubmitStatus::kAccepted;
+}
+
+bool Http2Connection::processPriorityUpdate(const Http2FrameHeader& header, std::string_view payload) {
+    if (role_ != Http2Role::kServer) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "server must not send PRIORITY_UPDATE");
+        return false;
+    }
+    if (header.streamId != 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "PRIORITY_UPDATE frame stream id must be 0");
+        return false;
+    }
+    if (payload.size() < 4) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "PRIORITY_UPDATE frame payload too short");
+        return false;
+    }
+    const auto id = http2Read32(reinterpret_cast<const unsigned char*>(payload.data())) & 0x7fffffffU;
+    if (!id || ((id & 1) == 0 && isIdleStreamId(id))) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid prioritized stream");
+        return false;
+    }
+    std::erase_if(priorities_, [&](const auto& entry) {
+        const auto* stream = findStream(entry.first);
+        return !isIdleStreamId(entry.first) && (!stream || http2StreamIsClosed(*stream));
+    });
+    std::size_t idle = 0;
+    for (const auto& entry : priorities_) {
+        if (isIdleStreamId(entry.first)) {
+            ++idle;
+        }
+    }
+    const bool newIdle = isIdleStreamId(id) && !priorities_.contains(id);
+    std::size_t active = 0;
+    streams_.forEach([&](const auto& stream) {
+        if (!http2StreamIsClosed(stream) && stream.pushReservation() == Http2PushReservation::kNone) {
+            ++active;
+        }
+    });
+    if (active + idle + (newIdle ? 1u : 0u) > Http2LocalSettings::kMaxConcurrentStreams) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "too many prioritized idle streams");
+        return false;
+    }
+    const auto update = decodeHttp2PriorityUpdate(std::span(payload.data(), payload.size()));
+    if (!update) {
+        return true;  // A malformed Priority field is ignored.
+    }
+    if (!isIdleStreamId(id)) {
+        const auto* stream = findStream(id);
+        if (!stream || http2StreamIsClosed(*stream) || stream->localSend().endStreamCommitted() != nullptr) {
+            return true;
+        }
+    }
+    reserveEventSlots(1);
+    priorities_.insert_or_assign(id, update->fields);
+    events_.push_back(Http2Event::priorityUpdate(*update));
+    return true;
+}
+
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
         header.type != std::to_underlying(Http2FrameType::kSettings)) {
@@ -457,6 +541,18 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
         appendGoaway(Http2ErrorCode::kProtocolError, "expected CONTINUATION");
         return false;
     }
+    if (auto* stream = findStream(header.streamId); stream && !stream->isAborted() && header.type <= 9) {
+        const auto reservation = stream->pushReservation();
+        const auto type = static_cast<Http2FrameType>(header.type);
+        const bool permitted = type == Http2FrameType::kRstStream || type == Http2FrameType::kPriority ||
+                               (reservation == Http2PushReservation::kLocal && type == Http2FrameType::kWindowUpdate) ||
+                               (reservation == Http2PushReservation::kRemote &&
+                                   (type == Http2FrameType::kHeaders || type == Http2FrameType::kContinuation));
+        if (reservation != Http2PushReservation::kNone && !permitted) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "frame on reserved push stream");
+            return false;
+        }
+    }
     switch (static_cast<Http2FrameType>(header.type)) {
         case Http2FrameType::kSettings:
             return processSettings(header, payload);
@@ -466,6 +562,11 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processWindowUpdate(header, payload);
         case Http2FrameType::kRstStream:
             return processRstStream(header, payload);
+        case Http2FrameType::kOrigin:
+        case Http2FrameType::kAlternativeService:
+            return processAdvertisement(header, payload);
+        case Http2FrameType::kPriorityUpdate:
+            return processPriorityUpdate(header, payload);
         case Http2FrameType::kPriority:
             return processPriority(header, payload);
         case Http2FrameType::kHeaders:
@@ -477,9 +578,7 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
         case Http2FrameType::kGoaway:
             return processGoaway(header, payload);
         case Http2FrameType::kPushPromise:
-            // Server: clients can never push. Client: we advertise ENABLE_PUSH=0.
-            appendGoaway(Http2ErrorCode::kProtocolError, "unexpected PUSH_PROMISE");
-            return false;
+            return processPushPromise(header, payload);
         default:
             if (header.streamId != 0) {
                 if (auto* stream = findStream(header.streamId);
@@ -627,7 +726,7 @@ void Http2Connection::beginConnection() {
         return;
     }
     std::array<char, Http2LocalSettings::kFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
-    auto* out = http2WriteLocalSettingsFrame(buffer.data());
+    auto* out = http2WriteLocalSettingsFrame(buffer.data(), enablePush_);
     if constexpr (Http2LocalSettings::kInitialWindowSize >
                   static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize)) {
         out = http2WriteWindowUpdate(out, 0,

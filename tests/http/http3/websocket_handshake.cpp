@@ -105,7 +105,7 @@ RUVIA_TEST(http3_websocket_handshake_builds_canonical_extended_connect_response)
         return;
     }
     RUVIA_CHECK_EQ(handshake->subprotocol(), "superchat");
-    RUVIA_CHECK(handshake->compression() != ruvia::WebSocketCompression::kDisabled);
+    RUVIA_CHECK(handshake->compression() != (ruvia::WebSocketCompression{}));
 
     const auto frame = ruvia::decodeHttp3Frame(handshake->headersFrame());
     RUVIA_CHECK(frame.has_value());

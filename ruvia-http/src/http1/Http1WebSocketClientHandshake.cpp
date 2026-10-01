@@ -57,8 +57,8 @@ Http1WebSocketClientHandshake::Http1WebSocketClientHandshake(
     Http1WebSocketClientHandshakeConfigView options, std::pmr::memory_resource* resource)
     : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
       key_(resource_),
-      subprotocolHeader_(resource_),
-      subprotocolRanges_(resource_),
+      negotiation_({.subprotocols = options.subprotocols, .deflate = options.deflate}, resource_),
+
       headers_(resource_),
       userAgent_(options.userAgent, resource_) {
     validateConfiguration(options.headers, options.subprotocols, options.userAgent);
@@ -68,15 +68,6 @@ Http1WebSocketClientHandshake::Http1WebSocketClientHandshake(
     headers_.reserve(options.headers.size());
     for (auto header : options.headers) {
         headers_.emplace_back(header.name(), header.value(), resource_);
-    }
-    subprotocolRanges_.reserve(options.subprotocols.size());
-    for (auto protocol : options.subprotocols) {
-        if (!subprotocolHeader_.empty()) {
-            subprotocolHeader_.append(", ");
-        }
-        const auto offset = subprotocolHeader_.size();
-        subprotocolHeader_.append(protocol);
-        subprotocolRanges_.push_back({offset, protocol.size()});
     }
 }
 
@@ -90,9 +81,8 @@ Http1ClientRequestPrepareResult Http1WebSocketClientHandshake::prepareRequest(
     headers.emplace_back("Upgrade", "websocket");
     headers.emplace_back("Connection", "Upgrade");
     headers.emplace_back("Sec-WebSocket-Key", key_);
-    headers.emplace_back("Sec-WebSocket-Version", "13");
-    if (!subprotocolHeader_.empty()) {
-        headers.emplace_back("Sec-WebSocket-Protocol", subprotocolHeader_);
+    for (const auto& field : negotiation_.requestFields()) {
+        headers.emplace_back(field.name(), field.value());
     }
     if (!userAgent_.empty()) {
         headers.emplace_back("User-Agent", userAgent_);
@@ -109,9 +99,9 @@ Http1WebSocketClientHandshake::validateResponse(const Http1ParsedClientResponseH
     }
     detail::WebSocketAcceptKey expected{};
     detail::encodeWebSocketAccept(expected, key_);
-    std::size_t accepts = 0, protocols = 0, extensions = 0;
+    std::size_t accepts = 0;
     bool acceptMatches = false, hasUpgrade = false, hasConnection = false;
-    std::string_view selected;
+
     for (const auto& header : response.head().headers()) {
         if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Accept")) {
             ++accepts;
@@ -121,11 +111,6 @@ Http1WebSocketClientHandshake::validateResponse(const Http1ParsedClientResponseH
             hasUpgrade = hasUpgrade || detail::httpHasToken(header.value(), "websocket");
         } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
             hasConnection = hasConnection || detail::httpHasToken(header.value(), "upgrade");
-        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Protocol")) {
-            ++protocols;
-            selected = detail::httpTrimOws(header.value());
-        } else if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
-            ++extensions;
         }
     }
     if (accepts != 1 || !acceptMatches) {
@@ -137,17 +122,11 @@ Http1WebSocketClientHandshake::validateResponse(const Http1ParsedClientResponseH
     if (!hasConnection) {
         return std::unexpected(Http1WebSocketClientHandshakeError::kConnection);
     }
-    if (extensions != 0) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kExtensions);
+
+    const auto negotiation = negotiation_.validateFields(response.head().headers());
+    if (!negotiation) {
+        return std::unexpected(negotiation.error() == WebSocketClientNegotiationError::kSubprotocol ? Http1WebSocketClientHandshakeError::kSubprotocol : Http1WebSocketClientHandshakeError::kExtensions);
     }
-    bool offered = protocols == 0;
-    const std::string_view offeredHeader = subprotocolHeader_;
-    for (auto range : subprotocolRanges_) {
-        offered = offered || offeredHeader.substr(range.first, range.second) == selected;
-    }
-    if (protocols > 1 || !offered) {
-        return std::unexpected(Http1WebSocketClientHandshakeError::kSubprotocol);
-    }
-    return Http1WebSocketClientHandshakeResultView{selected};
+    return Http1WebSocketClientHandshakeResultView{negotiation->selectedSubprotocol, negotiation->compression};
 }
 }  // namespace ruvia

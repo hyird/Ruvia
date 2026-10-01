@@ -18,10 +18,13 @@
 #include "ruvia/http/Http2ResponseHeadSubmitResult.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpConnectionAdvertisement.h"
 #include "ruvia/http/HttpExpectations.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpPriority.h"
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpPush.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
@@ -44,6 +47,10 @@ struct Http2ConnectionOptions final {
     // The resource must outlive the connection and any escaped events or
     // credits, including their owned heads and trailers.
     std::pmr::memory_resource* resource{nullptr};
+    bool enablePush{false};
+    // Enable only for an authenticated h2 connection to an origin server.
+    // RFC 8336 forbids using ORIGIN over h2c or through an explicit proxy.
+    bool receiveOriginAdvertisements{false};
 };
 
 struct Http2WebSocketServerHandshakeOptions final {
@@ -555,12 +562,36 @@ public:
     }
     const Http2GoawayEvent* goaway() const&& = delete;
 
+    [[nodiscard]] HttpOriginAdvertisement* originAdvertisement() & noexcept {
+        return std::get_if<HttpOriginAdvertisement>(&value_);
+    }
+    [[nodiscard]] const HttpOriginAdvertisement* originAdvertisement() const& noexcept {
+        return std::get_if<HttpOriginAdvertisement>(&value_);
+    }
+    const HttpOriginAdvertisement* originAdvertisement() const&& = delete;
+    [[nodiscard]] HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() & noexcept {
+        return std::get_if<HttpAlternativeServiceAdvertisement>(&value_);
+    }
+    [[nodiscard]] const HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() const& noexcept {
+        return std::get_if<HttpAlternativeServiceAdvertisement>(&value_);
+    }
+    const HttpAlternativeServiceAdvertisement* alternativeServiceAdvertisement() const&& = delete;
+    [[nodiscard]] const HttpPriorityUpdate* priorityUpdate() const& noexcept {
+        return std::get_if<HttpPriorityUpdate>(&value_);
+    }
+    const HttpPriorityUpdate* priorityUpdate() const&& = delete;
+
+    [[nodiscard]] const Http2PushPromiseEvent* pushPromise() const& noexcept {
+        return std::get_if<Http2PushPromiseEvent>(&value_);
+    }
+    const Http2PushPromiseEvent* pushPromise() const&& = delete;
+
 private:
     friend class Http2Connection;
     using Value = std::variant<Http2InformationalHeadEvent, Http2RequestHeadEvent,
         Http2ResponseHeadEvent, Http2MessageBodyChunkEvent, Http2MessageEndEvent,
         Http2TunnelDataEvent, Http2TunnelEndEvent, Http2StreamClosedEvent,
-        Http2RequestUnprocessedEvent, Http2GoawayEvent>;
+        Http2RequestUnprocessedEvent, Http2GoawayEvent, Http2PushPromiseEvent, HttpPriorityUpdate, HttpOriginAdvertisement, HttpAlternativeServiceAdvertisement>;
     template <typename Event>
     explicit Http2Event(Event event) noexcept
         : value_(std::move(event)) {}
@@ -714,8 +745,12 @@ public:
         const Http2ExtendedConnectRequestHeadView& request);
     [[nodiscard]] Http2DataSubmitStatus submitData(
         std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream);
+    [[nodiscard]] Http2FinishRequestStatus finishRequest(std::uint32_t streamId,
+        std::span<const HttpHeaderView> trailers = {});
     [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(
         std::uint32_t streamId) noexcept;
+    [[nodiscard]] std::expected<std::uint32_t, Http2PushSubmitError> submitPushPromise(
+        std::uint32_t associatedStreamId, HttpPushRequestView request);
     [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
         std::uint32_t streamId, const HttpInterimResponseHead& response);
     [[nodiscard]] Http2SubmitStatus submitBufferedResponse(
@@ -744,6 +779,11 @@ public:
         std::uint32_t streamId, HttpResponse response);
     [[nodiscard]] Http2FinishResponseStatus finishResponse(
         std::uint32_t streamId, const HttpResponseTrailerSection& trailers);
+    [[nodiscard]] Http2SubmitStatus submitOriginAdvertisement(std::span<const std::string_view> origins);
+    [[nodiscard]] Http2SubmitStatus submitAlternativeServiceAdvertisement(std::uint32_t streamId,
+        std::string_view origin, std::string_view fieldValue);
+    [[nodiscard]] Http2SubmitStatus submitPriorityUpdate(std::uint32_t streamId, HttpPriorityFields fields);
+
     [[nodiscard]] Http2SubmitStatus submitReset(std::uint32_t streamId, Http2ErrorCode error);
     [[nodiscard]] Http2ReceivedDataAcknowledgeStatus acknowledge(Http2ReceivedDataCredit&& credit);
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;
@@ -782,7 +822,7 @@ private:
         Http2Connection&, std::uint32_t, const HttpRequest&) noexcept;
     [[nodiscard]] static Http2RequestHeadSubmitResult pinSubmittedRequest(
         detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result);
-    explicit Http2Connection(std::pmr::memory_resource* resource, Http2Role role);
+    explicit Http2Connection(std::pmr::memory_resource* resource, Http2Role role, bool enablePush, bool receiveOriginAdvertisements);
     class Impl;
     struct ImplDeleter final {
         void operator()(Impl* value) const noexcept;

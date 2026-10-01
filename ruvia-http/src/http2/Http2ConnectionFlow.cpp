@@ -161,8 +161,10 @@ void Http2Connection::markSendWindowOpened() {
                 (void)stream->commitLocalEndStream();
                 releaseLocalRequestStreamIfClosed(*stream);
             }
-            drainedDataStreams_.push_back(pending.streamId);
+            const auto streamId = pending.streamId;
+            drainedDataStreams_.push_back(streamId);
             pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
+            retireCompletedLocalPush(streamId);
         } else {
             ++i;  // still window-blocked; keep the remainder for the next opening
         }

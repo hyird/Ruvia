@@ -44,7 +44,7 @@ public:
     }
 
     [[nodiscard]] std::string_view extensions() const noexcept {
-        return webSocketCompressionExtension(compression_);
+        return extensions_;
     }
 
     [[nodiscard]] std::span<const HttpHeader> responseHeaders() const& noexcept {
@@ -61,6 +61,7 @@ private:
 
     std::pmr::string subprotocol_;
     WebSocketCompression compression_;
+    std::pmr::string extensions_;
     std::pmr::vector<HttpHeader> responseHeaders_;
 };
 

@@ -37,6 +37,13 @@ struct Http1ClientRequestPrepareResultAccess final {
         return Http1ClientRequestPrepareResult(Http1ClientRequestPrepareFailure(error));
     }
 
+    [[nodiscard]] static Http1ClientRequestPrepareResult preparedStreamingContent(
+        std::string_view head, std::optional<std::uint64_t> length, bool gated,
+        Http1ClientExchangeState state) noexcept {
+        return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
+            Http1ClientRequestContentPlan(Http1ClientStreamingRequestContent(length, gated)), std::move(state)));
+    }
+
     [[nodiscard]] static Http1ClientRequestPrepareResult preparedWithoutContent(
         std::string_view head, Http1ClientExchangeState exchangeState) noexcept {
         return Http1ClientRequestPrepareResult(PreparedHttp1ClientRequest(head,
@@ -85,7 +92,7 @@ void appendView(char*& cursor, std::string_view value) noexcept {
     }
 }
 
-void appendUnsigned(char*& cursor, std::size_t value) noexcept {
+void appendUnsigned(char*& cursor, std::uint64_t value) noexcept {
     std::array<char, 32> digits;
     const auto [end, ec] = std::to_chars(digits.data(), digits.data() + digits.size(), value);
     if (ec == std::errc{}) {
@@ -149,16 +156,19 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     std::string_view method, std::string_view target, bool connect,
     std::span<const HttpHeaderView> headers, HttpClientRequestContentView content,
     std::span<char> headBuffer, Http1ClientRequestWirePolicy policy,
-    std::pmr::memory_resource* resource) {
+    std::pmr::memory_resource* resource, const Http1ClientRequestHeadView* streaming = nullptr) {
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error = Http1ClientRequestPrepareError::kInvalidHeader;
     const auto* contentBytes = content.borrowedBytes();
-    const bool explicitContent = contentBytes != nullptr;
+    const bool explicitContent = contentBytes != nullptr || streaming != nullptr;
+    const auto length = streaming ? streaming->contentLength : contentBytes ? std::optional<std::uint64_t>(contentBytes->value().size())
+                                                                            : std::nullopt;
+    const bool chunked = streaming && !length;
     if (!analyzeHeaders(headers, headerFacts, error)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
     const bool expectContinue = policy.expectation == HttpClientRequestExpectation::kContinue;
-    const auto contentIndication = explicitContent && !contentBytes->value().empty()
+    const auto contentIndication = explicitContent && (!length || *length != 0)
                                        ? HttpRequestContentIndication::kWillFollow
                                        : HttpRequestContentIndication::kNoContent;
     if (!httpClientExpectationIsValid(expectContinue, contentIndication)) {
@@ -185,6 +195,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         headerFacts.connectionOptions.close() || generateConnectionClose
             ? Http1ClosePolicy::kCloseAfterResponse
             : Http1ClosePolicy::kAllowReuse;
+    constexpr std::string_view kChunked = "Transfer-Encoding: chunked\r\n";
     const std::size_t generatedFields = 1 + (explicitContent ? 1 : 0) + (expectContinue ? 1 : 0) +
                                         (generateConnectionClose ? 1 : 0);
     if (headers.size() > kMaxHttpHeaderFields - generatedFields) {
@@ -200,9 +211,10 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         !addHeadBytes(headBytes, kHostPrefix.size()) ||
         !addHeadBytes(headBytes, authorityLength(origin, false)) ||
         !addHeadBytes(headBytes, kCrlf.size()) || !addHeadBytes(headBytes, headerFacts.wireBytes) ||
-        (explicitContent &&
+        (chunked && !addHeadBytes(headBytes, kChunked.size())) ||
+        (explicitContent && !chunked &&
             (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
-                !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
+                !addHeadBytes(headBytes, decimalDigits(*length)) ||
                 !addHeadBytes(headBytes, kCrlf.size()))) ||
         (expectContinue &&
             (!addHeadBytes(headBytes, kExpectPrefix.size()) ||
@@ -237,9 +249,11 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     appendAuthority(cursor, origin, false);
     appendView(cursor, kCrlf);
     appendHeaders(cursor, headers);
-    if (explicitContent) {
+    if (chunked) {
+        appendView(cursor, kChunked);
+    } else if (explicitContent) {
         appendView(cursor, kContentLengthPrefix);
-        appendUnsigned(cursor, contentBytes->value().size());
+        appendUnsigned(cursor, *length);
         appendView(cursor, kCrlf);
     }
     if (expectContinue) {
@@ -254,7 +268,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
 
     const auto contentState = expectContinue
                                   ? detail::Http1ClientInitialContentState::kAwaitingContinue
-                                  : (explicitContent && !contentBytes->value().empty()
+                                  : (explicitContent && (!length || *length != 0)
                                             ? detail::Http1ClientInitialContentState::kPending
                                             : detail::Http1ClientInitialContentState::kComplete);
     auto exchangeState = detail::Http1ClientRequestPrepareResultAccess::exchangeState(
@@ -262,6 +276,9 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         headerFacts.connectionOptions, effectiveClosePolicy, contentState,
         std::move(offeredUpgradeProtocols));
     const auto head = std::string_view(headBuffer.data(), headBytes);
+    if (streaming) {
+        return detail::Http1ClientRequestPrepareResultAccess::preparedStreamingContent(head, length, expectContinue, std::move(exchangeState));
+    }
     if (!explicitContent) {
         return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(
             head, std::move(exchangeState));
@@ -358,6 +375,28 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepare(const HttpOrig
     return prepareRequest(origin, request.method, request.target, false,
         static_cast<std::span<const HttpHeaderView>>(request.headers), request.content, headBuffer,
         policy, resource_);
+}
+
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareStreaming(const HttpOriginView& origin,
+    const Http1ClientRequestHeadView& request, std::span<char> headBuffer,
+    Http1ClientRequestWirePolicy policy) const {
+    using Access = detail::Http1ClientRequestPrepareResultAccess;
+    if (!isValidHttp1ClosePolicy(policy.closePolicy)) {
+        return Access::failure(Http1ClientRequestPrepareError::kInvalidClosePolicy);
+    }
+    if (!isValidHttpClientRequestExpectation(policy.expectation)) {
+        return Access::failure(Http1ClientRequestPrepareError::kInvalidExpectation);
+    }
+    if (!isValidHttpMethodToken(request.method)) {
+        return Access::failure(Http1ClientRequestPrepareError::kInvalidMethod);
+    }
+    if (request.method == "CONNECT") {
+        return Access::failure(Http1ClientRequestPrepareError::kConnectRequiresDedicatedEntry);
+    }
+    if (!detail::isValidOriginOrAsteriskFormTarget(classifyHttpMethod(request.method), request.target)) {
+        return Access::failure(Http1ClientRequestPrepareError::kInvalidTarget);
+    }
+    return prepareRequest(origin, request.method, request.target, false, request.headers, HttpClientRequestContentView::none(), headBuffer, policy, resource_, &request);
 }
 
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(

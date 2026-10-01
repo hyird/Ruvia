@@ -21,7 +21,7 @@ struct WebSocketConnectionOptions final {
     // implementation and all protocol buffers. nullptr uses the default PMR.
     std::pmr::memory_resource* resource{nullptr};
     ProtocolByteLimit messageLimit{ProtocolByteLimit::unlimited()};
-    WebSocketCompression compression{WebSocketCompression::kDisabled};
+    WebSocketCompression compression{(WebSocketCompression{})};
     WebSocketConnectionRole role{WebSocketConnectionRole::kServer};
     WebSocketMaskKeyGenerator maskKeyGenerator{nullptr};
     void* maskKeyContext{nullptr};

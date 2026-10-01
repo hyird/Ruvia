@@ -58,7 +58,7 @@ Http3SansIoSessionEngine::Http3SansIoSessionEngine(const RouteTable& routes,
     : routes_(routes),
       worker_(worker),
       limits_(limits),
-      connection_(Http3PeerRole::kServer, worker.resource()),
+      connection_(Http3PeerRole::kServer, worker.resource(), {.enableConnectProtocol = true}),
       streams_(worker.resource()) {
     if (limits_.maxBufferedBodyBytes == 0 || limits_.maxLiveStreams == 0 ||
         limits_.maxBufferedBytesInFlight == 0 || limits_.maxTunnelBufferedBytes == 0) {
@@ -354,6 +354,10 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
                 stream.pendingFinish = stream.state == StreamState::kReceiving;
             }
             return;
+        case Http3ConnectionEventKind::kPushPromise:
+        case Http3ConnectionEventKind::kPushCanceled:
+        case Http3ConnectionEventKind::kOriginAdvertisement:
+        case Http3ConnectionEventKind::kPriorityUpdate:
         case Http3ConnectionEventKind::kInformationalHead:
         case Http3ConnectionEventKind::kFinalHead:
         case Http3ConnectionEventKind::kRequestHead:

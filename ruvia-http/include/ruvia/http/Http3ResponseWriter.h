@@ -102,4 +102,18 @@ encodeHttp3ResponseTrailers(std::span<const Http3FieldSectionFieldView> fields,
     Http3FieldSectionLimits limits = {},
     std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
+class Http3QpackEncoder;
+// Dynamic forms share one encoder for every stream in the connection. Returned
+// storage belongs to resource; encoder-stream output is drained separately.
+[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, HttpStatusCode status, HttpKnownMethod method,
+    std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+[[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3ResponseHead(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan,
+    Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+[[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeHttp3ResponseTrailers(
+    Http3QpackEncoder& encoder, std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields,
+    Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+
 }  // namespace ruvia

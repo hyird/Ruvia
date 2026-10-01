@@ -24,7 +24,7 @@ struct Http3ClientSansIoResponseLimits final {
     std::size_t maxLiveStreams{32};
     std::size_t maxBodyBytesPerStream{16 * 1024 * 1024};
     std::size_t maxTotalBodyBytes{64 * 1024 * 1024};
-    Http3ConnectionLimits connection{};
+    Http3ConnectionConfig connection{};
 };
 
 enum class Http3ClientSansIoSessionStatus : std::uint8_t {

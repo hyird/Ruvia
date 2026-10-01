@@ -4,6 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
@@ -302,6 +303,55 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     return true;
 }
 
+std::optional<Http3MessageHeadError> finishHead(DecodeState& state) {
+    auto& head = state.head;
+    if (state.kind == Http3MessageHeadKind::kRequest) {
+        if (!state.methodSeen) {
+            return Http3MessageHeadError::kMessageError;
+        }
+        if (head.method == "CONNECT") {
+            if (state.protocolSeen) {
+                if (!state.schemeSeen || !state.authoritySeen || !state.pathSeen ||
+                    !validPath(head.path, head.method) || !validAuthority(head.authority, head.scheme)) {
+                    return Http3MessageHeadError::kMessageError;
+                }
+            } else {
+                const auto tunnel = detail::parseHttpAuthority(head.authority);
+                if (state.schemeSeen || state.pathSeen || !state.authoritySeen || !tunnel ||
+                    tunnel->portKind() != detail::HttpAuthorityPortKind::kValue ||
+                    *tunnel->port() == 0) {
+                    return Http3MessageHeadError::kMessageError;
+                }
+            }
+        } else {
+            if (state.protocolSeen || !state.schemeSeen || !state.pathSeen || !validPath(head.path, head.method)) {
+                return Http3MessageHeadError::kMessageError;
+            }
+            if (state.authoritySeen && state.hostSeen && head.authority != state.host) {
+                return Http3MessageHeadError::kMessageError;
+            }
+            const bool authorityRequired = equalsAsciiCaseInsensitive(head.scheme, "http") ||
+                                           equalsAsciiCaseInsensitive(head.scheme, "https");
+            if ((state.authoritySeen && !validAuthority(head.authority, head.scheme)) ||
+                (state.hostSeen && !validAuthority(state.host, head.scheme))) {
+                return Http3MessageHeadError::kMessageError;
+            }
+            if (authorityRequired && !state.authoritySeen && !state.hostSeen) {
+                return Http3MessageHeadError::kMessageError;
+            }
+            if (!state.authoritySeen && state.hostSeen) {
+                head.authority.assign(state.host);
+            }
+        }
+    } else if (!state.statusSeen) {
+        return Http3MessageHeadError::kMessageError;
+    }
+    if (state.contentLengthSeen) {
+        head.contentLength = state.contentLength;
+    }
+    return {};
+}
+
 }  // namespace
 
 Http3MessageHeader::Http3MessageHeader(std::pmr::memory_resource* resource)
@@ -341,51 +391,40 @@ std::expected<Http3MessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
         }
         return std::unexpected(Http3MessageHeadError::kQpackDecompressionFailed);
     }
-    if (kind == Http3MessageHeadKind::kRequest) {
-        if (!state.methodSeen) {
-            return std::unexpected(Http3MessageHeadError::kMessageError);
-        }
-        if (head.method == "CONNECT") {
-            if (state.protocolSeen) {
-                if (!state.schemeSeen || !state.authoritySeen || !state.pathSeen ||
-                    !validPath(head.path, head.method) || !validAuthority(head.authority, head.scheme)) {
-                    return std::unexpected(Http3MessageHeadError::kMessageError);
-                }
-            } else {
-                const auto tunnel = detail::parseHttpAuthority(head.authority);
-                if (state.schemeSeen || state.pathSeen || !state.authoritySeen || !tunnel ||
-                    tunnel->portKind() != detail::HttpAuthorityPortKind::kValue ||
-                    *tunnel->port() == 0) {
-                    return std::unexpected(Http3MessageHeadError::kMessageError);
-                }
-            }
-        } else {
-            if (state.protocolSeen || !state.schemeSeen || !state.pathSeen || !validPath(head.path, head.method)) {
-                return std::unexpected(Http3MessageHeadError::kMessageError);
-            }
-            if (state.authoritySeen && state.hostSeen && head.authority != state.host) {
-                return std::unexpected(Http3MessageHeadError::kMessageError);
-            }
-            const bool authorityRequired = equalsAsciiCaseInsensitive(head.scheme, "http") ||
-                                           equalsAsciiCaseInsensitive(head.scheme, "https");
-            if ((state.authoritySeen && !validAuthority(head.authority, head.scheme)) ||
-                (state.hostSeen && !validAuthority(state.host, head.scheme))) {
-                return std::unexpected(Http3MessageHeadError::kMessageError);
-            }
-            if (authorityRequired && !state.authoritySeen && !state.hostSeen) {
-                return std::unexpected(Http3MessageHeadError::kMessageError);
-            }
-            if (!state.authoritySeen && state.hostSeen) {
-                head.authority.assign(state.host);
-            }
-        }
-    } else if (!state.statusSeen) {
-        return std::unexpected(Http3MessageHeadError::kMessageError);
-    }
-    if (state.contentLengthSeen) {
-        head.contentLength = state.contentLength;
+    if (auto error = finishHead(state)) {
+        return std::unexpected(*error);
     }
     return head;
+}
+
+std::expected<Http3DecodedMessageHead, Http3MessageHeadError> decodeHttp3MessageHead(
+    Http3QpackDecoder& decoder, std::uint64_t streamId, std::span<const char> fieldSection,
+    Http3MessageHeadKind kind, std::pmr::memory_resource* resource, Http3MessageHeadLimits limits) {
+    auto* owner = resource ? resource : std::pmr::get_default_resource();
+    Http3MessageHead head(owner);
+    DecodeState state{head, kind, owner, limits.maxFieldSectionSize};
+    if (fieldSection.size() > limits.maxEncodedBytes) {
+        return std::unexpected(Http3MessageHeadError::kFieldSectionTooLarge);
+    }
+    const auto result = decoder.decode(streamId, fieldSection, receiveField, &state);
+    if (!result) {
+        return std::unexpected(result.error() == Http3QpackConnectionError::kLimit
+                                   ? Http3MessageHeadError::kFieldSectionTooLarge
+                                   : Http3MessageHeadError::kQpackDecompressionFailed);
+    }
+    if (result->status == Http3QpackDecodeStatus::kBlocked) {
+        return Http3DecodedMessageHead{Http3QpackBlocked{}};
+    }
+    if (state.callbackRejected) {
+        return std::unexpected(state.error);
+    }
+    if (result->fields > limits.maxFields) {
+        return std::unexpected(Http3MessageHeadError::kFieldSectionTooLarge);
+    }
+    if (auto error = finishHead(state)) {
+        return std::unexpected(*error);
+    }
+    return Http3DecodedMessageHead{std::move(head)};
 }
 
 }  // namespace ruvia

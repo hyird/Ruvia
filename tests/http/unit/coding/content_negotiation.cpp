@@ -235,3 +235,36 @@ RUVIA_TEST(response_coding_selection_carries_identity_fallback_once) {
         RUVIA_CHECK(!coding->identityAccepted());
     }
 }
+
+RUVIA_TEST(http_accepts_encoding_rfc9110_identity_rules) {
+    using ruvia::httpAcceptsEncoding;
+
+    // RFC 9110 §12.5.3: Empty field-value accepts only identity.
+    RUVIA_CHECK(httpAcceptsEncoding("", "identity"));
+    RUVIA_CHECK(!httpAcceptsEncoding("", "gzip"));
+
+    // RFC 9110 §12.5.3: "identity" is always acceptable unless specifically refused.
+    RUVIA_CHECK(httpAcceptsEncoding("gzip", "identity"));
+    RUVIA_CHECK(httpAcceptsEncoding("gzip, br", "identity"));
+    RUVIA_CHECK(httpAcceptsEncoding("*;q=0.5", "identity"));
+
+    // Explicitly refused with identity;q=0.
+    RUVIA_CHECK(!httpAcceptsEncoding("identity;q=0", "identity"));
+    RUVIA_CHECK(!httpAcceptsEncoding("gzip, identity;q=0", "identity"));
+
+    // Refused by wildcard *;q=0 when identity is not specifically included.
+    RUVIA_CHECK(!httpAcceptsEncoding("*;q=0", "identity"));
+    RUVIA_CHECK(!httpAcceptsEncoding("gzip, *;q=0", "identity"));
+
+    // Explicit identity;q>0 overrides *;q=0.
+    RUVIA_CHECK(httpAcceptsEncoding("gzip, *;q=0, identity;q=0.5", "identity"));
+
+    // Explicit identity;q>0.
+    RUVIA_CHECK(httpAcceptsEncoding("identity;q=0.1", "identity"));
+
+    // HttpAcceptedEncodingQuality accepts(bool) overload check.
+    HttpAcceptedEncodingQuality quality;
+    quality.update("gzip", "identity");
+    RUVIA_CHECK(quality.accepts(true));
+    RUVIA_CHECK(!quality.accepts(false));
+}

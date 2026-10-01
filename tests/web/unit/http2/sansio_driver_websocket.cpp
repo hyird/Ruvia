@@ -678,7 +678,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             };
             ruvia::WebSocketConnection clientCodec({
                 .resource = std::pmr::get_default_resource(),
-                .compression = ruvia::WebSocketCompression::kPermessageDeflate,
+                .compression = (ruvia::WebSocketCompression{.enabled = true}),
                 .role = ruvia::WebSocketConnectionRole::kClient,
                 .maskKeyGenerator = fixedMask,
             });
