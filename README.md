@@ -2252,6 +2252,10 @@ URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
+`multipartReader()` uses the worker pool for transient parsing state and releases
+it on completion, failure, or body-reader teardown. Part views expire on the next
+read, parent body-reader teardown, or reader destruction; copy values that must
+survive subsequent reads.
 
 Models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 `RUVIA_REGEX` does not accept general `std::regex`: for safe request validation it
