@@ -45,25 +45,67 @@ on sibling `.inl` include order to make a helper visible.
 
 ## Errors
 
-Use one shape per layer. Do not mix them on one API family.
+Use exceptions by default when a new operation cannot complete its assigned
+task (E.2). Use a purpose-designed exception class, throw by value, and catch
+by `const&`. Standard exception classes such as `std::invalid_argument` are
+appropriate when they fully express the error; use a domain exception when
+callers need domain-specific information. Do not throw integers or string
+literals, silently swallow failures, or use exceptions for normal flow control.
 
-| Layer | Shape | Example |
+Choose the mechanism by the meaning of the outcome, not by the layer. Protocol,
+sans-I/O, parser, and pure-function APIs can throw for an operation failure.
+Recoverability or untrusted input alone is not a reason to require a returned
+error. Use one error-handling shape per API family:
+
+| Outcome | Shape | Example |
 | --- | --- | --- |
-| Protocol hot path | `enum class *Status` / `*Result` | `Http2SubmitStatus`, `Http2FeedResult` |
-| Pure function that can fail | `std::expected<T, E>` | `parseMultipartBody()`, `encodeHttpContent()` |
-| Application / configuration | exception | `std::invalid_argument` at startup, `DbError` |
-| Contract violation | `std::terminate()` | destroying a started `Task` |
+| Normal protocol progress | status enum / progress result | need input, queued, backpressured, completed |
+| Operation cannot complete its assigned task | exception | invalid complete message, encoding failure, invalid configuration |
+| Explicit requirement to return failure as data | `std::expected<T, E>` / typed error result | a boundary that must not unwind, or an API designed to inspect failure values |
+| Unrecoverable lifecycle contract violation | `std::terminate()` | destroying a started `Task` |
 
-A status enum that includes `kQueued` or `kBackpressured` is not a failure and
-stays an enum. `std::expected` is for operations that either produce a value or
-fail.
+Queuing and backpressure states are not failures and stay in a status enum.
+An operation may return these normal states while throwing for a genuine
+failure. `std::expected` is for operations that either produce a value or fail.
+Returning `std::expected` does not itself promise `noexcept` or require
+allocation failures to be translated into its error type.
+
+Returned-error contracts must state the concrete requirement that makes them
+preferable to exceptions. Do not exempt an entire protocol or hot path from
+exception handling solely because of its category, or make unsupported claims
+about exception cost. Existing result-returning APIs retain their implemented
+contract until an API family is migrated with its callers and tests; their
+current shape is not a requirement for new APIs. Do not add a second
+throwing/non-throwing variant of the same operation.
+
+Use RAII for cleanup during exception propagation. Destructors, deallocation,
+and `swap` must not throw; mark operations `noexcept` when throwing is impossible
+or unacceptable. Catch at a boundary that can handle or translate the failure,
+rather than adding `try` / `catch` to every function. A lifecycle contract
+violation such as destroying a started `Task` remains terminal because unwinding
+cannot safely retire its suspended operations. For a recoverable failure,
+objects retained by the catching boundary must still satisfy their invariants.
 
 ## Names
 
-- Types: `PascalCase`.
-- Enumerators: `k` + `PascalCase` (`kAccepted`, `kNeedInput`).
-- Data members: trailing underscore (`worker_`).
+Use lowercase `underscore_style` consistently (NL.8 / NL.10):
+
+- Namespaces, types, concepts, and template parameters: `http_client`,
+  `http_origin_view`, `serializable`, `value_type`.
+- Functions, methods, variables, and parameters: `parse_multipart_body`,
+  `worker_count`, `request`.
+- Constants and scoped enumerators: `max_header_size`, `accepted`, `need_input`.
+  Do not add a `k` prefix or use `ALL_CAPS`.
+- Data members: trailing underscore (`worker_`, `request_count_`).
+- Macros: `ALL_CAPS` (`RUVIA_MODEL`, `RUVIA_ROUTES_BEGIN`). Do not encode type
+  information in names.
 - Files describe the unit, not the directory (`hpack.cpp`, not `unit_hpack.cpp`).
+
+Apply this style to new identifiers and whenever existing identifiers are
+renamed. Migrate an existing API family together with its definitions, callers,
+tests, and documentation; do not add compatibility aliases or a second spelling
+of the same operation. References to concrete APIs retain their actual spelling
+until that API is migrated.
 
 Do not hand-wrap enumerators to a column limit. `ColumnLimit` is 0, so
 clang-format owns whether a short enum stays on one line.
