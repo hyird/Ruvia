@@ -893,6 +893,12 @@ negotiation. `Context::file()` always serves the selected file as identity;
 `Context::staticFile()` and the document-root fallback can negotiate indexed
 variants when the server switch is enabled.
 
+File responses evaluate request preconditions against the selected representation
+and the handler's normal status. Redirects and errors other than `412` retain
+that status instead of becoming `304` or a new precondition failure. A byte range
+is considered only for a GET whose response would otherwise be `200`; HEAD
+retains full-representation metadata. Unsupported multiple ranges are ignored.
+
 `compression()` also enables incremental gzip, Brotli, or zstd for response
 streams; each handler write is flushed through the encoder so SSE and other
 low-latency streams do not wait for a full buffered response.

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <ctime>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -83,6 +84,6 @@ struct HttpEtagPreconditions final {
 // Whether an If-Range still authorises a range response. A date validator here
 // must match EXACTLY, unlike If-Modified-Since.
 [[nodiscard]] bool httpIfRangeAllows(std::string_view header, std::string_view etag,
-    std::time_t modifiedSeconds, bool dateValidatorStrong) noexcept;
+    std::optional<std::time_t> modifiedSeconds, bool dateValidatorStrong) noexcept;
 
 }  // namespace ruvia

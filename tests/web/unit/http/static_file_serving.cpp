@@ -277,6 +277,61 @@ RUVIA_TEST(static_root_rejects_permission_errors_in_index) {
 // Serving a file: preconditions, ranges, precompressed variants, type policy
 // and the traversal-safe path resolution behind them.
 
+RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_conditions) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() /
+                     ("ruvia_file_normal_status_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(dir);
+    const auto path = dir / "payload.txt";
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << "0123456789";
+    }
+    struct Case final {
+        ruvia::HttpStatusCode status;
+        ruvia::HttpHeaderView condition;
+    };
+    const Case cases[]{
+        {ruvia::http_status::kNotFound, {"If-None-Match", "*"}},
+        {ruvia::http_status::kTemporaryRedirect, {"If-Match", "\"different\""}},
+        {ruvia::http_status::kCreated, {"Range", "bytes=0-1"}},
+    };
+    ruvia::StaticRoot root(dir,
+        {.fileTypes = ruvia::StaticFileTypePolicy{.kind = ruvia::StaticFileTypePolicy::Kind::kAll}});
+    for (const auto& [indexed, item] : std::array{
+             std::pair{false, cases[0]}, std::pair{true, cases[0]},
+             std::pair{false, cases[1]}, std::pair{true, cases[1]},
+             std::pair{false, cases[2]}, std::pair{true, cases[2]}}) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        StaticFileTestRequest request(memory.resource());
+        request.addHeader(item.condition);
+        auto context = ruvia::detail::ContextAccess::make(
+            memory, request, ruvia::test::testContextServices());
+        context.status(item.status);
+        context.header("X-Context", "preserved");
+        std::optional<ruvia::HttpResponse> response;
+        try {
+            response.emplace(indexed ? context.staticFile(root, {.relativePath = "payload.txt"})
+                                     : context.file({.path = path}));
+        } catch (const ruvia::HttpError&) {
+        }
+        RUVIA_CHECK(response.has_value());
+        if (response) {
+            RUVIA_CHECK_EQ(response->status(), item.status);
+            RUVIA_CHECK_EQ(response->header("X-Context"), std::optional<std::string_view>{"preserved"});
+            RUVIA_CHECK(!response->header("Content-Range").has_value());
+            const auto file = response->fileBody();
+            RUVIA_CHECK(file.has_value());
+            if (file) {
+                RUVIA_CHECK_EQ(file->offset(), std::uint64_t{0});
+                RUVIA_CHECK_EQ(file->length(), std::uint64_t{10});
+            }
+        }
+    }
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_response_owns_path_after_handler_local_root_is_destroyed) {
     namespace fs = std::filesystem;
     using ruvia::detail::ContextAccess;
