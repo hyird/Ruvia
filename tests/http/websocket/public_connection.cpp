@@ -156,19 +156,23 @@ RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
             const std::string wire(sender.outputPlan().bytes());
             RUVIA_CHECK(sender.consumeOutput(wire.size()) == WebSocketOutputConsumeStatus::kDrained);
             input.append(wire);
-            const auto allocationsBeforePoll = memory.allocations;
-            auto event = protocol.poll();
-            RUVIA_CHECK(event && event->message());
-            RUVIA_CHECK_EQ(memory.allocations, allocationsBeforePoll);
-            if (event && event->message()) {
-                RUVIA_CHECK_EQ(event->message()->payload(), "payload");
-                const auto payloadAddress = reinterpret_cast<std::uintptr_t>(
-                    event->message()->payload().data());
-                const auto inputAddress = reinterpret_cast<std::uintptr_t>(input.data());
-                RUVIA_CHECK(payloadAddress >= inputAddress);
-                RUVIA_CHECK(payloadAddress + event->message()->payload().size() <=
-                            inputAddress + input.size());
+            const auto live_before_poll = memory.liveBytes;
+            {
+                auto event = protocol.poll();
+                RUVIA_CHECK(event && event->message());
+                if (event && event->message()) {
+                    RUVIA_CHECK_EQ(event->message()->payload(), "payload");
+                    const auto payloadAddress = reinterpret_cast<std::uintptr_t>(
+                        event->message()->payload().data());
+                    const auto inputAddress = reinterpret_cast<std::uintptr_t>(input.data());
+                    RUVIA_CHECK(payloadAddress >= inputAddress);
+                    RUVIA_CHECK(payloadAddress + event->message()->payload().size() <=
+                                inputAddress + input.size());
+                }
             }
+            // Borrowed payloads stay in input; transient debug iterator proxies
+            // must be released when the event is destroyed.
+            RUVIA_CHECK_EQ(memory.liveBytes, live_before_poll);
         }
         RUVIA_CHECK(protocol.submitFrame(WebSocketOpcode::kText, "out") ==
                     WebSocketFrameSubmitStatus::kAccepted);

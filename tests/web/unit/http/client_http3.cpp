@@ -589,6 +589,11 @@ private:
                         break;
                     }
                     if (error) {
+                        // The rejected connection can close while packets to its
+                        // old UDP port are still in flight. Keep serving its replacement.
+                        if (error == asio::error::connection_reset) {
+                            continue;
+                        }
                         throw std::system_error(error, "receive HTTP/3 GOAWAY test datagram");
                     }
                     if (size == 0) {

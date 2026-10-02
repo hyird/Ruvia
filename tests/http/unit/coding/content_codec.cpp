@@ -38,7 +38,9 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (++allocation_attempts_ == fail_at_) {
+        // Debug iterator proxies may be allocated inside noexcept STL code;
+        // exercise codec state and payload allocation failures instead.
+        if (bytes >= 32 && ++allocation_attempts_ == fail_at_) {
             throw codec_test_allocation_error();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
@@ -420,11 +422,18 @@ RUVIA_TEST(http_content_whole_buffer_results_keep_their_memory_resource_and_rele
                 RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
             }
 
+            const auto empty_string_bytes = [&] {
+                const std::pmr::string empty(&resource);
+                return resource.liveBytes() - retainedBaseline;
+            }();
+            const auto* decoded_data = firstDecoded.decoded()->bytes().data();
             auto decodedBytes = std::move(*firstDecoded.decoded()).takeBytes();
             RUVIA_CHECK(decodedBytes.get_allocator().resource() == &resource);
+            RUVIA_CHECK(decodedBytes.data() == decoded_data);
             RUVIA_CHECK_EQ(std::string_view(decodedBytes), std::string_view(plain));
             RUVIA_CHECK_EQ(firstEncoded.encoded()->bytes(), encodedBytes);
-            RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline);
+            // The moved-from result can retain an empty string's debug proxy.
+            RUVIA_CHECK_EQ(resource.liveBytes(), retainedBaseline + empty_string_bytes);
         }
         RUVIA_CHECK_EQ(resource.liveBytes(), std::size_t{0});
     }

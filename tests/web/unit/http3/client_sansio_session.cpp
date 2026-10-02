@@ -900,9 +900,12 @@ RUVIA_TEST(http3ClientSansIoSessionLocalStopPreservesOnlyAlreadyCompleteResponse
         const auto stopped = session.stop();
         RUVIA_CHECK(worker.deallocations > returnsBeforeStop);
         RUVIA_CHECK(retained && std::string_view(retained->body.data(), retained->body.size()) == "ok");
-        const auto returnsAfterStop = worker.deallocations;
+        const auto live_after_stop = worker.liveBytes;
         RUVIA_CHECK(session.stop().status == stopped.status);
-        RUVIA_CHECK_EQ(worker.deallocations, returnsAfterStop);
+        // Repeated stop can create and release empty debug iterator proxies;
+        // it must preserve the retained response and its live storage.
+        RUVIA_CHECK_EQ(worker.liveBytes, live_after_stop);
+        RUVIA_CHECK(retained && std::string_view(retained->body.data(), retained->body.size()) == "ok");
         RUVIA_CHECK(stopped.status ==
                     ruvia::detail::Http3ClientSansIoSessionStatus::kTransportError);
         RUVIA_CHECK(stopped.scope == ruvia::Http3ConnectionErrorScope::kConnection);

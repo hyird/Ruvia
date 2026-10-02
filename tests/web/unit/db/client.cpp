@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -45,6 +46,13 @@ namespace {
 using ruvia::test::RejectingMemoryResource;
 using ruvia::test::TrackingResource;
 using ruvia::testing::throwsOn;
+
+std::size_t owned_string_allocations() {
+    ruvia::test::CountingMemoryResource memory;
+    // Include implementation-owned storage such as MSVC debug iterator proxies.
+    const std::pmr::string input(256, 'x', &memory);
+    return memory.liveAllocations();
+}
 
 [[nodiscard]] ruvia::DbConfig testDbConfig() {
 #ifdef RUVIA_ENABLE_MARIADB
@@ -578,35 +586,39 @@ RUVIA_TEST(database_operation_guarded_cold_tasks_release_owned_inputs_and_retain
 
     State state(Lease("lease"));
     {
-        std::pmr::string firstResult(&memory);
-        std::pmr::string secondResult(&memory);
+        std::optional<std::pmr::string> firstResult;
+        std::optional<std::pmr::string> secondResult;
         auto first = operate(Guard(state), std::pmr::string(256, 'a', &memory), &memory);
         auto second = operate(Guard(state), std::pmr::string(256, 'b', &memory), &memory);
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
         {
             auto dropped = operate(Guard(state), std::pmr::string(256, 'x', &memory), &memory);
-            RUVIA_CHECK_EQ(memory.liveAllocations(), 3U);
+            RUVIA_CHECK_EQ(memory.liveAllocations(), 3U * owned_string_allocations());
         }
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
         RUVIA_CHECK(state.active());
 
         asio::io_context io(1);
-        auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
-        io.run();
-        firstResult = firstFuture.get();
-        RUVIA_CHECK_EQ(firstResult.size(), 256U);
-        RUVIA_CHECK_EQ(firstResult.front(), 'a');
-        RUVIA_CHECK_EQ(firstResult.back(), 'a');
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        {
+            auto firstFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(first)), asio::use_future);
+            io.run();
+            firstResult.emplace(firstFuture.get(), &memory);
+        }
+        RUVIA_CHECK_EQ(firstResult->size(), 256U);
+        RUVIA_CHECK_EQ(firstResult->front(), 'a');
+        RUVIA_CHECK_EQ(firstResult->back(), 'a');
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
 
         io.restart();
-        auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
-        io.run();
-        secondResult = secondFuture.get();
-        RUVIA_CHECK_EQ(secondResult.size(), 256U);
-        RUVIA_CHECK_EQ(secondResult.front(), 'b');
-        RUVIA_CHECK_EQ(secondResult.back(), 'b');
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        {
+            auto secondFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(second)), asio::use_future);
+            io.run();
+            secondResult.emplace(secondFuture.get(), &memory);
+        }
+        RUVIA_CHECK_EQ(secondResult->size(), 256U);
+        RUVIA_CHECK_EQ(secondResult->front(), 'b');
+        RUVIA_CHECK_EQ(secondResult->back(), 'b');
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
         RUVIA_CHECK(state.active());
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), 0U);
@@ -663,7 +675,7 @@ RUVIA_TEST(database_operation_guarded_overlapping_task_does_not_damage_first) {
             overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
         }
         RUVIA_CHECK(overlapRejected);
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
 
         io.restart();
         gate.resume();
@@ -699,7 +711,7 @@ RUVIA_TEST(database_operation_guarded_failure_rejects_pending_task_and_releases_
     State state(Lease("lease"));
     auto failed = fail(Guard(state), std::pmr::string(256, 'f', &memory));
     auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
 
     asio::io_context io(1);
     auto failedFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(failed)), asio::use_future);
@@ -711,7 +723,7 @@ RUVIA_TEST(database_operation_guarded_failure_rejects_pending_task_and_releases_
         failureObserved = std::string_view(error.what()) == "operation failed";
     }
     RUVIA_CHECK(failureObserved);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
 
     io.restart();
     auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
@@ -749,7 +761,7 @@ RUVIA_TEST(database_operation_guarded_started_cancellation_fails_lease_and_relea
     {
         auto cold = cancel(Guard(state), std::pmr::string(256, 'c', &memory));
         auto pending = complete(Guard(state), std::pmr::string(256, 'p', &memory));
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
         asio::io_context io(1);
         auto future = asio::co_spawn(io, ruvia::asAwaitable(std::move(cold)), asio::use_future);
         io.run();
@@ -761,7 +773,7 @@ RUVIA_TEST(database_operation_guarded_started_cancellation_fails_lease_and_relea
         }
         RUVIA_CHECK(cancellationObserved);
         RUVIA_CHECK(!state.active());
-        RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
 
         io.restart();
         auto pendingFuture = asio::co_spawn(io, ruvia::asAwaitable(std::move(pending)), asio::use_future);
@@ -795,7 +807,7 @@ RUVIA_TEST(database_operation_guard_releases_before_scoped_join_expires_owner) {
         ruvia::asAwaitable(awaitScopedOperation(operation)), asio::use_future);
     io.poll();
     RUVIA_CHECK(gate.continuation_ != nullptr);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), 2U * owned_string_allocations());
 
     auto overlapRunner = asio::co_spawn(io,
         ruvia::asAwaitable(awaitScopedOperation(overlap)), asio::use_future);
@@ -808,7 +820,7 @@ RUVIA_TEST(database_operation_guard_releases_before_scoped_join_expires_owner) {
         overlapRejected = std::string_view(error.what()) == "database operation is already in progress";
     }
     RUVIA_CHECK(overlapRejected);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), 1U);
+    RUVIA_CHECK_EQ(memory.liveAllocations(), owned_string_allocations());
 
     auto joiner = asio::co_spawn(io,
         ruvia::asAwaitable(joinScopedOperations(scope)), asio::use_future);

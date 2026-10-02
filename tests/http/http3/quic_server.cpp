@@ -192,11 +192,13 @@ public:
 
 private:
     void* do_allocate(std::size_t size, std::size_t alignment) override {
-        if (allocations_before_failure == 0) {
+        // Leave noexcept debug iterator metadata allocations available.
+        // Pending packet and index storage are the fallible allocations.
+        if (size >= 32 && allocations_before_failure == 0) {
             allocations_before_failure = std::numeric_limits<std::size_t>::max();
             throw std::bad_alloc();
         }
-        if (allocations_before_failure != std::numeric_limits<std::size_t>::max()) {
+        if (size >= 32 && allocations_before_failure != std::numeric_limits<std::size_t>::max()) {
             --allocations_before_failure;
         }
         return std::pmr::new_delete_resource()->allocate(size, alignment);

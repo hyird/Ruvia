@@ -29,6 +29,9 @@ public:
     [[nodiscard]] std::size_t attempts() const noexcept {
         return attempts_;
     }
+    [[nodiscard]] std::size_t failure_points() const noexcept {
+        return failure_points_;
+    }
     [[nodiscard]] std::size_t liveAllocations() const noexcept {
         return liveAllocations_;
     }
@@ -42,7 +45,10 @@ private:
             std::pmr::set_default_resource(nextDefault_);
             nextDefault_ = nullptr;
         }
-        if (attempts_++ == failAt_) {
+        ++attempts_;
+        // Noexcept STL constructors can allocate small debug iterator proxies.
+        // Inject into connection/container storage and account for all blocks.
+        if (bytes >= 32 && failure_points_++ == failAt_) {
             throw std::bad_alloc();
         }
         auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
@@ -61,6 +67,7 @@ private:
     }
     std::size_t failAt_;
     std::size_t attempts_{0};
+    std::size_t failure_points_{};
     std::size_t liveAllocations_{0};
     std::pmr::memory_resource* nextDefault_{nullptr};
 };
@@ -286,7 +293,7 @@ RUVIA_TEST(http2_public_construction_failure_returns_all_allocations) {
             RUVIA_CHECK(connection.wantsWrite());
         }
         RUVIA_CHECK(baseline.liveAllocations() == 0);
-        for (std::size_t failAt = 0; failAt < baseline.attempts(); ++failAt) {
+        for (std::size_t failAt = 0; failAt < baseline.failure_points(); ++failAt) {
             AccountingAllocationResource resource(failAt);
             bool threw = false;
             try {

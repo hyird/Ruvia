@@ -2295,9 +2295,13 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
             co_await moved.body().write("def");
             std::string trailerValue = "retained";
             const std::array<ruvia::HttpHeaderView, 1> fields{{{"X-End", trailerValue}}};
-            auto ending = known ? moved.body().end() : moved.body().end(fields);
-            trailerValue.assign("changed");
-            co_await std::move(ending);
+            if (known) {
+                co_await moved.body().end();
+            } else {
+                auto ending = moved.body().end(fields);
+                trailerValue.assign("changed");
+                co_await std::move(ending);
+            }
             RUVIA_CHECK(moved.body().complete());
             auto response = co_await moved.response();
             auto bytes = co_await response.body().readAll(16);
@@ -2320,10 +2324,10 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
     auto& io = ruvia::test::newTestIoContext();
     TestWorker worker(io);
     UploadPeer peer(io, worker.handle, UploadPeer::Mode::kEarlyFinal);
-    ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(peer.port()));
+    std::optional<ruvia::HttpClient> client(std::in_place, worker.attachment.loop(), localHttpClientConfig(peer.port()));
     peer.start();
     auto operation = [&]() -> ruvia::Task<void> {
-        auto exchange = co_await client.openRequest({.method = "POST", .target = "/upload"},
+        auto exchange = co_await client->openRequest({.method = "POST", .target = "/upload"},
             {.expectation = ruvia::HttpClientRequestExpectation::kContinue});
         auto response = co_await exchange.response();
         RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
@@ -2337,7 +2341,12 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
         auto bytes = co_await response.body().readAll(16);
         RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "no");
         co_await peer.wait();
-        co_await client.shutdown();
+        co_await client->shutdown();
+        client.reset();
+        // The response domain keeps the exchange's output signals alive after
+        // client destruction, including the stopped, unfinished upload path.
+        RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "no");
     };
     runOperation(worker, io, operation);
 }
