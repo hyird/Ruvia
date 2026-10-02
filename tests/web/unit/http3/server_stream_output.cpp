@@ -1496,7 +1496,7 @@ RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndRetur
     Mailbox mailbox(1, 1, 1);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 3, .maxQueuedBlocks = 1, .maxDriveWorkItems = 2});
-    constexpr std::array<char, 3> instructions{3, char(0x80), 1};
+    constexpr std::array<char, 3> instructions{3, '\x80', 1};
     const auto sent = mailbox.trySendCritical({kEpoch, kGeneration, Http3CriticalStreamOutput::Kind::kQpackDecoder}, std::as_bytes(std::span(instructions)));
     RUVIA_CHECK(sent == Mailbox::SendResult::kSentNotifyPeer);
     BorrowedBlock block;

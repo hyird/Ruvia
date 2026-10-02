@@ -79,9 +79,10 @@ RUVIA_TEST(http_client_advertisements_own_results_bound_queues_and_reclaim_repea
 RUVIA_TEST(http_client_advertisement_budget_counts_results_held_outside_the_queue) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
     auto run = [&]() -> ruvia::Task<void> {
         std::pmr::unsynchronized_pool_resource pool;
-        ruvia::detail::HttpClientAdvertisementQueue queue(attachment.loop().handle(),
+        ruvia::detail::HttpClientAdvertisementQueue queue(worker,
             {.receiveOrigins = true, .receiveAlternativeServices = true, .maxRetainedBytes = 4096}, &pool);
         ruvia::HttpOriginAdvertisement origins(&pool);
         origins.origins.emplace_back(std::string(1000, 'a'));
@@ -109,8 +110,9 @@ RUVIA_TEST(http_client_advertisement_budget_counts_results_held_outside_the_queu
 RUVIA_TEST(http_client_advertisements_disabled_queue_allocates_no_storage) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource memory;
-    ruvia::detail::HttpClientAdvertisementQueue queue(attachment.loop().handle(), {}, &memory, memory);
+    ruvia::detail::HttpClientAdvertisementQueue queue(worker, {}, &memory, memory);
     RUVIA_CHECK_EQ(memory.allocationCount(), std::size_t{0});
     auto run = [&]() -> ruvia::Task<void> {
         ruvia::HttpOriginAdvertisement origins(&memory);
