@@ -12,6 +12,14 @@ function(ruvia_apply_test_warnings name)
     endif()
 endfunction()
 
+# TEMPORARY CI crash diagnostics: limit DbgHelp to unit-test executables using test_main.
+function(ruvia_enable_windows_debug_crash_diagnostics name)
+    if(WIN32)
+        target_compile_definitions(${name} PRIVATE NOMINMAX)
+        target_link_libraries(${name} PRIVATE $<$<CONFIG:Debug>:dbghelp>)
+    endif()
+endfunction()
+
 function(ruvia_apply_test_support_includes name lib)
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -69,6 +77,7 @@ if(RUVIA_BUILD_CORE)
         core/scoped_operation.cpp
         core/stop_token.cpp
         support/test_main.cpp)
+    ruvia_enable_windows_debug_crash_diagnostics(ruvia_core_unit_tests)
 
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
     ruvia_add_test(ruvia_connection_scanner_lifetime ruvia::core SOURCES
@@ -86,6 +95,7 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_worker_notification ruvia::core TIMEOUT 60 SOURCES
         core/worker_notification.cpp
         support/test_main.cpp)
+    ruvia_enable_windows_debug_crash_diagnostics(ruvia_worker_notification)
     ruvia_add_test(ruvia_worker_dispatch_failure ruvia::core SOURCES
         core/worker_dispatch_failure.cpp)
     ruvia_add_test(ruvia_worker_async_await ruvia::core SOURCES core/asio_await.cpp)
@@ -104,9 +114,9 @@ if(RUVIA_BUILD_HTTP)
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
         ${_ruvia_http_unit_sources})
     if(WIN32)
-        target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
         target_link_libraries(ruvia_http_unit_tests PRIVATE ws2_32)
     endif()
+    ruvia_enable_windows_debug_crash_diagnostics(ruvia_http_unit_tests)
     target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_http_ngtcp2_core)
 endif()
 
@@ -172,7 +182,5 @@ if(RUVIA_BUILD_WEB)
     list(SORT _ruvia_web_unit_sources)
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
-    if(WIN32)
-        target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
-    endif()
+    ruvia_enable_windows_debug_crash_diagnostics(ruvia_web_unit_tests)
 endif()

@@ -13,6 +13,7 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,18 +45,37 @@ public:
     std::size_t allocations{};
     std::size_t deallocations{};
 
+    [[nodiscard]] bool owns(const void* pointer, std::size_t bytes) const noexcept {
+        const auto block_record = live_blocks_.find(const_cast<void*>(pointer));
+        return block_record != live_blocks_.end() && block_record->second >= bytes;
+    }
+
+    [[nodiscard]] std::size_t live_allocations() const noexcept {
+        return live_blocks_.size();
+    }
+
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        auto* const block = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        try {
+            live_blocks_.emplace(block, bytes);
+        } catch (...) {
+            std::pmr::new_delete_resource()->deallocate(block, bytes, alignment);
+            throw;
+        }
         ++allocations;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        return block;
     }
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        live_blocks_.erase(pointer);
         ++deallocations;
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
+
+    std::pmr::unordered_map<void*, std::size_t> live_blocks_{std::pmr::new_delete_resource()};
 };
 
 struct PostPayload final {
@@ -2227,10 +2247,16 @@ bool testRootTaskResultOwnsPmrStoragePastPoolRetirement() {
     bool retained = false;
     {
         auto result = root.get();
-        retained = result.values.size() == 32 && result.values.front() == 42 &&
-                   resource.allocations == 1 && resource.deallocations == 0;
+        const auto payload_bytes = result.values.capacity() * sizeof(int);
+        const bool payload_retained = resource.owns(result.values.data(), payload_bytes);
+        const bool values_valid = result.values.size() == 32 &&
+                                  std::all_of(result.values.begin(), result.values.end(),
+                                      [](int value) { return value == 42; });
+        retained = values_valid && result.values.get_allocator().resource() == &resource &&
+                   payload_retained && resource.live_allocations() > 0;
     }
-    return retained && resource.allocations == resource.deallocations;
+    return retained && resource.live_allocations() == 0 &&
+           resource.allocations == resource.deallocations;
 }
 
 bool testRootTasksJoinNestedScopesDuringStop() {
