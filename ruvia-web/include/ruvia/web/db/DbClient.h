@@ -10,12 +10,15 @@
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/Task.h"
+#include "ruvia/web/db/DbCache.h"
 #include "ruvia/web/db/DbHandle.h"
 #include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/db/DbSqlLiteral.h"
 
 namespace ruvia {
+
+class RedisHandle;
 
 namespace detail {
 class DbClientState;
@@ -27,6 +30,10 @@ class DbClientState;
 class DbClient final {
 public:
     DbClient(EventLoop loop, const DbConfig& config);
+    // Cache operations borrow an existing Redis capability on the same worker.
+    // Connect Redis first and shut this client down before its Redis owner.
+    DbClient(EventLoop loop, const DbConfig& config, const RedisHandle& cache_store,
+        const DbCacheConfig& cache_policy);
     ~DbClient();
 
     DbClient(const DbClient&) = delete;

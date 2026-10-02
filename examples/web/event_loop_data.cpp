@@ -62,7 +62,7 @@ struct WorkerData final {
         auto devices = db.getRepository<Device>();
         auto cached = redis.getRepository<CachedDevice>({.prefix = "ruvia:example:devices"});
         auto device = co_await devices.findOne({.where = Device::column<"id">() == 1});
-        auto cache = co_await cached.findOne({.where = CachedDevice::column<"id">() == "1"});
+        auto cache = co_await cached.findOne({.where = CachedDevice::field<"id">() == "1"});
         // Results stay in this coroutine on the owner loop and die before
         // shutdown. Do not return client-PMR objects to the main thread.
         if (device && cache) {

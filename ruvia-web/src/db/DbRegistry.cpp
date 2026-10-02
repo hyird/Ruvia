@@ -12,6 +12,7 @@
 
 #include "ruvia/web/detail/db/DbQueryCacheState.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia {
 namespace {
@@ -46,11 +47,11 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& 
       aliasIndex_(resource_) {
     aliasIndex_.build({kDefaultCapabilityAlias});
     entries_.reserve(1);
-    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_), kDefaultCapabilityAlias);
+    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_));
 }
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-    std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases)
+    std::pmr::memory_resource* resource, std::span<const detail::DbDefinition> databases, RedisRegistry* redis)
     : resource_(detail::pmrResourceOrDefault(resource)),
       entries_(resource_),
       aliasIndex_(resource_) {
@@ -59,20 +60,55 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& 
     aliasIndex_.build(databases);
     entries_.reserve(databases.size());
     for (const auto& definition : databases) {
-        add(ioContext, worker, DbConfigStorage(definition.config, resource_), definition.alias);
+        add(ioContext, worker, DbConfigStorage(definition.config, resource_));
+        if (definition.query_cache) {
+#ifdef RUVIA_ENABLE_REDIS
+            if (redis == nullptr) {
+                throw std::invalid_argument("database query cache requires an existing Redis registry");
+            }
+            const auto store = redis->get(definition.query_cache->redis_alias, cache_scope_);
+            attach_cache(entries_.size() - 1, worker, store, definition.query_cache->policy,
+                definition.config, definition.alias);
+#else
+            (void)redis;
+            throw std::invalid_argument("database query caching requires Redis support");
+#endif
+        }
     }
+}
+
+detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+    std::pmr::memory_resource* resource, const DbConfig& config,
+    const RedisHandle& redis, const DbCacheConfig& policy)
+    : DbRegistry(ioContext, worker, resource, config) {
+    attach_cache(0, worker, redis, DbCacheConfigStorage(policy, resource_),
+        DbConfigStorage(config, resource_), kDefaultCapabilityAlias);
+}
+
+void detail::DbRegistry::attach_cache(std::size_t index, const WorkerHandle& worker,
+    const RedisHandle& redis, const DbCacheConfigStorage& policy,
+    const DbConfigStorage& config, std::string_view alias) {
+#ifdef RUVIA_ENABLE_REDIS
+    if (redis.worker().id() != worker.id()) {
+        throw std::invalid_argument("database query cache Redis capability must belong to the same worker");
+    }
+    const auto identity = db_cache_scope(policy.nameSpace, alias, config, resource_);
+    entries_[index].cache = makePmrObject<DbQueryCacheState>(resource_, redis, policy, identity, resource_);
+#else
+    (void)index;
+    (void)worker;
+    (void)redis;
+    (void)policy;
+    (void)config;
+    (void)alias;
+    throw std::invalid_argument("database query caching requires Redis support");
+#endif
 }
 
 detail::DbRegistry::~DbRegistry() = default;
 
 void detail::DbRegistry::add(
-    asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::string_view alias) {
-    std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;
-    if (config.cache) {
-        const auto identity = db_cache_scope(config.cache->nameSpace, alias, config, resource_);
-        cache = makePmrObject<DbQueryCacheState>(resource_, ioContext, worker, *config.cache, identity, resource_);
-    }
-    config.cache.reset();
+    asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config) {
     PoolOwner owner;
     switch (config.driver) {
         case DbDriver::kUnspecified:
@@ -95,15 +131,12 @@ void detail::DbRegistry::add(
 #endif
     }
 
-    entries_.push_back(Entry{std::move(owner), std::move(cache)});
+    entries_.push_back(Entry{std::move(owner), {}});
 }
 
 Task<void> detail::DbRegistry::connect() {
     for (auto& entry : entries_) {
         co_await connectPool(poolRef(entry.pool));
-        if (entry.cache) {
-            co_await entry.cache->connect();
-        }
     }
 }
 

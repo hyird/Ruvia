@@ -26,7 +26,7 @@ class DbTransaction;
 class DbQuery;
 class DbStatement;
 template <typename Entity>
-class DbEntityRows;
+class entity_rows;
 template <typename Entity, typename Executor>
 class DbRepository;
 template <typename Entity, typename Executor>
@@ -196,7 +196,7 @@ private:
         std::optional<std::chrono::milliseconds> firstDuration,
         std::optional<std::chrono::milliseconds> secondDuration,
         detail::DbQueryCacheState& cache,
-        detail::ScopedOperationScope& scope, OperationGuard operation);
+        OperationGuard operation);
     detail::DbQueryCacheState* cache_{nullptr};
     StateOwner state_;
 };

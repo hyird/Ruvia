@@ -7,6 +7,10 @@
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbPoolOperations.h"
 
+namespace ruvia {
+class RedisHandle;
+}
+
 #if !defined(RUVIA_ENABLE_MARIADB) && !defined(RUVIA_ENABLE_POSTGRESQL)
 
 #include <memory_resource>
@@ -16,11 +20,12 @@
 #include <asio/ip/tcp.hpp>
 
 namespace ruvia::detail {
+class RedisRegistry;
 
 class DbRegistry final {
 public:
     DbRegistry(asio::io_context&, const WorkerHandle&, std::pmr::memory_resource*,
-        std::span<const DbDefinition>) {}
+        std::span<const DbDefinition>, RedisRegistry* = nullptr) {}
 
     DbRegistry(const DbRegistry&) = delete;
     DbRegistry& operator=(const DbRegistry&) = delete;
@@ -65,6 +70,7 @@ struct pg_result;
 
 namespace ruvia::detail {
 
+class RedisRegistry;
 class DbQueryCacheState;
 struct DbSlotSocket;
 struct DbSlotSocketQuarantine;
@@ -347,7 +353,10 @@ public:
     DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
         std::pmr::memory_resource* resource, const DbConfig& defaultConfig);
     DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
-        std::pmr::memory_resource* resource, std::span<const DbDefinition> databases);
+        std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, RedisRegistry* redis = nullptr);
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, const DbConfig& config,
+        const RedisHandle& redis, const DbCacheConfig& policy);
     ~DbRegistry();
 
     DbRegistry(const DbRegistry&) = delete;
@@ -375,9 +384,12 @@ public:
 #endif
 
 private:
-    void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::string_view alias);
+    void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config);
 
+    void attach_cache(std::size_t index, const WorkerHandle& worker, const RedisHandle& redis,
+        const DbCacheConfigStorage& policy, const DbConfigStorage& config, std::string_view alias);
     std::pmr::memory_resource* resource_;
+    ScopedOperationScope cache_scope_;
     struct Entry final {
         PoolOwner pool;
         std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;

@@ -12,34 +12,31 @@
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbQueryCache.h"
-
-namespace asio {
-class io_context;
-}
+#include "ruvia/web/redis/RedisHandle.h"
 namespace ruvia::detail {
-class RedisRegistry;
 class DbQueryCacheState final {
 public:
-    DbQueryCacheState(asio::io_context& io, const WorkerHandle& worker,
+    DbQueryCacheState(const RedisHandle& redis,
         const DbCacheConfigStorage& config, std::string_view identity, std::pmr::memory_resource* resource);
     ~DbQueryCacheState();
-    Task<void> connect();
     void closeNow() noexcept;
     std::optional<std::pmr::string> key(const DbQuery& query, const DbStatement& statement, DbDriver driver);
     Task<DbRows> wrap(std::optional<std::chrono::milliseconds> duration, std::optional<std::pmr::string> key,
-        DbCacheQuery database, ScopedOperationScope& scope, OperationOptions options,
+        DbCacheQuery database, OperationOptions options,
         std::optional<ruvia::OperationTimeout> deadline = std::nullopt);
-    Task<void> remove(std::span<const std::string_view> ids, ScopedOperationScope& scope, OperationOptions options);
-    Task<void> clear(ScopedOperationScope& scope, OperationOptions options);
+    Task<void> remove(std::span<const std::string_view> ids, OperationOptions options);
+    Task<void> clear(OperationOptions options);
 
 private:
+    void require_open() const;
+    bool closed_{false};
     std::pmr::memory_resource* resource_;
     std::chrono::milliseconds duration_;
     bool alwaysEnabled_;
     bool ignoreErrors_;
     std::pmr::string nameSpace_;
 #ifdef RUVIA_ENABLE_REDIS
-    std::unique_ptr<RedisRegistry, PmrObjectDeleter<RedisRegistry>> redis_;
+    RedisHandle redis_;
 #endif
 };
 }  // namespace ruvia::detail

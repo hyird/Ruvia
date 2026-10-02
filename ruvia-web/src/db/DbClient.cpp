@@ -26,6 +26,14 @@ DbClientState::DbClientState(EventLoop loop, const DbConfig& config)
       databases_(loop_.ioContext(), worker_, memory_.resource(), config),
       closeState_(loop_, worker_) {}
 
+DbClientState::DbClientState(EventLoop loop, const DbConfig& config,
+    const RedisHandle& cache_store, const DbCacheConfig& cache_policy)
+    : loop_(requireLoop(std::move(loop))),
+      worker_(loop_.handle()),
+      memory_(),
+      databases_(loop_.ioContext(), worker_, memory_.resource(), config, cache_store, cache_policy),
+      closeState_(loop_, worker_) {}
+
 DbClientState::~DbClientState() {
     const auto phase = phase_.load(std::memory_order_acquire);
     if (phase != Phase::kClosed || !closeState_.complete() ||
@@ -215,6 +223,12 @@ namespace ruvia {
 
 DbClient::DbClient(EventLoop loop, const DbConfig& config)
     : state_(std::make_shared<detail::DbClientState>(std::move(loop), config)) {
+    state_->bindStop();
+}
+
+DbClient::DbClient(EventLoop loop, const DbConfig& config,
+    const RedisHandle& cache_store, const DbCacheConfig& cache_policy)
+    : state_(std::make_shared<detail::DbClientState>(std::move(loop), config, cache_store, cache_policy)) {
     state_->bindStop();
 }
 

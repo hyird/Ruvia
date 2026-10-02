@@ -1,13 +1,11 @@
 #include "ruvia/web/db/DbQueryResultCache.h"
 
-#include <array>
 #include <optional>
 #include <utility>
 
 #include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbQueryCacheState.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #endif
 
@@ -87,33 +85,31 @@ Task<void> clearKeys(RedisHandle redis, std::pmr::string pattern, OperationOptio
 }
 }  // namespace
 #endif
-DbQueryCacheState::DbQueryCacheState(asio::io_context& io, const WorkerHandle& worker,
+DbQueryCacheState::DbQueryCacheState(const RedisHandle& redis,
     const DbCacheConfigStorage& config, std::string_view identity, std::pmr::memory_resource* resource)
     : resource_(resource),
       duration_(config.duration),
       alwaysEnabled_(config.alwaysEnabled),
       ignoreErrors_(config.ignoreErrors),
-      nameSpace_(identity, resource) {
+      nameSpace_(identity, resource)
 #ifdef RUVIA_ENABLE_REDIS
-    const std::array definitions{RedisDefinition{std::pmr::string(kDefaultCapabilityAlias, resource), RedisConfigStorage(config.options, resource)}};
-    redis_ = makePmrObject<RedisRegistry>(resource, io, resource, std::span<const RedisDefinition>(definitions), worker);
-#else
-    (void)io;
-    (void)worker;
+      ,
+      redis_(redis.withOptions({}))
+#endif
+{
+#ifndef RUVIA_ENABLE_REDIS
+    (void)redis;
     throw std::invalid_argument("database caching requires Redis support");
 #endif
 }
 DbQueryCacheState::~DbQueryCacheState() = default;
-Task<void> DbQueryCacheState::connect() {
-#ifdef RUVIA_ENABLE_REDIS
-    co_await redis_->connect();
-#endif
-    co_return;
-}
 void DbQueryCacheState::closeNow() noexcept {
-#ifdef RUVIA_ENABLE_REDIS
-    redis_->closeNow();
-#endif
+    closed_ = true;
+}
+void DbQueryCacheState::require_open() const {
+    if (closed_) {
+        throw DbError(DbError::Code::kClosing, std::nullopt, "database query cache is closing");
+    }
 }
 std::optional<std::pmr::string> DbQueryCacheState::key(const DbQuery& query, const DbStatement& statement, DbDriver driver) {
     if (!query.cacheEnabled().value_or(alwaysEnabled_) || !query.cacheable()) {
@@ -122,24 +118,25 @@ std::optional<std::pmr::string> DbQueryCacheState::key(const DbQuery& query, con
     return dbCacheKey(nameSpace_, query.cacheId(), statement.sql(), statement.params(), driver, resource_);
 }
 Task<DbRows> DbQueryCacheState::wrap(std::optional<std::chrono::milliseconds> duration, std::optional<std::pmr::string> key,
-    DbCacheQuery database, ScopedOperationScope& scope, OperationOptions options,
+    DbCacheQuery database, OperationOptions options,
     std::optional<ruvia::OperationTimeout> deadline) {
 #ifdef RUVIA_ENABLE_REDIS
+    require_open();
     if (key) {
-        return queryDbCache(RedisCacheStore{redis_->get(scope)}, std::move(*key),
+        return queryDbCache(RedisCacheStore{redis_}, std::move(*key),
             duration.value_or(duration_), ignoreErrors_, std::move(database), resource_,
             std::move(options), std::move(deadline));
     }
 #else
     (void)duration;
     (void)key;
-    (void)scope;
     (void)deadline;
 #endif
     return std::move(database)(std::move(options));
 }
-Task<void> DbQueryCacheState::remove(std::span<const std::string_view> ids, ScopedOperationScope& scope, OperationOptions options) {
+Task<void> DbQueryCacheState::remove(std::span<const std::string_view> ids, OperationOptions options) {
 #ifdef RUVIA_ENABLE_REDIS
+    require_open();
     std::pmr::vector<std::pmr::string> keys(resource_);
     keys.reserve(ids.size());
     for (const auto id : ids) {
@@ -148,21 +145,20 @@ Task<void> DbQueryCacheState::remove(std::span<const std::string_view> ids, Scop
         }
         keys.push_back(dbCacheKey(nameSpace_, id, {}, {}, DbDriver::kUnspecified, resource_));
     }
-    return removeKeys(redis_->get(scope), std::move(keys), std::move(options));
+    return removeKeys(redis_, std::move(keys), std::move(options));
 #else
     (void)ids;
-    (void)scope;
     (void)options;
     throw std::logic_error("Redis support is disabled");
 #endif
 }
-Task<void> DbQueryCacheState::clear(ScopedOperationScope& scope, OperationOptions options) {
+Task<void> DbQueryCacheState::clear(OperationOptions options) {
 #ifdef RUVIA_ENABLE_REDIS
+    require_open();
     auto pattern = dbCachePrefix(nameSpace_, resource_);
     pattern.push_back('*');
-    return clearKeys(redis_->get(scope), std::move(pattern), std::move(options));
+    return clearKeys(redis_, std::move(pattern), std::move(options));
 #else
-    (void)scope;
     (void)options;
     throw std::logic_error("Redis support is disabled");
 #endif
@@ -181,10 +177,10 @@ void DbQueryResultCache::expireCapability(detail::ScopedCapabilityNode& node) no
 }
 ScopedOperation<void> DbQueryResultCache::remove(std::span<const std::string_view> ids) const {
     requireActive();
-    return detail::makeScopedOperation(operationScope(), state_->remove(ids, operationScope(), options_));
+    return detail::makeScopedOperation(operationScope(), state_->remove(ids, options_));
 }
 ScopedOperation<void> DbQueryResultCache::clear() const {
     requireActive();
-    return detail::makeScopedOperation(operationScope(), state_->clear(operationScope(), options_));
+    return detail::makeScopedOperation(operationScope(), state_->clear(options_));
 }
 }  // namespace ruvia

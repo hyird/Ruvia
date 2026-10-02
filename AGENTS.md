@@ -1,369 +1,113 @@
 # AGENTS.md
 
-Ruvia 项目协作说明。默认用中文回复。本文件只记录稳定的仓库约束；实现细节、迁移历史和具体类型清单由代码与单元测试维护，不在这里逐轮追加。
+默认中文回复。
+本文件只记录规范、边界与核心设计。
+README 说明用法，STYLE.md 规定代码风格。
 
-README 面向使用者，说明构建、安装和公开能力；AGENTS 面向贡献者，说明目录、分层、性能和验证规则。不要在两个文件中重复记录同一内部实现。
+## 工程原则
 
-命名、错误返回、智能指针和配置封装借鉴 [cpp-coding-standards](https://github.com/affaan-m/ECC/blob/main/skills/cpp-coding-standards/SKILL.md) 及其依据的 [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)，具体规则由本文件和 `STYLE.md` 明确。其他领域继续遵守本仓库约束；采用这四项规则也不得改变 PMR、线程亲和、请求热路径、协议边界和协程生命周期契约。
+- 保留用户已有改动。
+- 优先正确性和长期可维护性。代码简单、清晰、易读易改。
+- 分层清晰、职责单一、边界明确、低耦合。
+- 同类能力统一抽象、入口、调用主链和生命周期。
+- 共同逻辑只保留一份权威实现。差异在明确边界处理。
+- 允许为明确收益破坏兼容性。迁移必须完整。
+- 同步更新全部调用方、示例、文档和必要功能单测。
+- 清除相关技术债务与历史遗留。不留旧实现、兼容旁路或临时 TODO。
+- 接口明确所有权、生命周期和错误语义。用类型表达不变量。
+- 遵守协议标准和 STYLE.md。避免过度设计。
 
-## 项目定位
-
-Ruvia 是 C++23 HTTP/Web 框架仓库，采用 monorepo + 多 CMake target：
-
-```text
-ruvia-core  -> ruvia::core
-ruvia-http  -> ruvia::http
-ruvia-web   -> ruvia::web
-```
-
-依赖方向固定：
-
-```text
-ruvia-web   -> ruvia-core + ruvia-http
-```
-
-新代码、新示例和新文档使用 `ruvia::web`，不保留历史 Web 框架别名。
-
-## 沟通规则
-
-- 默认中文回复。
-- 不要回退、覆盖或整理用户已有改动，除非用户明确要求。
-- 需求不清时只问一个必要问题；能从仓库上下文判断时直接执行。
-- 默认优先选择长期正确、最优雅清晰的一等抽象、清晰命名和稳定边界，即使改动面更大；不要为了缩小 diff 把新能力塞进语义不匹配的旧接口或 `detail` 旁路。
-- 配置封装按不变量归属选择：字段可以独立赋值、只表达待消费输入时，使用可直接 designated initialization 的普通聚合；类型自身承诺始终有效、必须维护跨字段不变量时，使用封装类，由构造函数完成校验并建立不变量，构造失败通过异常报告。单参数构造函数保持 `explicit`，不为普通字段增加无必要的静态工厂、builder、链式子配置或 identity wrapper。
-- 所有可默认构造的配置字段必须有默认成员初始化，协议要求且不可默认构造的值保持必填。职责 owner 在消费配置时校验依赖运行时的整体约束，并一次性归一化到所属 PMR 存储，在发布或使用运行时对象前建立其不变量；可选 App 能力传配置表示开启或替换，传 `nullptr` 表示关闭。
-- 讨论协议行为时，以 HTTP、TLS、WebSocket、SSE、HTTP/2、HTTP/3 相关 RFC 和标准优先。
-- 如果项目约束与协议标准冲突，优先修实现和文档以符合标准。
-- README 不写内部重构历史；AGENTS 不累积逐类型防回归目录。
-- 机械代码风格（include 形状、错误返回层、命名）见 `STYLE.md`，不要把那些规则再抄进本文件。
-
-## 目录规则
-
-顶层源码目录只允许：
+## 分层与目录
 
 ```text
-ruvia-core/
-ruvia-http/
-ruvia-web/
-examples/
-tests/
+ruvia-core -> ruvia::core
+ruvia-http -> ruvia::http
+ruvia-web  -> ruvia::web
+ruvia-web  -> ruvia-core + ruvia-http
 ```
 
-示例和测试按 target/协议层级归档：
-
-```text
-examples/web/
-tests/core/
-tests/http/{unit,http1,http2,http3,websocket,support}/
-tests/web/unit/
-tests/support/
-```
-
-只有需要区分多个测试类别的 target 才分子目录：`http` 和 `web` 分，
-`core` 只有单元测试，直接平铺。
-
-测试文件名只描述被测对象，不重复所在目录已经表达的信息：
-`http/http2/hpack/codec.cpp`，不是 `http/http2/hpack/unit_hpack.cpp`；
-`web/unit/router/routing_matching.cpp`，不是 `web/unit/router/unit_routing_matching.cpp`。
-单元测试 target 的源码列表按目录分组、组内字母序，不要往末尾追加。
-
-不要把 HTTP/1、HTTP/2、HTTP/3 或 WebSocket 单元测试重新散放到 `tests/` 根目录；
-target 专属的支撑代码跟随所属 target，只有跨 target 的通用支撑保留在
-独立目录。测试只保留可直接验证被测单元正确性的功能单测；不得为历史缺陷、
-目录/target/依赖边界、安装消费或编译 API 表面保留防回归测试或门禁。需要时可为
-当次变更临时生成上述验证，完成后必须立即删除临时文件、target 和 CTest 注册。
-不新增长期 guards、server/integration、conformance、benchmark 或故意失败的 probe target。
-
-仓库根目录不保留源码级 `include/`、`src/`、`fuzz/`、`core/`、`http/` 或 `web/`。
-
-每个库目录必须自带：
-
-```text
-<target>/
-  CMakeLists.txt
-  include/
-  src/
-```
-
-三个 target 的公开头和安装命名根严格对应：
-
-- `ruvia-core` 只能拥有并安装 `include/ruvia/core/**`。
-- `ruvia-http` 只能拥有并安装 `include/ruvia/http/**`。
-- `ruvia-web` 只能拥有并安装 `include/ruvia/web/**`。
-
-禁止在本 target 下创建或安装到另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target 目录里的文件。
-
-跨 target 只能引用依赖库非 `detail` 的公开头，不得直接引用另一个 target 的内部头或 `src/`；这一约束同样适用于示例、测试及公开头中的跨库引用，不能因内部头已安装或能通过传递 include 找到就引用它。AGENTS.md 及其他仓库文档引用头文件时也只能引用公开头，不得引用其他 target 的内部头。库内实现和本 target 的单元测试可以引用本库的 `detail` 头。target 之间只能通过 `target_link_libraries()` 传播的公开 include interface 使用依赖方已安装的头，不得通过物理相对或绝对路径穿透源码目录。跨库复用能力由所属 target 提供职责明确的公开 API，不把私有状态访问器直接公开。
-
-安装从非 `detail` 公开头出发，只包含真实的同 target 传递头依赖闭包；不得重新整树安装 `detail/`。
-
-`src/` 下最多保留一层业务分类目录，例如 `server/`、`http1/`、`http2/`、`http3/`、`websocket/`、`client/`；各 HTTP 版本独有的实现按 `http1/`、`http2/`、`http3/` 分开，跨版本实现仍按职责归档。不要引入 `src/net/...`、`src/*/core/...` 等重复层级。`ruvia-core/src/` 保持扁平。`src/` 只保存实现和 target 自有 `pch.h`，契约头统一放在公开 `detail/` 根。
-
-根 `CMakeLists.txt` 只负责全局选项、依赖发现、package export、install helper 和 `add_subdirectory(...)`。不要再拆出额外的仓库内 `.cmake` 片段。
-
-本地工具目录 `.codex/`、`.claude/`、`.agents/`、`.codegraph/` 必须保持 ignored，不作为源码提交。
-
-## Target 边界
-
-### ruvia-core
-
-`ruvia-core` 是可独立使用的 runtime 底座。
-
-可以包含：
-
-- `ruvia::Task<T>`、coroutine promise/awaiter、Asio awaiter/driver glue。
-- PMR、memory resource、对象生命周期 helper。
-- worker/request memory、connection scanner、socket/runtime helper。
-- ASCII、base64/base64url、constant-time、number/path 等小型通用 helper。
-
-禁止包含：
-
-- HTTP/Web 语义。
-- App、Context、Controller、Router、middleware、model、DB、Redis、JWT。
-- 对 HTTP/Web 协议语义、OpenSSL、zlib、brotli、zstd、MariaDB、hiredis 的公开依赖。
-
-### ruvia-http
-
-`ruvia-http` 是可独立使用的纯协议 target，不依赖 `ruvia-core`、Asio、socket 或 Ruvia runtime。
-
-可以包含：
-
-- HTTP method/status/header/request/response 类型。
-- HTTP/1 parser、chunk parser、request target parser。
-- cookie、cache、range、conditional request、content negotiation、header token/value helper。
-- multipart、form、URL encoding、SSE formatting 与纯 parser。
-- HTTP/1、HTTP/2、HTTP/3 与 QUIC sans-I/O 协议状态、HPACK、WebSocket sans-I/O 核心。
-- QUIC packet/key processing、connection IDs、stream 与 flow control、acknowledgments、loss recovery/retransmission、DATAGRAM 和 close 等协议语义。
-- QUIC 使用 ngtcp2 core；密钥派生所需的 crypto-provider callback contract 属于 HTTP 协议 API，具体 EVP 实现和 UDP/runtime I/O 由 Web 提供。ngtcp2 是 `ruvia-http` 的依赖，不是 `ruvia-web` 的直接依赖；HTTP 不依赖 OpenSSL、Asio、socket 或 `ruvia-core`。
-- content-coding、framing、connection、client role 等可由任意 runtime 驱动的纯协议 primitive。
-- 无分配的 `HttpProtocolError` 及其 HTTP status；不得携带 Web JSON error code/details。
-
-禁止包含：
-
-- App、Context、Controller、Router、route macro、middleware、Next。
-- Model/validation 宏。
-- DB、Redis、JWT、CSRF、Session、CORS、安全头、RateLimit 的 Web 集成。
-- `HttpErrorInfo`、`HttpError`、默认 JSON 错误 envelope、自定义 error handler。
-- 通用 JSON/model serialization、健康检查或校验错误 JSON。
-- 静态文件 MIME 推断、文件时间/ETag、runtime 文件读缓冲。
-- origin/cache/purge/rule 等产品策略。
-
-### ruvia-web
-
-`ruvia-web` 是完整 Web 框架产品，依赖 `ruvia::core` 和 `ruvia::http`。
-
-包含：
-
-- App 配置和启动。
-- Context、Controller、Router、middleware、Next、route macro。
-- HTTP server runtime、TLS、HTTP/2/HTTP/3 server、WebSocket route、response streaming。
-- 使用 OpenSSL 实现 TLS 与 QUIC crypto-provider callbacks，并提供 UDP/socket/runtime 驱动；Web 只能经 `ruvia::http` 的公开协议 API 驱动 QUIC，不得直接依赖或调用 ngtcp2。
-- Model、JSON/form parsing/serialization、validation middleware。
-- `HttpErrorInfo`、`HttpError`、RFC 9457 Problem Details 默认错误响应和自定义 error/not-found handler。
-- Session、CSRF、RateLimit、CORS、安全头、静态文件、AutoHTTPS redirect。
-- 可选 MariaDB、Redis、JWT 集成。
-
-不得把 Web-only API 下沉到 `ruvia-http`。
-
-### HTTP 协议与应用边界
-
-`ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、HTTP/3、QUIC、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。QUIC packet handling、key derivation contract、connection IDs、stream/flow control、ACK/loss recovery/retransmission、DATAGRAM 和 close 都由 HTTP 协议层负责；ngtcp2 core 是 `ruvia-http` 的实现依赖。`ruvia-web` 只使用 HTTP 的公开 API，提供 TLS/EVP callback 实现及 UDP/runtime 驱动，不依赖或调用 ngtcp2。
-
-outbound client 中借用调用方存储的公开类型必须以 `view` 单词结尾，具体拼写遵循 `STYLE.md`；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，命名迁移须同步定义和使用方，不得恢复不表达生命周期的名字或兼容别名。
-
-`ruvia-web` 拥有 HTTP 之上的 App、Context、Router、middleware、controller、validation、session、CSRF、JWT、rate limit、CORS、安全头、静态文件产品策略、AutoHTTPS、DB/Redis 和 WebSocket route 绑定。读取或设置 HTTP header 不等于拥有协议语义。
-
-AutoHTTPS 只构造重定向响应并向 HTTP/1 runtime 提交外部关闭策略；不得直接设置 `Connection`，最终连接字段和复用判定必须由解析所得 connection plan 经 `requireClose()` 后统一提交。
-
-边界判断：
-
-- 决定字节如何解析、分帧、序列化，连接是否保持，升级是否成立，协议失败对应哪个 HTTP status：放在 `ruvia-http`。
-- 决定协议失败如何变成应用错误/JSON，或 Web 产品、路由、中间件、配置执行何种策略：放在 `ruvia-web`。
-
-Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 在知道 request-body 与 persistence 状态后统一最终化连接语义。
-
-流式响应的 HTTP 版本、framing、复用与响应信号由 `ruvia-http` 的 `Http1ResponseStreamPlan` 统一产出；`ruvia-web` 只传入请求上限等外部关闭策略并驱动计划。响应 body 许可由 `HttpResponseBodyPlan` 决定，buffered 响应再由 `HttpBufferedResponseWritePlan` 绑定 representation length；HTTP/1、HTTP/2 和 streaming 不得在 Web 层用 `skipBody` 等布尔值重判。HEAD 保留 GET representation metadata 和长度，但 HTTP/1 不发 payload、HTTP/2 不发 DATA。
-
-`Http2Connection` 必须记录本地 `END_STREAM`，之后的 `submitData()` 必须拒绝。Web 只能用 core runtime、Asio/TLS/socket/timeouts 驱动 HTTP 协议 core，不得复制协议判断。
-
-## 性能原则
-
-- 请求热路径目标是 0 抽象成本。
-- 启动期可以使用注册表、工厂、虚函数和一次性构建。
-- 请求期不要新增 mutex、rwlock、spinlock、共享原子争用、type-erasure、`shared_ptr` 分配或不必要拷贝。
-- 唯一例外是显式的阻塞卸载：`Context::runBlocking()`/`tryRunBlocking()` 只在调用点付出队列锁、one-shot 分配和一次 worker handle 拷贝的代价，不调用的请求路径保持零成本。不得把该代价挪进任何默认路径。
-- `Context` 只暴露职责明确的 typed capability 并直接保存其状态；不得恢复按字符串和运行时类型索引的任意 request-local value bag。
-- 优先使用 per-worker 所有权、连接私有状态、启动期构建后只读数据。
-- 跨线程操作连接状态默认禁止；必须先设计明确的 worker mailbox 或 intrusive MPSC 边界。
-
-## 线程和运行时
-
-- 每个 worker 拥有一个 standalone Asio `io_context`。
-- `io_context`、dispatcher endpoint 和稳定 `WorkerHandle` 必须由同一个 worker runtime context 组装和退役；不得让不同 runtime 各自复制 handle 发布、detach 或 executor 绑定逻辑。
-- `ServerNetworkRuntime` 拥有独立的 server network thread/runtime，负责 TCP accept/dispatch；每条新接受的 TCP 连接只交接一次到目标业务 worker，之后连接及其协议状态不得再跨线程迁移。启用 HTTP/3 时，同一线程/runtime 负责 UDP I/O，并在所属线程驱动 HTTP 公共 QUIC 协议状态；Web 层不得复制或接管 QUIC 协议判断。
-- `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。自建 `EventLoop` 的顶层任务统一由 `EventLoop::start()` 返回的 `RootTask<T>` 持有；遗弃 root 不得销毁挂起帧，未观察异常必须进入 loop failure sink。
-- `WorkerHandle` 直接持有可关闭的稳定 dispatcher endpoint；热路径操作不得通过 `weak_ptr::lock()` 临时取得所有权，context owner 必须在销毁执行上下文前 detach endpoint，使逃逸句柄安全失效。请求期 `ContextServices`/`Context` 只借用 server 中地址稳定的 handle，不复制其共享所有权。
-- DB stream/transaction 等线性 lease 同一时刻只允许一个异步操作；lazy Task 只能在真正启动时取得操作权，失败清理由 backend 唯一负责，失败后的 lease 不得复用。
-- 连接 teardown 必须先显式唤醒或终止挂起 I/O，再 join 所有仍持有连接对象的后台操作；不得只等待某一种操作来源。
-- outbound HTTP/2 每条连接只允许一个 worker-affine reader/writer 驱动并复用多个 stream；单 stream 取消提交 RST_STREAM，GOAWAY 只重试协议明确标记为未处理的请求，teardown 关闭 transport 后必须 join 两个 driver。
-- worker 线程只跑事件循环，不得阻塞。同步、阻塞、CPU 密集的调用必须经 `BlockingPool` 卸载到独立线程；卸载的可调用体在外部线程运行，只能按值/移动捕获自有数据，不得捕获 `Context`、请求内存或任何 worker 私有状态。停机不等待仍在运行的卸载任务：挂起的协程立即以 `kWorkerStopping` 恢复，池线程的结果被丢弃。
-- 池归 `App` 进程级所有并被所有 worker 共享，线程在 `App::run()` 一次性建立并常驻至停机，不得按调用创建线程；队列必须有界，满时向调用方回报拒绝，不得无界排队。
-- 卸载是上一条 handle 借用规则的唯一豁免：结果可能比发起它的请求活得久，`runBlocking` 因此复制一次 `WorkerHandle` 取得所有权。豁免仅限此路径，不得据此在其他请求期代码复制 handle。
-- `App::server(ServerConfig)` 原子配置进程内 Web runtime；`workerCount=N` 表示 N 个业务 worker，另外有一个 server network thread。额外线程数不包括 `BlockingPool` 和 signal 线程。每个业务 worker 只创建一份 worker-local DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或数据资源。
-- 每个 Web worker 的 DB、Redis、outbound HTTP client、user state 和 rate limiter 必须由一个 worker capability owner 统一构造、启动、暴露和关闭；这些实例不得跨 worker 共享，也不得重新散落成相互独立的 runtime 生命周期字段。TLS、router 和 capabilities 均由各业务 worker 分别持有。
-- listener 通过一个 `App::listen(ListenConfig)` 原子配置统一的 bind address、可选 HTTP/HTTPS TCP 端口、TLS 和自动跳转；未填写的端口表示不开启，自动跳转要求同一配置同时提供 HTTP 与 HTTPS。只有 `ServerNetworkRuntime` 绑定全部配置的 HTTP/HTTPS TCP 端口；它接受连接后只向业务 worker 交接一次。交接成功后连接由目标业务 worker 持有并处理，不再迁移。
-- `App::run()` 为每个业务 worker 创建一个线程和完整 runtime，并创建一个 `ServerNetworkRuntime` 线程。server network thread/runtime 同时负责 TCP accept/dispatch，以及 HTTPS 同号 UDP 上的长期 HTTP/3 I/O；UDP socket、OpenSSL TLS/EVP 状态和定时驱动由网络 owner 持有并退役，QUIC 协议状态、packet processing、critical stream 与 wire-output 计划由 `ruvia-http` 所有。QUIC 请求通过有界 mailbox 固定交给一个业务 worker，连接生命周期内不再迁移。
-- Web 启动必须先完成所有业务 worker 的 prepare 和 server network TCP listener prepare，再启动并等待所有业务 worker 与 server network runtime ready，然后先使业务 worker、再使 server network 进入 serving；准备或启动失败不得留下部分系统对外服务。`onStart` 只在所有 worker 和 server network 都进入 serving 后执行。
-- `App::run()` 的调用线程是 App 生命周期的唯一执行线程，负责 `onStart`、`onStop`、join 和失败重抛。`App::stop()`、信号线程以及 worker/server network failure 只能提交单调 stop request 并关闭稳定 endpoint，不得在调用方线程执行用户 hook；App 单例的配置、运行和 runtime 借用必须继续受同一生命周期门禁保护。
-- outbound HTTP、DB 与 Redis 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient` / `RedisClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
-- App 内 outbound HTTP origin 必须通过 `App::httpClient(HttpClientRegistrationConfig)` 在启动前按 alias 固定注册；每个 worker 启动时一次性构造相同集合，`Context`/`WebWorkerContext` 只按默认项或 alias 取 handle。不得恢复请求期按 `HttpClientConfig` 建池、origin cache 或容量 setter。
-- standalone `DbClient::connect()` 必须保持绑定 loop 上启动的 lazy `Task<void>`，与后续 query/execute 使用同一 worker-affine coroutine 契约；不得恢复由调用线程隐式调度的 `std::future` 特例。
-- shutdown 时 server network runtime 在自己的 `io_context` 上关闭 TCP acceptors，并停止、排空和退役 UDP/QUIC transport；业务 worker 在各自的 `io_context` 上关闭已交接 TCP 连接、HTTP/3 worker owner 和 worker 资源。跨 server network/worker 的 HTTP/3 channel 必须先关闭双侧 publication gate，完成 transport-retired、worker-finalized、network-finalized 和最终 ACK，才能销毁。每个 owner 线程本地关闭其资源，不等待请求优雅排空；TCP listener 仅由 server network runtime 绑定，不依赖 `SO_REUSEPORT`。
-- idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
-- 默认限流规则和限流槽容量都显式保持 per-worker 语义；只有启动期路由元数据或默认规则证明需要限流时才预分配固定表，请求期不得惰性分配。
-- worker 内部唤醒原语只借用连接/会话稳定持有的有效 `WorkerHandle`，不得在请求热路径按值复制 handle；`wait/notify` 必须在所属 worker 执行，不得恢复 generic executor fallback。intrusive waiter 从挂链、调度到恢复前都必须有显式生命周期守卫，通知调度失败属于终止性契约违例。
-
-## 内存规则
-
-- 优先作用域对象和值所有权；确需独占动态对象时优先 `std::unique_ptr`，只有真实共享寿命才使用 `std::shared_ptr`。普通分配优先 `std::make_unique` / `std::make_shared`；要求所属 PMR 存储时，使用匹配的 allocator、deleter 或 typed RAII owner，不改用普通堆分配。裸指针和引用只表达借用，底层分配与释放封装在资源 owner 内；这些选择仍受请求热路径及 worker 所有权限制。
-- 框架内部拥有动态内存的对象默认使用 PMR 容器。
-- 公开 API 输入优先使用 `std::string_view`、`std::span`、`std::filesystem::path` 或值类型配置。
-- 公开启动配置的拥有型字段使用标准 `std::string`/`std::vector`，不得要求调用方提供 PMR allocator；App/worker 留存时再复制到所属 PMR 存储。
-- 请求/响应及握手状态使用请求 arena；Worker 层容器使用 `WorkerMemory`。仅在单次调用或循环迭代内使用的拥有型中间缓冲使用所属 worker 的可回收 pool，写入响应后必须可独立归还。
-- worker-local 表达显式所有权与线程亲和，不要求 `thread_local`；不同 client 可以拥有独立 pool，不得假设同 worker 的资源必然兼容。归还 pool 与归还操作系统是不同边界。
-- 可独立结束的操作参数、结果和临时输出块使用可逐项回收的 worker PMR，由对应 client 或 writer 的 owner 固定绑定，获取 handle 时不得透传任意 allocator。操作或结果对象通过 RAII 归还各自存储；长连接重复操作不得累积到握手/会话 arena，也不得清空仍被存活对象引用的 arena。
-- 面向业务的异步操作接收借用的数据输入时，必须在返回操作前完成拥有化；输出接受拥有型 PMR 数据时，兼容资源直接移动，不兼容资源在返回操作前复制到 owner 的资源，不能把输入 allocator 的寿命隐式延长到异步执行期。
-- 新增拥有型对象或异步接口时，必须明确对象 owner、分配器 owner、释放时点和借用有效期；分配器必须活到最后一个使用它的对象析构，借用不得跨出 owner 的有效期。
-- `Context::arena()` / `allocator()` 只用于请求或握手寿命的数据；重复操作的临时数据使用 `pool()`。posted job 用 `WebWorkerContext::pool()` 取得同一 worker 池，不提供 arena。框架操作入口必须默认选择正确资源，不得要求调用方每次手动换 allocator，也不得在 WebSocket 升级后才切换而遗漏此前取得的 handle。
-- 操作完成与结果销毁是两个释放边界；结果可以跨后续操作存活，其内存必须由结果对象持有到析构。不得用操作完成、下一条消息或定时器触发的 arena reset 代替对象所有权。
-- `RequestMemory` 只管理请求 arena 并借用 worker 上游资源，不拥有任意 C++ 对象的 erased cleanup 链；非平凡惰性对象必须由其职责明确的持有者通过 typed RAII 统一拥有和析构。
-- 启动期容器使用进程级同步 PMR pool。
-- `Context::text(std::string&)`、`std::string&&`、`const std::string&` 入口保持 deleted。
-
-## HTTP 解析和响应
-
-- 请求解析走 Ruvia 自研 zero-copy parser；method/path/version/header 文本默认借用连接读缓冲。header 描述符由 move-only 请求拥有，在请求/stream PMR 中按实际字段数一次分配；所有者必须在资源退役前释放描述符块。
-- header 上限 64KB，普通 body 上限 16MB。
-- chunked 请求体在连接读缓冲中原地解码。
-- 普通 route dispatch 前完整读取 body；大 body 必须显式使用 stream route。
-- stream body reader 返回的 view 只保证有效到下一次 `read()`。
-- 响应写出使用固定 header buffer + scatter-gather I/O，不拼接完整 response 字符串。
-- 文件响应不全量读入内存；plain TCP 优先平台零拷贝。
-- response streaming 和 WebSocket 必须通过显式 route macro 注册。
-- 普通路由的 `HttpResponse` 只允许空、bytes 或 file body；响应流必须走 `ResponseStreamWriter`，不得增加动态/类型擦除旁路。
-
-## 路由和中间件
-
-- Web 应用模型固定为一个进程一个 `App`：`ruvia::app()` 是唯一配置与生命周期入口，`App` 的构造、析构、复制和移动保持非公开或禁用；禁止增加可并存的 App 实例、显式 application builder 或实例级 controller 清单。
-- Controller 保持 CRTP + route macro 自动注册。声明 `RUVIA_ROUTES_BEGIN` / `RUVIA_ROUTES_END` 的 controller 必须在启动期自动进入进程级注册表；禁止增加 `useController<T>()`、手工 registrar 列表或要求使用者重复列举 controller。
-- controller registrar 按函数地址去重，并在首次生产或测试路由构建时封存；封存后注册必须硬错误，禁止不同 worker/TestApp 观察到不同 controller 集合。
-- 自动注册只覆盖最终程序实际保留并在 `App::run()` 前加载的 controller 翻译单元。静态库和 object library 必须通过安装包提供的 `ruvia_link_controllers()` 跨平台保留，动态模块的加载约束必须在面向使用者的文档中明确；不得要求用户维护 controller 类型清单，也不得用请求期动态发现补救链接或加载问题。
-- 生产 `App` 与 `TestApp` 使用同一份进程级 controller 注册集合；需要不同 controller 集合的测试应拆成不同测试二进制，不得给 `TestApp` 增加实例级筛选旁路。
-- 路由注册只允许通过 controller/group/route 宏完成。
-- 不暴露直接 `Router::addRoute(...)` 或 `Router::group(...)` API。
-- controller 和 middleware 实例保持 per-worker；进程只编译并拥有一份不可变路由查找计划，各 worker 的 route table 通过稳定 route index 绑定到该计划。绑定时必须验证 endpoint 模式、handler/middleware thunk、请求策略和 route shape 的完整启动期契约，禁止不同 worker 静默形成不同路由语义。
-- 路由表、中间件链、controller factory 和共享路由计划在 worker 启动前构建完成。
-- 请求期不得重建 route index、middleware chain 或 `std::function` 链。
-- App 注册的自包含 callback 必须由 App RAII 拥有并析构；worker、router 和请求服务只保存内部两指针 `CallbackRef`。公开 callback API 不得提供可制造悬垂引用的 `bind()`/`borrow()`。
-- 重复 method + path 或等价动态 route shape 必须启动期报错。
-- 无显式 HEAD route 时 fallback 到普通 GET；streaming GET 不参与隐式 HEAD fallback。
-- middleware API 使用普通非模板基类 + async `handle(Context&, Next&)`；`next()` 是 single-shot。
-
-## Controller API
-
-- SQL 与 Redis 的 ORM 和原有直接访问 API 是两条独立使用路线。ORM 通过实体 Repository 访问数据，共同语义统一命名、参数和结果，后端特有能力保留独立配置；直接路线保留 SQL/raw rows 与 Redis 原生命令。不得在直接查询入口添加实体映射重载，也不得在 ORM Repository/查询构建器暴露任意语句替换、原始行或原生命令执行旁路。ORM 可以组合 SQL 表达式、实体/子查询 JOIN、CTE 和显式类型投影；SQL 片段只作为表达式节点，不能替换 Repository 绑定的完整语句。两条路线可以复用连接、事务、取消与内存管理实现，示例中的数据操作必须明确选定路线。
-- SQL 与 Redis 的实体声明使用各自的宏、字段描述符和配置类型；不得把 Redis 宏实现成 SQL 宏的别名，也不得跨后端接受实体。内部可以复用值存储与生命周期实现。
-
-- 普通 handler：`ruvia::Task<ruvia::HttpResponse> handler(ruvia::Context& c)`，core 与 Web 共用无默认结果类型的 `Task<T>`；响应模型必须通过 `c.json(model)` 输出，不支持 handler 直接返回 `Task<Model>`。service 等内部异步函数仍可返回 `Task<T>`。core 层不提供默认结果类型，无结果操作显式使用 `Task<void>`。
-- streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
-- 公开协程返回类型统一是 `ruvia::Task<T>`，不暴露 `asio::awaitable<T>`。
-- 请求统一走 `c.req()`；连接元数据通过 `c.conn()` 读取。
-- `HttpRequest`、`ContextRequest`、`RawRequestClone` 不保存 remote address、TLS 状态或证书身份。
-- 响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)`。
-- 响应构造走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。
-- 一个公开操作只保留一个名字，不新增别名。
-- 数据库 `query()` 返回只暴露行集的 `DbRows`，`execute()` 返回 `DbExecResult`；后者的 insert id 必须是可选值，禁止把 backend 不支持伪装为 `0`。
-- Redis `expireAt()` 使用 `system_clock::time_point`，TTL/PTTL 使用状态化 `RedisTtl`，SCAN 游标使用 `RedisScanCursor`；公开 API 不暴露 Redis 的 `-1/-2` TTL 哨兵或裸整数游标。
-
-## Model 和校验
-
-- Model 通过 `RUVIA_MODEL` 声明一次，生成继承公开 `ruvia::Model<DerivedT, ...>` 的类型，同一 Model 支持解析和输出。`fromJson<T>()` / `toJson()` 支持 Model、Ruvia 标量、字符串、字节值及递归 `Array`/`BoxedArray` 根值；HTTP `c.json()` 和请求模型绑定仍使用 Model 根对象，不暴露动态 object/array writer 或原始 JSON details 注入入口。
-- `RUVIA_REQUIRED_FIELD` 要求输入包含字段，`RUVIA_OPTIONAL_FIELD` 允许缺失；两者均不隐含可空，只有独立的 `RUVIA_NULLABLE` 允许显式 JSON `null`。自定义 wire name 使用对应的 `*_FIELD_NAME`。字段通过 `get/set/ensure/reset<"field">()` 访问，`isPresent<"field">()` 记录原始输入存在性且不受默认值和应用赋值影响，`isNull<"field">()` 查询当前空值状态，不生成逐字段成员函数别名。
-- Model 字段描述符必须由 `RUVIA_MODEL` 的 `__VA_ARGS__` 直接进入 C++ 模板参数包。禁止在 Model 注册路径恢复 `NARG`、`FOR_EACH`、固定展开表、运行时注册表或固定字段数量上限。
-- 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。窄整数构造和赋值不得静默截断；二进制值拥有所属 PMR 存储，JSON 使用 RFC 4648 标准带填充的 canonical base64，不把 JSON 字符串解释为裸字节或 hex。
-- 校验规则写在 `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD` 上（`RUVIA_MIN`、`RUVIA_EMAIL` 等）。必填只由 `RUVIA_REQUIRED_FIELD` 表达。嵌套 Model 和数组自动递归校验。路由用 `ruvia::JsonBody<T>` / `FormBody<T>` / `QueryModel<T>` / `PathModel<T>` / `HeaderModel<T>` / `CookieModel<T>` 选择数据源；handler 通过 `validated<T>()` / `validatedJson<T>()` 读取。`fromJson`/`fromForm` 和 `jsonIf`/`formIf` 只解析结构，不跑字段规则；序列化也不执行规则。
-- 模型绑定只走 schema 路线。`JsonValue`/`JsonObject` 可作为动态字段，但不得附加普通字段校验规则；具体类型负责普通字段校验。动态字段本身的 null 仍遵守 `RUVIA_NULLABLE`，token 内部的 null 不受外层字段约束。动态值借用或在 owned parse 时拷贝完整 JSON token，移动构造保留借用/拥有模式且不延长 allocator 寿命，赋值归一化到目标资源；提供 kind 判断、`view()`、typed `get<T>()` 及对象/数组只读遍历，不得作为 `c.json()`/`toJson()` 的动态 writer。遍历回调返回 true 继续、false 早停；遍历方法只有完整完成时返回 true，类型不匹配或早停返回 false。解码后的 key 与子值在回调内借用，输入和资源必须覆盖使用期。
-- JSON 支持嵌套 Model、`Array` 和递归/地址稳定的 `BoxedArray`。form、query、param、header、cookie 只支持扁平 key-value 基础字段。原始 body 和扁平 multipart 协议访问保留，不提供 form 点路径/分组语言。
-- `RUVIA_DEFAULT` 仅在缺失的可选输入被消费时求值，每字段至多一个；模型构造或移动不得提前求值或保存默认值实例。默认值通过同一字段赋值路径归一化到模型资源，求值异常正常传播并释放部分解析数据；显式 null、错误类型、重复字段和已提供的空值不得触发默认值。`REQUIRED + DEFAULT` 仍拒绝缺失；校验阶段默认值与输入值使用同一套字段规则。仅必填且非空字段的 `get` 返回 `const T&`，可选或可空字段返回 `const std::optional<T>&`。字段未设置时默认省略，显式 `set<"field">(nullptr)` 要求 `RUVIA_NULLABLE` 并输出 null；`RUVIA_EMIT_NULL` 额外将未设置字段输出为 null，`RUVIA_OMIT_EMPTY` 处理已设置的具体空值。
-- `RUVIA_INITIAL` 仅为显式业务构造求值，每字段至多一个，不改变输入 presence；解析、移动和资源归一化不得执行它。它与 `RUVIA_DEFAULT` 可共存，但不得用业务初始值满足缺失的输入约束。两种值均按模型资源归一化，异常时释放部分构造数据。
-- Model 相等比较当前字段状态和值，忽略 allocator 与原始输入 presence，缺失与 null 不相等；集合按元素值与顺序比较。动态 JSON 视图比较保留的 token 字节，不做 JSON 语义归一化。
-- JSON validation middleware 同时绑定 typed model 与原始 JSON view，供下游校验后直接透传 PostgreSQL JSONB；原始 view 不得逃逸请求作用域。
-- validation 不应为 invalid type 或 duplicate 再扫描 body。
-- 同一 `RUVIA_PATTERN` 只能编译一次并复用。
-- 已校验模型由 validation middleware 的 typed coroutine frame 持有，并在 `next()` 期间以 intrusive scoped borrow 绑定到 `Context`；请求期不得为模型另行分配、保存 destroy callback 或设置固定模型数量上限，异常展开必须自动解绑。
-
-DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 只接受命令语句并直接返回 `DbExecResult`；backend 不得先构造 `DbRows` 再丢弃。Redis SCAN 的初始状态用空 continuation 表示，结果通过 `done()`/`nextCursor()` 表达终止，不向应用暴露 wire cursor 0 的双重语义。
-
-## CMake 和安装
-
-- `RUVIA_BUILD_CORE`、`RUVIA_BUILD_HTTP`、`RUVIA_BUILD_WEB` 默认均为 `ON`。
-- `RUVIA_BUILD_WEB=ON` 要求 core 与 HTTP 同时启用；core-only/http-only 不得查找或安装未选组件依赖。
-- MariaDB、PostgreSQL、Redis、JWT 是严格 feature：`RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_REDIS`、`RUVIA_ENABLE_JWT`。
-- Windows 只支持 MSVC，依赖使用 `x64-windows-static`；Windows CI 也必须
-  使用同一 static triplet。项目统一 MSVC static runtime：Debug 使用 `/MTd`，
-  其他配置使用 `/MT`。
-- 独立构建可以从环境初始化 vcpkg toolchain、triplet 和 manifest feature；作为
-  `FetchContent` / `add_subdirectory` 子项目时不得修改父项目的 `CMAKE_*` 或
-  `VCPKG_*` cache，生成的配置必须留在 Ruvia 自己的 binary tree。
-- outbound HTTP 的 wire/framing/HTTP/2/HTTP/3/QUIC 状态机保留在 `ruvia-http`；ngtcp2 core 仅由 HTTP target 私有依赖。`ruvia-web` 直接依赖 core、HTTP 和 OpenSSL 3.5+，可提供 worker-local DNS、socket、TLS/ALPN/EVP callback、UDP、连接复用、超时和取消驱动，但不得直接依赖或调用 ngtcp2。core-only/http-only 不得查找 OpenSSL；Web 不得通过 HTTP target 以外的依赖关系接入 QUIC。Web 不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
-- 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
-- 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。
-
-## 验证要求
-
-改动完成前至少运行任务相关的最小验证。
-
-- 本地编译固定使用仓库根目录的 `build/`，跨任务、跨会话复用同一构建目录、CMake cache、依赖和编译产物；不得每轮验证创建新的构建目录。
-- 验证前先检查 `build/CMakeCache.txt` 和已有 target，沿用现有 generator、toolchain、build type 和 feature 配置。只有首次配置或本次任务确实需要调整配置时才运行 CMake configure；不得为普通测试反复切换配置导致大面积重编译。
-- Linux 构建统一使用 `-j$(nproc)`，按可用 CPU 数并行编译；Windows 使用 `--parallel`。
-- 日常验证优先使用 `cmake --build build --target <相关target> -j$(nproc)` 增量编译，再用 `ctest --test-dir build -R '<相关测试正则>' --output-on-failure` 运行相关测试；Windows 补充 `--config Debug` / `-C Debug`。必须先更新受影响的测试产物，不能用旧二进制代替验证。
-- 不得主动删除 `build/`、CMake cache 或依赖缓存，不使用 `--clean-first`，不为每次测试执行全量 rebuild。只有明确的缓存损坏、工具链不兼容或用户要求才清理，并在清理前说明原因。
-- 下方命令是首次配置及完整构建、测试、安装的参考流程，不要求每次改动全部执行。纯文档修改无需编译；扩大到全量验证应由改动影响范围决定。
-
-涉及长连接或异步操作内存归属的改动，功能单测必须验证重复操作的临时分配能归还、保留结果及握手数据不被后续操作破坏，并覆盖受影响的成功、异常、取消及未启动即丢弃路径。使用分配/归还计数或 arena 使用量验证生命周期，不能只检查析构函数被调用。内存池缓存与仍存活的分配应分别判断；RSS 不立即下降不能单独认定泄漏，短时单测也不能代替线上长时间观测。
-
-目录、文档、CMake 清理：
-
-```bash
-git diff --check
-rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web tests examples
-```
-
-构建、测试和安装：
-
-```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DRUVIA_BUILD_TESTS=ON \
-  -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build -j$(nproc)
-ctest --test-dir build --output-on-failure
-cmake --install build --prefix build/install
-```
-
-Windows 使用 MSVC static 矩阵：
-
-```powershell
-$env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
-$env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build --config Debug --parallel
-ctest --test-dir build -C Debug --output-on-failure
-cmake --install build --config Debug --prefix build/install
-```
-
-不要提交 `build/`、`vcpkg_installed`、本地工具目录或 CodeGraph 索引。
+- 使用 C++23。源码只放在三个库、examples 和 tests。
+- 各库自带 CMakeLists.txt、include 和 src。
+- 各库只拥有自己的源码和公开命名根。
+- src 最多一层职责目录。core 的 src 保持扁平。
+- 跨库只用非 detail 公开 API。禁止穿透内部头和物理路径。
+- 安装只包含公开头的真实依赖闭包。
+- 根 CMakeLists.txt 只负责全局构建与安装。
+- core 是独立运行时底座。不含 HTTP/Web 语义。
+- core 不公开依赖 TLS、压缩或数据后端。
+- HTTP 是独立 sans-I/O 协议层。不依赖 core、Asio、socket 或 OpenSSL。
+- HTTP 拥有消息、分帧、连接及 QUIC 协议语义。
+- Web 拥有应用策略、路由、TLS/crypto 和网络驱动。
+- ngtcp2 只归 HTTP。Web 仅经公开协议 API 驱动 QUIC。
+- 不复制协议判断。不将 Web 能力下沉。
+
+## 性能与内存
+
+- 请求热路径以零拷贝、零抽象成本为目标。
+- 默认热路径不新增锁、共享争用、类型擦除或无用拷贝。
+- 默认热路径不新增共享所有权。显式卸载是唯一例外。
+- 启动期允许一次性构建和动态分派。
+- 优先值所有权与 RAII。借用不延长 owner 寿命。
+- 框架动态存储使用所属 PMR。公开启动配置不要求用户提供 PMR。
+- 请求和握手用 arena。独立操作、结果和临时数据用可回收 pool。
+- 分配器覆盖对象寿命。结果持有存储直到析构。
+- 异步入口返回前完成输入拥有化和资源归一化。
+- 长连接不得累积临时分配。存活数据不得被后续操作回收。
+- 零拷贝不得破坏所有权或借用有效期。
+
+## 运行时与生命周期
+
+- 生产 App 是进程级单例，通过 `ruvia::app()` 获取。
+- App 不可自行构造、复制或移动。
+- App 的配置与生命周期入口唯一。
+- 每个业务 worker 独占一个 standalone Asio 事件循环。
+- N 个业务 worker 另配一个网络接入线程。
+- 阻塞池和信号线程另计。
+- 网络线程接受 TCP，并驱动 HTTP/3 UDP 与 QUIC 传输。
+- TCP 连接只交接一次，后续 I/O 由所属业务 worker 驱动。
+- 每条 TCP 或 QUIC 连接固定绑定一个业务 worker。
+- 同一连接的全部请求交给同一 worker。绑定关系保持至连接结束。
+- worker 资源由统一 owner 管理。实例保持 worker-local。
+- 跨线程交互走有界 mailbox。禁止直接操作连接状态。
+- 调度入口与事件循环同属一个 owner。入口先于上下文退役。
+- 请求期只借用稳定 worker 句柄。显式卸载可复制一次。
+- 协程保持 lazy 和 structured ownership。
+- 公开协程统一使用 `ruvia::Task<T>`。
+- 未启动任务可丢弃。已启动任务必须完成。
+- 取消后必须 await/join。禁止销毁挂起帧或静默 detach。
+- teardown 先终止 I/O，再 join 全部后台操作。
+- 跨线程 channel 完成双方退役和确认后才能销毁。
+- 线性 lease 在任务启动时占用。不得并发或失败后复用。
+- 阻塞或 CPU 密集工作必须显式卸载到常驻有界线程池。
+- 卸载只携带自有数据。不借用请求或 worker 状态。
+- 停机恢复等待者并丢弃迟到结果。不等待仍运行的卸载任务。
+- 整体就绪后才能服务。启动失败不留下部分服务。
+- 用户 hook 和 join 由生命周期调用线程执行。
+- 其他线程只请求停止。资源由所属 owner 线程关闭。
+
+## Web 核心设计
+
+- controller 使用 CRTP 和宏自动注册。注册去重后封存。
+- 路由只通过宏声明。不维护手工 controller 清单。
+- controller 和中间件保持 per-worker。
+- 进程只拥有一份不可变路由查找计划。
+- worker 路由契约必须一致。路由和中间件链启动前构建。
+- 路由冲突启动即报错。中间件继续调用为 single-shot。
+- 上下文只暴露 typed capability。callback 由应用拥有。
+- Model 使用编译期 schema。解析、校验和序列化职责分开。
+- ORM 与直接访问保持独立路线。
+- client 可独立绑定事件循环。应用上下文只提供便捷入口。
+- outbound origin 启动前固定。请求期不建池。
+
+## 验证与仓库规范
+
+- 示例和测试按 target、协议层级归档。core 单测平铺。
+- 复用根 build 和现有配置。不无故清缓存或全量重编译。
+- 不修改父项目配置。Windows 使用 MSVC 和静态依赖/runtime。
+- 只保留功能单测。不保留历史缺陷、结构或安装/API guard。
+- 不新增长期 integration、conformance、benchmark 或 probe。
+- 临时验证完成即清理。交付前运行相关最小验证。
+- 生命周期改动验证成功、异常、取消和内存回收。
+- 纯文档只做文档校验。性能结论必须有可复核依据。
+- 准确说明验证范围和限制。
+- build、依赖缓存及本地工具目录保持 ignored。

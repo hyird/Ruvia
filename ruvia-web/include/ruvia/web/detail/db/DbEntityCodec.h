@@ -28,7 +28,7 @@ template <typename T>
 void decodeArrayElement(std::string_view text, T& value, std::pmr::memory_resource* resource) {
     if constexpr (is_optional<T>::value) {
         using V = typename is_optional<T>::value_type;
-        auto inner = DbEntitySlot<V>::makeValue(resource);
+        auto inner = entity_value_slot<V>::make_value(resource);
         decodeArrayElement(text, inner, resource);
         value = std::move(inner);
     } else if constexpr (std::is_same_v<T, std::pmr::string>) {
@@ -61,7 +61,7 @@ void decodeDbField(const DbField& field, T& out, std::pmr::memory_resource* reso
             out.reset();
             return;
         }
-        auto value = DbEntitySlot<V>::makeValue(resource);
+        auto value = entity_value_slot<V>::make_value(resource);
         decodeDbField(field, value, resource);
         out = std::move(value);
     } else if constexpr (IsPmrVector<U>::value) {
@@ -88,7 +88,7 @@ void decodeDbField(const DbField& field, T& out, std::pmr::memory_resource* reso
                     throw DbConversionError(DbConversionError::Code::kInvalidFormat, "NULL array element");
                 }
             } else {
-                auto value = DbEntitySlot<V>::makeValue(resource);
+                auto value = entity_value_slot<V>::make_value(resource);
                 decodeArrayElement(token, value, resource);
                 out.push_back(std::move(value));
             }
@@ -164,7 +164,7 @@ void decodeEntityField(E& entity, const DbField& field, std::pmr::memory_resourc
         return;
     }
     using T = typename C::value_type;
-    auto value = DbEntitySlot<T>::makeValue(resource);
+    auto value = entity_value_slot<T>::make_value(resource);
     decodeDbField(field, value, resource);
     entity.template set<C::name>(std::move(value));
 }
@@ -241,7 +241,7 @@ private:
 };
 
 template <typename E>
-DbEntityRows<E> mapDbEntityRows(DbRows&& rows, std::pmr::memory_resource* resource = nullptr) {
+entity_rows<E> mapentity_rows(DbRows&& rows, std::pmr::memory_resource* resource = nullptr) {
     auto* resolved = pmrResourceOrDefault(resource);
     auto result = DbResultAccess::makeEntityRows<E>(resolved, rows.size());
     DbEntityRowDecoder<E> decoder;

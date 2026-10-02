@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
+#include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/detail/redis/RedisArgumentPack.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
@@ -36,6 +37,10 @@ public:
     // Returns a request-scoped view whose policy is applied to every typed
     // command and inherited by pipelines and transactions created from it.
     [[nodiscard]] RedisHandle withOptions(OperationOptions options) const;
+
+    // Borrows the owning worker; an expired capability cannot expose it.
+    [[nodiscard]] const WorkerHandle& worker() const&;
+    const WorkerHandle& worker() const&& = delete;
 
     ScopedOperation<RedisValue> command(std::span<const std::string_view> args) const;
     ScopedOperation<RedisValue> command(
