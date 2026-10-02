@@ -172,4 +172,7 @@ if(RUVIA_BUILD_WEB)
     list(SORT _ruvia_web_unit_sources)
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
+    if(WIN32)
+        target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
+    endif()
 endif()

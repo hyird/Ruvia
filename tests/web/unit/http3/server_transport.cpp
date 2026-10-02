@@ -1302,11 +1302,11 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
                 application_fin = true;
             }
         }
-        return std::ranges::all_of(accepted_streams, [](bool accepted) { return accepted; }) &&
+        return std::ranges::all_of(accepted_streams, [](bool stream_accepted) { return stream_accepted; }) &&
                std::ranges::equal(received, expected) && application_fin;
     },
         std::chrono::seconds(8)));
-    RUVIA_CHECK(std::ranges::all_of(accepted_streams, [](bool accepted) { return accepted; }));
+    RUVIA_CHECK(std::ranges::all_of(accepted_streams, [](bool stream_accepted) { return stream_accepted; }));
     RUVIA_CHECK(std::ranges::equal(received, expected));
     RUVIA_CHECK(application_fin);
 

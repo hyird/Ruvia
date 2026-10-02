@@ -1030,7 +1030,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
             RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
             for (unsigned turn = 0; turn != 4; ++turn) {
-                co_await ruvia::asyncAsio([&io](auto done) {
+                (void)co_await ruvia::asyncAsio([&io](auto done) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
@@ -1042,7 +1042,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
                 stop.requestStop();
             }
             for (unsigned turn = 0; turn != 4; ++turn) {
-                co_await ruvia::asyncAsio([&io](auto done) {
+                (void)co_await ruvia::asyncAsio([&io](auto done) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
@@ -1074,7 +1074,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
         RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
         for (unsigned turn = 0; turn != 4; ++turn) {
-            co_await ruvia::asyncAsio([&io](auto done) {
+            (void)co_await ruvia::asyncAsio([&io](auto done) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }
@@ -1121,7 +1121,7 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
         // Let the producer decode already-buffered compressed bytes while the
         // consumer's borrowed view remains live; only pending storage may grow.
         for (unsigned turn = 0; turn != 4; ++turn) {
-            co_await ruvia::asyncAsio([&io](auto done) {
+            (void)co_await ruvia::asyncAsio([&io](auto done) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }

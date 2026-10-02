@@ -28,7 +28,7 @@ struct CapsuleTransport {
     CapsuleTransportState& state;
     asio::io_context& io;
     ruvia::Task<ruvia::detail::HttpStreamReadResult> readMore(std::pmr::string& bytes) {
-        co_await ruvia::asyncAsio<void>([&](auto done) {
+        (void)co_await ruvia::asyncAsio<void>([&](auto done) {
             asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
         });
         if (state.aborted) {
@@ -220,7 +220,7 @@ struct MixedDatagramTransport final {
     asio::io_context& io;
     std::pmr::memory_resource* resource;
     ruvia::Task<std::optional<ruvia::detail::HttpDatagramInput>> readDatagramInput() {
-        co_await ruvia::asyncAsio<void>([&](auto done) { asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); }); });
+        (void)co_await ruvia::asyncAsio<void>([&](auto done) { asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); }); });
         if (state.aborted) {
             throw std::system_error(std::make_error_code(std::errc::operation_canceled));
         }
