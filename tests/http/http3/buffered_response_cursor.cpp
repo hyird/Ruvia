@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/Http3ClientResponse.h"
-#include "ruvia/web/detail/http3/Http3BufferedResponseWrite.h"
+#include "ruvia/http/http3_buffered_response_cursor.h"
 
 #include "test_harness.h"
 
@@ -38,7 +38,7 @@ private:
     }
 };
 
-using Cursor = ruvia::detail::Http3BufferedResponseWrite;
+using Cursor = ruvia::http3_buffered_response_cursor;
 
 Cursor makeCursor(const ruvia::HttpResponse& response,
     const ruvia::HttpBufferedResponseWritePlan& plan, std::pmr::memory_resource* resource) {
@@ -72,19 +72,19 @@ RUVIA_TEST(http3BufferedResponseWriteOrdersHeadersDataAndExplicitFin) {
     const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
     Cursor cursor = makeCursor(response, plan, nullptr);
 
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
     auto headers = cursor.next();
     RUVIA_CHECK(headers && !headers->empty());
     RUVIA_CHECK(static_cast<unsigned char>((*headers)[0]) == 0x01);
     RUVIA_CHECK(cursor.acknowledge(headers->size()));
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
-    RUVIA_CHECK(!cursor.finReady());
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
+    RUVIA_CHECK(!cursor.fin_ready());
 
     auto frame = cursor.next();
     RUVIA_CHECK(frame && !frame->empty());
     RUVIA_CHECK(static_cast<unsigned char>((*frame)[0]) == 0x00);
     RUVIA_CHECK(cursor.acknowledge(frame->size()));
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
     auto body = cursor.next();
     RUVIA_CHECK(body && std::string_view(body->data(), body->size()) == "payload");
     if (!body) {
@@ -92,7 +92,7 @@ RUVIA_TEST(http3BufferedResponseWriteOrdersHeadersDataAndExplicitFin) {
     }
     const auto partialBodySize = body->size() / 2;
     RUVIA_CHECK(cursor.acknowledge(partialBodySize));
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
     const auto bodyRemainder = cursor.next();
     RUVIA_CHECK(bodyRemainder &&
                 bodyRemainder->data() == body->data() + partialBodySize);
@@ -100,12 +100,12 @@ RUVIA_TEST(http3BufferedResponseWriteOrdersHeadersDataAndExplicitFin) {
         return;
     }
     RUVIA_CHECK(cursor.acknowledge(bodyRemainder->size()));
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kFin);
-    RUVIA_CHECK(cursor.finReady());
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::fin);
+    RUVIA_CHECK(cursor.fin_ready());
     RUVIA_CHECK(!cursor.finished());
-    RUVIA_CHECK(cursor.acknowledgeFin(true));
+    RUVIA_CHECK(cursor.acknowledge_fin(true));
     RUVIA_CHECK(cursor.finished());
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kComplete);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::complete);
 }
 
 RUVIA_TEST(http3BufferedResponseWritePreservesEncodedDecodedFieldSectionSizeAcrossMoveAndFin) {
@@ -122,7 +122,7 @@ RUVIA_TEST(http3BufferedResponseWritePreservesEncodedDecodedFieldSectionSizeAcro
     RUVIA_CHECK(decodedSize > 42U);
 
     Cursor cursor = makeCursor(response, plan, nullptr);
-    RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+    RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
     const auto headers = cursor.next();
     RUVIA_CHECK(headers && headers->size() > 1);
     if (!headers || headers->size() <= 1) {
@@ -130,18 +130,18 @@ RUVIA_TEST(http3BufferedResponseWritePreservesEncodedDecodedFieldSectionSizeAcro
     }
     const auto partialSize = headers->size() / 2;
     RUVIA_CHECK(cursor.acknowledge(partialSize));
-    RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+    RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
     const auto remainder = cursor.next();
     RUVIA_CHECK(remainder && remainder->size() == headers->size() - partialSize);
     if (!remainder) {
         return;
     }
     RUVIA_CHECK(cursor.acknowledge(remainder->size()));
-    RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+    RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
 
     Cursor moved(std::move(cursor));
-    RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), decodedSize);
-    RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), 0U);
+    RUVIA_CHECK_EQ(moved.decoded_field_section_size(), decodedSize);
+    RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), 0U);
     RUVIA_CHECK(cursor.failed());
     const auto frame = moved.next();
     RUVIA_CHECK(frame && !frame->empty());
@@ -149,18 +149,18 @@ RUVIA_TEST(http3BufferedResponseWritePreservesEncodedDecodedFieldSectionSizeAcro
         return;
     }
     RUVIA_CHECK(moved.acknowledge(frame->size()));
-    RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), decodedSize);
+    RUVIA_CHECK_EQ(moved.decoded_field_section_size(), decodedSize);
     const auto body = moved.next();
     RUVIA_CHECK(body && std::string_view(body->data(), body->size()) == "payload");
     if (!body) {
         return;
     }
     RUVIA_CHECK(moved.acknowledge(body->size()));
-    RUVIA_CHECK(moved.finReady());
-    RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), decodedSize);
-    RUVIA_CHECK(moved.acknowledgeFin(true));
+    RUVIA_CHECK(moved.fin_ready());
+    RUVIA_CHECK_EQ(moved.decoded_field_section_size(), decodedSize);
+    RUVIA_CHECK(moved.acknowledge_fin(true));
     RUVIA_CHECK(moved.finished());
-    RUVIA_CHECK_EQ(moved.decodedFieldSectionSize(), decodedSize);
+    RUVIA_CHECK_EQ(moved.decoded_field_section_size(), decodedSize);
 }
 
 RUVIA_TEST(http3BufferedResponseWritePartialAndWantKeepTheOfferedAddressStable) {
@@ -174,8 +174,8 @@ RUVIA_TEST(http3BufferedResponseWritePartialAndWantKeepTheOfferedAddressStable) 
     const auto original = std::string(offered->data(), offered->size());
     const auto* address = offered->data();
     const char first = offered->front();
-    const auto demand = cursor.nextStep();
-    RUVIA_CHECK(demand == Cursor::NextStep::kBytes);
+    const auto demand = cursor.next_step();
+    RUVIA_CHECK(demand == Cursor::step::bytes);
     RUVIA_CHECK(cursor.acknowledge(0));
     auto retry = cursor.next();
     RUVIA_CHECK(retry && retry->data() == address && retry->front() == first &&
@@ -210,7 +210,7 @@ RUVIA_TEST(http3BufferedResponseWriteCannotMoveAnOutstandingWriteBuffer) {
     // Moving after all previously offered bytes were confirmed is safe.
     Cursor moved(std::move(cursor));
     acknowledgeAll(moved);
-    RUVIA_CHECK(moved.acknowledgeFin(true));
+    RUVIA_CHECK(moved.acknowledge_fin(true));
 }
 
 RUVIA_TEST(http3BufferedResponseWriteHeadRetainsRepresentationLengthWithoutData) {
@@ -219,11 +219,11 @@ RUVIA_TEST(http3BufferedResponseWriteHeadRetainsRepresentationLengthWithoutData)
     const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kHead, response);
     Cursor cursor = makeCursor(response, plan, nullptr);
     acknowledgeAll(cursor);
-    RUVIA_CHECK(cursor.finReady());
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kFin);
-    RUVIA_CHECK(cursor.acknowledgeFin(true));
+    RUVIA_CHECK(cursor.fin_ready());
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::fin);
+    RUVIA_CHECK(cursor.acknowledge_fin(true));
     RUVIA_CHECK(cursor.finished());
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kComplete);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::complete);
     RUVIA_CHECK_EQ(plan.contentLength(), std::uint64_t{19});
 }
 
@@ -236,7 +236,7 @@ RUVIA_TEST(http3BufferedResponseWriteDemandIsPureAndFindsHeadersOnlyFin) {
         }
         const auto plan = ruvia::planBufferedHttpResponseWrite(method, response);
         auto cursor = makeCursor(response, plan, &memory);
-        RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
+        RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
 
         auto headers = cursor.next();
         RUVIA_CHECK(headers && !headers->empty());
@@ -248,7 +248,7 @@ RUVIA_TEST(http3BufferedResponseWriteDemandIsPureAndFindsHeadersOnlyFin) {
         const auto allocations = memory.allocations;
         const auto returns = memory.returns;
         for (unsigned attempt = 0; attempt < 4; ++attempt) {
-            RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kBytes);
+            RUVIA_CHECK(cursor.next_step() == Cursor::step::bytes);
             RUVIA_CHECK_EQ(memory.allocations, allocations);
             RUVIA_CHECK_EQ(memory.returns, returns);
         }
@@ -256,14 +256,14 @@ RUVIA_TEST(http3BufferedResponseWriteDemandIsPureAndFindsHeadersOnlyFin) {
         RUVIA_CHECK(retry && retry->data() == address &&
                     std::string_view(retry->data(), retry->size()) == original);
         RUVIA_CHECK(cursor.acknowledge(headers->size()));
-        RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kFin);
+        RUVIA_CHECK(cursor.next_step() == Cursor::step::fin);
         RUVIA_CHECK_EQ(memory.allocations, allocations);
         RUVIA_CHECK_EQ(memory.returns, returns);
 
         const auto fin = cursor.next();
-        RUVIA_CHECK(fin && fin->empty() && cursor.finReady());
-        RUVIA_CHECK(cursor.acknowledgeFin(true));
-        RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kComplete);
+        RUVIA_CHECK(fin && fin->empty() && cursor.fin_ready());
+        RUVIA_CHECK(cursor.acknowledge_fin(true));
+        RUVIA_CHECK(cursor.next_step() == Cursor::step::complete);
     }
     RUVIA_CHECK_EQ(memory.allocations, memory.returns);
 }
@@ -286,7 +286,7 @@ RUVIA_TEST(http3BufferedResponseWriteFileWithoutPayloadSendsOnlyMetadata) {
         const auto decodedSize = encoded->decodedFieldSectionSize();
         RUVIA_CHECK(decodedSize > 42U);
         auto cursor = makeCursor(response, plan, &memory);
-        RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+        RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
         ruvia::Http3ClientResponse decoder(0, method, &memory);
         struct Received {
             std::optional<std::uint64_t> length;
@@ -312,13 +312,13 @@ RUVIA_TEST(http3BufferedResponseWriteFileWithoutPayloadSendsOnlyMetadata) {
         }
         RUVIA_CHECK(decoder.feed(*headers, false, false, callback, &received).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(cursor.acknowledge(headers->size()));
-        RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+        RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
         const auto following = cursor.next();
-        RUVIA_CHECK(following && following->empty() && cursor.finReady());
-        RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+        RUVIA_CHECK(following && following->empty() && cursor.fin_ready());
+        RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
         RUVIA_CHECK(decoder.feed({}, true, false, callback, &received).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-        RUVIA_CHECK(cursor.acknowledgeFin(true));
-        RUVIA_CHECK_EQ(cursor.decodedFieldSectionSize(), decodedSize);
+        RUVIA_CHECK(cursor.acknowledge_fin(true));
+        RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
         RUVIA_CHECK(received.heads == 1 && received.bodies == 0 && received.ends == 1);
         RUVIA_CHECK(received.length == length);
     }
@@ -333,8 +333,8 @@ RUVIA_TEST(http3BufferedResponseWriteEmptyAndNoContentResponsesOmitData) {
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
         auto cursor = makeCursor(response, plan, nullptr);
         acknowledgeAll(cursor);
-        RUVIA_CHECK(cursor.finReady());
-        RUVIA_CHECK(cursor.acknowledgeFin(true));
+        RUVIA_CHECK(cursor.fin_ready());
+        RUVIA_CHECK(cursor.acknowledge_fin(true));
     }
 }
 
@@ -343,13 +343,13 @@ RUVIA_TEST(http3BufferedResponseWriteRejectsFilesAndEncodingFailures) {
     fileResponse.fileBody("response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
     const auto filePlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, fileResponse);
     auto file = Cursor::create(fileResponse, filePlan, nullptr);
-    RUVIA_CHECK(!file && file.error() == Cursor::Error::kFileBodyUnsupported);
+    RUVIA_CHECK(!file && file.error() == Cursor::error::file_body_unsupported);
 
     ruvia::HttpResponse invalid;
     invalid.header("connection", "close");
     const auto invalidPlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, invalid);
     auto encoded = Cursor::create(invalid, invalidPlan, nullptr);
-    RUVIA_CHECK(!encoded && encoded.error() == Cursor::Error::kResponseEncoding);
+    RUVIA_CHECK(!encoded && encoded.error() == Cursor::error::response_encoding);
 }
 
 RUVIA_TEST(http3BufferedResponseWriteReturnsPoolStorageOnlyAfterCursorRetirement) {
@@ -364,12 +364,12 @@ RUVIA_TEST(http3BufferedResponseWriteReturnsPoolStorageOnlyAfterCursorRetirement
             RUVIA_CHECK(memory.allocations > memory.returns);
             RUVIA_CHECK(response.bodyBytes() == "retained body");
             acknowledgeAll(cursor);
-            RUVIA_CHECK(cursor.acknowledgeFin(true));
+            RUVIA_CHECK(cursor.acknowledge_fin(true));
         }
         RUVIA_CHECK(memory.allocations > memory.returns);
         RUVIA_CHECK(response.bodyBytes() == "retained body");
         acknowledgeAll(held);
-        RUVIA_CHECK(held.acknowledgeFin(true));
+        RUVIA_CHECK(held.acknowledge_fin(true));
     }
     RUVIA_CHECK_EQ(memory.allocations, memory.returns);
 }
@@ -380,11 +380,11 @@ RUVIA_TEST(http3BufferedResponseWriteTransportFailureDoesNotCommitFin) {
     const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
     auto cursor = makeCursor(response, plan, nullptr);
     acknowledgeAll(cursor);
-    RUVIA_CHECK(cursor.finReady());
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kFin);
-    RUVIA_CHECK(cursor.acknowledgeFin(false));
+    RUVIA_CHECK(cursor.fin_ready());
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::fin);
+    RUVIA_CHECK(cursor.acknowledge_fin(false));
     RUVIA_CHECK(cursor.failed());
-    RUVIA_CHECK(cursor.nextStep() == Cursor::NextStep::kFailed);
+    RUVIA_CHECK(cursor.next_step() == Cursor::step::failed);
     RUVIA_CHECK(!cursor.finished());
     RUVIA_CHECK(!cursor.next());
 }
@@ -396,11 +396,46 @@ RUVIA_TEST(http3BufferedResponseWriteHandlesOutOfMemoryAndNotStartedCleanup) {
     CountingResource memory;
     memory.reject = true;
     auto failed = Cursor::create(response, plan, &memory);
-    RUVIA_CHECK(!failed && failed.error() == Cursor::Error::kOutOfMemory);
+    RUVIA_CHECK(!failed && failed.error() == Cursor::error::out_of_memory);
     memory.reject = false;
     {
         auto cold = Cursor::create(response, plan, &memory);
         RUVIA_CHECK(cold.has_value());
     }
     RUVIA_CHECK_EQ(memory.allocations, memory.returns);
+}
+
+RUVIA_TEST(http3_buffered_response_cursor_consumes_encoded_head_storage) {
+    CountingResource head_memory;
+    CountingResource cursor_memory;
+    ruvia::HttpResponse response;
+    response.body("retained body");
+    response.header("X-Projection", "retained");
+    const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
+    std::optional<Cursor> cursor;
+    std::size_t decoded_size{};
+    {
+        auto head = ruvia::encodeHttp3ResponseHead(response, plan, {}, &head_memory);
+        RUVIA_CHECK(head.has_value());
+        if (!head) {
+            return;
+        }
+        decoded_size = head->decodedFieldSectionSize();
+        auto created = Cursor::create(response, plan, std::move(*head), &cursor_memory);
+        RUVIA_CHECK(created.has_value());
+        if (!created) {
+            return;
+        }
+        cursor.emplace(std::move(*created));
+    }
+    RUVIA_CHECK(head_memory.allocations > 0);
+    RUVIA_CHECK_EQ(head_memory.allocations, head_memory.returns);
+    RUVIA_CHECK(cursor_memory.allocations > cursor_memory.returns);
+    RUVIA_CHECK_EQ(cursor->decoded_field_section_size(), decoded_size);
+    acknowledgeAll(*cursor);
+    RUVIA_CHECK(cursor->acknowledge_fin(true));
+    RUVIA_CHECK(cursor->finished());
+    RUVIA_CHECK(response.bodyBytes() == "retained body");
+    cursor.reset();
+    RUVIA_CHECK_EQ(cursor_memory.allocations, cursor_memory.returns);
 }
