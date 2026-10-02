@@ -563,8 +563,8 @@ Http3ServerConnection::publishOne(WorkLanes eligibleLanes) & noexcept {
             index = (index + 1) % pending.size();
         }
         nextCriticalOutput_ = (index + 1) % pending.size();
-        const auto kind = index == 0 ? Http3CriticalStreamOutput::Kind::kQpackEncoder : index == 1 ? Http3CriticalStreamOutput::Kind::kQpackDecoder
-                                                                                                   : Http3CriticalStreamOutput::Kind::kControl;
+        const auto kind = index == 0 ? ruvia::http3_critical_stream_output::stream_kind::qpack_encoder : index == 1 ? ruvia::http3_critical_stream_output::stream_kind::qpack_decoder
+                                                                                                                    : ruvia::http3_critical_stream_output::stream_kind::control;
         const auto bytes = pending[index].first(std::min(Http3StreamMailbox::kMaxBlockBytes, pending[index].size()));
         const auto sent = outbound_.trySendCritical({epoch_, connectionGeneration_, kind}, std::as_bytes(bytes));
         Dispatch::PublishResult result;
@@ -1849,14 +1849,14 @@ void Http3ServerConnection::enqueueForDemand(
     QueueKind desired = QueueKind::kLocalRunnable;
     if (rejection != nullptr) {
         switch (rejection->output->nextStep()) {
-            case Http3BufferedResponseWrite::NextStep::kBytes:
+            case ruvia::http3_buffered_response_cursor::step::bytes:
                 desired = QueueKind::kDataRunnable;
                 break;
-            case Http3BufferedResponseWrite::NextStep::kFin:
+            case ruvia::http3_buffered_response_cursor::step::fin:
                 desired = QueueKind::kControlRunnable;
                 break;
-            case Http3BufferedResponseWrite::NextStep::kComplete:
-            case Http3BufferedResponseWrite::NextStep::kFailed:
+            case ruvia::http3_buffered_response_cursor::step::complete:
+            case ruvia::http3_buffered_response_cursor::step::failed:
                 break;
         }
     } else {

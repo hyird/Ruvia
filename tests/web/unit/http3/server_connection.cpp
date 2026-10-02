@@ -3326,7 +3326,7 @@ ruvia::Task<void> exerciseDynamicQpackPublication(Fixture& fixture, const ruvia:
         Mailbox::BorrowedBlock block;
         if (outbound.tryReceive(block)) {
             if (const auto* critical = block.critical()) {
-                auto& destination = critical->kind == ruvia::detail::Http3CriticalStreamOutput::Kind::kQpackEncoder ? encoderWire : decoderWire;
+                auto& destination = critical->kind == ruvia::http3_critical_stream_output::stream_kind::qpack_encoder ? encoderWire : decoderWire;
                 destination.append(reinterpret_cast<const char*>(block.bytes().data()), block.bytes().size());
             } else {
                 responseWire.append(reinterpret_cast<const char*>(block.bytes().data()), block.bytes().size());
@@ -3405,7 +3405,7 @@ ruvia::Task<void> exerciseOriginPublication(Fixture& fixture, const ruvia::Worke
         if (outbound.tryReceive(block)) {
             if (const auto* critical = block.critical()) {
                 RUVIA_CHECK(critical->epoch == kEpoch && critical->connectionGeneration == generation);
-                RUVIA_CHECK(critical->kind == ruvia::detail::Http3CriticalStreamOutput::Kind::kControl);
+                RUVIA_CHECK(critical->kind == ruvia::http3_critical_stream_output::stream_kind::control);
                 controlWire.append(reinterpret_cast<const char*>(block.bytes().data()), block.bytes().size());
             } else {
                 responseWire.append(reinterpret_cast<const char*>(block.bytes().data()), block.bytes().size());

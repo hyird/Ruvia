@@ -242,7 +242,7 @@ public:
     struct PublishAttempt final {
         PublishStatus status{PublishStatus::kNoReadyRequest};
         std::uint64_t streamId{};
-        std::optional<Http3CriticalStreamOutput::Kind> criticalKind{};
+        std::optional<ruvia::http3_critical_stream_output::stream_kind> criticalKind{};
         // When status is kAttempted this is the exact result returned by the
         // selected dispatch, including notifyPeer and the mailbox block lane.
         Dispatch::PublishResult publication{};

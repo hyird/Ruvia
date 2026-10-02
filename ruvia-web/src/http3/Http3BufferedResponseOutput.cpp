@@ -11,7 +11,7 @@ namespace ruvia::detail {
 
 Http3BufferedResponseOutput::Http3BufferedResponseOutput(const HttpResponse& response,
     Http3StreamMailbox& mailbox, MessageId messageId,
-    Http3BufferedResponseWrite cursor, std::uint64_t initialPublishedWireBytes) noexcept
+    ruvia::http3_buffered_response_cursor cursor, std::uint64_t initialPublishedWireBytes) noexcept
     : response_(&response),
       mailbox_(mailbox),
       messageId_(messageId),
@@ -23,12 +23,12 @@ Http3BufferedResponseOutput::create(const HttpResponse& response,
     const HttpBufferedResponseWritePlan& writePlan, WorkerMemory& worker,
     Http3StreamMailbox& mailbox, MessageId messageId,
     std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
-    auto cursor = Http3BufferedResponseWrite::create(response, writePlan, worker.resource());
+    auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, worker.resource());
     if (!cursor) {
         return std::unexpected(cursorError(cursor.error()));
     }
     if (peerMaxFieldSectionSize &&
-        std::cmp_greater(cursor->decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
+        std::cmp_greater(cursor->decoded_field_section_size(), *peerMaxFieldSectionSize)) {
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
     return Http3BufferedResponseOutput(
@@ -41,7 +41,7 @@ Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBuff
     if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
-    auto cursor = Http3BufferedResponseWrite::create(response, writePlan, std::move(encodedHead), worker.resource());
+    auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, std::move(encodedHead), worker.resource());
     if (!cursor) {
         return std::unexpected(cursorError(cursor.error()));
     }
@@ -63,15 +63,15 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
     }
 
     (void)mailbox_.drainReturns();
-    switch (cursor_->nextStep()) {
-        case Http3BufferedResponseWrite::NextStep::kComplete:
+    switch (cursor_->next_step()) {
+        case ruvia::http3_buffered_response_cursor::step::complete:
             state_ = State::kComplete;
             cursor_.reset();
             response_ = nullptr;
             return result(Status::kComplete);
-        case Http3BufferedResponseWrite::NextStep::kFailed:
+        case ruvia::http3_buffered_response_cursor::step::failed:
             return fail(Error::kInvalidCursorState);
-        case Http3BufferedResponseWrite::NextStep::kFin: {
+        case ruvia::http3_buffered_response_cursor::step::fin: {
             if (publishedWireBytes_ > kHttp3VarIntMax) {
                 return fail(Error::kWireByteCountOverflow);
             }
@@ -85,7 +85,7 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
                 return fail(Error::kMailboxStopped);
             }
             const bool notifyPeer = sent == Http3StreamMailbox::ControlResult::kSentNotifyPeer;
-            const auto acknowledged = cursor_->acknowledgeFin(true);
+            const auto acknowledged = cursor_->acknowledge_fin(true);
             if (!acknowledged) {
                 return fail(cursorError(acknowledged.error()), 0, notifyPeer);
             }
@@ -94,7 +94,7 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
             response_ = nullptr;
             return result(Status::kFin, BlockReason::kNone, Error::kNone, 0, notifyPeer);
         }
-        case Http3BufferedResponseWrite::NextStep::kBytes:
+        case ruvia::http3_buffered_response_cursor::step::bytes:
             break;
     }
 
@@ -141,16 +141,16 @@ void Http3BufferedResponseOutput::stop() noexcept {
 
 Http3BufferedResponseOutput::NextStep Http3BufferedResponseOutput::nextStep() const noexcept {
     if (state_ == State::kComplete) {
-        return NextStep::kComplete;
+        return NextStep::complete;
     }
     if (state_ == State::kFailed || !cursor_) {
-        return NextStep::kFailed;
+        return NextStep::failed;
     }
-    return cursor_->nextStep();
+    return cursor_->next_step();
 }
 
 std::size_t Http3BufferedResponseOutput::decodedFieldSectionSize() const noexcept {
-    return cursor_ ? cursor_->decodedFieldSectionSize() : 0;
+    return cursor_ ? cursor_->decoded_field_section_size() : 0;
 }
 
 bool Http3BufferedResponseOutput::complete() const noexcept {
@@ -166,21 +166,21 @@ std::uint64_t Http3BufferedResponseOutput::publishedWireBytes() const noexcept {
 }
 
 Http3BufferedResponseOutput::Error Http3BufferedResponseOutput::cursorError(
-    Http3BufferedResponseWrite::Error error) noexcept {
+    ruvia::http3_buffered_response_cursor::error error) noexcept {
     switch (error) {
-        case Http3BufferedResponseWriteError::kInvalidResponsePlan:
+        case ruvia::http3_buffered_response_error::invalid_response_plan:
             return Error::kInvalidResponsePlan;
-        case Http3BufferedResponseWriteError::kFileBodyUnsupported:
+        case ruvia::http3_buffered_response_error::file_body_unsupported:
             return Error::kFileBodyUnsupported;
-        case Http3BufferedResponseWriteError::kResponseEncoding:
+        case ruvia::http3_buffered_response_error::response_encoding:
             return Error::kResponseEncoding;
-        case Http3BufferedResponseWriteError::kOutOfMemory:
+        case ruvia::http3_buffered_response_error::out_of_memory:
             return Error::kOutOfMemory;
-        case Http3BufferedResponseWriteError::kInvalidState:
+        case ruvia::http3_buffered_response_error::invalid_state:
             return Error::kInvalidCursorState;
-        case Http3BufferedResponseWriteError::kExcessiveAcknowledgement:
+        case ruvia::http3_buffered_response_error::excessive_acknowledgement:
             return Error::kCursorAcknowledgement;
-        case Http3BufferedResponseWriteError::kDataPlan:
+        case ruvia::http3_buffered_response_error::data_plan:
             return Error::kCursorDataPlan;
     }
     return Error::kInvalidCursorState;

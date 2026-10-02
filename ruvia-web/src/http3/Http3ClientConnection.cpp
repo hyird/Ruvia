@@ -1501,8 +1501,8 @@ bool Http3ClientConnection::driveCriticalOutput() {
             }
         }
         const auto remaining = std::span<const char>(output.data(), output.size()).subspan(offset);
-        const auto kind = i == 0 ? Http3CriticalStreamOutput::Kind::kQpackEncoder : i == 1 ? Http3CriticalStreamOutput::Kind::kQpackDecoder
-                                                                                           : Http3CriticalStreamOutput::Kind::kControl;
+        const auto kind = i == 0 ? ruvia::http3_critical_stream_output::stream_kind::qpack_encoder : i == 1 ? ruvia::http3_critical_stream_output::stream_kind::qpack_decoder
+                                                                                                            : ruvia::http3_critical_stream_output::stream_kind::control;
         const auto sent = session_->writeCriticalStream(kind, remaining);
         if (sent.status == ruvia::quic_operation_status::would_block ||
             sent.status == ruvia::quic_operation_status::need_input) {

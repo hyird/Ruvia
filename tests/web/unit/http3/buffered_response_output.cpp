@@ -120,7 +120,7 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
         auto output = makeOutput(response, plan, worker, mailbox);
         std::string wire;
 
-        RUVIA_CHECK(output.nextStep() == Output::NextStep::kBytes);
+        RUVIA_CHECK(output.nextStep() == Output::NextStep::bytes);
         const auto decodedFieldSectionSize = output.decodedFieldSectionSize();
         RUVIA_CHECK(decodedFieldSectionSize > 0);
         const auto headers = output.publishStep();
@@ -129,7 +129,7 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
         RUVIA_CHECK(headers.bytesAccepted > 0);
         RUVIA_CHECK_EQ(headers.publishedWireBytes, headers.bytesAccepted);
         collectOne(mailbox, wire, ruvia_ctx);
-        RUVIA_CHECK(output.nextStep() == Output::NextStep::kFin);
+        RUVIA_CHECK(output.nextStep() == Output::NextStep::fin);
         RUVIA_CHECK_EQ(output.decodedFieldSectionSize(), decodedFieldSectionSize);
 
         const Control blocker{Control::Kind::kWritable, kMessageId};
@@ -150,7 +150,7 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
         RUVIA_CHECK_EQ(finResult.bytesAccepted, 0U);
         RUVIA_CHECK_EQ(finResult.publishedWireBytes, wire.size());
         RUVIA_CHECK(output.complete());
-        RUVIA_CHECK(output.nextStep() == Output::NextStep::kComplete);
+        RUVIA_CHECK(output.nextStep() == Output::NextStep::complete);
         RUVIA_CHECK(!output.failed());
 
         Control fin;

@@ -28,7 +28,7 @@ struct FakeQuic final {
 
     [[nodiscard]] StreamOpen open(Driver::Kind kind) {
         ++opens;
-        if (kind == Driver::Kind::kQpackEncoder && noCredit) {
+        if (kind == Driver::Kind::qpack_encoder && noCredit) {
             noCredit = false;
             return {.status = OperationStatus::would_block};
         }
@@ -114,9 +114,9 @@ RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams
         RUVIA_CHECK(identifier && identifier->value == 12);
         RUVIA_CHECK_EQ(decodedGoaway->encodedBytes, goaway.size());
     }
-    RUVIA_CHECK(driver.streamId(Driver::Kind::kControl) == 2);
-    RUVIA_CHECK(driver.streamId(Driver::Kind::kQpackEncoder) == 6);
-    RUVIA_CHECK(driver.streamId(Driver::Kind::kQpackDecoder) == 10);
+    RUVIA_CHECK(driver.streamId(Driver::Kind::control) == 2);
+    RUVIA_CHECK(driver.streamId(Driver::Kind::qpack_encoder) == 6);
+    RUVIA_CHECK(driver.streamId(Driver::Kind::qpack_decoder) == 10);
     RUVIA_CHECK_EQ(quic.opens, 4);
 }
 

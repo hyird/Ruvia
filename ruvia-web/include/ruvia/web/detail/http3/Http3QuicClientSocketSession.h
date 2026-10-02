@@ -79,7 +79,7 @@ public:
         return peer_;
     }
     [[nodiscard]] ruvia::quic_stream_write_result writeCriticalStream(
-        Http3CriticalStreamOutput::Kind kind, std::span<const char> bytes);
+        ruvia::http3_critical_stream_output::stream_kind kind, std::span<const char> bytes);
     void close() noexcept;
 
 private:

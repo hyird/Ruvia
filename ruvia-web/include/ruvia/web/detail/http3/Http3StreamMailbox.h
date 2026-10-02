@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/Http3Connection.h"
-#include "ruvia/web/detail/http3/Http3CriticalStreamOutput.h"
+#include "ruvia/http/http3_critical_stream_output.h"
 
 namespace ruvia::detail {
 
@@ -28,7 +28,7 @@ struct Http3StreamMessageId final {
 struct Http3CriticalStreamMessageId final {
     std::uint64_t epoch{};
     std::uint64_t connectionGeneration{};
-    Http3CriticalStreamOutput::Kind kind{Http3CriticalStreamOutput::Kind::kQpackEncoder};
+    ruvia::http3_critical_stream_output::stream_kind kind{ruvia::http3_critical_stream_output::stream_kind::qpack_encoder};
 };
 using Http3MailboxDestination = std::variant<Http3StreamMessageId, Http3CriticalStreamMessageId>;
 

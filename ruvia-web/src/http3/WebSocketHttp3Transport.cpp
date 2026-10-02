@@ -341,7 +341,7 @@ bool WebSocketHttp3Transport::driveOutput() {
         if (bytes.empty()) {
             continue;
         }
-        const auto written = session_->writeCriticalStream(index == 0 ? Http3CriticalStreamOutput::Kind::kQpackEncoder : Http3CriticalStreamOutput::Kind::kQpackDecoder,
+        const auto written = session_->writeCriticalStream(index == 0 ? ruvia::http3_critical_stream_output::stream_kind::qpack_encoder : ruvia::http3_critical_stream_output::stream_kind::qpack_decoder,
             std::span<const char>(bytes.data() + offset, bytes.size() - offset));
         if (written.status == ruvia::quic_operation_status::accepted) {
             if (written.accepted == 0 || written.accepted > bytes.size() - offset) {

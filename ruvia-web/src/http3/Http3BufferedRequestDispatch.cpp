@@ -797,12 +797,12 @@ Http3BufferedRequestDispatch::publicationDemand() const noexcept {
         return PublicationDemand::kLocalPeerLimitRejected;
     }
     switch (output_->nextStep()) {
-        case Http3BufferedResponseOutput::NextStep::kBytes:
+        case Http3BufferedResponseOutput::NextStep::bytes:
             return PublicationDemand::kData;
-        case Http3BufferedResponseOutput::NextStep::kFin:
+        case Http3BufferedResponseOutput::NextStep::fin:
             return PublicationDemand::kControl;
-        case Http3BufferedResponseOutput::NextStep::kComplete:
-        case Http3BufferedResponseOutput::NextStep::kFailed:
+        case Http3BufferedResponseOutput::NextStep::complete:
+        case Http3BufferedResponseOutput::NextStep::failed:
             return PublicationDemand::kLocalFailed;
     }
     return PublicationDemand::kLocalFailed;

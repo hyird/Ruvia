@@ -7,7 +7,7 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/detail/http3/Http3BufferedResponseWrite.h"
+#include "ruvia/http/http3_buffered_response_cursor.h"
 #include "ruvia/web/detail/http3/Http3StreamMailbox.h"
 
 namespace ruvia::detail {
@@ -36,7 +36,7 @@ class Http3BufferedResponseOutput final {
 public:
     using Error = Http3BufferedResponseOutputError;
     using MessageId = Http3StreamMessageId;
-    using NextStep = Http3BufferedResponseWrite::NextStep;
+    using NextStep = ruvia::http3_buffered_response_cursor::step;
 
     enum class Status : std::uint8_t {
         kBytes,
@@ -109,9 +109,9 @@ private:
 
     Http3BufferedResponseOutput(const HttpResponse& response,
         Http3StreamMailbox& mailbox, MessageId messageId,
-        Http3BufferedResponseWrite cursor, std::uint64_t initialPublishedWireBytes) noexcept;
+        ruvia::http3_buffered_response_cursor cursor, std::uint64_t initialPublishedWireBytes) noexcept;
 
-    [[nodiscard]] static Error cursorError(Http3BufferedResponseWrite::Error error) noexcept;
+    [[nodiscard]] static Error cursorError(ruvia::http3_buffered_response_cursor::error error) noexcept;
     [[nodiscard]] Result fail(Error error, std::size_t bytesAccepted = 0,
         bool notifyPeer = false) noexcept;
     [[nodiscard]] Result result(Status status, BlockReason blockReason = BlockReason::kNone,
@@ -121,7 +121,7 @@ private:
     const HttpResponse* response_{};
     Http3StreamMailbox& mailbox_;
     const MessageId messageId_;
-    std::optional<Http3BufferedResponseWrite> cursor_;
+    std::optional<ruvia::http3_buffered_response_cursor> cursor_;
     std::uint64_t publishedWireBytes_{};
     State state_{State::kPublishing};
     Error failure_{Error::kNone};
