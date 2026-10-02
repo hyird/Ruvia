@@ -86,8 +86,27 @@ Task<void> detail::MariaDbPool::connectUnlocked(
                 *slot.connection, "configuring MariaDB timeouts", DbError::Code::kConnectFailed);
         }
 
+        const bool use_tls = config_.tls.mode == client_tls_mode::verify_identity;
+        const my_bool enforce_tls = use_tls ? 1 : 0;
+        if (mysql_optionsv(slot.connection, MYSQL_OPT_SSL_ENFORCE, &enforce_tls) != 0 ||
+            mysql_optionsv(slot.connection, MYSQL_OPT_SSL_VERIFY_SERVER_CERT, &enforce_tls) != 0) {
+            throw mysqlError(*slot.connection, "configuring MariaDB authenticated TLS", DbError::Code::kConnectFailed);
+        }
+        if (use_tls) {
+            if (mysql_optionsv(slot.connection, MYSQL_OPT_TLS_VERSION, "TLSv1.2,TLSv1.3") != 0) {
+                throw mysqlError(*slot.connection, "configuring MariaDB TLS versions", DbError::Code::kConnectFailed);
+            }
+            const auto set_path = [&](mysql_option option, const std::pmr::string& path) {
+                if (!path.empty() && mysql_optionsv(slot.connection, option, path.c_str()) != 0) {
+                    throw mysqlError(*slot.connection, "configuring MariaDB TLS credentials", DbError::Code::kConnectFailed);
+                }
+            };
+            set_path(MYSQL_OPT_SSL_CA, config_.tls.ca_file);
+            set_path(MYSQL_OPT_SSL_CERT, config_.tls.certificate_file);
+            set_path(MYSQL_OPT_SSL_KEY, config_.tls.private_key_file);
+        }
         auto& initialized = *slot.connection;
-        constexpr auto clientFlags = 0UL;
+        const auto clientFlags = use_tls ? static_cast<unsigned long>(CLIENT_SSL) : 0UL;
         MYSQL* connected = nullptr;
         int status = mysql_real_connect_start(&connected, &initialized, resolvedHosts.c_str(),
             config_.username.c_str(), config_.password.c_str(),
@@ -101,6 +120,10 @@ Task<void> detail::MariaDbPool::connectUnlocked(
 
         if (connected == nullptr) {
             throw mysqlError(initialized, "mysql_real_connect", DbError::Code::kConnectFailed);
+        }
+
+        if (use_tls && mysql_get_ssl_cipher(&initialized) == nullptr) {
+            throw DbError(DbError::Code::kConnectFailed, DbDriver::kMariaDb, "MariaDB refused required TLS");
         }
 
         // MariaDB's non-blocking API suspends by yielding out of a fibre when

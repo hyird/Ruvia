@@ -103,9 +103,11 @@ private:
 
 class Http2SansIoStreamRuntime final {
 public:
-    Http2SansIoStreamRuntime(std::uint32_t streamId, std::pmr::memory_resource* resource)
+    Http2SansIoStreamRuntime(std::uint32_t streamId, std::pmr::memory_resource* resource,
+        std::pmr::memory_resource* body_resource = nullptr)
         : streamId_(streamId),
           resource_(pmrResourceOrDefault(resource)),
+          body_resource_(body_resource != nullptr ? body_resource : resource_),
           trailers_(resource_) {}
 
     void bindPushParent(std::uint32_t id) noexcept {
@@ -146,7 +148,7 @@ public:
             return false;
         }
         selectedRoute_.emplace(
-            Http2SansIoSelectedRoute::Token{}, std::move(resolution), bodyMode, resource_);
+            Http2SansIoSelectedRoute::Token{}, std::move(resolution), bodyMode, body_resource_);
         return true;
     }
 
@@ -195,6 +197,7 @@ private:
     std::uint32_t streamId_;
     std::uint32_t pushParent_{};
     std::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* body_resource_;
     HttpRequestTrailers trailers_;
     std::optional<HttpPriority> priorityUpdate_{};
     std::optional<Http2SansIoSelectedRoute> selectedRoute_;
@@ -210,8 +213,10 @@ private:
 class Http2SansIoStreamRuntimeTable final {
 public:
     explicit Http2SansIoStreamRuntimeTable(
-        std::pmr::memory_resource* resource, Http2SansIoTermination& termination)
+        std::pmr::memory_resource* resource, Http2SansIoTermination& termination,
+        std::pmr::memory_resource* body_resource = nullptr)
         : resource_(pmrResourceOrDefault(resource)),
+          body_resource_(body_resource != nullptr ? body_resource : resource_),
           termination_(termination),
           overflow_(resource_) {}
 
@@ -259,12 +264,12 @@ public:
         }
         for (auto& slot : inline_) {
             if (!slot) {
-                slot.emplace(streamId, resource_);
+                slot.emplace(streamId, resource_, body_resource_);
                 ++size_;
                 return *slot;
             }
         }
-        auto runtime = makePmrObject<Http2SansIoStreamRuntime>(resource_, streamId, resource_);
+        auto runtime = makePmrObject<Http2SansIoStreamRuntime>(resource_, streamId, resource_, body_resource_);
         auto* result = runtime.get();
         overflow_.push_back(std::move(runtime));
         ++size_;
@@ -363,6 +368,7 @@ private:
     }
 
     std::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* body_resource_;
     Http2SansIoTermination& termination_;
     std::array<std::optional<Http2SansIoStreamRuntime>, kInlineCapacity> inline_{};
     std::pmr::vector<OverflowRuntime> overflow_;

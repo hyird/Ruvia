@@ -57,7 +57,8 @@ Task<std::optional<Http1SessionRequestCompletion>> dispatchHttpWebSocketRoute(
         }
         webSocketConnection.emplace(WebSocketSocketTransport<Stream>{d.stream},
             d.baseRouteServices.worker(), d.scannerEntry, webSocketEndpoint.lifecycle(),
-            ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes), d.memory.resource(),
+            ProtocolByteLimit::limited(d.options.maxWebSocketMessageBytes),
+            d.inbound_buffer_pool != nullptr ? d.inbound_buffer_pool : d.memory.resource(),
             pendingFrames, handshake.compression(), webSocketEndpoint.deflate().compressionLevel);
         co_await invokeWebSocketHandler(
             *webSocketConnection, d.scannerEntry, webSocketEndpoint.handler(), context);

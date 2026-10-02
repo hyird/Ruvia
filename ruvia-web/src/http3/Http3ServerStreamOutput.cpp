@@ -99,7 +99,7 @@ bool Http3ServerStreamOutput::validResponseStreamId(StreamId streamId) const noe
     if (isHttp3RequestStreamId(streamId)) {
         return true;
     }
-    if ((streamId & 3) != 3 || streamId > kHttp3VarIntMax) {
+    if (http3StreamIdType(streamId) != Http3StreamIdType::kServerUnidirectional) {
         return false;
     }
     const auto* slot = findStream(streamId);
@@ -175,7 +175,8 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::registerPushStream(Stre
     if (stopped_) {
         return {.status = Status::kStopped};
     }
-    if ((streamId & 3) != 3 || streamId > kHttp3VarIntMax || pushId > kHttp3VarIntMax || findStream(streamId) != nullptr) {
+    if (http3StreamIdType(streamId) != Http3StreamIdType::kServerUnidirectional ||
+        pushId > kHttp3VarIntMax || findStream(streamId) != nullptr) {
         return {.status = Status::kInvalidInput};
     }
     auto* slot = findOrCreateStream(streamId);
@@ -210,7 +211,8 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(Http3StreamM
 Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptCriticalData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId) {
     requireOwnerThread();
     const auto* target = block.critical();
-    if (!block || target == nullptr || (streamId & 3) != 3 || streamId > kHttp3VarIntMax) {
+    if (!block || target == nullptr ||
+        http3StreamIdType(streamId) != Http3StreamIdType::kServerUnidirectional) {
         return {.status = Status::kInvalidInput};
     }
     if (const auto* slot = findStream(streamId); slot != nullptr && slot->info.pushId) {
@@ -745,11 +747,15 @@ bool Http3ServerStreamOutput::closeConnectionAndRelease() {
 bool Http3ServerStreamOutput::retireStream(StreamSlot& slot, StreamState terminalState,
     std::uint64_t errorCode) {
     slot.info.state = StreamState::kStopping;
-    if ((slot.info.streamId & 3) == 3 && !slot.info.pushId) {
+    if (http3StreamIdType(slot.info.streamId) == Http3StreamIdType::kServerUnidirectional &&
+        !slot.info.pushId) {
         // A local critical stream cannot be reset independently (RFC 9114).
         return closeConnectionAndRelease();
     }
-    if (slot.info.pushId) {
+    if (connection_.read_health(slot.info.streamId).status == ruvia::quic_stream_read_status::closed &&
+        connection_.write_health(slot.info.streamId) == TransportError::retired) {
+        slot.info.termination = {.send = TransportError::retired, .close = TransportError::retired};
+    } else if (slot.info.pushId) {
         slot.info.termination = {
             .send = slot.info.sendFinAccepted ? TransportError::completed
                                               : connection_.reset_stream(slot.info.streamId, errorCode),
@@ -879,9 +885,7 @@ bool Http3ServerStreamOutput::finishStream(StreamSlot& slot, TransportError& err
         slot.info.sendFinAccepted = true;
     }
 
-    const auto retired = slot.info.pushId
-                             ? connection_.close_stream(slot.info.streamId)
-                             : connection_.retire_completed_stream(slot.info.streamId);
+    const auto retired = connection_.retire_completed_stream(slot.info.streamId);
     if (retired == TransportError::would_block || retired == TransportError::need_input) {
         error = retired;
         return false;

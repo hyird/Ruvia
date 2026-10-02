@@ -119,7 +119,14 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
         if (resolved == nullptr) {
             if (auto documentResponse = selectDocumentRootFallback(
                     documentRoot, request, memory, services, staticFileMode)) {
-                co_return std::move(*documentResponse);
+                auto context = detail::ContextAccess::make(memory, request,
+                    withRouteHandlers(services, *this, errorHandlerFor(request.path()),
+                        notFoundHandlerFor(request.path())));
+                auto terminal = [&documentResponse](Context&) -> Task<HttpResponse> {
+                    co_return std::move(*documentResponse);
+                };
+                const auto terminal_ref = makeCallableRef<HttpResponse, Context&>(terminal);
+                co_return co_await runUnmatchedChain(context, terminal_ref);
             }
             // One handleError co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's

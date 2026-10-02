@@ -19,6 +19,7 @@
 #include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 namespace ruvia {
 class WorkerMemory;
@@ -79,6 +80,7 @@ private:
     const RouteTable& routes_;
     WorkerMemory& worker_;
     Http2SansIoSessionContext session_;
+    inbound_buffer_resource inbound_buffers_;
     std::string_view remoteAddress_;
     ruvia::Http2Connection connection_;
     WorkerSignal writeSignal_;

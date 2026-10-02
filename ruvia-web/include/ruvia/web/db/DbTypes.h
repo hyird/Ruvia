@@ -19,6 +19,7 @@
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/web/Attributes.h"
+#include "ruvia/web/ClientTlsConfig.h"
 #include "ruvia/web/db/DbCache.h"
 
 namespace ruvia {
@@ -59,6 +60,7 @@ struct DbConfig final {
     std::optional<std::uint16_t> port{};
     std::string username{};
     std::string password{};
+    client_tls_config tls{};
     std::string database{};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connectTimeout{std::chrono::seconds(5)};

@@ -57,6 +57,8 @@ public:
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/stream.hpp>
 
 #include "ruvia/core/OperationTimeout.h"
 #include "ruvia/core/PoolLeaseScheduler.h"
@@ -136,6 +138,11 @@ private:
         Connection& operator=(Connection&&) noexcept;
 
         asio::ip::tcp::socket socket;
+        // Pool construction reserves all slots before any TLS stream exists.
+        // Once connect() starts, slots never move: TLS and pending I/O borrow
+        // this socket until their owning connection is retired.
+        using tls_stream_type = asio::ssl::stream<asio::ip::tcp::socket&>;
+        std::unique_ptr<tls_stream_type, PmrObjectDeleter<tls_stream_type>> tls_stream;
         asio::ip::tcp::resolver resolver;
         std::pmr::string writeBuffer;
         std::array<char, kRedisReadBufferBytes> readBuffer;
@@ -201,6 +208,7 @@ private:
     const RedisConfigStorage& config_;
     std::optional<std::chrono::milliseconds> commandTimeout_;
     std::pmr::memory_resource* resource_;
+    std::optional<asio::ssl::context> tls_context_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<RedisOperationCancellationMailbox> cancellationMailbox_;

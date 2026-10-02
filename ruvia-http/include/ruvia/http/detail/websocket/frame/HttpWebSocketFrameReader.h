@@ -28,6 +28,9 @@ inline void compactWebSocketReadBuffer(
     const auto consumed = std::exchange(pendingCompactUntil, 0);
     if (consumed >= buffer.size()) {
         buffer.clear();
+        if (buffer.capacity() > 4096) {
+            std::pmr::string(buffer.get_allocator()).swap(buffer);
+        }
         offset = 0;
         return;
     }

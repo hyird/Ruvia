@@ -816,9 +816,9 @@ public:
     // Reports the protocol receive state without exposing internal stream storage.
     [[nodiscard]] Http2StreamReceiveStatus streamReceiveStatus(
         std::uint32_t streamId) const noexcept;
-    // Borrowed snapshot used for application route selection; it does not grant
+    // Borrowed snapshot of the peer's request metadata; it does not grant
     // access to the connection's stream table or mutable protocol state.
-    [[nodiscard]] std::optional<Http2ServerRequestRouteView> serverRequestRoute(
+    [[nodiscard]] std::optional<http2_server_request_view> server_request_view(
         std::uint32_t streamId) const noexcept;
     [[nodiscard]] std::span<const std::uint32_t> takeDrainedDataStreams() & noexcept;
     std::span<const std::uint32_t> takeDrainedDataStreams() && = delete;

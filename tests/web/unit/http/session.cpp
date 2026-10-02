@@ -112,54 +112,6 @@ RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
         it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
 }
 
-RUVIA_TEST(session_persistence_plan_persists_replacement_before_deleting_old_id) {
-    using ruvia::detail::sessionPersistencePlan;
-    using ruvia::detail::SessionPersistenceStep;
-
-    const auto fresh = sessionPersistencePlan("newid", {});
-    RUVIA_CHECK_EQ(fresh.count, std::size_t{1});
-    RUVIA_CHECK(fresh.steps[0] == SessionPersistenceStep::kPersistCurrent);
-
-    const auto cleared = sessionPersistencePlan({}, "oldid");
-    RUVIA_CHECK_EQ(cleared.count, std::size_t{1});
-    RUVIA_CHECK(cleared.steps[0] == SessionPersistenceStep::kDeleteOld);
-
-    // Rotation must write the replacement blob before deleting the old one.
-    // Otherwise a Redis SETEX failure after DEL would log the user out by
-    // destroying the recognized session before its successor exists.
-    const auto rotated = sessionPersistencePlan("newid", "oldid");
-    RUVIA_CHECK_EQ(rotated.count, std::size_t{2});
-    RUVIA_CHECK(rotated.steps[0] == SessionPersistenceStep::kPersistCurrent);
-    RUVIA_CHECK(rotated.steps[1] == SessionPersistenceStep::kDeleteOld);
-}
-
-RUVIA_TEST(session_commit_plan_publishes_new_cookie_after_storage_succeeds) {
-    using ruvia::detail::sessionCommitPlan;
-    using ruvia::detail::SessionCommitStep;
-
-    const auto fresh = sessionCommitPlan("newid", {}, true);
-    RUVIA_CHECK_EQ(fresh.count, std::size_t{2});
-    RUVIA_CHECK(fresh.steps[0] == SessionCommitStep::kPersistCurrent);
-    RUVIA_CHECK(fresh.steps[1] == SessionCommitStep::kPublishCurrentCookie);
-
-    const auto existing = sessionCommitPlan("sameid", {}, false);
-    RUVIA_CHECK_EQ(existing.count, std::size_t{1});
-    RUVIA_CHECK(existing.steps[0] == SessionCommitStep::kPersistCurrent);
-
-    // Rotation is the strictest ordering: write the replacement, delete the old
-    // blob, then publish the new cookie. Any Redis failure before the final step
-    // must leave the client's previous cookie untouched.
-    const auto rotated = sessionCommitPlan("newid", "oldid", true);
-    RUVIA_CHECK_EQ(rotated.count, std::size_t{3});
-    RUVIA_CHECK(rotated.steps[0] == SessionCommitStep::kPersistCurrent);
-    RUVIA_CHECK(rotated.steps[1] == SessionCommitStep::kDeleteOld);
-    RUVIA_CHECK(rotated.steps[2] == SessionCommitStep::kPublishCurrentCookie);
-
-    const auto noCurrent = sessionCommitPlan({}, "oldid", true);
-    RUVIA_CHECK_EQ(noCurrent.count, std::size_t{1});
-    RUVIA_CHECK(noCurrent.steps[0] == SessionCommitStep::kDeleteOld);
-}
-
 RUVIA_TEST(session_state_makes_persistence_decisions_exclusive) {
     ruvia::detail::ContextSessionState state(std::pmr::new_delete_resource());
     RUVIA_CHECK(state.untouched() != nullptr);

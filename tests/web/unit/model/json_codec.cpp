@@ -424,3 +424,60 @@ RUVIA_TEST(model_json_codec_roundtrips_empty_schema_and_rejects_non_object_root)
     auto rejected = ruvia::fromJson<CodecEmpty>(R"([])");
     RUVIA_CHECK(!rejected.has_value());
 }
+
+RUVIA_TEST(json_array_limits_apply_across_nested_collections_and_model_fields) {
+    using nested_array = ruvia::Array<ruvia::Array<ruvia::Int32>>;
+    RUVIA_CHECK(ruvia::fromJson<nested_array>("[[1,2],[3]]", {.max_array_elements = 5}));
+    RUVIA_CHECK(!ruvia::fromJson<nested_array>("[[1,2],[3]]", {.max_array_elements = 4}));
+    RUVIA_CHECK(ruvia::fromJson<nested_array>("[]", {.max_array_elements = 0}));
+    RUVIA_CHECK(!ruvia::fromJson<nested_array>("[[]]", {.max_array_elements = 0}));
+
+    constexpr auto tree = R"({"name":"a","children":[{"name":"b","children":[{"name":"c"}]},{"name":"d"}]})";
+    RUVIA_CHECK(ruvia::fromJson<CodecNode>(tree, {.max_array_elements = 3}));
+    RUVIA_CHECK(!ruvia::fromJson<CodecNode>(tree, {.max_array_elements = 2}));
+}
+
+RUVIA_TEST(json_representation_budget_bounds_owned_strings_and_array_storage) {
+    using array = ruvia::Array<ruvia::Int32>;
+    constexpr auto two_elements = sizeof(array) + 2 * 4 * (sizeof(ruvia::Int32) + sizeof(ruvia::Int32*));
+    RUVIA_CHECK(ruvia::fromJson<array>("[1,2]", {.max_representation_bytes = two_elements}));
+    RUVIA_CHECK(!ruvia::fromJson<array>("[1,2,3]", {.max_representation_bytes = two_elements}));
+    RUVIA_CHECK(!ruvia::fromJson<ruvia::Int32>("1", {.max_representation_bytes = 0}));
+
+    const std::string text = "\"" + std::string(4096, 'x') + "\"";
+    RUVIA_CHECK(!ruvia::fromJson<ruvia::String>(text, {.max_representation_bytes = 1024}));
+    RUVIA_CHECK(ruvia::fromJson<ruvia::String>(text, {.max_representation_bytes = 16384}));
+}
+
+RUVIA_TEST(json_budget_failure_releases_partial_results_and_preserves_retained_values) {
+    ruvia::test::CountingMemoryResource memory;
+    {
+        auto retained = ruvia::fromJson<ruvia::Array<ruvia::String>>(
+            R"(["retained value with owned storage"])", {.resource = &memory});
+        RUVIA_CHECK(retained.has_value());
+        const auto retained_allocations = memory.liveAllocations();
+        for (std::size_t index = 0; index < 8; ++index) {
+            auto failed = ruvia::fromJson<ruvia::BoxedArray<ruvia::String>>(
+                R"(["first element with owned storage","second element with owned storage"])",
+                {.resource = &memory, .max_array_elements = 1});
+            RUVIA_CHECK(!failed);
+            RUVIA_CHECK_EQ(memory.liveAllocations(), retained_allocations);
+            RUVIA_CHECK_EQ((*retained)[0].view(), std::string_view("retained value with owned storage"));
+        }
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(request_json_binding_enforces_default_aggregate_array_limit) {
+    std::string input = R"({"name":"node","values":[)";
+    for (std::size_t index = 0; index < 64 * 1024 + 1; ++index) {
+        if (index != 0) {
+            input += ',';
+        }
+        input += R"("")";
+    }
+    input += "]}";
+    ruvia::test::CountingMemoryResource memory;
+    RUVIA_CHECK(!ruvia::detail::ModelParseAccess::parseJsonBorrowedPartial<CodecRootNested>(input, &memory));
+    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+}

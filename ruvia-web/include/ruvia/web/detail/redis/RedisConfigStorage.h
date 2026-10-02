@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/client/ClientTlsConfigStorage.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/redis/RedisTypes.h"
@@ -26,6 +27,7 @@ struct RedisConfigStorage final {
     std::uint16_t port{6379};
     std::pmr::string username;
     std::pmr::string password;
+    client_tls_config_storage tls;
     std::uint32_t database{0};
     std::size_t poolSizePerWorker{4};
     std::size_t blockingPoolSizePerWorker{1};
@@ -51,6 +53,7 @@ private:
           port(source.port),
           username(source.username, resource),
           password(source.password, resource),
+          tls(source.tls, resource),
           database(source.database),
           poolSizePerWorker(source.poolSizePerWorker),
           blockingPoolSizePerWorker(source.blockingPoolSizePerWorker),
@@ -68,6 +71,7 @@ private:
           port(source.port),
           username(source.username, resource),
           password(source.password, resource),
+          tls(source.tls, resource),
           database(source.database),
           poolSizePerWorker(source.poolSizePerWorker),
           blockingPoolSizePerWorker(source.blockingPoolSizePerWorker),

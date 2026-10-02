@@ -21,6 +21,9 @@ struct Http3ClientRequestHeadView final {
     std::string_view path{};
     std::span<const Http3FieldSectionFieldView> fields{};
     std::optional<std::uint64_t> bodyLength{};
+    // Suppress automatic Content-Length generation while still validating an
+    // explicitly supplied field against bodyLength.
+    bool emit_content_length{true};
     // RFC 9220 Extended CONNECT; only valid with method CONNECT.
     std::string_view protocol{};
     // Must come from the received peer SETTINGS, not local configuration.

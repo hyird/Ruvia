@@ -81,21 +81,12 @@ RUVIA_TEST(h2_request_header_blocks_release_independently_of_retained_stream_dat
     RUVIA_CHECK_EQ(stream.remoteHeaderAt(0).value, std::string_view("handshake"));
 }
 
-RUVIA_TEST(h2_request_builder_route_method_is_known_wire_method_when_not_ws_connect) {
-    auto stream = makeStream();
-    stream.assignRequestMethod("POST");
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kPost);
-    stream.assignRequestMethod("DELETE");
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kDelete);
-}
-
 RUVIA_TEST(h2_request_builder_preserves_extension_method_for_web_501) {
     auto request = HttpRequestAccess::make();
     auto stream = makeStream();
     stream.assignRequestMethod("PROPFIND");
     stream.assignRequestPath("/dav/resource");
 
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kUnknown);
     RUVIA_CHECK(buildRequest(stream, request));
     RUVIA_CHECK_EQ(request.method(), std::string_view("PROPFIND"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
@@ -286,7 +277,6 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
     stream.markAuthority();
     RUVIA_CHECK(stream.beginStandardConnect());
 
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
     RUVIA_CHECK_EQ(
         Http2RequestBuilder::requestTarget(stream), std::string_view("proxy.example:443"));
     RUVIA_CHECK(buildRequest(stream, request));
@@ -320,7 +310,6 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_retains_connect_method) {
     stream.assignRequestPath("/.well-known/masque/udp?target=origin.example");
     RUVIA_CHECK(stream.beginExtendedConnect());
 
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
     RUVIA_CHECK(buildRequest(stream, request));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);
@@ -348,7 +337,7 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_preserves_empty_path) {
     RUVIA_CHECK(request.queryString().empty());
 }
 
-RUVIA_TEST(h2_request_builder_websocket_extended_connect_maps_only_route_method) {
+RUVIA_TEST(h2_request_builder_websocket_extended_connect_preserves_wire_method) {
     auto request = HttpRequestAccess::make();
     auto stream = makeStream();
     stream.assignRequestMethod("CONNECT");
@@ -358,7 +347,6 @@ RUVIA_TEST(h2_request_builder_websocket_extended_connect_maps_only_route_method)
     stream.assignRequestPath("/chat");
     RUVIA_CHECK(stream.beginExtendedConnect());
 
-    RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kGet);
     RUVIA_CHECK(buildRequest(stream, request));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);

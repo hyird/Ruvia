@@ -479,6 +479,7 @@ private:
     bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
+    std::pmr::memory_resource* inbound_buffer_pool_{};
     std::size_t dispatchDepth_{0};
     using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage,
         detail::PmrObjectDeleter<detail::ContextRequestStorage>>;

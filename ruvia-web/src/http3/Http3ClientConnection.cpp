@@ -897,7 +897,7 @@ void Http3ClientConnection::finishRequest(Request& request, Outcome outcome) {
                     const bool contentSemanticsPresent =
                         plan && plan->contentSemantics() == HttpResponseContentSemantics::kWithContent;
                     decodeHttpClientResponseContentEncoding(
-                        *state, contentSemanticsPresent, maxResponseBytes_, resource_);
+                        *state, contentSemanticsPresent, maxResponseBytes_);
                     if (request.deadline && Clock::now() >= *request.deadline) {
                         outcome = Outcome::kDeadline;
                         state->discardResponseBody();

@@ -97,13 +97,16 @@ std::string frame(std::uint64_t type, std::string_view payload) {
 
 std::string requestHeaders(ruvia::WorkerMemory& worker, std::string_view method,
     std::string_view path, std::optional<std::uint64_t> bodyLength = std::nullopt,
-    std::span<const ruvia::Http3FieldSectionFieldView> fields = {}) {
+    std::span<const ruvia::Http3FieldSectionFieldView> fields = {},
+    std::string_view protocol = {}) {
     auto head = ruvia::encodeHttp3ClientRequestHead({.method = method,
                                                         .scheme = "https",
                                                         .authority = "example.test",
                                                         .path = path,
                                                         .fields = fields,
-                                                        .bodyLength = bodyLength},
+                                                        .bodyLength = bodyLength,
+                                                        .protocol = protocol,
+                                                        .peerEnableConnectProtocol = !protocol.empty()},
         {}, worker.resource());
     if (!head) {
         throw std::runtime_error("fixture request head failed to encode");
@@ -118,6 +121,56 @@ std::string data(std::string_view payload) {
 
 }  // namespace
 
+RUVIA_TEST(http3_session_routes_extension_method_by_exact_token) {
+    ruvia::detail::Router router;
+    auto& implementation = ruvia::detail::RouterImpl::from(router);
+    implementation.registerExtensionMethodRoute("PROPFIND",
+        std::pmr::string("/dav", std::pmr::get_default_resource()),
+        ruvia::detail::RouteHandler(nullptr, &routing_test::dummyHandler),
+        ruvia::detail::RequestBodyMode::kBuffered,
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+    implementation.finalize();
+
+    ruvia::WorkerMemory worker;
+    ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker);
+    const auto head = requestHeaders(worker, "PROPFIND", "/dav");
+    RUVIA_CHECK(session.feed(0, head, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+
+    const auto* request = session.request(0);
+    const auto* resolution = session.resolution(0);
+    RUVIA_CHECK(request != nullptr && request->request().method() == "PROPFIND");
+    RUVIA_CHECK(resolution != nullptr && resolution->resolved() != nullptr);
+    if (resolution != nullptr && resolution->resolved() != nullptr) {
+        RUVIA_CHECK(resolution->resolved()->route().path() == "/dav");
+    }
+}
+
+RUVIA_TEST(http3_session_maps_websocket_connect_to_websocket_route) {
+    ruvia::detail::Router router;
+    auto& implementation = ruvia::detail::RouterImpl::from(router);
+    implementation.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
+        std::pmr::string("/socket", std::pmr::get_default_resource()),
+        ruvia::detail::RouteStreamHandler(nullptr, &routing_test::dummyStreamHandler),
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+    implementation.finalize();
+
+    ruvia::WorkerMemory worker;
+    ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker);
+    const auto head = requestHeaders(worker, "CONNECT", "/socket", std::nullopt, {}, "websocket");
+    RUVIA_CHECK(session.feed(0, head, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+
+    const auto* request = session.request(0);
+    const auto* resolution = session.resolution(0);
+    RUVIA_CHECK(request != nullptr && request->request().method() == "CONNECT");
+    RUVIA_CHECK(request != nullptr && request->extendedConnectProtocol() == "websocket");
+    RUVIA_CHECK(resolution != nullptr && resolution->resolved() != nullptr);
+    if (resolution != nullptr && resolution->resolved() != nullptr) {
+        RUVIA_CHECK(resolution->resolved()->route().endpoint().webSocket() != nullptr);
+    }
+}
+
 RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
     ruvia::detail::Router router;
     auto& implementation = ruvia::detail::RouterImpl::from(router);
@@ -131,6 +184,9 @@ RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
     RUVIA_CHECK(session.feed(0, requestHeaders(worker, "GET", "/priority"), true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
     auto lease = session.acquireRequest(0);
     RUVIA_CHECK(lease.has_value());
+    if (!lease) {
+        return;
+    }
     const auto* observed = session.requestPriorityUpdate(0);
     RUVIA_CHECK(observed && !*observed);
     std::array<char, 32> bytes{};
@@ -138,6 +194,9 @@ RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
         const auto encoded = ruvia::encodeHttp3PriorityUpdate(bytes, {.elementId = 0,
                                                                          .fields = {.urgency = static_cast<std::uint8_t>(urgency), .incremental = urgency == 7}});
         RUVIA_CHECK(encoded.has_value());
+        if (!encoded) {
+            return;
+        }
         RUVIA_CHECK(session.feed(2, std::string_view(bytes.data(), *encoded)).scope == ruvia::Http3ConnectionErrorScope::kNone);
         RUVIA_CHECK(observed == session.requestPriorityUpdate(0));
         RUVIA_CHECK(observed->has_value() && observed->value().urgency == urgency && observed->value().incremental == (urgency == 7));
@@ -332,6 +391,9 @@ RUVIA_TEST(http3BufferedSansIoSessionRetiredLeaseKeepsItsBodyBudget) {
     (void)session.feed(0, data("abc"), true);
     auto lease = session.acquireRequest(0);
     RUVIA_CHECK(lease.has_value());
+    if (!lease) {
+        return;
+    }
     (void)session.feed(0, {}, false, true);
     RUVIA_CHECK(!session.acquireRequest(0));
     (void)session.feed(4, head);
@@ -830,4 +892,46 @@ RUVIA_TEST(http3BufferedSansIoSessionReleasesAggregateBodyBudgetOnRejectionAndRe
     RUVIA_CHECK(session.release(4));
     RUVIA_CHECK_EQ(session.activeStreamCount(), 1U);
     RUVIA_CHECK(!session.terminated());
+}
+
+RUVIA_TEST(http3_body_allocations_share_worker_budget_and_remain_pinned_by_lease) {
+    using Engine = ruvia::detail::Http3SansIoSessionEngine;
+    ruvia::detail::Router router;
+    auto& implementation = ruvia::detail::RouterImpl::from(router);
+    routing_test::addRoute(implementation, ruvia::HttpKnownMethod::kPost, "/items");
+    implementation.finalize();
+    ruvia::WorkerMemory worker;
+    ruvia::detail::inbound_buffer_resource shared(worker.resource(), 1500);
+    Engine first(implementation.routeTable(), worker,
+        {.inbound_buffer_pool = &shared, .max_inbound_buffer_bytes = 1200});
+    Engine second(implementation.routeTable(), worker,
+        {.inbound_buffer_pool = &shared, .max_inbound_buffer_bytes = 1200});
+    const auto head = requestHeaders(worker, "POST", "/items");
+    const std::string payload(1024, 'a');
+    const auto chunk = data(std::string_view(payload));
+    RUVIA_CHECK(first.feed(0, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const auto first_result = first.feed(0, chunk, true);
+    RUVIA_CHECK(first_result.status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    auto lease = first.acquireRequest(0);
+    RUVIA_CHECK(lease.has_value());
+    if (!lease) {
+        return;
+    }
+    RUVIA_CHECK(shared.used() >= 1024);
+    const auto held = shared.used();
+    first.stop();
+    RUVIA_CHECK_EQ(shared.used(), held);
+    RUVIA_CHECK_EQ(lease->request().request().bodyBytes().size(), std::size_t{1024});
+    RUVIA_CHECK(second.feed(0, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(second.feed(0, chunk, true).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(second.rejection(0) == Engine::Rejection::kWorkerBodyBudgetExhausted);
+    RUVIA_CHECK(!second.terminated());
+    RUVIA_CHECK_EQ(shared.used(), held);
+    lease.reset();
+    RUVIA_CHECK_EQ(shared.used(), std::size_t{0});
+    RUVIA_CHECK(second.feed(4, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(second.feed(4, chunk, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    RUVIA_CHECK(shared.used() >= 1024);
+    second.stop();
+    RUVIA_CHECK_EQ(shared.used(), std::size_t{0});
 }

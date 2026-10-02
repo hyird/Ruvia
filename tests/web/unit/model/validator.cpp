@@ -553,3 +553,45 @@ RUVIA_TEST(model_rules_require_optional_fields_without_duplicate_parse_errors) {
         }
     }
 }
+
+namespace {
+std::size_t bounded_rule_calls = 0;
+bool bounded_invalid_rule(const ruvia::String&) {
+    ++bounded_rule_calls;
+    return false;
+}
+RUVIA_MODEL(bounded_validation_item,
+    RUVIA_REQUIRED_FIELD(value, ruvia::String, RUVIA_CUSTOM("invalid value", bounded_invalid_rule)));
+RUVIA_MODEL(bounded_validation_model,
+    RUVIA_REQUIRED_FIELD(items, ruvia::Array<bounded_validation_item>));
+}  // namespace
+
+RUVIA_TEST(validation_diagnostics_stop_at_the_document_limit) {
+    bounded_validation_model model;
+    auto& items = model.ensure<"items">();
+    for (std::size_t index = 0; index < 4 * ruvia::max_validation_issues; ++index) {
+        items.emplace_back().set<"value">("invalid");
+    }
+    bounded_rule_calls = 0;
+    ruvia::Validator validator;
+    ruvia::detail::ModelValidationAccess::validateModel(model, validator);
+    RUVIA_CHECK_EQ(validator.issues().size(), ruvia::max_validation_issues);
+    RUVIA_CHECK_EQ(bounded_rule_calls, ruvia::max_validation_issues);
+    RUVIA_CHECK(validator.full());
+    RUVIA_CHECK_EQ(validator.issues().front().field(), std::string_view("items[0].value"));
+    try {
+        validator.throwIfInvalid();
+        RUVIA_CHECK(false);
+    } catch (const ruvia::ValidationError& error) {
+        RUVIA_CHECK_EQ(error.issues().size(), ruvia::max_validation_issues);
+    }
+}
+
+RUVIA_TEST(validation_diagnostic_text_preserves_complete_utf8_within_limit) {
+    ruvia::Validator validator;
+    std::string message(ruvia::max_validation_text_bytes - 1, 'x');
+    message += "中文";
+    validator.add("field", "code", message);
+    RUVIA_CHECK_EQ(validator.issues()[0].message().size(), ruvia::max_validation_text_bytes - 1);
+    RUVIA_CHECK_EQ(validator.issues()[0].message(), std::string_view(message).substr(0, ruvia::max_validation_text_bytes - 1));
+}

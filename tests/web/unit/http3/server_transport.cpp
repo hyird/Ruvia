@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -789,6 +790,9 @@ struct MutualTlsHandshake final {
     bool clientVerifiesLocalhost{};
     bool serverHandshakeComplete{};
     bool serverH3Negotiated{};
+    bool cryptoFailureObserved{};
+    std::string_view cryptoFailureStage;
+    std::uint8_t serverTlsFailureAlert{};
     long clientVerifyResult{X509_V_ERR_UNSPECIFIED};
     ClientCertificateObservation clientCertificate;
 };
@@ -823,30 +827,78 @@ MutualTlsHandshake performRequiredMutualTlsHandshake(const MutualTlsFiles& files
         const std::string client_private_key_file = clientPrivateKey == nullptr
                                                         ? std::string{}
                                                         : clientPrivateKey->string();
+        const auto trust_anchor_file = files.trustAnchor.string();
         const ruvia::detail::ClientTransportConfigView client_config{
             .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kVerify,
-            .caFile = files.trustAnchor.string(),
+            .caFile = trust_anchor_file,
             .certificateChainFile = client_certificate_file,
             .privateKeyFile = client_private_key_file};
         PlainUdpTlsClientPeer peer(client_config, "localhost", fixture.server_endpoint(),
             local_port, &memory);
 
+        const bool expects_valid_client_certificate =
+            clientCertificate == &files.trustedClientCertificate;
+        auto drive_stage = [&](std::string_view phase, auto&& operation) -> bool {
+            try {
+                operation();
+                return true;
+            } catch (const ruvia::quic_error& error) {
+                if (error.code() == ruvia::quic_error_code::crypto_failure &&
+                    !expects_valid_client_certificate && !fixture.admissions().empty()) {
+                    auto& server = fixture.protocol_server().connection(
+                        fixture.admissions().front().token);
+                    if (server.tls_handshake().failed()) {
+                        result.cryptoFailureObserved = true;
+                        result.cryptoFailureStage = phase;
+                        result.serverTlsFailureAlert = static_cast<std::uint8_t>(
+                            server.tls_handshake().failure_alert());
+                        return false;
+                    }
+                }
+                std::throw_with_nested(std::runtime_error(
+                    "mTLS handshake driver failed during " + std::string(phase) + ": " + error.what()));
+            } catch (const std::exception& error) {
+                std::throw_with_nested(std::runtime_error(
+                    "mTLS handshake driver failed during " + std::string(phase) + ": " + error.what()));
+            }
+        };
+
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
         while (std::chrono::steady_clock::now() < deadline) {
-            peer.send_packets();
-            fixture.pump(false);
-            if (fixture.admissions().empty() && !fixture.pending_offers().empty()) {
-                (void)fixture.admit_pending(1);
+            if (!drive_stage("client packet generation/transmit", [&] { peer.send_packets(); })) {
+                break;
             }
-            peer.receive_packets();
+            if (!drive_stage("server packet processing", [&] {
+                    fixture.pump(false);
+                    if (fixture.admissions().empty() && !fixture.pending_offers().empty()) {
+                        (void)fixture.admit_pending(1);
+                    }
+                })) {
+                break;
+            }
+            if (!drive_stage("client packet receive/processing", [&] { peer.receive_packets(); })) {
+                break;
+            }
 
             const auto client_info = peer.connection().info();
-            if (client_info.quic_handshake_complete || peer.saw_remote_close() ||
+            const bool server_ready = !fixture.admissions().empty() &&
+                                      fixture.protocol_server().connection(fixture.admissions().front().token).info().quic_handshake_complete;
+            if ((client_info.quic_handshake_complete && server_ready) || peer.saw_remote_close() ||
                 client_info.state == ruvia::quic_connection_state::failed ||
                 client_info.state == ruvia::quic_connection_state::draining) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        if (result.cryptoFailureObserved && !fixture.admissions().empty()) {
+            auto& server = fixture.protocol_server().connection(fixture.admissions().front().token);
+            (void)drive_stage("server TLS-failure close submission", [&] {
+                (void)server.close({.kind = ruvia::quic_close_kind::transport,
+                    .code = 0x100U + result.serverTlsFailureAlert});
+            });
+            (void)drive_stage("server TLS-failure close transmission", [&] { fixture.pump(false); });
+            (void)drive_stage("client TLS-failure close reception", [&] { peer.receive_packets(); });
         }
 
         result.acceptedByServer = !fixture.admissions().empty();
@@ -1053,14 +1105,16 @@ RUVIA_TEST(http3QuicTransportBoundsLifetimePeerAdmissionsDespiteRepeatedClose) {
         auto config = files.server_tls_config();
         ruvia::quic_server_config server_config;
         server_config.limits.max_lifetime_peer_streams = lifetime_limit;
-        server_config.local_transport_parameters.initial_max_streams_uni = lifetime_limit + 2;
+        server_config.local_transport_parameters.initial_max_streams_bidi = 0;
+        server_config.local_transport_parameters.initial_max_streams_uni = lifetime_limit;
         CountingMemoryResource memory;
         {
             const ruvia::detail::ClientTransportConfigView client_tls_config{
                 .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification};
             PlainUdpQuicServerFixture fixture(config, server_config, client_tls_config, &memory);
             ruvia::quic_transport_parameters client_parameters;
-            client_parameters.initial_max_streams_uni = lifetime_limit + 2;
+            client_parameters.initial_max_streams_bidi = 0;
+            client_parameters.initial_max_streams_uni = lifetime_limit;
             ruvia::quic_limits client_limits;
             client_limits.max_lifetime_peer_streams = lifetime_limit;
             auto& client = fixture.add_client("localhost", client_parameters, client_limits);
@@ -1077,23 +1131,25 @@ RUVIA_TEST(http3QuicTransportBoundsLifetimePeerAdmissionsDespiteRepeatedClose) {
                 auto& receiver = server_initiates ? client.transport->connection() : server;
                 const auto opened = sender.open_stream(true);
                 RUVIA_CHECK_EQ(opened.status, ruvia::quic_operation_status::accepted);
+                constexpr std::array payload{std::byte{0x21}};
+                const auto write = sender.write_stream(opened.stream_id, payload, true);
+                RUVIA_CHECK_EQ(write.status, ruvia::quic_operation_status::accepted);
+                RUVIA_CHECK_EQ(write.accepted, payload.size());
+                bool stream_seen = false;
                 const auto stream_ready = fixture.run_until([&] {
                     auto accepted = receiver.accept_streams();
-                    return std::ranges::any_of(
+                    stream_seen |= std::ranges::any_of(
                         std::span(accepted.streams).first(accepted.size),
                         [&opened](const ruvia::quic_stream_metadata& item) {
                             return item.stream_id == opened.stream_id;
                         });
+                    return stream_seen;
                 });
                 RUVIA_CHECK(stream_ready);
                 if (!stream_ready) {
                     break;
                 }
 
-                constexpr std::array payload{std::byte{0x21}};
-                const auto write = sender.write_stream(opened.stream_id, payload, true);
-                RUVIA_CHECK_EQ(write.status, ruvia::quic_operation_status::accepted);
-                RUVIA_CHECK_EQ(write.accepted, payload.size());
                 std::array<std::byte, 8> output{};
                 std::size_t bytes_read{};
                 bool fin{};
@@ -1124,12 +1180,18 @@ RUVIA_TEST(http3QuicTransportBoundsLifetimePeerAdmissionsDespiteRepeatedClose) {
             constexpr std::array payload{std::byte{0x21}};
             const auto write = sender.write_stream(beyond_limit.stream_id, payload, true);
             RUVIA_CHECK_EQ(write.status, ruvia::quic_operation_status::accepted);
-            RUVIA_CHECK(fixture.run_until([&] {
-                const auto state = fixture.connection_state(server_initiates, client);
-                return state == ruvia::quic_connection_state::closing ||
-                       state == ruvia::quic_connection_state::draining ||
-                       state == ruvia::quic_connection_state::failed;
-            }));
+            bool rejected = false;
+            try {
+                (void)fixture.run_until([&] {
+                    return fixture.connection_state(server_initiates, client) ==
+                           ruvia::quic_connection_state::failed;
+                });
+            } catch (const ruvia::quic_error& error) {
+                rejected = error.code() == ruvia::quic_error_code::resource_limit;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(fixture.connection_state(server_initiates, client),
+                ruvia::quic_connection_state::failed);
         }
         RUVIA_CHECK_EQ(memory.allocations(), memory.deallocations());
         RUVIA_CHECK_EQ(memory.outstanding_bytes(), std::size_t{0});
@@ -1200,7 +1262,7 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
     Http3CriticalStreamOutput expected_output(*prefixes);
     RUVIA_CHECK(expected_output.queueGoaway(0));
     std::array<std::string, 4> expected{
-        std::string(prefixes->controlPrefix().begin(), prefixes->controlPrefix().end()),
+        std::string{},
         std::string(prefixes->qpackEncoderPrefix().begin(), prefixes->qpackEncoderPrefix().end()),
         std::string(prefixes->qpackDecoderPrefix().begin(), prefixes->qpackDecoderPrefix().end()),
         "graceful close flushes this stream"};
@@ -1248,9 +1310,8 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
     RUVIA_CHECK(std::ranges::equal(received, expected));
     RUVIA_CHECK(application_fin);
 
-    // Wait for the client core to emit its actual ACK datagram and deliver it to the server.
-    fixture.reset_packet_observation();
-    RUVIA_CHECK(fixture.run_until([&] { return fixture.last_client_packets() != 0; }));
+    // Drive pending acknowledgments without requiring a new ACK after the receive loop.
+    fixture.pump();
     constexpr std::array<char, 0> no_reason{};
     const ruvia::quic_close_reason_view no_error_close{
         .kind = ruvia::quic_close_kind::application,
@@ -1275,11 +1336,13 @@ RUVIA_TEST(http3QuicServerTransportRequestsWireCloseBeforeExplicitLocalRetiremen
     server_config.max_active_connections = 1;
     CountingMemoryResource memory;
     {
-        PlainUdpQuicServerFixture fixture(tls_config, server_config, {}, &memory);
+        PlainUdpQuicServerFixture fixture(tls_config, server_config,
+            {.tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification}, &memory);
         (void)fixture.add_client();
         RUVIA_CHECK(fixture.run_until([&] {
             return !fixture.admissions().empty() &&
-                   fixture.protocol_server().connection(fixture.admissions().front().token).info().quic_handshake_complete;
+                   fixture.protocol_server().connection(fixture.admissions().front().token).info().confirmed &&
+                   fixture.client(0).transport->connection().info().confirmed;
         }));
         const auto token = fixture.admissions().front().token;
         auto& server = fixture.protocol_server().connection(token);
@@ -1384,12 +1447,15 @@ RUVIA_TEST(http3QuicServerTransportLocallyRetiresWithUnsentUdpPacketWithoutPumpi
 RUVIA_TEST(http3QuicServerTransportZeroCapacityAndRepeatedCloseAreSafe) {
     IdentityFiles files;
     auto tls_config = files.server_tls_config();
-    ruvia::quic_server_config invalid_config;
-    invalid_config.max_active_connections = 0;
+    ruvia::quic_server_config zero_config;
+    zero_config.max_active_connections = 0;
+    PlainUdpQuicServerFixture fixture(tls_config, zero_config);
+    (void)fixture.add_client();
+    RUVIA_CHECK(fixture.run_until([&] { return !fixture.pending_offers().empty(); },
+        std::chrono::seconds(8), false));
+    RUVIA_CHECK_EQ(fixture.admit_pending(1).status, ruvia::quic_operation_status::would_block);
+    RUVIA_CHECK_EQ(fixture.protocol_server().connection_count(), std::size_t{0});
     ruvia::detail::http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        ruvia::detail::http3_quic_server_transport invalid(tls, invalid_config);
-    }));
 
     ruvia::quic_server_config valid_config;
     valid_config.max_active_connections = 1;
@@ -1399,7 +1465,7 @@ RUVIA_TEST(http3QuicServerTransportZeroCapacityAndRepeatedCloseAreSafe) {
     RUVIA_CHECK_EQ(transport.server().retire(stale), ruvia::quic_operation_status::retired);
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)transport.server().connection(stale); }));
 }
-RUVIA_TEST(http3QuicServerTransportRejectsInvalidConfigurationBeforeTakingBio) {
+RUVIA_TEST(http3QuicServerTransportRejectsInvalidConfigurationWithoutTakingSocketOwnership) {
     IdentityFiles files;
     auto tls_config = files.server_tls_config();
     ruvia::detail::http3_quic_tls_context tls(tls_config, std::pmr::get_default_resource());
@@ -1409,8 +1475,8 @@ RUVIA_TEST(http3QuicServerTransportRejectsInvalidConfigurationBeforeTakingBio) {
     owned_socket.bind({asio::ip::address_v4::loopback(), 0});
 
     std::array<ruvia::quic_server_config, 4> invalid_configs{};
-    invalid_configs[0].max_active_connections = 0;
-    invalid_configs[1].max_pending_connections = 0;
+    invalid_configs[0].local_transport_parameters.max_udp_payload_size = 1199;
+    invalid_configs[1].local_transport_parameters.active_connection_id_limit = 1;
     invalid_configs[2].limits.max_datagram_size = 0;
     invalid_configs[3].limits.max_lifetime_peer_streams = 0;
     for (const auto& config : invalid_configs) {

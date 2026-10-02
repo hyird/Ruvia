@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -109,8 +110,10 @@ public:
 private:
     [[nodiscard]] static IssueList copyIssues(const IssueList& issues) {
         IssueList copied(detail::processResource());
-        copied.reserve(issues.size());
-        for (const auto& issue : issues) {
+        const auto count = std::min(issues.size(), max_validation_issues);
+        copied.reserve(count);
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto& issue = issues[index];
             copied.push_back(detail::ValidationIssueAccess::copy(
                 issue, detail::processResource()));
         }
@@ -138,7 +141,14 @@ public:
         : resource_(detail::pmrResourceOrDefault(options.resource)),
           issues_(resource_) {}
 
+    [[nodiscard]] bool full() const noexcept {
+        return issues_.size() >= max_validation_issues;
+    }
+
     Validator& add(std::string_view field, std::string_view code, std::string_view message) & {
+        if (full()) {
+            return *this;
+        }
         issues_.push_back(ValidationIssue(
             {.field = field, .code = code, .message = message, .resource = resource_}));
         return *this;

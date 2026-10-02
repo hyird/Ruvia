@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,7 @@
 #include "ruvia/web/detail/router/PrefixFallback.h"
 #include "ruvia/web/detail/router/RouteDispatchServices.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
@@ -53,8 +55,10 @@ struct OwnedHttpErrorInfo final {
         code.assign(source.code().data(), source.code().size());
         message.assign(source.message().data(), source.message().size());
         std::pmr::vector<ValidationIssue> copied(validationIssues.get_allocator().resource());
-        copied.reserve(source.validationIssues().size());
-        for (const auto& issue : source.validationIssues()) {
+        const auto issues = source.validationIssues().first(
+            std::min(source.validationIssues().size(), max_validation_issues));
+        copied.reserve(issues.size());
+        for (const auto& issue : issues) {
             copied.push_back(
                 detail::ValidationIssueAccess::copy(issue, copied.get_allocator().resource()));
         }
@@ -83,6 +87,10 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, const std::exception_pt
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {
         errorInfo.assign(HttpErrorInfo({.status = error.status(), .message = error.what()}));
+    } catch (const detail::inbound_buffer_limit_error&) {
+        errorInfo.assign(HttpErrorInfo({.status = ruvia::http_status::kServiceUnavailable,
+            .code = "inbound_buffer_limit",
+            .message = "inbound buffer capacity exhausted"}));
     } catch (const BlockingOperationRejected& error) {
         // The blocking pool refused the work or the worker is going away. That
         // is capacity, not a bug in the request: answer it like any other

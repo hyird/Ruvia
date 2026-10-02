@@ -107,13 +107,15 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(std::string_view
         return detail::Http1ClientResponseParseResultAccess::failure(error);
     };
 
-    const auto headerBytes = detail::findHttpHeaderEnd(buffer, 0);
+    const auto headerBytes = detail::findHttpHeaderEnd(buffer, header_scan_offset_);
     if (headerBytes == std::string_view::npos) {
         if (buffer.size() >= kMaxHttpHeaderBytes) {
             return fail(Http1ClientResponseParseError::kHeaderTooLarge);
         }
+        header_scan_offset_ = buffer.size() > 3 ? buffer.size() - 3 : 0;
         return detail::Http1ClientResponseParseResultAccess::needMore();
     }
+    header_scan_offset_ = 0;
     if (headerBytes > kMaxHttpHeaderBytes) {
         return fail(Http1ClientResponseParseError::kHeaderTooLarge);
     }

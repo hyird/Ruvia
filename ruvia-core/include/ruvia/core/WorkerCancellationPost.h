@@ -100,10 +100,11 @@ public:
             return;
         }
         auto retained = mailbox_->retain();
-        auto result = retained->worker().post(WorkerCancellationDispatch<Mailbox>(retained, operationId_));
-        if (result.status() != PostStatus::kAccepted) {
-            std::terminate();
-        }
+        // Cancellation belongs to an already admitted operation. Use the
+        // dispatcher completion lane so a full user mailbox cannot reject it.
+        // Detached endpoints have already retired their owners and operations.
+        (void)detail::WorkerHandleAccess::deferIfAttached(retained->worker(),
+            WorkerCancellationDispatch<Mailbox>(retained, operationId_));
     }
 
 private:

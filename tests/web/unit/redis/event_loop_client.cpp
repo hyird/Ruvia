@@ -12,6 +12,8 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/use_future.hpp>
@@ -25,6 +27,7 @@
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "test_tls_identity.h"
 
 namespace {
 
@@ -45,8 +48,9 @@ public:
         kValidNestedArray,
         kRejectThenPing };
 
-    explicit RedisPeer(Mode mode = Mode::kNormal)
+    explicit RedisPeer(Mode mode = Mode::kNormal, asio::ssl::context* tls_context = nullptr)
         : mode_(mode),
+          tls_context_(tls_context),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
           port_(acceptor_.local_endpoint().port()),
@@ -69,7 +73,7 @@ public:
     }
 
     ruvia::RedisConfig config() const {
-        return {.host = "127.0.0.1", .port = port_, .poolSizePerWorker = 1, .connectTimeout = std::chrono::seconds(2), .commandTimeout = std::chrono::seconds(2)};
+        return {.host = "127.0.0.1", .port = port_, .tls = {.mode = ruvia::client_tls_mode::disabled}, .poolSizePerWorker = 1, .connectTimeout = std::chrono::seconds(2), .commandTimeout = std::chrono::seconds(2)};
     }
 
     void waitForBlockedCommand() {
@@ -85,8 +89,9 @@ public:
     }
 
 private:
-    asio::awaitable<std::string> line() {
-        co_await asio::async_read_until(socket_, buffer_, "\r\n", asio::use_awaitable);
+    template <typename Stream>
+    asio::awaitable<std::string> line(Stream& stream) {
+        co_await asio::async_read_until(stream, buffer_, "\r\n", asio::use_awaitable);
         std::istream input(&buffer_);
         std::string value;
         std::getline(input, value);
@@ -97,7 +102,7 @@ private:
     asio::awaitable<void> serve() {
         co_await acceptor_.async_accept(socket_, asio::use_awaitable);
         try {
-            co_await serveConnection();
+            co_await serve_transport();
         } catch (const std::system_error&) {
             if (mode_ != Mode::kRejectThenPing) {
                 throw;
@@ -107,20 +112,31 @@ private:
             firstConnection_ = false;
             socket_ = asio::ip::tcp::socket(io_);
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
-            co_await serveConnection();
+            co_await serve_transport();
         }
     }
 
-    asio::awaitable<void> serveConnection() {
+    asio::awaitable<void> serve_transport() {
+        if (tls_context_ != nullptr) {
+            asio::ssl::stream<asio::ip::tcp::socket&> stream(socket_, *tls_context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            co_await serveConnection(stream);
+        } else {
+            co_await serveConnection(socket_);
+        }
+    }
+
+    template <typename Stream>
+    asio::awaitable<void> serveConnection(Stream& stream) {
         for (;;) {
-            const auto header = co_await line();
+            const auto header = co_await line(stream);
             const auto count = std::stoi(header.substr(1));
             std::vector<std::string> args;
             for (int index = 0; index < count; ++index) {
-                const auto bulk = co_await line();
+                const auto bulk = co_await line(stream);
                 const auto size = static_cast<std::size_t>(std::stoul(bulk.substr(1)));
                 if (buffer_.size() < size + 2) {
-                    co_await asio::async_read(socket_, buffer_,
+                    co_await asio::async_read(stream, buffer_,
                         asio::transfer_exactly(size + 2 - buffer_.size()), asio::use_awaitable);
                 }
                 std::string arg(size, '\0');
@@ -137,8 +153,8 @@ private:
             std::string reply;
             if ((mode_ == Mode::kCoalescedPings || mode_ == Mode::kCoalescedArrays) &&
                 args.front() == "PING") {
-                if (co_await line() != "*1" || co_await line() != "$4" ||
-                    co_await line() != "PING") {
+                if (co_await line(stream) != "*1" || co_await line(stream) != "$4" ||
+                    co_await line(stream) != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
                 reply = mode_ == Mode::kCoalescedArrays
@@ -173,11 +189,12 @@ private:
             } else {
                 reply = "-ERR test error\r\n";
             }
-            co_await asio::async_write(socket_, asio::buffer(reply), asio::use_awaitable);
+            co_await asio::async_write(stream, asio::buffer(reply), asio::use_awaitable);
         }
     }
 
     Mode mode_;
+    asio::ssl::context* tls_context_;
     bool firstConnection_{true};
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
@@ -762,4 +779,62 @@ RUVIA_TEST(redis_client_failed_connect_can_be_shutdown) {
     pool.loop(0).start(client.shutdown()).get();
     pool.join();
     RUVIA_CHECK(failed);
+}
+
+RUVIA_TEST(redis_tls_authenticates_identity_and_preserves_operation_memory) {
+    ruvia::test::tls_identity identity("redis.test");
+    RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+    auto config = peer.config();
+    config.tls = {.ca_file = identity.ca_file.string(), .server_name = "redis.test"};
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    pool.start();
+    pool.loop(0).start(checkRuntimeMemory(pool.loop(0), config, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
+    ruvia::test::tls_identity identity("redis.test");
+    for (const bool trust_ca : {false, true}) {
+        RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+        auto config = peer.config();
+        config.password = "must-not-send";
+        config.tls = {.ca_file = trust_ca ? identity.ca_file.string() : "", .server_name = trust_ca ? "wrong.test" : "redis.test"};
+        ruvia::EventLoopPool pool({.loopCount = 1});
+        ruvia::RedisClient client(pool.loop(0), config);
+        pool.start();
+        bool rejected = false;
+        try {
+            pool.loop(0).start(client.connect()).get();
+        } catch (const ruvia::RedisError& error) {
+            rejected = error.code() == ruvia::RedisError::Code::kConnectFailed;
+        }
+        RUVIA_CHECK(rejected);
+        pool.loop(0).start(client.shutdown()).get();
+        pool.join();
+    }
+}
+
+RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
+    ruvia::test::tls_identity identity("redis.test");
+    RedisPeer peer(RedisPeer::Mode::kNormal, &identity.context);
+    auto config = peer.config();
+    config.tls = {.ca_file = identity.ca_file.string(), .server_name = "redis.test"};
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    ruvia::RedisClient client(pool.loop(0), config);
+    {
+        auto cold = client.connect();
+    }
+    pool.start();
+    auto pending = pool.loop(0).start(blockedCommand(client));
+    peer.waitForBlockedCommand();
+    client.close();
+    bool cancelled = false;
+    try {
+        pending.get();
+    } catch (const ruvia::RedisError&) {
+        cancelled = true;
+    }
+    pool.loop(0).start(client.shutdown()).get();
+    pool.join();
+    RUVIA_CHECK(cancelled);
 }

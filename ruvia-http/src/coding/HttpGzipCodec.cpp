@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/coding/HttpContentCodec.h"
+#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
@@ -17,18 +18,18 @@ namespace ruvia::detail {
 namespace {
 
 voidpf gzipZalloc(voidpf opaque, uInt items, uInt size) noexcept {
-    return zlibPmrAllocate(static_cast<std::pmr::memory_resource*>(opaque), items, size);
+    return zlib_pmr_allocate_with_exception(opaque, items, size);
 }
 
 void gzipZfree(voidpf, voidpf address) noexcept {
     zlibPmrFree(address);
 }
 
-[[nodiscard]] z_stream makeGzipStream(std::pmr::memory_resource* resource) noexcept {
+[[nodiscard]] z_stream makeGzipStream(void* allocation_context) noexcept {
     z_stream stream{};
     stream.zalloc = &gzipZalloc;
     stream.zfree = &gzipZfree;
-    stream.opaque = resource;
+    stream.opaque = allocation_context;
     return stream;
 }
 
@@ -49,8 +50,10 @@ inline void refillGzipInput(
 HttpContentDecodeResult decodeGzipContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto stream = makeGzipStream(output.get_allocator().resource());
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
+    auto stream = makeGzipStream(&allocation_context);
     if (inflateInit2(&stream, 15 + 16) != Z_OK) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
     struct Guard final {
@@ -68,6 +71,9 @@ HttpContentDecodeResult decodeGzipContent(
         stream.next_out = reinterpret_cast<Bytef*>(buffer);
         stream.avail_out = static_cast<uInt>(sizeof(buffer));
         const int status = inflate(&stream, Z_NO_FLUSH);
+        if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END) {
+            allocation_context.rethrow_allocation_failure();
+        }
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (!appendDecodedBytes(output, buffer, produced, maxDecodedBytes)) {
             return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecodedSizeExceeded);
@@ -85,6 +91,7 @@ HttpContentDecodeResult decodeGzipContent(
             const auto availableInput = stream.avail_in;
             const int reset = inflateReset2(&stream, 15 + 16);
             if (reset != Z_OK) {
+                allocation_context.rethrow_allocation_failure();
                 return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
             }
             stream.next_in = nextInput;
@@ -111,9 +118,11 @@ HttpContentDecodeResult decodeGzipContent(
 HttpContentEncodeResult encodeGzipContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
-    auto stream = makeGzipStream(output.get_allocator().resource());
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
+    auto stream = makeGzipStream(&allocation_context);
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
         Z_OK) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
     }
     struct Guard final {
@@ -132,6 +141,9 @@ HttpContentEncodeResult encodeGzipContent(
                 stream.next_out = &probe;
                 stream.avail_out = 1;
                 const auto status = deflate(&stream, Z_FINISH);
+                if (status != Z_OK && status != Z_STREAM_END) {
+                    allocation_context.rethrow_allocation_failure();
+                }
                 if (status == Z_STREAM_END && stream.avail_out == 1) {
                     return HttpContentEncodeResultAccess::encoded(std::move(output));
                 }
@@ -151,6 +163,9 @@ HttpContentEncodeResult encodeGzipContent(
             status = deflate(&stream, stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
             return offset + (writable - stream.avail_out);
         });
+        if (status != Z_OK && status != Z_STREAM_END) {
+            allocation_context.rethrow_allocation_failure();
+        }
         if (status == Z_STREAM_END) {
             return HttpContentEncodeResultAccess::encoded(std::move(output));
         }

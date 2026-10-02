@@ -4,8 +4,6 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/HttpKnownMethod.h"
-
 namespace ruvia {
 
 enum class Http2FinishRequestStatus : std::uint8_t {
@@ -29,13 +27,11 @@ enum class Http2StreamReceiveStatus : std::uint8_t {
     kClosed,
 };
 
-// Borrowed route-selection snapshot for a server request. Views remain valid
+// Borrowed snapshot of the peer's HTTP/2 request metadata. Views remain valid
 // only until the connection consumes more input; no stream storage is exposed.
-struct Http2ServerRequestRouteView final {
-    HttpKnownMethod method{HttpKnownMethod::kUnknown};
-    std::string_view requestMethod{};
+struct http2_server_request_view final {
+    std::string_view method{};
     std::string_view path{};
-    bool webSocketConnect{false};
     std::string_view authority{};
     std::string_view protocol{};
 };

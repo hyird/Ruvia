@@ -13,10 +13,12 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
 #include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
@@ -364,4 +366,65 @@ RUVIA_TEST(client_response_memory_domain_joins_error_waiters_before_releasing_st
         pool.closeNow();
         co_await pool.join();
     });
+}
+
+RUVIA_TEST(client_response_memory_budget_is_shared_and_charged_before_buffer_growth) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    AllocationCounter upstream;
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.max_in_flight_bytes = 2048});
+    {
+        auto first = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget, upstream);
+        auto second = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget, upstream);
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            {
+                std::pmr::string held(first->resource());
+                held.assign(1024, 'a');
+                const auto charge = budget->in_flight_bytes();
+                RUVIA_CHECK(charge >= 1025U);
+                std::pmr::string rejected(second->resource());
+                bool limited = false;
+                try {
+                    rejected.assign(1024, 'b');
+                } catch (const ruvia::HttpClientError& error) {
+                    limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+                }
+                RUVIA_CHECK(limited);
+                RUVIA_CHECK_EQ(budget->in_flight_bytes(), charge);
+                RUVIA_CHECK_EQ(held.size(), 1024U);
+            }
+            RUVIA_CHECK_EQ(budget->in_flight_bytes(), 0U);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.liveBytes(), 0U);
+}
+
+RUVIA_TEST(client_response_decoder_allocations_share_the_receive_budget) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.max_in_flight_bytes = 128 * 1024});
+    auto domain = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget);
+    const std::string plain(256 * 1024, 'a');
+    auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, plain, {.maxEncodedBytes = 4096});
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    runOperation(worker, io, [&]() -> ruvia::Task<void> {
+        ruvia::detail::HttpClientResponseState state(worker.handle, domain->resource());
+        state.responseBodyPlan = ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
+        state.headers.push_back(ruvia::HttpHeader::copyOf("Content-Encoding", "gzip", state.resource));
+        state.pending.assign(encoded.encoded()->bytes());
+        ruvia::detail::configureHttpClientResponseDecoding(state);
+        bool limited = false;
+        try {
+            ruvia::detail::decodeHttpClientResponseContentEncoding(state, true, plain.size());
+        } catch (const ruvia::HttpClientError& error) {
+            limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+        }
+        RUVIA_CHECK(limited);
+        RUVIA_CHECK(state.pending.empty());
+        RUVIA_CHECK(state.buffered.empty());
+        co_return;
+    });
+    RUVIA_CHECK_EQ(budget->in_flight_bytes(), 0U);
 }

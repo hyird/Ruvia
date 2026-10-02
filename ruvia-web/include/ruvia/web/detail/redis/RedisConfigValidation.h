@@ -2,11 +2,13 @@
 
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/core/TcpSocketOptions.h"
+#include "ruvia/web/detail/client/ClientTlsConfigStorage.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
 namespace ruvia::detail {
 
 inline void validateRedisConfig(const RedisConfig& config) {
+    validate_client_tls_config(config.tls);
     ruvia::ensureConfigHost(config.host, "redis host must not be empty", "redis host is invalid",
         ruvia::kSeparatedPortHostRules);
     ruvia::ensureNonZeroPort(config.port, "redis port must not be zero");

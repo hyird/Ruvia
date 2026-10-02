@@ -268,7 +268,8 @@ std::optional<WebSocketEvent> WsConnection::poll() & {
 }
 
 std::optional<WebSocketEvent> WsConnection::pollImpl() & {
-    inboundInflated_.clear();
+    assembler_.release_completed();
+    std::pmr::string(inboundInflated_.get_allocator()).swap(inboundInflated_);
     if (closePhase_ == ClosePhase::kFinalOutputQueued ||
         closePhase_ == ClosePhase::kTransportEndReady || closePhase_ == ClosePhase::kClosed) {
         return WebSocketEvent::makeTransportEnd();

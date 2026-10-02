@@ -543,3 +543,37 @@ RUVIA_TEST(ws_public_driver_implementation_lifetime_and_construction_failures) {
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
 }
+
+RUVIA_TEST(ws_default_message_limit_rejects_oversized_declared_frame_before_payload) {
+    // A masked binary frame declaring 16 MiB + 1 bytes requires no payload to
+    // establish that it cannot fit the finite default message policy.
+    const std::string header("\x82\xff\x00\x00\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00", 14);
+    WebSocketConnection connection;
+    RUVIA_CHECK(connection.feed(header) == WebSocketFeedStatus::kAccepted);
+    const auto event = connection.nextEvent();
+    RUVIA_CHECK(event && event->protocolError());
+    RUVIA_CHECK_EQ(event->protocolError()->closeCode(), std::uint16_t{1009});
+    std::pmr::string input(header);
+    WebSocketServerProtocol protocol(input);
+    const auto borrowed_event = protocol.poll();
+    RUVIA_CHECK(borrowed_event && borrowed_event->protocolError());
+    RUVIA_CHECK_EQ(borrowed_event->protocolError()->closeCode(), std::uint16_t{1009});
+}
+
+RUVIA_TEST(ws_owned_input_backpressure_does_not_copy_rejected_bytes) {
+    CountingResource resource;
+    WebSocketConnection connection({.resource = &resource, .max_buffered_input_bytes = 16});
+    const auto baseline = resource.liveBytes;
+    const std::string oversized(17, 'x');
+    RUVIA_CHECK(connection.feed(oversized) == WebSocketFeedStatus::backpressured);
+    RUVIA_CHECK_EQ(resource.liveBytes, baseline);
+    const std::string ping("\x89\x81\x00\x00\x00\x00p", 7);
+    RUVIA_CHECK(connection.feed(ping) == WebSocketFeedStatus::kAccepted);
+    const auto event = connection.nextEvent();
+    RUVIA_CHECK(event && event->ping());
+    RUVIA_CHECK_EQ(event->ping()->payload(), "p");
+    (void)connection.consumeOutput(connection.outputPlan().bytes().size());
+    RUVIA_CHECK(!connection.nextEvent());
+    RUVIA_CHECK(connection.feed(ping) == WebSocketFeedStatus::kAccepted);
+    RUVIA_CHECK(connection.nextEvent()->ping() != nullptr);
+}

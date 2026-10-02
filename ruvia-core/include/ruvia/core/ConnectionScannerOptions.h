@@ -14,6 +14,9 @@ struct ConnectionScannerOptions final {
     std::optional<std::chrono::milliseconds> initialReadTimeout{};
     std::optional<std::chrono::milliseconds> payloadReadTimeout{};
     std::optional<std::chrono::milliseconds> writeTimeout{};
+    // Absolute phase deadlines, independent of successful I/O progress.
+    std::optional<std::chrono::milliseconds> initial_read_completion_timeout{};
+    std::optional<std::chrono::milliseconds> payload_read_completion_timeout{};
 };
 
 }  // namespace ruvia

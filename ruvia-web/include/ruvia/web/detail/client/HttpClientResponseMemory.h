@@ -37,7 +37,7 @@ public:
         return worker_;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept {
-        return memory_.resource();
+        return &receive_resource_;
     }
 
     [[nodiscard]] HttpClientResponseState* createState(HttpClientPool& pool);
@@ -61,9 +61,26 @@ private:
     void release() noexcept;
     void releaseRoot() noexcept;
 
+    class receive_resource final : public std::pmr::memory_resource {
+    public:
+        receive_resource(std::pmr::memory_resource& upstream, HttpClientResultBudgetDomain& budget)
+            : upstream_(upstream),
+              budget_(budget) {}
+
+    private:
+        void* do_allocate(std::size_t bytes, std::size_t alignment) override;
+        void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override;
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+        std::pmr::memory_resource& upstream_;
+        HttpClientResultBudgetDomain& budget_;
+    };
+
     WorkerMemory memory_;
     WorkerHandle worker_;
     std::shared_ptr<HttpClientResultBudgetDomain> resultBudgetDomain_;
+    mutable receive_resource receive_resource_;
     HttpClientResponseState* stateHead_{};
     std::size_t references_{1};
     Phase phase_{Phase::kPrepared};

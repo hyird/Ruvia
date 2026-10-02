@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <variant>
@@ -16,11 +18,14 @@ namespace ruvia::detail {
 class HttpMultipartDelimiterResult;
 
 [[nodiscard]] inline HttpMultipartDelimiterResult httpMatchMultipartDelimiterLine(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept;
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* padding_cursor = nullptr) noexcept;
 [[nodiscard]] inline HttpMultipartDelimiterResult httpFindInitialMultipartDelimiter(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept;
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* search_cursor = nullptr, std::size_t* padding_cursor = nullptr) noexcept;
 [[nodiscard]] inline HttpMultipartDelimiterResult httpFindMultipartBodyDelimiter(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept;
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* search_cursor = nullptr, std::size_t* padding_cursor = nullptr) noexcept;
 
 class HttpMultipartDelimiterNoMatch final {
 private:
@@ -115,11 +120,11 @@ public:
 
 private:
     friend HttpMultipartDelimiterResult httpMatchMultipartDelimiterLine(
-        std::string_view, const MultipartBoundary&, bool) noexcept;
+        std::string_view, const MultipartBoundary&, bool, std::size_t*) noexcept;
     friend HttpMultipartDelimiterResult httpFindInitialMultipartDelimiter(
-        std::string_view, const MultipartBoundary&, bool) noexcept;
+        std::string_view, const MultipartBoundary&, bool, std::size_t*, std::size_t*) noexcept;
     friend HttpMultipartDelimiterResult httpFindMultipartBodyDelimiter(
-        std::string_view, const MultipartBoundary&, bool) noexcept;
+        std::string_view, const MultipartBoundary&, bool, std::size_t*, std::size_t*) noexcept;
 
     using Value = std::variant<HttpMultipartDelimiterNoMatch, HttpMultipartDelimiterNeedInput,
         HttpMultipartPartDelimiter, HttpMultipartCloseDelimiter>;
@@ -181,7 +186,8 @@ private:
 // "--". A closing delimiter ending exactly at the current buffer boundary is
 // complete only when the I/O owner has signalled end-of-input.
 [[nodiscard]] inline HttpMultipartDelimiterResult httpMatchMultipartDelimiterLine(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept {
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* padding_cursor) noexcept {
     const auto value = boundary.value();
     const auto markerSize = value.size() + 2;
     if (!httpMultipartMarkerPrefixMatches(input, value)) {
@@ -206,8 +212,14 @@ private:
         cursor += 2;
     }
 
+    if (padding_cursor != nullptr) {
+        cursor = std::max(cursor, *padding_cursor);
+    }
     while (cursor < input.size() && (input[cursor] == ' ' || input[cursor] == '\t')) {
         ++cursor;
+    }
+    if (padding_cursor != nullptr) {
+        *padding_cursor = cursor;
     }
     if (cursor == input.size()) {
         if (close && inputFinished) {
@@ -230,37 +242,64 @@ private:
                  : HttpMultipartDelimiterResult::makePart(0, cursor + 2);
 }
 
+// Cursors belong to one retained input prefix and must be reset after consume.
+// Searches keep at most the three-byte delimiter prefix overlap; a candidate's
+// transport padding resumes at its last inspected byte.
 [[nodiscard]] inline HttpMultipartDelimiterResult httpFindInitialMultipartDelimiter(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept {
-    if (!input.empty() && input.front() == '-') {
-        auto match = httpMatchMultipartDelimiterLine(input, boundary, inputFinished);
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* search_cursor, std::size_t* padding_cursor) noexcept {
+    auto cursor = search_cursor == nullptr ? 0 : *search_cursor;
+    if (cursor == 0 && !input.empty() && input.front() == '-') {
+        auto match = httpMatchMultipartDelimiterLine(input, boundary, inputFinished, padding_cursor);
         if (match.noMatch() == nullptr) {
             return match;
         }
+        if (padding_cursor != nullptr) {
+            *padding_cursor = 0;
+        }
     }
-
-    for (auto prefix = input.find("\r\n--"); prefix != std::string_view::npos;
+    for (auto prefix = input.find("\r\n--", cursor); prefix != std::string_view::npos;
         prefix = input.find("\r\n--", prefix + 1)) {
-        auto match =
-            httpMatchMultipartDelimiterLine(input.substr(prefix + 2), boundary, inputFinished);
+        auto match = httpMatchMultipartDelimiterLine(
+            input.substr(prefix + 2), boundary, inputFinished, padding_cursor);
         if (match.noMatch() != nullptr) {
+            if (padding_cursor != nullptr) {
+                *padding_cursor = 0;
+            }
             continue;
         }
+        if (search_cursor != nullptr) {
+            *search_cursor = prefix;
+        }
         return match.rebased(prefix + 2);
+    }
+    if (search_cursor != nullptr) {
+        *search_cursor = input.size() > 3 ? input.size() - 3 : 0;
     }
     return HttpMultipartDelimiterResult::makeNoMatch();
 }
 
 [[nodiscard]] inline HttpMultipartDelimiterResult httpFindMultipartBodyDelimiter(
-    std::string_view input, const MultipartBoundary& boundary, bool inputFinished) noexcept {
-    for (auto prefix = input.find("\r\n--"); prefix != std::string_view::npos;
+    std::string_view input, const MultipartBoundary& boundary, bool inputFinished,
+    std::size_t* search_cursor, std::size_t* padding_cursor) noexcept {
+    const auto cursor = search_cursor == nullptr ? 0 : *search_cursor;
+    for (auto prefix = input.find("\r\n--", cursor); prefix != std::string_view::npos;
         prefix = input.find("\r\n--", prefix + 1)) {
-        auto match =
-            httpMatchMultipartDelimiterLine(input.substr(prefix + 2), boundary, inputFinished);
+        auto match = httpMatchMultipartDelimiterLine(
+            input.substr(prefix + 2), boundary, inputFinished, padding_cursor);
         if (match.noMatch() != nullptr) {
+            if (padding_cursor != nullptr) {
+                *padding_cursor = 0;
+            }
             continue;
         }
+        if (search_cursor != nullptr) {
+            *search_cursor = prefix;
+        }
         return match.rebased(prefix);
+    }
+    if (search_cursor != nullptr) {
+        *search_cursor = input.size() > 3 ? input.size() - 3 : 0;
     }
     return HttpMultipartDelimiterResult::makeNoMatch();
 }

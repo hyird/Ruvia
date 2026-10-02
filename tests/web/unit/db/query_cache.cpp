@@ -13,6 +13,7 @@
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/web/db/DbQuery.h"
+#include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 
@@ -39,6 +40,43 @@ DbRows sample(std::pmr::memory_resource* resource, std::string_view value = "a\0
     Access::rows(result).push_back(std::move(row));
     return result;
 }
+RUVIA_TEST(db_cache_scope_separates_alias_backend_endpoint_database_and_role) {
+    auto* resource = std::pmr::get_default_resource();
+#ifdef RUVIA_ENABLE_MARIADB
+    DbConfig config{.driver = DbDriver::kMariaDb};
+#else
+    DbConfig config{.driver = DbDriver::kPostgreSql};
+#endif
+    const detail::DbConfigStorage base(config, resource);
+    const auto scope = detail::db_cache_scope("shared", "primary", base, resource);
+    RUVIA_CHECK(scope != detail::db_cache_scope("shared", "replica", base, resource));
+    RUVIA_CHECK(scope != detail::db_cache_scope("another", "primary", base, resource));
+    for (int dimension = 0; dimension < 5; ++dimension) {
+        detail::DbConfigStorage changed(base, resource);
+        switch (dimension) {
+            case 0:
+                changed.host = "127.0.0.2";
+                break;
+            case 1:
+                ++changed.port;
+                break;
+            case 2:
+                changed.database = "another";
+                break;
+            case 3:
+                changed.username = "another";
+                break;
+            case 4:
+                changed.driver = base.driver == DbDriver::kMariaDb ? DbDriver::kPostgreSql : DbDriver::kMariaDb;
+                break;
+        }
+        RUVIA_CHECK(scope != detail::db_cache_scope("shared", "primary", changed, resource));
+    }
+    const auto other = detail::db_cache_scope("shared", "replica", base, resource);
+    RUVIA_CHECK(detail::dbCacheKey(scope, "explicit-id", {}, {}, config.driver, resource) !=
+                detail::dbCacheKey(other, "explicit-id", {}, {}, config.driver, resource));
+}
+
 RUVIA_TEST(db_cache_codec_preserves_binary_empty_null_and_owns_decoded_rows) {
     test::CountingMemoryResource resource;
     {

@@ -19,11 +19,48 @@
 
 namespace ruvia::detail {
 
+// A parse-local, conservative representation budget. Charging cumulative growth
+// (rather than only live sizes) also bounds storage retained by monotonic arenas.
+class json_parse_budget final {
+public:
+    explicit json_parse_budget(ModelParseOptions options = {}) noexcept
+        : elements_(options.max_array_elements),
+          bytes_(options.max_representation_bytes) {}
+
+    [[nodiscard]] bool consume_bytes(std::size_t bytes) noexcept {
+        if (bytes > bytes_) {
+            exhausted_ = true;
+            return false;
+        }
+        bytes_ -= bytes;
+        return true;
+    }
+
+    [[nodiscard]] bool consume_element() noexcept {
+        if (elements_ == 0) {
+            exhausted_ = true;
+            return false;
+        }
+        --elements_;
+        return true;
+    }
+
+    [[nodiscard]] bool exhausted() const noexcept {
+        return exhausted_;
+    }
+
+private:
+    std::size_t elements_;
+    std::size_t bytes_;
+    bool exhausted_{false};
+};
+
 struct ModelParseAccess final {
     template <typename ModelT>
     [[nodiscard]] static std::optional<ModelT> parseValue(std::string_view& input,
-        std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
-        return ModelT::ruviaParseJsonValue(input, resource, depth, stringStorage);
+        std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
+        json_parse_budget& budget) {
+        return ModelT::ruviaParseJsonValue(input, resource, depth, stringStorage, budget);
     }
 
     template <typename ModelT>
@@ -71,8 +108,8 @@ struct ModelParseAccess final {
 
 template <typename T>
 [[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth = 0,
-    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed);
+    std::pmr::memory_resource* resource, std::size_t depth,
+    ModelStringStorage stringStorage, json_parse_budget& budget);
 
 template <typename SequenceT>
 struct JsonSequenceValueTraits;
@@ -97,7 +134,8 @@ struct JsonSequenceValueTraits<BoxedArray<ValueT>> {
 
 template <typename SequenceT>
 [[nodiscard]] std::optional<SequenceT> parseJsonSequenceValue(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
+    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
+    json_parse_budget& budget) {
     using Traits = JsonSequenceValueTraits<std::remove_cvref_t<SequenceT>>;
     using ElementT = typename Traits::value_type;
 
@@ -118,7 +156,16 @@ template <typename SequenceT>
     }
 
     for (;;) {
-        auto element = parseJsonValue<ElementT>(remaining, resource, depth + 1, stringStorage);
+        if (!budget.consume_element()) {
+            return std::nullopt;
+        }
+        // Four element slots cover all geometric vector allocations, including
+        // old buffers held by an arena. Boxed values additionally own pointers.
+        constexpr auto element_bytes = 4 * (sizeof(ElementT) + sizeof(ElementT*));
+        if (!budget.consume_bytes(element_bytes)) {
+            return std::nullopt;
+        }
+        auto element = parseJsonValue<ElementT>(remaining, resource, depth + 1, stringStorage, budget);
         if (!element.has_value()) {
             return std::nullopt;
         }
@@ -138,15 +185,22 @@ template <typename SequenceT>
 
 template <typename T>
 [[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
+    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
+    json_parse_budget& budget) {
     using FieldT = std::remove_cvref_t<T>;
-    if (depth > kMaxJsonDepth) {
+    if (depth > kMaxJsonDepth || budget.exhausted()) {
         return std::nullopt;
     }
     auto remaining = input;
     if constexpr (isRuviaString<FieldT>) {
         const auto parsed = parseJsonString(remaining);
         if (!parsed.has_value()) {
+            return std::nullopt;
+        }
+        if ((stringStorage == ModelStringStorage::kOwned ||
+                parsed->encoding() != JsonStringEncoding::kLiteral) &&
+            (!budget.consume_bytes(parsed->raw().size()) ||
+                !budget.consume_bytes(parsed->raw().size() + sizeof(std::pmr::string)))) {
             return std::nullopt;
         }
         if (parsed->encoding() == JsonStringEncoding::kLiteral) {
@@ -165,7 +219,27 @@ template <typename T>
         value.assignOwned(std::move(*decoded));
         return value;
     } else if constexpr (isRuviaBytes<FieldT>) {
-        return parseModelBinaryValue(input, resource);
+        // Escaped base64 may allocate both a decoded token and a byte value.
+        const auto token = parseJsonString(remaining);
+        if (!token || !budget.consume_bytes(token->raw().size()) ||
+            !budget.consume_bytes(token->raw().size() + sizeof(std::pmr::string))) {
+            return std::nullopt;
+        }
+        std::optional<Bytes> value;
+        if (token->encoding() == JsonStringEncoding::kLiteral) {
+            value = decodeModelBinary(token->raw(), resource);
+        } else {
+            const auto decoded = decodeJsonString(token->raw(), resource);
+            if (!decoded) {
+                return std::nullopt;
+            }
+            value = decodeModelBinary(*decoded, resource);
+        }
+        if (!value) {
+            return std::nullopt;
+        }
+        input = remaining;
+        return value;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         const auto parsed = parseJsonString(remaining);
         if (!parsed.has_value() || parsed->encoding() != JsonStringEncoding::kLiteral) {
@@ -174,7 +248,7 @@ template <typename T>
         input = remaining;
         return parsed->raw();
     } else if constexpr (isRuviaArray<FieldT> || isRuviaBoxedArray<FieldT>) {
-        auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth, stringStorage);
+        auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth, stringStorage, budget);
         if (!parsed.has_value()) {
             return std::nullopt;
         }
@@ -200,7 +274,7 @@ template <typename T>
         return FieldT(parsed);
     } else if constexpr (isModel<FieldT>) {
         auto nested =
-            ModelParseAccess::parseValue<FieldT>(remaining, resource, depth, stringStorage);
+            ModelParseAccess::parseValue<FieldT>(remaining, resource, depth, stringStorage, budget);
         if (!nested.has_value()) {
             return std::nullopt;
         }
@@ -211,12 +285,28 @@ template <typename T>
     }
 }
 
+template <typename T>
+[[nodiscard]] std::optional<T> parseJsonValue(std::string_view& input,
+    std::pmr::memory_resource* resource, std::size_t depth = 0,
+    ModelStringStorage stringStorage = ModelStringStorage::kBorrowed) {
+    json_parse_budget budget;
+    if (!budget.consume_bytes(sizeof(T))) {
+        return std::nullopt;
+    }
+    return parseJsonValue<T>(input, resource, depth, stringStorage, budget);
+}
+
 // One complete typed JSON value, including structural checks inside arrays.
 // Borrowed reads are used by JSON views; standalone codecs request owned data.
 template <typename T>
 [[nodiscard]] std::optional<T> parseJsonDocument(std::string_view input,
-    std::pmr::memory_resource* resource, ModelStringStorage stringStorage) {
-    auto value = parseJsonValue<T>(input, resource, 0, stringStorage);
+    std::pmr::memory_resource* resource, ModelStringStorage stringStorage,
+    ModelParseOptions options = {}) {
+    json_parse_budget budget(options);
+    if (!budget.consume_bytes(sizeof(T))) {
+        return std::nullopt;
+    }
+    auto value = parseJsonValue<T>(input, resource, 0, stringStorage, budget);
     skipJsonWhitespace(input);
     if (!value || !input.empty() || !ModelValidationAccess::valueStructureValid(*value)) {
         return std::nullopt;

@@ -1250,6 +1250,8 @@ RUVIA_TEST(http3ServerConnectionChannelCarriesPushOpenResultsAcrossBothOwnerThre
         RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token) == Status::kWrongState);
         RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token,
                         Channel::IntentSettlement::kExecutedHandoff, Connection::PushStreamOpenResult{.status = Connection::PushStreamOpenResult::Status::kOpened, .streamId = 0}) == Status::kWrongState);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token,
+                        Channel::IntentSettlement::kExecutedHandoff, Connection::PushStreamOpenResult{.status = Connection::PushStreamOpenResult::Status::kOpened, .streamId = std::numeric_limits<std::uint64_t>::max()}) == Status::kWrongState);
         auto forged = first.token;
         forged.id.pushId = 123;
         RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, forged,

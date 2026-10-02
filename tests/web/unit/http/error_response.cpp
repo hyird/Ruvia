@@ -1,7 +1,9 @@
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
@@ -141,4 +143,25 @@ RUVIA_TEST(default_error_response_normalizes_non_error_status_and_status_text) {
                 {.status = ruvia::http_status::kNotFound, .code = "not_found", .message = "nope"}));
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kNotFound);
     }
+}
+
+RUVIA_TEST(default_error_response_and_exception_copy_limit_validation_details) {
+    ruvia::Validator validator;
+    validator.add("field", "required", "missing");
+    std::pmr::vector<ruvia::ValidationIssue> issues;
+    for (std::size_t index = 0; index < 2 * ruvia::max_validation_issues; ++index) {
+        issues.push_back(ruvia::detail::ValidationIssueAccess::copy(
+            validator.issues()[0], issues.get_allocator().resource()));
+    }
+    const ruvia::ValidationError error(issues);
+    RUVIA_CHECK_EQ(error.issues().size(), ruvia::max_validation_issues);
+    const auto response = makeDefaultErrorResponse(std::pmr::get_default_resource(),
+        HttpErrorInfo({.status = ruvia::http_status::kBadRequest, .validationIssues = issues}));
+    const auto body = response.bodyBytes();
+    std::size_t count = 0;
+    for (auto offset = body.find(R"("field":)"); offset != std::string_view::npos;
+        offset = body.find(R"("field":)", offset + 1)) {
+        ++count;
+    }
+    RUVIA_CHECK_EQ(count, ruvia::max_validation_issues);
 }

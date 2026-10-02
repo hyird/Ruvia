@@ -84,6 +84,9 @@ struct ModelOptions final {
 
 struct ModelParseOptions final {
     std::pmr::memory_resource* resource{nullptr};
+    // Totals across the complete typed JSON document, including nested arrays.
+    std::size_t max_array_elements{64 * 1024};
+    std::size_t max_representation_bytes{16 * 1024 * 1024};
 };
 
 struct ModelSerializeOptions final {

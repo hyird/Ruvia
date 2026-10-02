@@ -1068,6 +1068,7 @@ RUVIA_TEST(db_registry_owns_nested_pmr_configuration) {
     std::optional<ruvia::detail::DbDefinition> definition;
     auto config = testDbConfig();
     config.host = std::string(80, 'h');
+    config.tls.mode = ruvia::client_tls_mode::disabled;
     config.username = std::string(80, 'u');
     config.password = std::string(80, 'p');
     config.database = std::string(80, 'd');
@@ -1154,6 +1155,7 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
     {
         auto config = testDbConfig();
         config.host = std::string(80, 'h');
+        config.tls.mode = ruvia::client_tls_mode::disabled;
         config.username = std::string(80, 'u');
         config.password = std::string(80, 'p');
         config.database = std::string(80, 'd');
@@ -1174,6 +1176,7 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     {
         auto config = testDbConfig();
         config.host = std::string(80, 'h');
+        config.tls.mode = ruvia::client_tls_mode::disabled;
         config.connectTimeout = std::chrono::milliseconds::zero();
         TrackingResource resource;
         const ruvia::DbMigratorOptions options{
@@ -1187,6 +1190,7 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     {
         auto config = testDbConfig();
         config.host = std::string(80, 'h');
+        config.tls.mode = ruvia::client_tls_mode::disabled;
         TrackingResource resource;
         const ruvia::DbMigratorOptions options{
             .table = "invalid-table-name",
@@ -1205,6 +1209,7 @@ RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
     }};
     auto config = testDbConfig();
     config.host = std::string(80, 'h');
+    config.tls.mode = ruvia::client_tls_mode::disabled;
     TrackingResource resource;
     const ruvia::DbMigratorOptions options{
         .table = std::string(60, 't'),
@@ -1284,4 +1289,27 @@ RUVIA_TEST(db_sql_literal_cold_operations_release_owned_parameters) {
     });
     RUVIA_CHECK(rejected);
     RUVIA_CHECK_EQ(memory.allocationCount(), allocations);
+}
+
+RUVIA_TEST(database_tls_configuration_enforces_backend_identity_constraints) {
+#ifdef RUVIA_ENABLE_MARIADB
+    ruvia::DbConfig maria{.driver = ruvia::DbDriver::kMariaDb};
+    RUVIA_CHECK(maria.tls.mode == ruvia::client_tls_mode::verify_identity);
+    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
+    maria.host = "database.example.test";
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
+    maria.host = "127.0.0.1";
+    maria.tls.server_name = "database.example.test";
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
+    maria.tls = {.mode = ruvia::client_tls_mode::disabled};
+    maria.host = "database.example.test";
+    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(maria); }));
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    ruvia::DbConfig postgres{.driver = ruvia::DbDriver::kPostgreSql, .host = "database.example.test"};
+    postgres.tls.server_name = "expected.example.test";
+    RUVIA_CHECK(!ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(postgres); }));
+    postgres.tls.ca_file = std::string("bad\0file", 8);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { ruvia::detail::validateDbConfig(postgres); }));
+#endif
 }

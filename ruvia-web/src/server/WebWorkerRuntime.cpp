@@ -87,7 +87,9 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
         .idleTimeout = options.idleTimeout,
         .initialReadTimeout = options.requestHeaderTimeout,
         .payloadReadTimeout = options.requestBodyTimeout,
-        .writeTimeout = options.writeTimeout};
+        .writeTimeout = options.writeTimeout,
+        .initial_read_completion_timeout = options.header_completion_timeout,
+        .payload_read_completion_timeout = options.body_completion_timeout};
 }
 
 }  // namespace
@@ -132,6 +134,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
       finalizeSignal_(workerRuntime_.handle()),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
+      inbound_buffers_(memory_.resource(), validatedOptions.max_inbound_buffer_bytes_per_worker),
       listeners_(memory_.resource()),
       acceptors_(memory_.resource()),
       backgroundTasks_(workerRuntime_.handle(), {.resource = memory_.resource()}),
@@ -159,6 +162,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
           workerRuntime_.handle(), memory_.resource(), capabilities_,
           [this](const std::exception_ptr& failure) { failWorker(failure); })),
       workSetPool_(memory_) {
+    options_.inbound_buffer_pool = &inbound_buffers_;
     const auto http3Listener = std::ranges::find_if(listeners,
         [](const HttpServerListenerDefinition& listener) { return listener.http3.has_value(); });
     if (http3Listener != listeners.end()) {

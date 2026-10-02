@@ -596,7 +596,8 @@ int quic_stream_reset_callback(ngtcp2_conn*, std::int64_t stream_id,
         // Application retirement does not retire ngtcp2's stream: the peer's
         // RESET_STREAM can still arrive in response to our STOP_SENDING.
         auto& stream = found->second;
-        if (!stream.readable || final_size < stream.received_offset || stream.receive_fin ||
+        if (!stream.readable || final_size < stream.received_offset ||
+            (stream.receive_fin && final_size != stream.received_offset) ||
             error_code > NGTCP2_MAX_VARINT) {
             throw_protocol_error("ngtcp2 reset final size is inconsistent with received data");
         }
@@ -945,7 +946,6 @@ quic_operation_status quic_connection::terminate_bidirectional_stream(
     stream.input.clear();
     stream.input_offset = 0;
     stream.send_reset = true;
-    stream.receive_fin = true;
     stream.receive_end_observed = true;
     stream.retired = true;
     detail::retire_closed_streams(state, state.connection_);
@@ -959,7 +959,7 @@ quic_operation_status quic_connection::retire_completed_stream(std::uint64_t str
     const bool send_complete = !stream.writable ||
                                (stream.fin_submitted && !stream.send_reset && !stream.send_stopped);
     const bool receive_complete = !stream.readable ||
-                                  (stream.receive_fin && !stream.peer_reset_error &&
+                                  ((stream.receive_fin || stream.peer_reset_error.has_value()) &&
                                       stream.receive_end_observed && stream.input_offset == stream.input.size());
     if (!send_complete || !receive_complete) {
         return quic_operation_status::would_block;

@@ -543,6 +543,10 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     RUVIA_CHECK(firstReceived.fin && secondReceived.fin);
+    output.notifyTransportActivity();
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
+        (void)output.drive();
+    }
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
     RUVIA_CHECK_EQ(mailbox.drainReturns(), std::uint32_t{2});
     const auto firstInfo = output.streamInfo(firstId);
@@ -610,6 +614,8 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
                     .status == Output::Status::kAccepted);
     for (unsigned attempt = 0; attempt < 16; ++attempt) {
         (void)output.drive();
+        pair.pump();
+        output.notifyTransportActivity();
         const auto info = output.streamInfo(streamId);
         if (info && info->state == Output::StreamState::kFinished) {
             break;
@@ -708,8 +714,7 @@ RUVIA_TEST(http3ServerStreamOutputKeepsReceiveHalfOpenAfterResponseFin) {
     }
     info = output.streamInfo(streamId);
     RUVIA_CHECK(info && info->state == Output::StreamState::kFinished);
-    std::array<char, 1> readBuffer{};
-    RUVIA_CHECK_EQ(pair.server().read_stream(streamId, std::as_writable_bytes(std::span(readBuffer))).status,
+    RUVIA_CHECK_EQ(pair.server().read_health(streamId).status,
         ruvia::quic_stream_read_status::closed);
     RUVIA_CHECK(output.acceptControl({.kind = Http3StreamControl::Kind::kStreamFin,
                                          .id = messageId(streamId),
@@ -749,6 +754,7 @@ RUVIA_TEST(http3ServerStreamOutputDrainsBufferedRequestBeforeNormalRetirement) {
     const auto request = pair.readServerToTerminal(streamId);
     RUVIA_CHECK(request.status == ruvia::quic_stream_read_status::fin);
     RUVIA_CHECK_EQ(request.bytes, std::string("x"));
+    pair.pump();
     output.notifyTransportActivity();
     for (unsigned attempt = 0; attempt < 16; ++attempt) {
         (void)output.drive();
@@ -805,8 +811,7 @@ RUVIA_TEST(http3ServerStreamOutputRetiresAfterPeerReset) {
     }
     info = output.streamInfo(streamId);
     RUVIA_CHECK(info && info->state == Output::StreamState::kFinished);
-    std::array<char, 1> readBuffer{};
-    RUVIA_CHECK_EQ(pair.server().read_stream(streamId, std::as_writable_bytes(std::span(readBuffer))).status,
+    RUVIA_CHECK_EQ(pair.server().read_health(streamId).status,
         ruvia::quic_stream_read_status::closed);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
 #endif
@@ -833,8 +838,7 @@ RUVIA_TEST(http3ServerStreamOutputStopForceClosesAnOpenReceiveHalf) {
     info = output.streamInfo(streamId);
     RUVIA_CHECK(info && info->state == Output::StreamState::kCancelled);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    std::array<char, 1> readBuffer{};
-    RUVIA_CHECK_EQ(pair.server().read_stream(streamId, std::as_writable_bytes(std::span(readBuffer))).status,
+    RUVIA_CHECK_EQ(pair.server().read_health(streamId).status,
         ruvia::quic_stream_read_status::closed);
 #endif
 }
@@ -1107,6 +1111,10 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
                 (void)mailbox.drainReturns();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
+            output.notifyTransportActivity();
+            for (unsigned attempt = 0; attempt < 16; ++attempt) {
+                (void)output.drive();
+            }
             const auto blockedInfo = output.streamInfo(blockedId);
             const auto siblingInfo = output.streamInfo(siblingId);
             RUVIA_CHECK_EQ(timedOut, std::size_t{1});
@@ -1152,6 +1160,10 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             RUVIA_CHECK(freshReceived.fin);
+            output.notifyTransportActivity();
+            for (unsigned attempt = 0; attempt < 16; ++attempt) {
+                (void)output.drive();
+            }
             RUVIA_CHECK_EQ(freshReceived.bytes.size(), freshWire.size());
             RUVIA_CHECK_EQ(timedOut, std::size_t{1});
             RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kFinished);
@@ -1580,6 +1592,10 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     }
     RUVIA_CHECK(push.fin);
     RUVIA_CHECK(response.fin);
+    output.notifyTransportActivity();
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
+        (void)output.drive();
+    }
     RUVIA_CHECK_EQ(push.bytes, std::string(pushWire.data(), pushWire.size()));
     RUVIA_CHECK_EQ(response.bytes, std::string(parentWire.data(), parentWire.size()));
     RUVIA_CHECK(output.streamInfo(first.stream_id)->state == Output::StreamState::kFinished);

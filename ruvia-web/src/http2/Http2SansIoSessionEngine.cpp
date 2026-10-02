@@ -55,13 +55,17 @@ Http2SansIoSessionEngine::Http2SansIoSessionEngine(asio::any_io_executor executo
       routes_(routes),
       worker_(worker),
       session_(std::move(session)),
+      inbound_buffers_(session_.options().inbound_buffer_pool != nullptr
+                           ? session_.options().inbound_buffer_pool
+                           : worker.resource(),
+          session_.options().max_inbound_buffer_bytes_per_connection),
       remoteAddress_(session_.services().connInfo().remote().address()),
       connection_(ruvia::Http2Connection::server({.resource = worker.resource()})),
       writeSignal_(session_.services().worker()),
       outputBudget_(session_.services().worker()),
       handlerFinished_(session_.services().worker()),
       writerFinished_(session_.services().worker()),
-      streamRuntimes_(worker.resource(), termination_),
+      streamRuntimes_(worker.resource(), termination_, &inbound_buffers_),
       bufferedResponseWriter_(connection_, streamRuntimes_, worker, writeSignal_, outputBudget_) {}
 
 bool Http2SansIoSessionEngine::wantsWrite() const noexcept {
@@ -204,8 +208,8 @@ Task<bool> Http2SansIoSessionEngine::pushRequest(std::uint32_t associatedStreamI
     }
     const auto id = promised->streamId();
     try {
-        const auto route = connection_.serverRequestRoute(id);
-        auto* runtime = route ? http2SelectStreamRoute(routes_, *route, streamRuntimes_, id) : nullptr;
+        const auto requestView = connection_.server_request_view(id);
+        auto* runtime = requestView ? http2SelectStreamRoute(routes_, *requestView, streamRuntimes_, id) : nullptr;
         if (runtime == nullptr || !runtime->holdRequestHead(std::move(*promised))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
@@ -229,7 +233,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     const auto requestStart = std::chrono::steady_clock::now();
     const auto& options = session_.options();
     auto& scannerEntry = session_.scannerEntry();
-    const auto& baseServices = session_.services();
+    const auto baseServices = session_.services().with_inbound_buffer_pool(inbound_buffers_);
 
     std::array<std::byte, kRequestArenaStackBytes> arenaBlock;
     std::optional<RequestMemory> requestMemoryStorage;
@@ -480,7 +484,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                             writeSignal_, outputBudget_, executor_),
                         baseServices.worker(), scannerEntry, webSocketEndpoint->lifecycle(),
                         ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
-                        context.pool(), std::string_view{},
+                        &inbound_buffers_, std::string_view{},
                         submittedHandshake->compression(), webSocketEndpoint->deflate().compressionLevel);
                     co_await invokeWebSocketHandler(
                         *webSocketConnection, scannerEntry, webSocketEndpoint->handler(), context);
@@ -647,11 +651,11 @@ void Http2SansIoSessionEngine::drainEvents() {
         wakeWriter();
     };
     const auto resolveStreamRoute = [&](std::uint32_t streamId) {
-        const auto route = connection_.serverRequestRoute(streamId);
-        if (!route.has_value()) {
+        const auto requestView = connection_.server_request_view(streamId);
+        if (!requestView.has_value()) {
             return static_cast<Http2SansIoStreamRuntime*>(nullptr);
         }
-        return http2SelectStreamRoute(routes_, *route, streamRuntimes_, streamId);
+        return http2SelectStreamRoute(routes_, *requestView, streamRuntimes_, streamId);
     };
     const auto onMessageHead = [&](Http2RequestHeadEvent* messageHead) {
         const auto streamId = messageHead->streamId();

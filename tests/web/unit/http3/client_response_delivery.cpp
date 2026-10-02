@@ -1042,7 +1042,7 @@ RUVIA_TEST(http3_client_response_delivery_holds_compressed_bytes_until_fin_and_d
         FakeRead fin{.fin = true};
         const auto finished = driver.drive(0, fin);
         RUVIA_CHECK(finished.status == Driver::Status::kResponseComplete);
-        ruvia::detail::decodeHttpClientResponseContentEncoding(state, true, 1024, &resource);
+        ruvia::detail::decodeHttpClientResponseContentEncoding(state, true, 1024);
         RUVIA_CHECK(!state.bodyDecodeRequired);
         RUVIA_CHECK_EQ(std::string_view(state.buffered), plain);
         RUVIA_CHECK_EQ(receiveBudget.used(), plain.size());
@@ -1106,7 +1106,7 @@ RUVIA_TEST(http3_client_response_delivery_decode_errors_and_decoded_limits_publi
             std::exception_ptr failure;
             try {
                 ruvia::detail::decodeHttpClientResponseContentEncoding(
-                    state, true, item.decodedLimit, &resource);
+                    state, true, item.decodedLimit);
             } catch (const ruvia::HttpClientError& error) {
                 RUVIA_CHECK(error.code() == item.error);
                 failure = std::current_exception();

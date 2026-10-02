@@ -1,4 +1,8 @@
 #include <cstdint>
+#include <memory_resource>
+#include <new>
+#include <stdexcept>
+#include <string>
 
 #include "ruvia/http/HttpContentEncoder.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
@@ -9,6 +13,56 @@ using ruvia::HttpContentEncoder;
 using ruvia::HttpContentEncodeStep;
 
 namespace {
+
+class codec_test_allocation_error final : public std::bad_alloc {
+public:
+    [[nodiscard]] const char* what() const noexcept override {
+        return "codec test allocation failure";
+    }
+};
+
+class throwing_memory_resource final : public std::pmr::memory_resource {
+public:
+    explicit throwing_memory_resource(std::size_t fail_at)
+        : fail_at_(fail_at) {}
+
+    [[nodiscard]] std::size_t live_bytes() const noexcept {
+        return live_bytes_;
+    }
+    [[nodiscard]] std::size_t allocations() const noexcept {
+        return allocations_;
+    }
+    [[nodiscard]] std::size_t releases() const noexcept {
+        return releases_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (++allocation_attempts_ == fail_at_) {
+            throw codec_test_allocation_error();
+        }
+        auto* allocation = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        live_bytes_ += bytes;
+        ++allocations_;
+        return allocation;
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+        live_bytes_ -= bytes;
+        ++releases_;
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    const std::size_t fail_at_;
+    std::size_t allocation_attempts_{};
+    std::size_t allocations_{};
+    std::size_t live_bytes_{};
+    std::size_t releases_{};
+};
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -392,6 +446,42 @@ RUVIA_TEST(http_content_whole_buffer_results_keep_their_memory_resource_and_rele
         decodeAllocationThrew = true;
     }
     RUVIA_CHECK(decodeAllocationThrew);
+}
+
+RUVIA_TEST(http_content_codecs_rethrow_allocator_exceptions_and_release_partial_state) {
+    const struct {
+        HttpContentCoding coding;
+        std::string encoded;
+    } cases[] = {
+        {HttpContentCoding::kGzip, gzipCompress({})},
+        {HttpContentCoding::kBrotli, brotliCompress({})},
+        {HttpContentCoding::kZstd, zstdCompress({})},
+    };
+
+    for (const auto& test : cases) {
+        for (const bool decode : {false, true}) {
+            bool observed_allocation_exception = false;
+            for (std::size_t fail_at = 1; fail_at <= 16; ++fail_at) {
+                throwing_memory_resource resource(fail_at);
+                try {
+                    if (decode) {
+                        auto result = decodeHttpContent(test.coding, test.encoded,
+                            {.maxDecodedBytes = 0, .resource = &resource});
+                        RUVIA_CHECK(result.decoded() != nullptr);
+                    } else {
+                        auto result = encodeHttpContent(test.coding, {},
+                            {.maxEncodedBytes = 1024, .resource = &resource});
+                        RUVIA_CHECK(result.encoded() != nullptr);
+                    }
+                } catch (const codec_test_allocation_error&) {
+                    observed_allocation_exception = true;
+                }
+                RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+                RUVIA_CHECK_EQ(resource.releases(), resource.allocations());
+            }
+            RUVIA_CHECK(observed_allocation_exception);
+        }
+    }
 }
 
 RUVIA_TEST(http_content_decoder_state_uses_the_callers_memory_resource) {

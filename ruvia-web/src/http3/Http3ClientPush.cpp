@@ -143,7 +143,7 @@ void Http3ClientConnection::finishPush(PushList::iterator found, Outcome outcome
                     const auto plan = push.delivery->responseBodyPlan();
                     decodeHttpClientResponseContentEncoding(*state,
                         plan && plan->contentSemantics() == HttpResponseContentSemantics::kWithContent,
-                        maxResponseBytes_, resource_);
+                        maxResponseBytes_);
                     if (push.deadline && std::chrono::steady_clock::now() >= *push.deadline) {
                         state->discardResponseBody();
                         (void)push.delivery->commitTerminalError(HttpClientError::Code::kTimeout);

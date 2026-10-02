@@ -486,7 +486,7 @@ RUVIA_TEST(http2_public_dropped_credit_retries_failed_window_update_once) {
                 ruvia::Http2SubmitStatus::kAccepted);
 }
 
-RUVIA_TEST(http2_public_server_route_view_hides_stream_storage) {
+RUVIA_TEST(http2_public_server_request_view_hides_stream_storage) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::Http2Connection::server({.resource = &resource});
     RUVIA_CHECK(!server.headerBlockInProgress());
@@ -494,13 +494,11 @@ RUVIA_TEST(http2_public_server_route_view_hides_stream_storage) {
     const auto wire = serverRequestWire(&resource, {});
     RUVIA_CHECK(server.feed(wire) == ruvia::Http2FeedResult::kAccepted);
 
-    const auto route = server.serverRequestRoute(1);
-    RUVIA_CHECK(route.has_value());
-    RUVIA_CHECK(route->method == ruvia::HttpKnownMethod::kPost);
-    RUVIA_CHECK(route->requestMethod == "POST");
-    RUVIA_CHECK(route->path == "/upload");
-    RUVIA_CHECK(!route->webSocketConnect);
-    RUVIA_CHECK(!server.serverRequestRoute(3).has_value());
+    const auto requestView = server.server_request_view(1);
+    RUVIA_CHECK(requestView.has_value());
+    RUVIA_CHECK(requestView->method == "POST");
+    RUVIA_CHECK(requestView->path == "/upload");
+    RUVIA_CHECK(!server.server_request_view(3).has_value());
     const auto window = server.sendWindowState(1);
     RUVIA_CHECK(window.has_value());
     RUVIA_CHECK(window->available == 65535);

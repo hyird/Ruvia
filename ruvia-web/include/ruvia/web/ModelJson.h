@@ -49,7 +49,7 @@ template <typename T>
     requires detail::isModelJsonValue<T>
 [[nodiscard]] std::optional<T> fromJson(std::string_view body, ModelParseOptions options = {}) {
     return detail::parseJsonDocument<T>(body, detail::pmrResourceOrDefault(options.resource),
-        detail::ModelStringStorage::kOwned);
+        detail::ModelStringStorage::kOwned, options);
 }
 
 // Serializes current values without invoking field rules or initializers.

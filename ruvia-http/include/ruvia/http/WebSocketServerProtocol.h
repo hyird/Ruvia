@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocolTypes.h"
 
@@ -24,7 +25,7 @@ struct WebSocketServerProtocolOptions final {
 class WebSocketServerProtocol final {
 public:
     explicit WebSocketServerProtocol(std::pmr::string& input,
-        ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
+        ProtocolByteLimit messageLimit = ProtocolByteLimit::limited(kDefaultMaxWebSocketMessageBytes),
         WebSocketCompression compression = (WebSocketCompression{}));
     WebSocketServerProtocol(std::pmr::string& input, ProtocolByteLimit messageLimit,
         WebSocketServerProtocolOptions options);

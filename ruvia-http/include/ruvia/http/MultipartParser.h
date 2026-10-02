@@ -131,6 +131,9 @@ private:
 struct MultipartParseOptions final {
     MultipartBoundary boundary;
     std::pmr::memory_resource* resource{nullptr};
+    std::size_t max_parts{1024};
+    // Cumulative wire header bytes bound decoded names, filenames and metadata.
+    std::size_t max_metadata_bytes{1024 * 1024};
 };
 
 class MultipartBoundaryNotApplicable final {
@@ -278,6 +281,8 @@ enum class MultipartParseError : std::uint8_t {
     kInvalidContentDisposition,
     kMissingFieldName,
     kDelimiterLineTooLarge,
+    too_many_parts,
+    metadata_too_large,
 };
 
 class MultipartPollFailure final {
@@ -549,6 +554,11 @@ private:
     std::string_view currentContentTypeView_;
     State state_{ProgressState::kBoundary};
     std::size_t pendingEraseBytes_{0};
+    std::size_t remaining_parts_;
+    std::size_t remaining_metadata_bytes_;
+    std::size_t header_scan_offset_{0};
+    std::size_t delimiter_scan_offset_{0};
+    std::size_t delimiter_padding_offset_{0};
     bool nextChunkIsFirst_{false};
     bool firstBoundary_{true};
     bool currentFilenamePresent_{false};
