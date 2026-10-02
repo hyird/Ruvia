@@ -82,6 +82,8 @@ public:
     }
 
 private:
+    friend struct http3_worker_server_test_access;
+
     struct Slot final {
         explicit Slot(std::pmr::memory_resource* resource)
             : remoteAddress(resource),
@@ -130,6 +132,7 @@ private:
     [[nodiscard]] bool finishTerminalSlots() noexcept;
     [[nodiscard]] bool finalizeWorkerPublications(Slot& slot) noexcept;
     void finishStoppedSlots() noexcept;
+    [[nodiscard]] Task<void> join_retired_slot(Slot& slot);
 
     const WorkerHandle& worker_;
     WorkerMemory& memory_;
@@ -148,6 +151,13 @@ private:
     Http3ServerBodyBudget bodyBudget_;
     TaskScope retirementTasks_;
     std::pmr::vector<Slot> slots_;
+    struct PendingInput final {
+        Http3StreamMailbox::BorrowedBlock block;
+        std::uint64_t sequence{};
+    };
+    std::pmr::vector<PendingInput> pendingInput_;
+    std::size_t pendingInputCount_{};
+    std::uint64_t nextInputSequence_{};
     Http3StreamMailbox* requestMailbox_{};
     Http3ServerConnectionChannel::Notification networkWake_{};
     std::size_t maxConnections_{};

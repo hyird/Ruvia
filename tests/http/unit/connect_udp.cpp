@@ -1,8 +1,10 @@
 #include <array>
 #include <string>
 
+#include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpDatagram.h"
+#include "ruvia/http/HttpResponseServer.h"
 
 #include "test_harness.h"
 
@@ -57,4 +59,69 @@ RUVIA_TEST(http_datagram_session_checks_negotiation_context_size_and_half_close)
     RUVIA_CHECK(!capsule.prepareUdpDatagram(payload, ruvia::HttpDatagramTransport::kQuic));
     const std::string tooLarge(65528, 'x');
     RUVIA_CHECK(!capsule.prepareUdpDatagram(tooLarge, ruvia::HttpDatagramTransport::kCapsule));
+}
+
+RUVIA_TEST(http_connect_udp_response_preparation_owns_required_fields_and_http1_upgrade_framing) {
+    for (const auto version : {ruvia::HttpProtocolVersion::kHttp11, ruvia::HttpProtocolVersion::kHttp2, ruvia::HttpProtocolVersion::kHttp3}) {
+        ruvia::HttpResponse response;
+        response.status(ruvia::http_status::kCreated);
+        response.header("X-Proxy", "test");
+        auto prepared = ruvia::prepareHttpConnectUdpResponse(std::move(response), version);
+        RUVIA_CHECK(prepared.has_value());
+        if (!prepared) {
+            continue;
+        }
+        RUVIA_CHECK(prepared->header("capsule-protocol") == "?1");
+        RUVIA_CHECK(prepared->header("x-proxy") == "test");
+        if (version == ruvia::HttpProtocolVersion::kHttp11) {
+            RUVIA_CHECK(prepared->status() == ruvia::http_status::kSwitchingProtocols);
+            auto plan = ruvia::prepareHttp1ConnectUdpResponseHead(*prepared);
+            RUVIA_CHECK(plan.has_value());
+            if (plan) {
+                ruvia::HttpResponseHeadBuffer head{std::pmr::polymorphic_allocator<char>{}};
+                ruvia::appendHttp1ResponseHead(*prepared, head, *plan);
+                RUVIA_CHECK(head.view().starts_with("HTTP/1.1 101 "));
+                RUVIA_CHECK(head.view().find("Connection: Upgrade\r\n") != std::string_view::npos);
+                RUVIA_CHECK(head.view().find("Content-Length:") == std::string_view::npos);
+                RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);
+            }
+        } else {
+            RUVIA_CHECK(prepared->status() == ruvia::http_status::kCreated);
+            RUVIA_CHECK(!prepared->header("connection") && !prepared->header("upgrade"));
+        }
+    }
+    for (const auto field : {"Content-Length", "Transfer-Encoding", "Content-Type", "Content-Encoding", "Connection", "Upgrade", "Trailer"}) {
+        ruvia::HttpResponse invalid;
+        invalid.header(field, field == std::string_view("Content-Length") ? "0" : field == std::string_view("Content-Type") ? "application/octet-stream"
+                                                                                                                            : "test");
+        RUVIA_CHECK(!ruvia::prepareHttpConnectUdpResponse(std::move(invalid), ruvia::HttpProtocolVersion::kHttp3));
+    }
+    ruvia::HttpResponse disabled;
+    disabled.header("Capsule-Protocol", "?0");
+    RUVIA_CHECK(!ruvia::prepareHttpConnectUdpResponse(std::move(disabled), ruvia::HttpProtocolVersion::kHttp11));
+    ruvia::HttpResponse content;
+    content.body("forbidden");
+    RUVIA_CHECK(!ruvia::prepareHttpConnectUdpResponse(std::move(content), ruvia::HttpProtocolVersion::kHttp2));
+}
+
+RUVIA_TEST(http_connect_udp_http1_request_writer_generates_upgrade_without_message_content) {
+    ruvia::Http1ClientRequestWriter writer;
+    std::array<char, 4096> buffer;
+    const std::array fields{ruvia::HttpHeaderView{"Capsule-Protocol", "?1"}, ruvia::HttpHeaderView{"X-Proxy", "test"}};
+    const auto origin = ruvia::HttpOriginView::https({.host = "[::1]", .port = 8443});
+    auto result = writer.prepareConnectUdp(origin, "/udp", fields, buffer);
+    RUVIA_CHECK(result.prepared());
+    if (result.prepared()) {
+        const auto head = result.prepared()->head();
+        RUVIA_CHECK(head.starts_with("GET /udp HTTP/1.1\r\n"));
+        RUVIA_CHECK(head.find("Host: [::1]:8443\r\n") != std::string_view::npos);
+        RUVIA_CHECK(head.find("Upgrade: connect-udp\r\n") != std::string_view::npos);
+        RUVIA_CHECK(head.find("Content-Length:") == std::string_view::npos);
+        RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string_view::npos);
+    }
+    auto missing = writer.prepareConnectUdp(origin, "/udp", {}, buffer);
+    RUVIA_CHECK(missing.failure());
+    const std::array invalid{ruvia::HttpHeaderView{"Capsule-Protocol", "?0"}};
+    auto disabled = writer.prepareConnectUdp(origin, "/udp", invalid, buffer);
+    RUVIA_CHECK(disabled.failure());
 }

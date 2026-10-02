@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -29,6 +30,8 @@ struct Http3ClientSansIoResponseLimits final {
 
 enum class Http3ClientSansIoSessionStatus : std::uint8_t {
     kNeedMoreData,
+    kQpackBlocked,
+    kPushPromisePending,
     kMessageEnd,
     kReset,
     kStreamError,
@@ -43,6 +46,7 @@ struct Http3ClientSansIoSessionResult final {
     Http3ClientSansIoSessionStatus status{Http3ClientSansIoSessionStatus::kNeedMoreData};
     Http3ConnectionErrorScope scope{Http3ConnectionErrorScope::kNone};
     Http3ConnectionErrorCode code{Http3ConnectionErrorCode::kNoError};
+    std::size_t consumedBytes{};
 };
 
 // Optional synchronous event sink for an incremental response owner. When set,
@@ -122,6 +126,53 @@ public:
     // delivery. This is local abandonment, not a synthetic peer RESET. The
     // terminal response remains owned until release(streamId).
     [[nodiscard]] bool cancelRequest(std::uint64_t streamId) noexcept;
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+    [[nodiscard]] std::size_t maxLiveStreams() const noexcept {
+        return limits_.maxLiveStreams;
+    }
+    [[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeRequestHead(
+        std::uint64_t streamId, Http3ClientRequestHeadView view) {
+        Http3FieldSectionLimits limits{};
+        if (const auto& settings = connection_.peerSettings(); settings && settings->maxFieldSectionSize) {
+            limits.maxDecodedBytes = static_cast<std::size_t>(std::min<std::uint64_t>(limits.maxDecodedBytes, *settings->maxFieldSectionSize));
+        }
+        return connection_.encodeClientRequestHead(streamId, view, limits);
+    }
+    [[nodiscard]] Http3Settings localSettings() const noexcept {
+        return connection_.localSettings();
+    }
+    [[nodiscard]] bool queuePriorityUpdate(std::uint64_t streamId, HttpPriority priority);
+    [[nodiscard]] bool queueMaxPushId(std::uint64_t maximum);
+    [[nodiscard]] bool queueCancelPush(std::uint64_t pushId);
+    [[nodiscard]] bool queuePushPriorityUpdate(std::uint64_t pushId, HttpPriority priority);
+    // Borrowed synchronous push events, including stream association and
+    // terminal events. The driver commits terminal results after feed returns.
+    void observePushes(Http3ConnectionCallback callback, void* context) noexcept {
+        pushObserver_ = {.callback = callback, .context = context};
+    }
+    // Called after the corresponding QUIC stream can no longer deliver input.
+    [[nodiscard]] bool retirePushStream(std::uint64_t streamId);
+    void observeOrigins(Http3ConnectionCallback callback, void* context) noexcept {
+        originObserver_ = {.callback = callback, .context = context};
+    }
+    [[nodiscard]] std::span<const char> pendingControlOutput() const noexcept {
+        return controlOutput_;
+    }
+    [[nodiscard]] bool consumeControlOutput(std::size_t bytes) noexcept;
+    [[nodiscard]] std::span<const char> pendingEncoderOutput() const noexcept {
+        return connection_.pendingQpackEncoderOutput();
+    }
+    [[nodiscard]] bool consumeEncoderOutput(std::size_t bytes) noexcept {
+        return connection_.consumeQpackEncoderOutput(bytes);
+    }
+    [[nodiscard]] std::span<const char> pendingDecoderOutput() const noexcept {
+        return connection_.pendingQpackDecoderOutput();
+    }
+    [[nodiscard]] bool consumeDecoderOutput(std::size_t bytes) noexcept {
+        return connection_.consumeQpackDecoderOutput(bytes);
+    }
     [[nodiscard]] std::size_t liveStreamCount() const noexcept;
     [[nodiscard]] std::size_t retainedBodyBytes() const noexcept;
     // The sole connection driver observes peer SETTINGS and GOAWAY before
@@ -169,6 +220,9 @@ private:
     Http3ClientBodyBudget localBodyBudget_;
     Http3ClientBodyBudget* bodyBudget_;
     Http3Connection connection_;
+    std::pmr::string controlOutput_;
+    Http3ClientResponseEventSink originObserver_{};
+    Http3ClientResponseEventSink pushObserver_{};
     std::pmr::unordered_map<std::uint64_t, StoredResponse> responses_;
     std::size_t retainedBodyBytes_{0};
     bool feeding_{};

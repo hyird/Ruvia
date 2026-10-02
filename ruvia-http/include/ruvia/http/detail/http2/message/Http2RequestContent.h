@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <variant>
 
 namespace ruvia::detail {
@@ -33,10 +34,17 @@ private:
 };
 
 class Http2StreamingRequestContent final {
+public:
+    [[nodiscard]] constexpr std::optional<std::uint64_t> expectedLength() const noexcept {
+        return length_;
+    }
+
 private:
     friend class Http2RequestContent;
 
-    constexpr Http2StreamingRequestContent() noexcept = default;
+    explicit constexpr Http2StreamingRequestContent(std::optional<std::uint64_t> length) noexcept
+        : length_(length) {}
+    std::optional<std::uint64_t> length_{};
 };
 
 class Http2RequestContent final {
@@ -49,8 +57,8 @@ public:
         return Http2RequestContent(Http2KnownLengthRequestContent(length));
     }
 
-    [[nodiscard]] static constexpr Http2RequestContent streaming() noexcept {
-        return Http2RequestContent(Http2StreamingRequestContent());
+    [[nodiscard]] static constexpr Http2RequestContent streaming(std::optional<std::uint64_t> length = {}) noexcept {
+        return Http2RequestContent(Http2StreamingRequestContent(length));
     }
 
     [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const& noexcept {

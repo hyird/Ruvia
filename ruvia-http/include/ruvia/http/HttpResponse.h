@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
@@ -15,6 +16,7 @@
 
 #include "ruvia/http/Attributes.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
@@ -22,6 +24,7 @@
 
 namespace ruvia {
 
+enum class HttpConnectUdpError : std::uint8_t;
 class HttpResponse;
 class HttpResponseHeaders;
 
@@ -354,6 +357,7 @@ public:
         std::pmr::string&& value, std::string_view contentEncoding);
 
 private:
+    friend std::expected<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse, HttpProtocolVersion);
     friend struct detail::HttpResponseBodyAccess;
     friend struct detail::HttpResponseFileAccess;
     friend struct detail::HttpResponseHeaderStateAccess;

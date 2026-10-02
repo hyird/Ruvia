@@ -19,9 +19,13 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpPush.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/web/HttpClientInformationalResponse.h"
 #include "ruvia/web/HttpClientResponseBytes.h"
+#include "ruvia/web/detail/client/HttpClientTunnelState.h"
+#include "ruvia/web/detail/client/HttpClientUploadState.h"
 #include "ruvia/web/detail/http3/Http3ClientBodyBudget.h"
 
 namespace ruvia {
@@ -51,6 +55,7 @@ public:
           dataSignal(worker),
           spaceSignal(worker),
           resource(resource),
+          informational(resource),
           headers(resource),
           trailers(resource),
           buffered(resource),
@@ -83,6 +88,17 @@ public:
     void discardResponseBody() noexcept;
     void releaseConsumedBodyPrefix();
 
+    void retainInformational(HttpStatusCode status, std::span<const HttpHeaderView> fields);
+
+    [[nodiscard]] HttpClientOutputQueue* output() noexcept {
+        return tunnel ? static_cast<HttpClientOutputQueue*>(&*tunnel) : upload ? static_cast<HttpClientOutputQueue*>(&*upload)
+                                                                               : nullptr;
+    }
+    [[nodiscard]] bool receiveComplete() const noexcept {
+        return complete || (tunnel && tunnel->accepted && tunnel->receiveEnded);
+    }
+    std::optional<HttpClientTunnelState> tunnel;
+    std::optional<HttpClientUploadState> upload;
     WorkerSignal headSignal;
     WorkerSignal dataSignal;
     WorkerSignal spaceSignal;
@@ -95,6 +111,8 @@ public:
     HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
     HttpKnownMethod requestMethod{HttpKnownMethod::kUnknown};
     std::optional<HttpResponseBodyPlan> responseBodyPlan{};
+    std::pmr::vector<HttpClientInformationalResponse> informational;
+    std::size_t informationalFieldBytes{};
     std::pmr::vector<HttpHeader> headers;
     std::pmr::vector<HttpHeader> trailers;
     // Declared before body strings so their storage is destroyed before the
@@ -129,6 +147,9 @@ public:
     // Declared last so the operation scope closes while every field borrowed
     // by a body coroutine is alive.
     ScopedOperationScope bodyOperationScope;
+    std::optional<HttpPushRequest> promisedRequest{};
+    bool pushResponseTaken{false};
+    ScopedOperationScope pushResponseScope;
 
 private:
     void promotePendingData();

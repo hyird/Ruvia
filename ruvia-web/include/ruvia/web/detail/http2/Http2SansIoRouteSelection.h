@@ -20,7 +20,9 @@ namespace ruvia::detail {
     auto& runtime = streamRuntimes.ensureAccepted(streamId);
     RouteResolution resolution;
     auto bodyMode = RequestBodyMode::kBuffered;
-    if (!path.empty()) {
+    if (route.requestMethod == "CONNECT" && !route.webSocketConnect) {
+        resolution = routes.resolveConnect(route.protocol, route.protocol.empty() ? route.authority : path);
+    } else if (!path.empty()) {
         // An unclassified method can only be served by an extension route, and
         // it is matched on the exact wire token -- the same split HTTP/1 makes
         // in RouteTable::resolve(const HttpRequest&). Without this branch,
@@ -34,8 +36,8 @@ namespace ruvia::detail {
     if (resolved != nullptr) {
         bodyMode = resolved->route().endpoint().requestBodyMode();
     }
-    if (route.webSocketConnect && resolved != nullptr &&
-        resolved->route().endpoint().webSocket() != nullptr) {
+    if (resolved != nullptr && ((route.webSocketConnect && resolved->route().endpoint().webSocket() != nullptr) ||
+                                   resolved->route().endpoint().tunnel() != nullptr)) {
         bodyMode = RequestBodyMode::kStream;
     }
     return runtime.selectRoute(std::move(resolution), bodyMode) ? &runtime : nullptr;

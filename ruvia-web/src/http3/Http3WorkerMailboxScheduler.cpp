@@ -300,13 +300,13 @@ Http3WorkerMailboxScheduler::StepResult Http3WorkerMailboxScheduler::step() noex
 }
 
 bool Http3WorkerMailboxScheduler::acknowledgeIntent(ConnectionToken connection,
-    const Connection::TransportIntentToken& intent) noexcept {
+    const Connection::TransportIntentToken& intent, std::optional<Connection::PushStreamOpenResult> opened) noexcept {
     auto* slot = validate(connection);
     if (slot == nullptr || slot->owner == nullptr || !slot->offeredIntent ||
         *slot->offeredIntent != intent) {
         return false;
     }
-    if (!slot->owner->ackTransportIntent(intent)) {
+    if (!slot->owner->ackTransportIntent(intent, opened)) {
         return false;
     }
     slot->offeredIntent.reset();
@@ -318,7 +318,7 @@ bool Http3WorkerMailboxScheduler::parkIntentForControlCapacity(ConnectionToken c
     const Connection::TransportIntentToken& intent) noexcept {
     auto* slot = validate(connection);
     if (slot == nullptr || slot->owner == nullptr || !slot->offeredIntent ||
-        *slot->offeredIntent != intent || intent.kind != Connection::TransportIntentKind::kStreamReset) {
+        *slot->offeredIntent != intent || (intent.kind != Connection::TransportIntentKind::kStreamReset && intent.kind != Connection::TransportIntentKind::kOpenPushStream)) {
         return false;
     }
     const auto current = slot->owner->peekTransportIntent();
@@ -608,7 +608,7 @@ void Http3WorkerMailboxScheduler::receiveActivation(Slot& slot, std::uint64_t ep
     syncSlot(slot, activation);
     const auto& work = activation.work;
     if (work.runnable.data || work.runnable.control || work.runnable.local ||
-        activation.transportIntent) {
+        activation.transportIntent || activation.inputCapacityAvailable) {
         const bool alreadyPending = localWakePending_;
         localWakePending_ = true;
         if (!alreadyPending && workerWake_.valid()) {

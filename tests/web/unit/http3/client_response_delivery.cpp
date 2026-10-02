@@ -41,7 +41,7 @@ namespace {
 using Delivery = ruvia::detail::Http3ClientResponseDelivery;
 using Driver = ruvia::detail::Http3ClientReceiveDriver;
 using Engine = ruvia::detail::Http3ClientSansIoSessionEngine;
-using Read = ruvia::detail::Http3QuicStreamSet::StreamRead;
+using Read = ruvia::quic_stream_read_result;
 using State = ruvia::detail::HttpClientResponseState;
 using BodyBudgetLease = ruvia::detail::Http3ClientBodyBudget::Lease;
 
@@ -121,15 +121,15 @@ struct FakeRead final {
 
     Read operator()(std::uint64_t, std::span<char> destination) {
         if (reset) {
-            return {.status = Read::Status::kReset};
+            return {.status = ruvia::quic_stream_read_status::reset};
         }
         if (position == wire.size()) {
-            return {.status = fin ? Read::Status::kFin : Read::Status::kWouldBlock};
+            return {.status = fin ? ruvia::quic_stream_read_status::fin : ruvia::quic_stream_read_status::would_block};
         }
         const auto size = std::min({destination.size(), wire.size() - position, maxChunk});
         std::copy_n(wire.data() + position, size, destination.data());
         position += size;
-        return {.status = Read::Status::kData, .size = size};
+        return {.status = ruvia::quic_stream_read_status::data, .size = size};
     }
 };
 
@@ -296,6 +296,9 @@ RUVIA_TEST(http3_client_response_delivery_keeps_final_plans_for_decoder_and_term
         FakeRead informational{.wire = responseHead("103")};
         RUVIA_CHECK(informationalDriver.drive(0, informational).status == Driver::Status::kProgress);
         RUVIA_CHECK(!informationalDelivery.responseBodyPlan());
+        RUVIA_CHECK_EQ(informationalState.informational.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(informationalState.informational.front().status().value(), std::uint16_t{103});
+        RUVIA_CHECK_EQ(informationalState.informational.front().headers().front().value(), "copied");
         FakeRead finalHead{.wire = responseHead("200"), .fin = true};
         RUVIA_CHECK(informationalDriver.drive(0, finalHead).status == Driver::Status::kProgress);
         RUVIA_CHECK(planMatches(informationalDelivery.responseBodyPlan(), ruvia::HttpKnownMethod::kGet,

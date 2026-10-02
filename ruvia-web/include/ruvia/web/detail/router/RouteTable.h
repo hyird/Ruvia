@@ -96,6 +96,11 @@ public:
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method, std::string_view path) const noexcept;
 
+    [[nodiscard]] RouteResolution resolveConnect(std::string_view protocol, std::string_view target) const noexcept;
+    Task<std::optional<HttpResponse>> dispatchTunnel(const HttpRequest& request,
+        const ResolvedRoute& resolved, RequestMemory& memory, const RouteStreamHandler& handler,
+        ContextServices services) const;
+
     // Extension-method routing, kept off every enum-indexed structure. The
     // request's exact token is compared against a small cold list, which costs
     // a known-method request nothing: both protocol drivers only reach it when

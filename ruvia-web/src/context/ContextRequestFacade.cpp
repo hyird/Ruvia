@@ -1,5 +1,7 @@
+#include <array>
 #include <stdexcept>
 
+#include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/request/RequestQueryValues.h"
 
@@ -35,12 +37,49 @@ std::string_view ContextRequest::path() const noexcept {
     return context_->request_.path();
 }
 
+std::string_view ContextRequest::scheme() const noexcept {
+    return context_->request_.scheme();
+}
+std::string_view ContextRequest::authority() const noexcept {
+    return context_->request_.authority();
+}
+std::string_view ContextRequest::target() const noexcept {
+    return context_->request_.target();
+}
+HttpProtocolVersion ContextRequest::protocolVersion() const noexcept {
+    return context_->request_.protocolVersion();
+}
+HttpRequestTargetForm ContextRequest::targetForm() const noexcept {
+    return context_->request_.targetForm();
+}
+
 std::string_view ContextRequest::routePath() const noexcept {
     return context_->routePath_;
+}
+HttpPriority ContextRequest::priority() const noexcept {
+    if (context_->requestPriorityUpdate_ != nullptr && *context_->requestPriorityUpdate_) {
+        return **context_->requestPriorityUpdate_;
+    }
+    const auto parsed = parseHttpPriority(context_->request_.headers());
+    return parsed ? parsed->requestPriority() : HttpPriority{};
+}
+void Context::priority(HttpPriorityFields fields) {
+    std::array<char, 12> value{};
+    const auto encoded = encodeHttpPriority(value, fields);
+    if (!encoded) {
+        throw std::invalid_argument("invalid HTTP priority parameters");
+    }
+    header("Priority", std::string_view(value.data(), *encoded));
 }
 
 std::optional<std::string_view> ContextRequest::header(std::string_view name) const {
     return context_->requestHeader(name);
+}
+std::span<const HttpHeader> ContextRequest::trailers() const noexcept {
+    return context_->requestTrailers_ != nullptr ? context_->requestTrailers_->fields() : std::span<const HttpHeader>{};
+}
+std::optional<std::string_view> ContextRequest::trailer(std::string_view name) const noexcept {
+    return context_->requestTrailers_ != nullptr ? context_->requestTrailers_->field(name) : std::nullopt;
 }
 
 bool ContextRequest::accepts(std::string_view mediaType) const noexcept {

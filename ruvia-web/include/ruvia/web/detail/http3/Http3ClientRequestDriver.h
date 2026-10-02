@@ -5,8 +5,8 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/http/quic_connection.h"
 #include "ruvia/web/detail/http3/Http3ClientRequestWrite.h"
-#include "ruvia/web/detail/http3/Http3QuicStreamSet.h"
 
 namespace ruvia::detail {
 
@@ -17,7 +17,7 @@ namespace ruvia::detail {
 // before destroying this driver on cancellation, fatal error or shutdown.
 class Http3ClientRequestDriver final {
 public:
-    using StreamId = Http3QuicStreamSet::StreamId;
+    using StreamId = std::uint64_t;
     enum class Result : std::uint8_t { kBlocked,
         kConnectionDraining,
         kProgress,
@@ -31,8 +31,8 @@ public:
     Http3ClientRequestDriver(Http3ClientRequestDriver&&) = delete;
     Http3ClientRequestDriver& operator=(Http3ClientRequestDriver&&) = delete;
 
-    // open() -> OpenStream; registerResponse(id, knownMethod) -> bool;
-    // write(id, bytes) -> StreamWrite; finish(id) -> Error. Register the
+    // open() -> quic_stream_open_result; registerResponse(id, knownMethod) -> bool;
+    // write(id, bytes) -> quic_stream_write_result; finish(id) -> quic_operation_status. Register the
     // request and its HEAD semantics before emitting its HEADERS. At most one
     // nonblocking write and one FIN attempt per tick; no task is started here.
     // After kProgress/kFinished, pump QUIC before sleeping even if the previous
@@ -50,20 +50,19 @@ public:
         bool progress = false;
         if (!streamId_) {
             const auto opened = open();
-            if (opened.error == Http3QuicStreamSet::Error::kStreamLimitRetry ||
-                opened.error == Http3QuicStreamSet::Error::kHandshakePending) {
+            if (opened.status == ruvia::quic_operation_status::would_block ||
+                opened.status == ruvia::quic_operation_status::need_input) {
                 return Result::kBlocked;
             }
-            if (opened.error == Http3QuicStreamSet::Error::kConnectionRequestLimit) {
-                // No stream ID, registration or HEADERS was consumed. The
-                // owning pool can use this same stable request on a new QUIC
-                // connection rather than retrying an exhausted one.
+            if (opened.status == ruvia::quic_operation_status::draining ||
+                opened.status == ruvia::quic_operation_status::closing ||
+                opened.status == ruvia::quic_operation_status::retired) {
                 return Result::kConnectionDraining;
             }
-            if (opened.error != Http3QuicStreamSet::Error::kNone) {
+            if (opened.status != ruvia::quic_operation_status::accepted) {
                 return fail();
             }
-            streamId_ = opened.id;
+            streamId_ = opened.stream_id;
             progress = true;
         }
         if (!registered_) {
@@ -83,12 +82,13 @@ public:
         if (!segment->empty()) {
             const auto result = write(*streamId_, *segment);
             switch (result.status) {
-                case Http3QuicStreamSet::StreamWrite::Status::kAccepted:
-                    if (result.bytes > segment->size() || !request_.acknowledge(result.bytes)) {
+                case ruvia::quic_operation_status::accepted:
+                    if (result.accepted > segment->size() || !request_.acknowledge(result.accepted)) {
                         return fail();
                     }
-                    return progress || result.bytes != 0 ? Result::kProgress : Result::kBlocked;
-                case Http3QuicStreamSet::StreamWrite::Status::kWouldBlock:
+                    return progress || result.accepted != 0 ? Result::kProgress : Result::kBlocked;
+                case ruvia::quic_operation_status::would_block:
+                case ruvia::quic_operation_status::need_input:
                     if (!request_.acknowledge(0)) {
                         return fail();
                     }
@@ -98,22 +98,35 @@ public:
             }
         }
         if (!request_.finReady()) {
-            return fail();
+            return progress ? Result::kProgress : Result::kBlocked;
         }
         const auto error = finish(*streamId_);
-        if (error == Http3QuicStreamSet::Error::kNone) {
+        if (error == ruvia::quic_operation_status::accepted) {
             if (!request_.acknowledgeFin(true)) {
                 return fail();
             }
             return Result::kFinished;
         }
-        if (error == Http3QuicStreamSet::Error::kWouldBlock) {
+        if (error == ruvia::quic_operation_status::would_block ||
+            error == ruvia::quic_operation_status::need_input) {
             return progress ? Result::kProgress : Result::kBlocked;
         }
         (void)request_.acknowledgeFin(false);
         return fail();
     }
 
+    [[nodiscard]] bool prepareConnectionHead(std::uint64_t id, Http3ClientSansIoSessionEngine& engine) {
+        return request_.prepareConnectionHead(id, engine);
+    }
+    void stopSending() noexcept {
+        request_.stopSending();
+    }
+    [[nodiscard]] bool requiresConnectSettings() const noexcept {
+        return request_.requiresConnectSettings();
+    }
+    [[nodiscard]] bool waitingForContent() const noexcept {
+        return request_.waitingForContent();
+    }
     [[nodiscard]] std::optional<StreamId> streamId() const noexcept {
         return streamId_;
     }

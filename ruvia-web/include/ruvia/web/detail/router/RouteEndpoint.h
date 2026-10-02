@@ -11,6 +11,7 @@
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/WebSocketSubprotocolSet.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/HttpTunnelRouteConfig.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/router/RouteModes.h"
@@ -69,6 +70,29 @@ private:
 
     RouteStreamHandler handler_;
     ResponseStreamKind kind_;
+};
+
+class TunnelRouteEndpoint final {
+public:
+    [[nodiscard]] const RouteStreamHandler& handler() const noexcept {
+        return handler_;
+    }
+    [[nodiscard]] std::string_view protocol() const noexcept {
+        return protocol_;
+    }
+    [[nodiscard]] const HttpTunnelRouteConfig& config() const noexcept {
+        return config_;
+    }
+
+private:
+    friend class RouteEndpoint;
+    TunnelRouteEndpoint(std::pmr::memory_resource* resource, RouteStreamHandler handler, std::string_view protocol, HttpTunnelRouteConfig config)
+        : handler_(handler),
+          protocol_(protocol, resource),
+          config_(config) {}
+    RouteStreamHandler handler_;
+    std::pmr::string protocol_;
+    HttpTunnelRouteConfig config_;
 };
 
 class WebSocketRouteEndpoint final {
@@ -179,7 +203,31 @@ public:
             WebSocketRouteEndpoint(pmrResourceOrDefault(resource), handler, options));
     }
 
+    [[nodiscard]] static RouteEndpoint tunnel(std::pmr::memory_resource* resource,
+        RouteStreamHandler handler, std::string_view protocol, HttpTunnelRouteConfig config = {}) {
+        if (!handler.valid() || (!protocol.empty() && !isValidHttpMethodToken(protocol))) {
+            throw std::invalid_argument("invalid CONNECT handler or protocol token");
+        }
+        if (protocol == "connect-udp") {
+            config.datagrams = true;
+        }
+        if (config.datagrams && protocol.empty()) {
+            throw std::invalid_argument("HTTP Datagrams require an Extended CONNECT protocol");
+        }
+        if (config.peerTransportFinTimeout <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument("CONNECT peer transport FIN timeout must be greater than zero");
+        }
+        return RouteEndpoint(TunnelRouteEndpoint(pmrResourceOrDefault(resource), handler, protocol, config));
+    }
+    [[nodiscard]] const TunnelRouteEndpoint* tunnel() const& noexcept {
+        return std::get_if<TunnelRouteEndpoint>(&value_);
+    }
+    const TunnelRouteEndpoint* tunnel() const&& = delete;
+
     [[nodiscard]] RouteEndpoint clone(std::pmr::memory_resource* resource) const {
+        if (const auto* endpoint = tunnel()) {
+            return RouteEndpoint::tunnel(resource, endpoint->handler(), endpoint->protocol(), endpoint->config());
+        }
         if (const auto* endpoint = buffered()) {
             return RouteEndpoint::buffered(endpoint->handler(), endpoint->requestBodyMode());
         }
@@ -219,7 +267,7 @@ public:
 
 private:
     using Value =
-        std::variant<BufferedRouteEndpoint, ResponseStreamRouteEndpoint, WebSocketRouteEndpoint>;
+        std::variant<BufferedRouteEndpoint, ResponseStreamRouteEndpoint, WebSocketRouteEndpoint, TunnelRouteEndpoint>;
 
     template <typename Endpoint>
     explicit RouteEndpoint(Endpoint endpoint) noexcept

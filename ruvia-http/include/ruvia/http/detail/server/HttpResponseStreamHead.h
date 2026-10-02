@@ -24,7 +24,8 @@ enum class ResponseStreamFraming : std::uint8_t {
     // the body is delimited by the connection close (RFC 9112 6.3), so it also
     // announces Connection: close and the session shuts the socket afterwards.
     kHttp1CloseDelimited,
-    kHttp2Frames
+    kHttp2Frames,
+    kHttp3Frames
 };
 
 enum class ResponseStreamKind : std::uint8_t { kGeneric,
@@ -49,7 +50,8 @@ enum class ResponseTrailerIntent : std::uint8_t { kNone,
 enum class ResponseStreamTrailerFraming : std::uint8_t {
     kUnavailable,
     kHttp1Chunked,
-    kHttp2TrailingHeaders
+    kHttp2TrailingHeaders,
+    kHttp3TrailingHeaders
 };
 
 // Authoritative phase immediately after the initial response head is submitted.
@@ -112,9 +114,9 @@ private:
     ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
     const auto bodyPlan = planHttpResponseBody(requestMethod, responseStatus);
-    if (framing == ResponseStreamFraming::kHttp2Frames) {
+    if (framing == ResponseStreamFraming::kHttp2Frames || framing == ResponseStreamFraming::kHttp3Frames) {
         return ResponseStreamCommitPlan(framing, bodyPlan,
-            ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
+            framing == ResponseStreamFraming::kHttp3Frames ? ResponseStreamTrailerFraming::kHttp3TrailingHeaders : ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
             bodyPlan.bodySuppressed() ? (trailerIntent == ResponseTrailerIntent::kPresent
                                                 ? ResponseStreamHeadDisposition::kTrailersOnly
                                                 : ResponseStreamHeadDisposition::kMessageEnded)
@@ -195,7 +197,7 @@ private:
                                                                  detail::kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
         kind == ResponseStreamKind::kSse &&
-        (framing == ResponseStreamFraming::kHttp2Frames || bodyPlan.transferEncodingAllowed()) &&
+        (framing == ResponseStreamFraming::kHttp2Frames || framing == ResponseStreamFraming::kHttp3Frames || bodyPlan.transferEncodingAllowed()) &&
         !detail::responseHasKnownHeader(response, detail::kResponseHeaderCacheControl);
     const auto additionalHeaders = static_cast<std::size_t>(needsSseContentType) +
                                    static_cast<std::size_t>(needsHttp1Chunked) +

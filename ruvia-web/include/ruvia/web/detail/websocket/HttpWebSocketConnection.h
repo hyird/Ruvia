@@ -20,8 +20,8 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/WebSocketServerProtocol.h"
 #include "ruvia/web/WebSocket.h"
+#include "ruvia/web/detail/http/HttpStreamReadResult.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
-#include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 
 namespace ruvia::detail {
 
@@ -30,7 +30,7 @@ namespace ruvia::detail {
 // lives here; the HTTP/1.1 and HTTP/2 transports differ only in the Transport
 // policy, which supplies four transport-specific operations:
 //   asio-executor executor() const;
-//   Task<WsTransportReadResult> readMore(std::pmr::string& buffer);
+//   Task<HttpStreamReadResult> readMore(std::pmr::string& buffer);
 //   Task<std::error_code> writeBytes(std::string_view, WebSocketTransportDisposition);
 //   void abort() noexcept;  // abort this WebSocket transport, not an unrelated h2 stream
 template <typename Transport>

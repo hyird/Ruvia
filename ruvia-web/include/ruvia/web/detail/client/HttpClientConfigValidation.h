@@ -1,5 +1,4 @@
 #pragma once
-
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -10,6 +9,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
+#include "ruvia/web/detail/http3/Http3QpackConfigValidation.h"
 
 namespace ruvia::detail {
 
@@ -20,6 +20,24 @@ inline void validateHttpClientUserAgent(std::string_view userAgent) {
 }
 
 inline void validateHttpClientConfig(const HttpClientConfig& config) {
+    validateHttp3QpackConfig(config.qpack);
+    if (config.push.maxQueuedPushes == 0 || config.push.maxConcurrentPushes == 0 ||
+        (config.push.timeout && config.push.timeout->count() <= 0)) {
+        throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
+    }
+    if (config.push.enabled && config.protocol == HttpClientProtocol::kHttp3Only && config.push.maxConcurrentPushes > 25) {
+        throw std::invalid_argument("HTTP/3 push concurrency must leave room for critical streams and requests");
+    }
+    if (config.push.enabled && config.scheme == HttpScheme::kHttps &&
+        config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify) {
+        throw std::invalid_argument("HTTPS push requires authenticated origin authority");
+    }
+    if (config.advertisements.maxQueuedAdvertisements == 0 || config.advertisements.maxRetainedBytes == 0) {
+        throw std::invalid_argument("HTTP advertisement bounds must be positive");
+    }
+    if (config.advertisements.receiveOrigins && (config.scheme != HttpScheme::kHttps || config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify)) {
+        throw std::invalid_argument("ORIGIN advertisements require authenticated HTTPS");
+    }
     const auto scheme = config.scheme;
     const std::string_view host = config.host;
     const auto port = config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);

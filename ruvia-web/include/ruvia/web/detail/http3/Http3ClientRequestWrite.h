@@ -14,6 +14,7 @@
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 
 namespace ruvia::detail {
+class Http3ClientSansIoSessionEngine;
 
 enum class Http3ClientRequestWriteError : std::uint8_t {
     kInvalidRequest,
@@ -49,9 +50,15 @@ public:
     Http3ClientRequestWrite(Http3ClientRequestWrite&& other);
     Http3ClientRequestWrite& operator=(Http3ClientRequestWrite&&) = delete;
 
+    [[nodiscard]] bool prepareConnectionHead(std::uint64_t streamId, Http3ClientSansIoSessionEngine& engine);
     [[nodiscard]] std::expected<Segment, Error> next() noexcept;
     [[nodiscard]] std::expected<void, Error> acknowledge(std::size_t count) noexcept;
     [[nodiscard]] std::expected<void, Error> acknowledgeFin(bool successful) noexcept;
+    [[nodiscard]] bool requiresConnectSettings() const noexcept {
+        return request_.isTunnel() && !request_.tunnelProtocol().empty();
+    }
+    [[nodiscard]] bool waitingForContent() const noexcept;
+    void stopSending() noexcept;
     [[nodiscard]] bool finReady() const noexcept;
     [[nodiscard]] bool finished() const noexcept;
     [[nodiscard]] bool failed() const noexcept;
@@ -66,12 +73,13 @@ public:
     explicit Http3ClientRequestWrite(PreparedTag, std::pmr::memory_resource* resource,
         HttpClientRequestStorage&& request, std::pmr::string&& scheme,
         std::pmr::string&& authority, std::pmr::vector<char>&& headers,
-        Http3DataWritePlan dataPlan) noexcept;
+        Http3DataWritePlan dataPlan, Http3FieldSectionLimits limits = {}) noexcept;
 
 private:
     enum class State : std::uint8_t { kHeaders,
         kDataHeader,
         kDataBody,
+        kTrailers,
         kFin,
         kFinished,
         kFailed };
@@ -79,9 +87,11 @@ private:
         Http3ClientRequestWrite& other);
     [[nodiscard]] Segment activeSegment() const noexcept;
     [[nodiscard]] std::expected<void, Error> prepareData() noexcept;
+    [[nodiscard]] std::expected<void, Error> prepareTrailers() noexcept;
     [[nodiscard]] std::expected<void, Error> failPlan() noexcept;
 
     std::pmr::memory_resource* workerPool_;
+    Http3FieldSectionLimits fieldLimits_{};
     HttpClientRequestStorage request_;
     std::pmr::string scheme_;
     std::pmr::string authority_;

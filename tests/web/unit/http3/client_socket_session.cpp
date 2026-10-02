@@ -22,7 +22,7 @@ RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     RUVIA_CHECK(session.localEndpoint().port() != 0);
     RUVIA_CHECK(session.localEndpoint().address().is_loopback());
@@ -52,7 +52,7 @@ RUVIA_TEST(http3QuicClientSocketSessionWriteWaitCompletesWhenSocketIsReady) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     auto future = asio::co_spawn(io, ruvia::asAwaitable(session.waitWritable()), asio::use_future);
     io.run();
@@ -69,7 +69,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitWakesOnReadableDatagram) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     const std::array<char, 1> datagram{'x'};
     (void)peerSocket.send_to(asio::buffer(datagram), session.localEndpoint());
@@ -89,7 +89,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRetriesFullInputViaQuicTimer)
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     const std::array<char, 1> datagram{'x'};
     (void)peerSocket.send_to(asio::buffer(datagram), session.localEndpoint());
@@ -111,7 +111,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadAndTimerAfterWritab
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult blockedOutput;
     blockedOutput.outputBackpressured = true;
@@ -133,7 +133,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitPreservesAbsoluteDeadlineAcro
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult pendingInput;
     pendingInput.inputBackpressured = true;
@@ -168,7 +168,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadWriteTimerOnStop) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult blockedOutput;
     blockedOutput.outputBackpressured = true;
@@ -193,7 +193,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitCloseJoinsAllPendingHandlers)
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult blockedOutput;
     blockedOutput.outputBackpressured = true;
@@ -217,7 +217,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRejectsConcurrentCyclesWithou
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     auto first = asio::co_spawn(io, ruvia::asAwaitable(session.waitForActivity({})),
         asio::use_future);
@@ -247,7 +247,7 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeIsLatchedBeforeArming) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     session.notifyWork();
     session.notifyWork();
@@ -277,7 +277,7 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeDrainsAllArmedHandlers) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult pending;
     pending.eventTimeout = std::chrono::seconds(1);
@@ -303,7 +303,7 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeCannotOverrideStop) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     Http3QuicClientSocketSession::PumpResult pending;
     pending.eventTimeout = std::chrono::seconds(1);
@@ -328,7 +328,7 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitColdDropAndCloseBeforeStart) 
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     {
         auto cold = session.waitForActivity({});
@@ -350,7 +350,7 @@ RUVIA_TEST(http3QuicClientSocketSessionCloseWakesJoinedReadWait) {
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
-    Http3QuicClientTlsContext tls(ClientTransportConfigView{});
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
     Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
     auto future = asio::co_spawn(io, ruvia::asAwaitable(session.waitReadable()), asio::use_future);
     RUVIA_CHECK(io.poll() != 0);

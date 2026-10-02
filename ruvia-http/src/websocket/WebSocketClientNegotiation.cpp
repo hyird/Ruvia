@@ -4,6 +4,7 @@
 #include <charconv>
 #include <stdexcept>
 
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -145,7 +146,11 @@ WebSocketClientNegotiation::WebSocketClientNegotiation(WebSocketClientNegotiatio
             throw std::invalid_argument("WebSocket client fields too large");
         }
         headerBytes += name.size() + value.size() + 4;
-        fields_.push_back(detail::HttpHeaderAccess::make(std::pmr::string(name, resource_), std::pmr::string(value, resource_)));
+        std::pmr::string normalizedName(name, resource_);
+        for (char& character : normalizedName) {
+            character = static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(character)));
+        }
+        fields_.push_back(detail::HttpHeaderAccess::make(std::move(normalizedName), std::pmr::string(value, resource_)));
     };
     if (config.headers.size() > kMaxHttpHeaderFields - 3) {
         throw std::invalid_argument("too many WebSocket client headers");

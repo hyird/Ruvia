@@ -186,6 +186,16 @@ HttpClientResponseState::HttpClientResponseState(HttpClientResponseMemoryDomain&
 }
 
 void HttpClientResponseState::detachTransportBindings() noexcept {
+    if (tunnel) {
+        tunnel->wake = nullptr;
+        tunnel->wakeTarget = nullptr;
+        tunnel->stop();
+    }
+    if (upload) {
+        upload->wake = nullptr;
+        upload->wakeTarget = nullptr;
+        upload->stop();
+    }
     if (http2DataCredit) {
         http2DataCredit.reset();
     }

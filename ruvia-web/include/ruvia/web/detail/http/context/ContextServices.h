@@ -11,6 +11,7 @@
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpPriority.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
@@ -20,6 +21,7 @@
 namespace ruvia {
 
 class HttpRequest;
+class HttpRequestTrailers;
 namespace detail {
 class RequestDeadline;
 }
@@ -30,6 +32,9 @@ class Env;
 namespace ruvia::detail {
 
 class RateLimiter;
+class HttpInterimResponseOutput;
+class HttpConnectionAdvertisementOutput;
+class HttpPushOutput;
 class RouteTable;
 class WorkerStateRegistry;
 
@@ -111,6 +116,54 @@ public:
     [[nodiscard]] constexpr const ContextRequestBodySource& requestBodySource() const noexcept {
         return requestBodySource_;
     }
+    [[nodiscard]] HttpInterimResponseOutput* interimOutput() const noexcept {
+        return interimOutput_;
+    }
+    [[nodiscard]] ContextServices withInterimOutput(HttpInterimResponseOutput& output) const noexcept {
+        auto services = *this;
+        services.interimOutput_ = &output;
+        return services;
+    }
+    ContextServices withInterimOutput(HttpInterimResponseOutput&&) const = delete;
+    [[nodiscard]] HttpConnectionAdvertisementOutput* connectionAdvertisements() const noexcept {
+        return connectionAdvertisements_;
+    }
+    [[nodiscard]] ContextServices withConnectionAdvertisements(HttpConnectionAdvertisementOutput& output) const noexcept {
+        auto services = *this;
+        services.connectionAdvertisements_ = &output;
+        return services;
+    }
+    ContextServices withConnectionAdvertisements(HttpConnectionAdvertisementOutput&&) const = delete;
+
+    [[nodiscard]] HttpPushOutput* pushOutput() const noexcept {
+        return pushOutput_;
+    }
+    [[nodiscard]] ContextServices withPushOutput(HttpPushOutput& output) const noexcept {
+        auto services = *this;
+        services.pushOutput_ = &output;
+        return services;
+    }
+    ContextServices withPushOutput(HttpPushOutput&&) const = delete;
+
+    [[nodiscard]] const HttpRequestTrailers* requestTrailers() const noexcept {
+        return requestTrailers_;
+    }
+    [[nodiscard]] ContextServices withRequestTrailers(const HttpRequestTrailers& trailers) const noexcept {
+        auto result = *this;
+        result.requestTrailers_ = &trailers;
+        return result;
+    }
+    ContextServices withRequestTrailers(HttpRequestTrailers&&) const = delete;
+
+    [[nodiscard]] const std::optional<HttpPriority>* requestPriorityUpdate() const noexcept {
+        return requestPriorityUpdate_;
+    }
+    [[nodiscard]] ContextServices withRequestPriorityUpdate(const std::optional<HttpPriority>& priority) const noexcept {
+        auto services = *this;
+        services.requestPriorityUpdate_ = &priority;
+        return services;
+    }
+    ContextServices withRequestPriorityUpdate(std::optional<HttpPriority>&&) const = delete;
 
     [[nodiscard]] constexpr const ContextResponseOutput& responseOutput() const noexcept {
         return responseOutput_;
@@ -306,6 +359,11 @@ private:
     bool precompressedStaticFiles_{false};
 
     ContextRequestBodySource requestBodySource_;
+    const HttpRequestTrailers* requestTrailers_{};
+    const std::optional<HttpPriority>* requestPriorityUpdate_{};
+    HttpInterimResponseOutput* interimOutput_{};
+    HttpConnectionAdvertisementOutput* connectionAdvertisements_{};
+    HttpPushOutput* pushOutput_{};
     ContextResponseOutput responseOutput_;
     std::string_view automaticAltSvc_;
     ConnInfo connInfo_;

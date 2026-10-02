@@ -18,6 +18,7 @@ struct Events final {
     std::vector<std::string> trailers;
     std::vector<std::optional<ruvia::HttpResponseBodyPlan>> responseBodyPlans;
     std::vector<std::optional<std::uint64_t>> contentLengths;
+    std::vector<std::optional<ruvia::HttpClientRequestContentSignal>> requestContentSignals;
 };
 struct CountingResource final : std::pmr::memory_resource {
     std::size_t outstanding{};
@@ -43,6 +44,7 @@ void reenter(void* opaque, const ruvia::Http3ClientResponseEvent&) {
 void collect(void* p, const ruvia::Http3ClientResponseEvent& event) {
     auto& out = *static_cast<Events*>(p);
     out.kinds.push_back(event.kind);
+    out.requestContentSignals.push_back(event.requestContentSignal);
     if (!event.body.empty()) {
         out.body.append(event.body.data(), event.body.size());
     }
@@ -421,4 +423,34 @@ RUVIA_TEST(http3_client_response_reset_is_terminal) {
     const auto result = response.feed({}, false, true, collect, &events);
     RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kReset);
     RUVIA_CHECK_EQ(events.kinds.size(), std::size_t{1});
+}
+
+RUVIA_TEST(http3ClientResponseSignalsContinueOnlyFor100AndStopsContentAtFinalHead) {
+    std::pmr::monotonic_buffer_resource resource;
+    Events events;
+    ruvia::Http3ClientResponse response(0, ruvia::HttpKnownMethod::kPost, &resource);
+    const std::array<ruvia::Http3FieldSectionFieldView, 1> early{{{":status", "103"}}};
+    const std::array<ruvia::Http3FieldSectionFieldView, 1> continued{{{":status", "100"}}};
+    const std::array<ruvia::Http3FieldSectionFieldView, 2> final{{{":status", "204"}, {"x-final", "retained"}}};
+    auto makeHead = [&](auto fields) {
+        const auto encoded = ruvia::encodeHttp3FieldSection(fields, &resource);
+        std::string wire;
+        std::array<char, 16> prefix{};
+        auto type = ruvia::encodeHttp3VarInt(prefix, 1);
+        wire.append(prefix.data(), *type);
+        auto length = ruvia::encodeHttp3VarInt(prefix, encoded->size());
+        wire.append(prefix.data(), *length);
+        wire.append(encoded->data(), encoded->size());
+        return wire;
+    };
+    RUVIA_CHECK(response.feed(makeHead(early), false, false, collect, &events).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(response.feed(makeHead(continued), false, false, collect, &events).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(response.feed(makeHead(final), true, false, collect, &events).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(events.requestContentSignals.size(), std::size_t{4});
+    if (events.requestContentSignals.size() == 4) {
+        RUVIA_CHECK(!events.requestContentSignals[0]);
+        RUVIA_CHECK(events.requestContentSignals[1] == ruvia::HttpClientRequestContentSignal::kContinue);
+        RUVIA_CHECK(events.requestContentSignals[2] == ruvia::HttpClientRequestContentSignal::kExchangeComplete);
+        RUVIA_CHECK(!events.requestContentSignals[3]);
+    }
 }

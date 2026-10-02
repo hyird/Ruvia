@@ -7,6 +7,7 @@ namespace ruvia {
 class BodyReader;
 class ResponseStreamWriter;
 class WebSocket;
+class HttpTunnel;
 
 namespace detail {
 
@@ -132,6 +133,19 @@ private:
     WebSocket* webSocket_;
 };
 
+class ContextTunnelOutput final {
+public:
+    [[nodiscard]] constexpr HttpTunnel& tunnel() const noexcept {
+        return *tunnel_;
+    }
+
+private:
+    friend class ContextResponseOutput;
+    explicit constexpr ContextTunnelOutput(HttpTunnel& tunnel) noexcept
+        : tunnel_(&tunnel) {}
+    HttpTunnel* tunnel_;
+};
+
 class ContextResponseOutput final {
 public:
     constexpr ContextResponseOutput() noexcept
@@ -146,6 +160,13 @@ public:
         return ContextResponseOutput(ContextWebSocketOutput(webSocket));
     }
 
+    [[nodiscard]] static constexpr ContextResponseOutput tunnel(HttpTunnel& tunnel) noexcept {
+        return ContextResponseOutput(ContextTunnelOutput(tunnel));
+    }
+    [[nodiscard]] constexpr const ContextTunnelOutput* tunnel() const& noexcept {
+        return std::get_if<ContextTunnelOutput>(&value_);
+    }
+    const ContextTunnelOutput* tunnel() const&& = delete;
     [[nodiscard]] constexpr const ContextBufferedResponseOutput* buffered() const& noexcept {
         return std::get_if<ContextBufferedResponseOutput>(&value_);
     }
@@ -163,7 +184,7 @@ public:
 
 private:
     using Value = std::variant<ContextBufferedResponseOutput, ContextResponseStreamOutput,
-        ContextWebSocketOutput>;
+        ContextWebSocketOutput, ContextTunnelOutput>;
 
     template <typename Output>
     explicit constexpr ContextResponseOutput(Output output) noexcept

@@ -18,9 +18,16 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpConnectUdp.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
+#include "ruvia/web/detail/http/HttpTunnelSession.h"
+#include "ruvia/web/detail/http/context/HttpConnectionAdvertisementOutput.h"
+#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
+#include "ruvia/web/detail/http/context/HttpPushOutput.h"
 #include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
 #include "ruvia/web/detail/http2/Http2SansIoRequestBody.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
@@ -128,7 +135,7 @@ bool Http2SansIoSessionEngine::workerRunning() const noexcept {
 void Http2SansIoSessionEngine::setInactivityPhase() noexcept {
     session_.scannerEntry().setPhase(http2SansIoInactivityPhase(
         connection_.headerBlockInProgress(), streamRuntimes_.size(),
-        streamRuntimes_.webSocketTunnelCount() != 0));
+        streamRuntimes_.tunnelCount() != 0));
 }
 
 void Http2SansIoSessionEngine::removeStreamRuntime(std::uint32_t streamId) noexcept {
@@ -174,6 +181,48 @@ void Http2SansIoSessionEngine::resetStreamNoThrow(
 
 std::pmr::memory_resource* Http2SansIoSessionEngine::workerResource() const noexcept {
     return worker_.resource();
+}
+
+Task<bool> Http2SansIoSessionEngine::pushRequest(std::uint32_t associatedStreamId, HttpPushRequestView request) {
+    auto* parent = streamRuntimes_.find(associatedStreamId);
+    const auto* head = parent != nullptr ? parent->requestHead() : nullptr;
+    if (head == nullptr || (associatedStreamId & 1U) == 0) {
+        co_return false;
+    }
+    const auto& original = head->request();
+    if (!httpAsciiEqualsIgnoreCase(original.scheme(), request.scheme) ||
+        !httpAuthoritiesEqual(BorrowedText(original.authority()), BorrowedText(request.authority),
+            original.scheme() == "https" ? 443 : 80)) {
+        throw std::invalid_argument("push request must use its associated request origin");
+    }
+    auto promised = connection_.submitPushRequest(associatedStreamId, request);
+    if (!promised) {
+        if (promised.error() == Http2PushSubmitError::kInvalidRequest) {
+            throw std::invalid_argument("invalid HTTP/2 push request");
+        }
+        co_return false;
+    }
+    const auto id = promised->streamId();
+    try {
+        const auto route = connection_.serverRequestRoute(id);
+        auto* runtime = route ? http2SelectStreamRoute(routes_, *route, streamRuntimes_, id) : nullptr;
+        if (runtime == nullptr || !runtime->holdRequestHead(std::move(*promised))) {
+            throw std::logic_error("HTTP/2 push dispatch admission failed");
+        }
+    } catch (...) {
+        resetStreamNoThrow(id, Http2ErrorCode::kCancel);
+        removeStreamRuntime(id);
+        wakeWriter();
+        throw;
+    }
+    streamRuntimes_.find(id)->bindPushParent(associatedStreamId);
+    if (!admitStream(id)) {
+        resetStreamNoThrow(id, Http2ErrorCode::kCancel);
+        wakeWriter();
+        co_return false;
+    }
+    wakeWriter();
+    co_return true;
 }
 
 Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
@@ -239,7 +288,42 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
     const auto responseCodingAvailability =
         options.compression.has_value() ? HttpResponseCodingAvailability::kIdentityAndCompression
                                         : HttpResponseCodingAvailability::kIdentityOnly;
-    auto requestServices = baseServices;
+    struct ResponseOutputTarget {
+        ::ruvia::Http2Connection& connection;
+        WorkerSignal& writer;
+        std::uint32_t streamId;
+    } outputTarget{connection_, writeSignal_, streamId};
+    HttpInterimResponseOutput interimOutput(workerResource(), &outputTarget, [](void* raw, const HttpInterimResponseHead& head) -> Task<void> {
+        auto& target = *static_cast<ResponseOutputTarget*>(raw);
+        const auto status = target.connection.submitInterimResponseHead(target.streamId, head);
+        if (status != Http2SubmitStatus::kAccepted) {
+            throw std::invalid_argument("HTTP/2 interim response rejected");
+        }
+        target.writer.notify();
+        co_return;
+    });
+    HttpConnectionAdvertisementOutput advertisements(workerResource(), &outputTarget, [](void* raw, std::span<const std::string_view> origins) -> Task<void> {
+            auto& target = *static_cast<ResponseOutputTarget*>(raw);
+            if (target.connection.submitOriginAdvertisement(origins) != Http2SubmitStatus::kAccepted) {
+                throw std::invalid_argument("HTTP/2 ORIGIN advertisement rejected");
+            }
+            target.writer.notify();
+            co_return; }, [](void* raw, std::string_view value) -> Task<void> {
+            auto& target = *static_cast<ResponseOutputTarget*>(raw);
+            if (target.connection.submitAlternativeServiceAdvertisement(target.streamId, {}, value) != Http2SubmitStatus::kAccepted) {
+                throw std::invalid_argument("HTTP/2 ALTSVC advertisement rejected");
+            }
+            target.writer.notify();
+            co_return; });
+    struct PushTarget {
+        Http2SansIoSessionEngine& owner;
+        std::uint32_t streamId;
+    } pushTarget{*this, streamId};
+    HttpPushOutput pushOutput(workerResource(), &pushTarget, [](void* raw, HttpPushRequestView promisedRequest) -> Task<bool> {
+        auto& target = *static_cast<PushTarget*>(raw);
+        co_return co_await target.owner.pushRequest(target.streamId, promisedRequest);
+    });
+    auto requestServices = baseServices.withPushOutput(pushOutput).withRequestTrailers(streamRuntime->trailers()).withRequestPriorityUpdate(streamRuntime->priorityUpdate()).withInterimOutput(interimOutput).withConnectionAdvertisements(advertisements);
     do {
         const auto& resolution = selectedRoute->resolution();
         const auto* resolved = resolution.resolved();
@@ -254,7 +338,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
         if (handlerDeadline > std::chrono::milliseconds::zero()) {
             selectedRoute->armDeadline(
                 baseServices.worker(), baseServices.stopToken(), handlerDeadline);
-            requestServices = baseServices.withRequestDeadline(*selectedRoute->deadline());
+            requestServices = requestServices.withRequestDeadline(*selectedRoute->deadline());
         }
 
         const auto expectationPlan =
@@ -304,6 +388,65 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                 requestServices);
             break;
         }
+        if (const auto* tunnelEndpoint = resolved == nullptr ? nullptr : resolved->route().endpoint().tunnel()) {
+            const bool udp = tunnelEndpoint->protocol() == "connect-udp";
+            if (udp && !validateHttpConnectUdpRequest(request)) {
+                response = co_await routes_.handleError(request, requestMemory,
+                    HttpErrorInfo({.status = http_status::kBadRequest, .message = "invalid CONNECT-UDP request head"}), requestServices);
+                break;
+            }
+            if (streamingBody == nullptr || !requestHead->snapshot().connectPending) {
+                resetStreamNoThrow(streamId, Http2ErrorCode::kInternalError);
+                wakeWriter();
+                co_return;
+            }
+            using Transport = Http2SansIoTunnelTransport<asio::any_io_executor>;
+            std::optional<HttpTunnelSession<Transport>> tunnelSession;
+            auto establishAndRun = [&](Context& context) -> Task<void> {
+                auto head = ContextAccess::streamingHead(context);
+                if (udp) {
+                    auto negotiated = prepareHttpConnectUdpResponse(std::move(head), HttpProtocolVersion::kHttp2);
+                    if (!negotiated) {
+                        throw std::invalid_argument("invalid CONNECT-UDP response metadata");
+                    }
+                    head = std::move(*negotiated);
+                }
+                const auto committed = connection_.submitConnectResponseHead(streamId, head);
+                if (committed != Http2SubmitStatus::kAccepted) {
+                    throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
+                }
+                if (!streamRuntimes_.markTunnel(streamId)) {
+                    std::terminate();
+                }
+                setInactivityPhase();
+                ContextAccess::markTunnelHandshakeStarted(context);
+                wakeWriter();
+                tunnelSession.emplace(Transport(connection_, streamId, streamingBody->queue(), *streamSignal,
+                                          writeSignal_, outputBudget_, executor_),
+                    baseServices.worker(), *context.pool());
+                co_await invokeTunnelHandler(*tunnelSession, scannerEntry, tunnelEndpoint->handler(), context);
+            };
+            const auto terminal = makeCallableRef<void, Context&>(establishAndRun);
+            std::optional<HttpResponse> buffered;
+            std::exception_ptr exception;
+            try {
+                buffered = co_await routes_.dispatchTunnel(request, *resolved, requestMemory, terminal, dispatchServices);
+            } catch (...) {
+                exception = std::current_exception();
+            }
+            if (tunnelSession.has_value()) {
+                co_await finishTunnelSession(*tunnelSession, exception, options.connectionFailure, remoteAddress_, scannerEntry, tunnelEndpoint->config().peerTransportFinTimeout);
+                co_return;
+            }
+            if (exception != nullptr) {
+                std::rethrow_exception(exception);
+            }
+            if (!buffered.has_value()) {
+                co_return;
+            }
+            response = std::move(*buffered);
+            break;
+        }
         if (webSocketEndpoint != nullptr) {
             const auto handshakeValidation = ruvia::validateHttp2WebSocketHandshake(
                 connection_, streamId, request);
@@ -326,7 +469,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                     if (submittedHandshake == nullptr) {
                         co_return;
                     }
-                    if (!streamRuntimes_.markWebSocketTunnel(streamId)) {
+                    if (!streamRuntimes_.markTunnel(streamId)) {
                         std::terminate();
                     }
                     setInactivityPhase();
@@ -628,6 +771,11 @@ void Http2SansIoSessionEngine::drainEvents() {
             resetEventStream(streamId, Http2ErrorCode::kInternalError);
             return;
         }
+        for (const auto& field : messageEnd->trailers()) {
+            if (!streamRuntime->trailers().append(field.name(), field.value())) {
+                throw std::logic_error("HTTP/2 decoder published invalid request trailers");
+            }
+        }
         if (auto* signal = streamRuntime->signal()) {
             signal->wake();
         } else if (!admitStream(streamId)) {
@@ -636,6 +784,14 @@ void Http2SansIoSessionEngine::drainEvents() {
     };
     const auto onStreamClosed = [&](const auto* streamClosed) {
         const auto streamId = streamClosed->streamId();
+        streamRuntimes_.forEach([&](Http2SansIoStreamRuntime& child) {
+            if (child.pushParent() == streamId) {
+                resetStreamNoThrow(child.streamId(), Http2ErrorCode::kCancel);
+                if (auto* childSignal = child.signal()) {
+                    childSignal->wake();
+                }
+            }
+        });
         outputBudget_.releaseAndReconcile(streamId, connection_);
         auto* streamRuntime = streamRuntimes_.find(streamId);
         auto* signal = streamRuntime != nullptr ? streamRuntime->signal() : nullptr;
@@ -663,6 +819,10 @@ void Http2SansIoSessionEngine::drainEvents() {
             onMessageEnd(messageEnd);
         } else if (const auto* streamClosed = event->streamClosed()) {
             onStreamClosed(streamClosed);
+        } else if (const auto* update = event->priorityUpdate(); update != nullptr && !update->push) {
+            if (auto* runtime = streamRuntimes_.find(static_cast<std::uint32_t>(update->elementId))) {
+                runtime->reprioritize(update->fields.requestPriority());
+            }
         }
     }
     for (const auto streamId : connection_.takeDrainedDataStreams()) {

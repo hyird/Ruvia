@@ -1,6 +1,8 @@
 #include "ruvia/web/HttpClientHandle.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -8,7 +10,10 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
@@ -93,11 +98,48 @@ void HttpClientResponse::release() noexcept {
     state->releaseReference();
 }
 
+std::span<const HttpClientInformationalResponse> HttpClientResponse::informationalResponses() const& noexcept {
+    return state_->informational;
+}
+
+void detail::HttpClientResponseState::retainInformational(HttpStatusCode status, std::span<const HttpHeaderView> fields) {
+    // Retained progress metadata has a separate fixed aggregate bound. It must
+    // never grow with the duration of an upstream response stream.
+    if (informational.size() >= 8) {
+        throw HttpClientError(HttpClientError::Code::kProtocolError, "too many informational response heads");
+    }
+    HttpClientInformationalResponse head(status, resource);
+    head.headers_.reserve(fields.size());
+    std::size_t bytes = informationalFieldBytes;
+    for (const auto& field : fields) {
+        if (bytes > kMaxHttpHeaderBytes - 32 || field.name().size() > kMaxHttpHeaderBytes - bytes - 32 || field.value().size() > kMaxHttpHeaderBytes - bytes - 32 - field.name().size()) {
+            throw HttpClientError(HttpClientError::Code::kProtocolError, "informational response metadata exceeds byte limit");
+        }
+        bytes += 32 + field.name().size() + field.value().size();
+        head.headers_.push_back(HttpHeader::copyOf(field.name(), field.value(), resource));
+    }
+    informational.push_back(std::move(head));
+    informationalFieldBytes = bytes;
+}
+
 HttpStatusCode HttpClientResponse::status() const noexcept {
     return state_->status;
 }
 HttpProtocolVersion HttpClientResponse::protocolVersion() const noexcept {
     return state_->protocolVersion;
+}
+void HttpClientResponse::reprioritize(HttpPriority priority) & {
+    if (state_ == nullptr) {
+        throw std::logic_error("response owner has moved");
+    }
+    checkResponseOperationAffinity(state_);
+    if (priority.urgency > 7) {
+        throw std::invalid_argument("HTTP priority urgency must be between 0 and 7");
+    }
+    if (state_->complete || state_->abandoned || state_->pool == nullptr) {
+        throw HttpClientError(HttpClientError::Code::kClosing, "response transport is retired");
+    }
+    state_->pool->reprioritize(*state_, priority);
 }
 std::span<const HttpHeader> HttpClientResponse::headers() const& noexcept {
     return state_->headers;
@@ -242,7 +284,7 @@ void detail::HttpClientResponseState::promotePendingData() {
 }
 
 bool HttpClientResponseBody::complete() const noexcept {
-    return state_ == nullptr || (state_->complete && state_->offset == state_->buffered.size() &&
+    return state_ == nullptr || (state_->receiveComplete() && state_->offset == state_->buffered.size() &&
                                     state_->pending.empty());
 }
 
@@ -269,8 +311,8 @@ Task<std::optional<View>> detail::HttpClientResponseState::read() {
     auto& state = *this;
     state.releaseConsumedBodyPrefix();
     state.incrementalRead = true;
-    while ((state.bodyDecodeRequired && !state.complete) ||
-           (state.buffered.empty() && state.pending.empty() && !state.complete)) {
+    while ((state.bodyDecodeRequired && !state.receiveComplete()) ||
+           (state.buffered.empty() && state.pending.empty() && !state.receiveComplete())) {
         co_await state.dataSignal.wait();
     }
     promotePendingData();
@@ -315,7 +357,7 @@ Task<HttpClientResponseBytes> detail::HttpClientResponseState::readAll(std::size
         state.pool->releaseResponseData(state);
     }
     state.notifyProducerSpace();
-    while (!state.complete) {
+    while (!state.receiveComplete()) {
         co_await state.dataSignal.wait();
     }
     if (state.failure) {
@@ -369,8 +411,8 @@ Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output)
     state.incrementalRead = true;
     for (;;) {
         state.releaseConsumedBodyPrefix();
-        while ((state.bodyDecodeRequired && !state.complete) ||
-               (state.buffered.empty() && state.pending.empty() && !state.complete)) {
+        while ((state.bodyDecodeRequired && !state.receiveComplete()) ||
+               (state.buffered.empty() && state.pending.empty() && !state.receiveComplete())) {
             co_await state.dataSignal.wait();
         }
         promotePendingData();
@@ -451,9 +493,76 @@ ScopedOperation<HttpClientResponse> HttpClientHandle::send(
         operationScope(), pool_->execute(std::move(request), options_));
 }
 
+ScopedOperation<HttpClientExchange> HttpClientHandle::openRequest(const HttpClientRequestView& head, HttpClientUploadConfig upload) const {
+    requireActive();
+    if (head.content.borrowedBytes() != nullptr || upload.maxChunkBytes == 0 || upload.continueTimeout <= std::chrono::milliseconds::zero() ||
+        upload.continueTimeout > std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration::max()) ||
+        (upload.expectation != HttpClientRequestExpectation::kNone && upload.expectation != HttpClientRequestExpectation::kContinue)) {
+        throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
+    }
+    detail::HttpClientRequestStorage request(head.method.view(), head.target.view(), detail::pmrResourceOrDefault(resource_));
+    for (const auto& field : head.headers) {
+        request.appendHeader(field.name(), field.value());
+    }
+    return detail::makeScopedOperation(operationScope(), pool_->openRequest(std::move(request), upload, options_));
+}
+
+ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openUdpTunnel(const HttpClientUdpTunnelRequestView& head, HttpClientTunnelConfig config) const {
+    requireActive();
+    auto* resource = detail::pmrResourceOrDefault(resource_);
+    std::pmr::vector<HttpHeaderView> fields(resource);
+    fields.reserve(head.headers.size() + 1);
+    for (const auto& field : head.headers) {
+        if (httpAsciiEqualsIgnoreCase(field.name(), "capsule-protocol")) {
+            throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
+        }
+        fields.push_back(field);
+    }
+    fields.emplace_back("Capsule-Protocol", "?1");
+    auto authority = detail::clientUriHost(host(), resource);
+    if (port() != (scheme() == HttpScheme::kHttps ? 443 : 80)) {
+        std::array<char, 5> digits;
+        const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), port()).ptr;
+        authority.push_back(':');
+        authority.append(digits.data(), end);
+    }
+    // openTunnel owns all fields before this temporary preparation storage dies.
+    return openTunnel({.authority = authority, .protocol = "connect-udp", .target = head.target, .headers = fields}, config);
+}
+
+ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openTunnel(const HttpClientTunnelRequestView& head, HttpClientTunnelConfig config) const {
+    requireActive();
+    if ((config.datagrams && head.protocol.empty()) || config.maxChunkBytes == 0 || config.maxChunkBytes > kDefaultMaxBufferedBodyBytes ||
+        (head.protocol.empty() ? (!isValidHttpConnectAuthority(head.authority) || !head.target.empty()) : (!isValidHttpMethodToken(head.protocol) || !isValidHttpOriginFormTarget(head.target) || !parseHttpAuthorityHost(BorrowedText(head.authority)) || head.authority.empty()))) {
+        throw std::invalid_argument("invalid CONNECT request or tunnel policy");
+    }
+    detail::HttpClientRequestStorage request("CONNECT", head.target, detail::pmrResourceOrDefault(resource_));
+    if (head.protocol == "connect-udp" && !validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp2,
+                                              .scheme = scheme() == HttpScheme::kHttps ? "https" : "http",
+                                              .authority = head.authority,
+                                              .path = head.target,
+                                              .headers = head.headers})) {
+        throw std::invalid_argument("invalid CONNECT-UDP request head");
+    }
+    request.setTunnel(head.authority, head.protocol);
+    for (const auto& field : head.headers) {
+        request.appendHeader(field.name(), field.value());
+    }
+    return detail::makeScopedOperation(operationScope(), pool_->openTunnel(std::move(request), config, options_));
+}
+
 HttpClientStats HttpClientHandle::stats() const {
     requireActive();
     return pool_->stats();
+}
+std::optional<HttpClientPush> HttpClientHandle::nextPush() const {
+    requireActive();
+    return pool_->nextPush();
+}
+
+std::optional<HttpClientAdvertisement> HttpClientHandle::nextAdvertisement() const {
+    requireActive();
+    return pool_->nextAdvertisement();
 }
 
 std::string_view HttpClientHandle::host() const& {

@@ -16,6 +16,7 @@
 #include "ruvia/web/detail/server/RequestDeadline.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
+#include "ruvia/web/detail/server/http1/Http1InterimResponseSink.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
 #include "ruvia/web/detail/server/request/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/request/RequestMemoryArena.h"
@@ -24,6 +25,7 @@
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/server/route/HttpServerStreamBodyRoute.h"
+#include "ruvia/web/detail/server/route/HttpServerTunnelRoute.h"
 #include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerIdleWorkSet.h"
@@ -149,7 +151,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
         // the services below, so the deadline's stop source outlives every
         // dispatch that observes its token.
         std::optional<RequestDeadline> requestDeadline;
-        ContextServices requestServices = baseRouteServices;
+        Http1InterimResponseSink interimSink(stream, memory_.resource());
+        ContextServices requestServices = baseRouteServices.withInterimOutput(interimSink.output());
         std::optional<Http1SessionRequestCompletion> requestCompletion;
         // Rejections that close the connection funnel through one co_await
         // site after the read loop: every co_await expression in a coroutine
@@ -213,7 +216,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                 // server-layer rejection below: a custom onError/onNotFound
                 // handler is a handler too and must see the request stop token.
                 requestDeadline.reset();
-                requestServices = baseRouteServices;
+                requestServices = baseRouteServices.withInterimOutput(interimSink.output());
                 routeResolution = routes.resolve(parsed.request);
                 // Keyed on the client, not the hop: behind a trusted proxy every
                 // request would otherwise share the proxy's single key.
@@ -226,7 +229,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                 if (handlerDeadline > std::chrono::milliseconds::zero()) {
                     requestDeadline.emplace(stopToken_);
                     requestDeadline->arm(workerRuntime_.handle(), handlerDeadline);
-                    requestServices = baseRouteServices.withRequestDeadline(*requestDeadline);
+                    requestServices = requestServices.withRequestDeadline(*requestDeadline);
                 }
 
                 const auto expectationPlan =
@@ -353,6 +356,17 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                     break;
                 }
 
+                if (endpoint.tunnel() != nullptr) {
+                    const auto pending = std::string_view(readBuffer.data() + requestHead->headerBytes(),
+                        usedBytes - requestHead->headerBytes());
+                    auto completion = co_await dispatchHttpTunnelRoute(routeDispatch(), *resolved, pending);
+                    if (!completion) {
+                        co_return;
+                    }
+                    requestCompletion.emplace(std::move(*completion));
+                    break;
+                }
+
                 if (endpoint.webSocket() != nullptr) {
                     const auto pendingFrames =
                         std::string_view(readBuffer.data() + requestHead->headerBytes(),
@@ -368,7 +382,8 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
 
                 if (endpoint.responseStream() != nullptr) {
                     requestCompletion.emplace(co_await dispatchHttpResponseStreamRoute(
-                        routeDispatch(), responseHead, *requestHead, *resolved));
+                        routeDispatch(), responseHead, *requestHead, *resolved,
+                        httpBodyAndPipeline(*requestHead, readBuffer, usedBytes), maxRequestBodyBytes));
                     break;
                 }
                 const auto* bufferedEndpoint = endpoint.buffered();

@@ -30,6 +30,7 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/web/Http3QpackConfig.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/Callback.h"
@@ -123,6 +124,7 @@ enum class Http3Mode : std::uint8_t {
 // enables QUIC when HTTPS is configured; it never changes TCP ALPN.
 struct Http3ListenConfig final {
     Http3Mode mode{Http3Mode::kAutomatic};
+    Http3QpackConfig qpack{};
     // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
     std::chrono::milliseconds handshakeTimeout{std::chrono::seconds(10)};
     // Maximum time to drain admitted request streams and close the connection.

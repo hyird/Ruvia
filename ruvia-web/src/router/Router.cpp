@@ -201,7 +201,27 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
 }
 
 void detail::RouterImpl::validateRouteTarget(
-    HttpKnownMethod method, std::string_view methodToken, std::string_view path) const {
+    HttpKnownMethod method, std::string_view methodToken, std::string_view path, const RouteEndpoint& endpoint) const {
+    if (const auto* tunnel = endpoint.tunnel()) {
+        if (method != HttpKnownMethod::kConnect || !methodToken.empty()) {
+            throw std::invalid_argument("tunnel route requires CONNECT");
+        }
+        if (tunnel->protocol().empty()) {
+            if (path != "*" && !isValidHttpConnectAuthority(path)) {
+                throw std::invalid_argument("CONNECT route requires host:port authority or *");
+            }
+        } else if (path.contains('?') || !isValidHttpOriginFormTarget(path)) {
+            throw std::invalid_argument("extended CONNECT route requires an origin-form path");
+        }
+        for (const auto& route : pendingRoutes_) {
+            const auto* registered = route.endpoint().tunnel();
+            if (registered != nullptr && registered->protocol() == tunnel->protocol() &&
+                (tunnel->protocol().empty() ? (path == route.path() || httpAuthoritiesEqual(path, route.path(), 0)) : path == route.path())) {
+                throw std::invalid_argument("duplicate CONNECT route registration");
+            }
+        }
+        return;
+    }
     // An extension route carries kUnknown plus a token; anything else must sit
     // in the enum-indexed fast path.
     if (methodToken.empty() && !RouteTable::isRoutableMethod(method)) {

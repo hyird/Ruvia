@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
+#include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/web/detail/http3/Http3ClientReceiveDriver.h"
 
@@ -19,7 +20,7 @@
 namespace {
 using Driver = ruvia::detail::Http3ClientReceiveDriver;
 using Engine = ruvia::detail::Http3ClientSansIoSessionEngine;
-using Read = ruvia::detail::Http3QuicStreamSet::StreamRead;
+using Read = ruvia::quic_stream_read_result;
 
 std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
     std::vector<char> output(16);
@@ -45,15 +46,15 @@ struct FakeRead final {
 
     Read operator()(std::uint64_t, std::span<char> destination) {
         if (reset) {
-            return {.status = Read::Status::kReset};
+            return {.status = ruvia::quic_stream_read_status::reset};
         }
         if (position == wire.size()) {
-            return {.status = Read::Status::kFin};
+            return {.status = ruvia::quic_stream_read_status::fin};
         }
         const auto size = std::min({destination.size(), wire.size() - position, maxChunk});
         std::copy_n(wire.data() + position, size, destination.data());
         position += size;
-        return {.status = Read::Status::kData, .size = size};
+        return {.status = ruvia::quic_stream_read_status::data, .size = size};
     }
 };
 
@@ -75,7 +76,7 @@ void tryRecursiveRead(void* raw, const ruvia::Http3ConnectionEvent& event) {
             [&owner](std::uint64_t, std::span<char> output) -> Read {
                 owner.nestedRead = true;
                 output[0] = '?';
-                return {.status = Read::Status::kData, .size = 1};
+                return {.status = ruvia::quic_stream_read_status::data, .size = 1};
             });
     } catch (const std::logic_error&) {
         owner.rejected = true;
@@ -96,10 +97,10 @@ RUVIA_TEST(http3ClientReceiveDriverPreservesOnlyPeerResetCodesWithoutNarrowing) 
         RUVIA_CHECK(engine.registerRequest(id, ruvia::HttpKnownMethod::kPost).scope ==
                     ruvia::Http3ConnectionErrorScope::kNone);
         const auto reset = driver.drive(id, [&](std::uint64_t, std::span<char>) -> Read {
-            return {.status = Read::Status::kReset, .peerResetErrorCode = codes[index]};
+            return {.status = ruvia::quic_stream_read_status::reset, .peer_reset_error_code = codes[index]};
         });
         RUVIA_CHECK(reset.status == Driver::Status::kStreamReset);
-        RUVIA_CHECK(reset.peerResetErrorCode == codes[index]);
+        RUVIA_CHECK(reset.peer_reset_error_code == codes[index]);
         RUVIA_CHECK(reset.peerReportsUnprocessed == (index == 2));
         RUVIA_CHECK(engine.response(id)->reset && !engine.response(id)->complete);
         RUVIA_CHECK(engine.release(id));
@@ -109,8 +110,8 @@ RUVIA_TEST(http3ClientReceiveDriverPreservesOnlyPeerResetCodesWithoutNarrowing) 
     FakeRead responded{.wire = responseHead(), .maxChunk = Driver::kReadBlockBytes};
     RUVIA_CHECK(driver.drive(16, responded).status == Driver::Status::kProgress);
     const auto contradicted = driver.drive(16, [](std::uint64_t, std::span<char>) -> Read {
-        return {.status = Read::Status::kReset,
-            .peerResetErrorCode = static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestRejected)};
+        return {.status = ruvia::quic_stream_read_status::reset,
+            .peer_reset_error_code = static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestRejected)};
     });
     RUVIA_CHECK(contradicted.status == Driver::Status::kStreamReset);
     RUVIA_CHECK(!contradicted.peerReportsUnprocessed);
@@ -121,11 +122,11 @@ RUVIA_TEST(http3ClientReceiveDriverPreservesOnlyPeerResetCodesWithoutNarrowing) 
     control.wire.insert(control.wire.end(), settings.begin(), settings.end());
     RUVIA_CHECK(driver.drive(3, control).status == Driver::Status::kProgress);
     const auto failed = driver.drive(3, [](std::uint64_t, std::span<char>) -> Read {
-        return {.status = Read::Status::kReset,
-            .peerResetErrorCode = static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestRejected)};
+        return {.status = ruvia::quic_stream_read_status::reset,
+            .peer_reset_error_code = static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestRejected)};
     });
     RUVIA_CHECK(failed.status == Driver::Status::kConnectionError);
-    RUVIA_CHECK(!failed.peerResetErrorCode && !failed.peerReportsUnprocessed);
+    RUVIA_CHECK(!failed.peer_reset_error_code && !failed.peerReportsUnprocessed);
 }
 
 RUVIA_TEST(http3ClientReceiveDriverFeedsInterleavedFramesAndPublishesOnlyValidFin) {
@@ -200,7 +201,7 @@ RUVIA_TEST(http3ClientReceiveDriverHonorsApplicationReadCapacityWithoutLosingFra
     bool touched{};
     const auto blocked = driver.drive(0, [&touched](std::uint64_t, std::span<char>) -> Read {
             touched = true;
-            return {.status = Read::Status::kFatal}; }, 0);
+            return {.status = ruvia::quic_stream_read_status::closed}; }, 0);
     RUVIA_CHECK(blocked.status == Driver::Status::kBlocked && !touched);
     bool complete{};
     for (int i = 0; i < 40 && !complete; ++i) {
@@ -247,7 +248,7 @@ RUVIA_TEST(http3ClientReceiveDriverTransportFailureWakesEveryIncompleteResponse)
     RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet).scope ==
                 ruvia::Http3ConnectionErrorScope::kNone);
     const auto failed = driver.drive(0, [](std::uint64_t, std::span<char>) -> Read {
-        return {.status = Read::Status::kFatal};
+        return {.status = ruvia::quic_stream_read_status::closed};
     });
     RUVIA_CHECK(failed.status == Driver::Status::kTransportError);
     RUVIA_CHECK(failed.protocol.status == ruvia::detail::Http3ClientSansIoSessionStatus::kTransportError);
@@ -272,7 +273,7 @@ RUVIA_TEST(http3ClientReceiveDriverDoesNotMaskEarlierConnectionProtocolFailure) 
     const auto protocol = engine.feed(0, unexpected);
     RUVIA_CHECK(protocol.scope == ruvia::Http3ConnectionErrorScope::kConnection);
     const auto result = driver.drive(0, [](std::uint64_t, std::span<char>) -> Read {
-        return {.status = Read::Status::kFatal};
+        return {.status = ruvia::quic_stream_read_status::closed};
     });
     RUVIA_CHECK(result.status == Driver::Status::kConnectionError);
     RUVIA_CHECK(result.protocol.code == protocol.code);
@@ -285,10 +286,85 @@ RUVIA_TEST(http3ClientReceiveDriverRejectsInvalidTransportByteCountBeforeFeeding
     Driver driver(engine);
     RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet).scope ==
                 ruvia::Http3ConnectionErrorScope::kNone);
-    const auto wrong = driver.drive(0, [](std::uint64_t, std::span<char>) -> Read { return {.status = Read::Status::kData, .size = 5}; }, 4);
+    const auto wrong = driver.drive(0, [](std::uint64_t, std::span<char>) -> Read { return {.status = ruvia::quic_stream_read_status::data, .size = 5}; }, 4);
     RUVIA_CHECK(wrong.status == Driver::Status::kTransportError);
     RUVIA_CHECK(engine.response(0)->result.status ==
                 ruvia::detail::Http3ClientSansIoSessionStatus::kTransportError);
     RUVIA_CHECK(!engine.response(0)->complete);
     RUVIA_CHECK(engine.release(0));
+}
+
+RUVIA_TEST(http3ClientReceiveDriverRetainsBlockedSuffixAndResumesAfterEncoderInstructions) {
+    std::pmr::unsynchronized_pool_resource resource;
+    Engine engine(&resource, {.connection = {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2}});
+    Driver driver(engine);
+    RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, &resource);
+    constexpr std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-dynamic", "retained"}};
+    const auto section = encoder.encode(0, fields);
+    RUVIA_CHECK(section.has_value());
+    if (!section) {
+        return;
+    }
+    FakeRead input;
+    input.wire = frame(1, *section);
+    const auto data = frame(0, std::span<const char>("payload", 7));
+    input.wire.insert(input.wire.end(), data.begin(), data.end());
+    input.maxChunk = input.wire.size();
+    RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kProgress);
+    const auto blockedPosition = input.position;
+    RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kBlocked);
+    RUVIA_CHECK_EQ(input.position, blockedPosition);
+    FakeRead unrelated{.wire = responseHead(), .maxChunk = 1024};
+    RUVIA_CHECK(driver.drive(4, unrelated).status == Driver::Status::kProgress);
+    RUVIA_CHECK(driver.drive(4, unrelated).status == Driver::Status::kResponseComplete);
+    std::vector<char> instructions{2};
+    const auto pending = encoder.pendingEncoderOutput();
+    instructions.insert(instructions.end(), pending.begin(), pending.end());
+    const auto updated = engine.feed(7, instructions);
+    RUVIA_CHECK(updated.scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kProgress);
+    RUVIA_CHECK(driver.drive(0, input).status == Driver::Status::kResponseComplete);
+    const auto response = engine.response(0);
+    RUVIA_CHECK(response && response->complete);
+    if (response) {
+        RUVIA_CHECK_EQ(std::string_view(response->body.data(), response->body.size()), "payload");
+        RUVIA_CHECK_EQ(response->headers.size(), std::size_t{1});
+        if (!response->headers.empty()) {
+            RUVIA_CHECK_EQ(response->headers[0].value, std::string_view("retained"));
+        }
+    }
+    RUVIA_CHECK(!engine.pendingDecoderOutput().empty());
+    RUVIA_CHECK(encoder.consumeDecoder(engine.pendingDecoderOutput()));
+    RUVIA_CHECK(engine.consumeDecoderOutput(engine.pendingDecoderOutput().size()));
+    RUVIA_CHECK(engine.release(0));
+    RUVIA_CHECK(engine.release(4));
+}
+
+RUVIA_TEST(http3ClientReceiveDriverPeerResetRetiresQpackBlockedSuffixWithoutEncoderProgress) {
+    std::pmr::unsynchronized_pool_resource resource;
+    Engine engine(&resource, {.connection = {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2}});
+    Driver driver(engine);
+    RUVIA_CHECK(engine.registerRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, &resource);
+    const std::array fields{ruvia::Http3FieldSectionFieldView{":status", "200"}, ruvia::Http3FieldSectionFieldView{"x-custom", "retained"}};
+    const auto section = encoder.encode(0, fields);
+    RUVIA_CHECK(section.has_value());
+    auto wire = frame(1, *section);
+    const auto data = frame(0, std::span<const char>("payload", 7));
+    wire.insert(wire.end(), data.begin(), data.end());
+    const auto pending = driver.drive(0, [&](std::uint64_t, std::span<char> bytes) -> Read { std::copy(wire.begin(), wire.end(), bytes.begin()); return {.status = ruvia::quic_stream_read_status::data, .size = wire.size()}; });
+    RUVIA_CHECK(pending.protocol.status == ruvia::detail::Http3ClientSansIoSessionStatus::kQpackBlocked);
+    const auto reset = driver.acceptReset(0, static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestCancelled));
+    RUVIA_CHECK(reset.status == Driver::Status::kStreamReset);
+    RUVIA_CHECK(!reset.peerReportsUnprocessed);
+    RUVIA_CHECK_EQ(reset.peer_reset_error_code, std::optional{static_cast<std::uint64_t>(ruvia::Http3ConnectionErrorCode::kRequestCancelled)});
+    RUVIA_CHECK(!engine.pendingDecoderOutput().empty());
+    RUVIA_CHECK(engine.release(0));
+    RUVIA_CHECK(engine.registerRequest(4, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const auto sibling = driver.drive(4, [](std::uint64_t, std::span<char>) -> Read { return {}; });
+    RUVIA_CHECK(sibling.status == Driver::Status::kBlocked);
+    RUVIA_CHECK(engine.cancelRequest(4));
+    RUVIA_CHECK(engine.release(4));
 }

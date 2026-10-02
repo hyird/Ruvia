@@ -4,6 +4,7 @@
 #include <exception>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrResource.h"
@@ -24,17 +25,16 @@ std::uint64_t hashStreamId(std::uint64_t value) noexcept {
 
 }  // namespace
 
-Http3ServerStreamOutput::Http3ServerStreamOutput(Http3QuicServerTransport& transport,
-    ConnectionId connectionId, WorkerMemory& worker, std::uint64_t epoch,
-    std::uint64_t connectionGeneration, Http3ServerStreamOutputConfig config)
-    : Http3ServerStreamOutput(transport, connectionId, worker.resource(), epoch,
+Http3ServerStreamOutput::Http3ServerStreamOutput(ruvia::quic_connection& connection,
+    WorkerMemory& worker, std::uint64_t epoch, std::uint64_t connectionGeneration,
+    Http3ServerStreamOutputConfig config)
+    : Http3ServerStreamOutput(connection, worker.resource(), epoch,
           connectionGeneration, config) {}
 
-Http3ServerStreamOutput::Http3ServerStreamOutput(Http3QuicServerTransport& transport,
-    ConnectionId connectionId, std::pmr::memory_resource* resource, std::uint64_t epoch,
+Http3ServerStreamOutput::Http3ServerStreamOutput(ruvia::quic_connection& connection,
+    std::pmr::memory_resource* resource, std::uint64_t epoch,
     std::uint64_t connectionGeneration, Http3ServerStreamOutputConfig config)
-    : transport_(transport),
-      connectionId_(connectionId),
+    : connection_(connection),
       epoch_(epoch),
       connectionGeneration_(connectionGeneration),
       maxTrackedStreams_(config.maxTrackedStreams),
@@ -49,8 +49,9 @@ Http3ServerStreamOutput::Http3ServerStreamOutput(Http3QuicServerTransport& trans
         (writeTimeout_ && writeTimeout_->count() <= 0)) {
         throw std::invalid_argument("HTTP/3 server output capacities must be nonzero and representable");
     }
-    if (!transport_.connectionInfo(connectionId_)) {
-        throw std::invalid_argument("HTTP/3 server output requires a live transport connection");
+    if (connection_.info().state == ruvia::quic_connection_state::retired ||
+        connection_.info().state == ruvia::quic_connection_state::failed) {
+        throw std::invalid_argument("HTTP/3 server output requires a live QUIC connection");
     }
     streams_.resize(tableCapacity(maxTrackedStreams_));
     nodes_.resize(maxQueuedBlocks_);
@@ -94,8 +95,15 @@ Http3ServerStreamOutput::IdentityStatus Http3ServerStreamOutput::identityStatus(
     return IdentityStatus::kMatch;
 }
 
-bool Http3ServerStreamOutput::validRequestStreamId(StreamId streamId) const noexcept {
-    return isHttp3RequestStreamId(streamId);
+bool Http3ServerStreamOutput::validResponseStreamId(StreamId streamId) const noexcept {
+    if (isHttp3RequestStreamId(streamId)) {
+        return true;
+    }
+    if ((streamId & 3) != 3 || streamId > kHttp3VarIntMax) {
+        return false;
+    }
+    const auto* slot = findStream(streamId);
+    return slot != nullptr && slot->info.pushId.has_value();
 }
 
 Http3ServerStreamOutput::StreamSlot* Http3ServerStreamOutput::findStream(StreamId streamId) noexcept {
@@ -162,25 +170,64 @@ bool Http3ServerStreamOutput::isTerminal(StreamState state) const noexcept {
            state == StreamState::kFailed || state == StreamState::kConnectionClosed;
 }
 
-Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(
-    Http3StreamMailbox::BorrowedBlock& block) {
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::registerPushStream(StreamId streamId, std::uint64_t pushId) {
     requireOwnerThread();
-    if (!block) {
+    if (stopped_) {
+        return {.status = Status::kStopped};
+    }
+    if ((streamId & 3) != 3 || streamId > kHttp3VarIntMax || pushId > kHttp3VarIntMax || findStream(streamId) != nullptr) {
         return {.status = Status::kInvalidInput};
     }
-    const auto identity = identityStatus(block.id());
-    if (identity == IdentityStatus::kForeignEpoch) {
+    auto* slot = findOrCreateStream(streamId);
+    if (slot == nullptr) {
+        return {.status = Status::kCapacityExhausted};
+    }
+    slot->info.pushId = pushId;
+    return {.status = Status::kAccepted};
+}
+
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(Http3StreamMailbox::BorrowedBlock& block) {
+    requireOwnerThread();
+    if (!block || block.critical() != nullptr) {
+        return {.status = Status::kInvalidInput};
+    }
+    if (block.id().epoch != epoch_) {
         return {.status = Status::kForeignEpoch};
     }
-    if (identity == IdentityStatus::kStaleConnection) {
+    if (block.id().connectionGeneration != connectionGeneration_) {
+        return {.status = Status::kStaleConnection};
+    }
+    if (!validResponseStreamId(block.id().streamId)) {
+        return failConnection(Status::kInvalidStreamId);
+    }
+    const auto* registered = findStream(block.id().streamId);
+    const auto expectedPush = registered == nullptr ? std::nullopt : registered->info.pushId;
+    if (block.id().pushId != expectedPush) {
+        return failConnection(Status::kInvalidInput);
+    }
+    return acceptAddressedData(block, block.id().streamId, block.id().epoch, block.id().connectionGeneration);
+}
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptCriticalData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId) {
+    requireOwnerThread();
+    const auto* target = block.critical();
+    if (!block || target == nullptr || (streamId & 3) != 3 || streamId > kHttp3VarIntMax) {
+        return {.status = Status::kInvalidInput};
+    }
+    if (const auto* slot = findStream(streamId); slot != nullptr && slot->info.pushId) {
+        return {.status = Status::kInvalidInput};
+    }
+    return acceptAddressedData(block, streamId, target->epoch, target->connectionGeneration);
+}
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptAddressedData(Http3StreamMailbox::BorrowedBlock& block,
+    StreamId streamId, std::uint64_t epoch, std::uint64_t generation) {
+    if (epoch != epoch_) {
+        return {.status = Status::kForeignEpoch};
+    }
+    if (generation != connectionGeneration_) {
         return {.status = Status::kStaleConnection};
     }
     if (stopped_) {
         return {.status = Status::kStopped};
-    }
-    const StreamId streamId = block.id().streamId;
-    if (!validRequestStreamId(streamId)) {
-        return failConnection(Status::kInvalidStreamId);
     }
     if (const auto* existing = findStream(streamId);
         existing != nullptr &&
@@ -219,7 +266,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(
     }
     // A newly queued block is the first real pending output (or new write
     // activity); a deferred FIN alone must not start the timeout clock.
-    slot->lastWriteActivity = Http3QuicServerTransport::Clock::now();
+    slot->lastWriteActivity = std::chrono::steady_clock::now();
 
     const auto nodeIndex = freeNode_;
     auto& node = nodes_[nodeIndex];
@@ -274,8 +321,13 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
     if (stopped_) {
         return {.status = Status::kStopped};
     }
-    if (!validRequestStreamId(control.id.streamId)) {
+    if (!validResponseStreamId(control.id.streamId)) {
         return failConnection(Status::kInvalidStreamId);
+    }
+    const auto* registered = findStream(control.id.streamId);
+    const auto expectedPush = registered == nullptr ? std::nullopt : registered->info.pushId;
+    if (control.id.pushId != expectedPush) {
+        return failConnection(Status::kInvalidInput);
     }
     auto* slot = findOrCreateStream(control.id.streamId);
     if (slot == nullptr) {
@@ -328,7 +380,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
             slot->info.state = StreamState::kFinPending;
             if (control.value == slot->info.acceptedWireBytes &&
                 slot->info.queuedWireBytes == 0 && slot->head == kNoNode) {
-                slot->lastWriteActivity = Http3QuicServerTransport::Clock::now();
+                slot->lastWriteActivity = std::chrono::steady_clock::now();
             }
             requestScan();
             const bool finishReady = control.value == slot->info.acceptedWireBytes &&
@@ -344,7 +396,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::cancelStream(
     if (stopped_) {
         return {.status = Status::kStopped};
     }
-    if (!validRequestStreamId(streamId)) {
+    if (!validResponseStreamId(streamId)) {
         return {.status = Status::kInvalidStreamId};
     }
     if (errorCode > kHttp3VarIntMax) {
@@ -398,7 +450,7 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
             continue;
         }
 
-        if (writeTimedOut(slot, Http3QuicServerTransport::Clock::now())) {
+        if (writeTimedOut(slot, std::chrono::steady_clock::now())) {
             result.lastStreamId = slot.info.streamId;
             slot.info.timedOut = true;
             ++result.operations;
@@ -428,10 +480,10 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
             if (node.offset > bytes.size()) {
                 result.lastStreamId = slot.info.streamId;
                 ++result.operations;
-                const auto failure = handleWriteFailure(slot, StreamWrite::Status::kFatal);
+                const auto failure = handleWriteFailure(slot, TransportError::closing);
                 result.status = failure.status;
                 result.errorStreamId = slot.info.streamId;
-                result.writeStatus = StreamWrite::Status::kFatal;
+                result.writeStatus = TransportError::closing;
                 result.termination = failure.termination;
                 result.transportError = failure.transportError;
                 result.madeProgress = slot.info.state != StreamState::kStopping;
@@ -457,18 +509,18 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
             const auto input = std::span<const char>(
                 reinterpret_cast<const char*>(remaining.data()), remaining.size());
             result.lastStreamId = slot.info.streamId;
-            const auto written = transport_.writeStream(connectionId_, slot.info.streamId, input);
+            const auto written = connection_.write_stream(slot.info.streamId, std::as_bytes(input));
             ++result.operations;
             ++result.writeCalls;
             slot.info.lastWriteStatus = written.status;
-            if (written.status == StreamWrite::Status::kWouldBlock) {
+            if (written.status == TransportError::would_block) {
                 ++result.wouldBlockWrites;
                 continue;
             }
-            if (written.status != StreamWrite::Status::kAccepted || written.bytes == 0 ||
-                written.bytes > remaining.size() ||
-                written.bytes > std::numeric_limits<std::uint64_t>::max() - slot.info.acceptedWireBytes ||
-                written.bytes > slot.info.queuedWireBytes) {
+            if (written.status != TransportError::accepted || written.accepted == 0 ||
+                written.accepted > remaining.size() ||
+                written.accepted > std::numeric_limits<std::uint64_t>::max() - slot.info.acceptedWireBytes ||
+                written.accepted > slot.info.queuedWireBytes) {
                 const auto failure = handleWriteFailure(slot, written.status);
                 result.status = failure.status;
                 result.errorStreamId = slot.info.streamId;
@@ -479,11 +531,11 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
                 roundMadeProgress_ = roundMadeProgress_ || result.madeProgress;
                 break;
             }
-            slot.info.acceptedWireBytes += written.bytes;
-            slot.info.queuedWireBytes -= written.bytes;
-            slot.lastWriteActivity = Http3QuicServerTransport::Clock::now();
-            node.offset += written.bytes;
-            result.acceptedBytes += written.bytes;
+            slot.info.acceptedWireBytes += written.accepted;
+            slot.info.queuedWireBytes -= written.accepted;
+            slot.lastWriteActivity = std::chrono::steady_clock::now();
+            node.offset += written.accepted;
+            result.acceptedBytes += written.accepted;
             result.madeProgress = true;
             roundMadeProgress_ = true;
             if (node.offset == bytes.size()) {
@@ -504,8 +556,13 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
             result.lastStreamId = slot.info.streamId;
             ++result.operations;
             const bool sendFinWasAccepted = slot.info.sendFinAccepted;
-            TransportError error = TransportError::kNone;
+            TransportError error = TransportError::accepted;
             if (!finishStream(slot, error)) {
+                if (error == TransportError::would_block ||
+                    error == TransportError::need_input) {
+                    ++result.wouldBlockWrites;
+                    continue;
+                }
                 result.status = connectionRetired_  ? Status::kConnectionClosed
                                 : retirementFailed_ ? Status::kUnsafeToRelease
                                                     : Status::kTransportError;
@@ -655,7 +712,7 @@ bool Http3ServerStreamOutput::connectionRetired() const {
 }
 
 bool Http3ServerStreamOutput::connectionIdentityGone() {
-    return !transport_.connectionInfo(connectionId_).has_value();
+    return connection_.info().state == ruvia::quic_connection_state::retired;
 }
 
 bool Http3ServerStreamOutput::closeConnectionAndRelease() {
@@ -666,9 +723,13 @@ bool Http3ServerStreamOutput::closeConnectionAndRelease() {
         releaseAllQueues();
         return true;
     }
-    const auto close = transport_.retireConnectionLocally(connectionId_);
-    if (close == TransportError::kNone ||
-        (close == TransportError::kNoConnection && connectionIdentityGone())) {
+    static constexpr std::string_view reason = "HTTP/3 server output closed";
+    const auto close = connection_.close({.kind = ruvia::quic_close_kind::application,
+        .code = static_cast<std::uint64_t>(Http3ConnectionErrorCode::kInternalError),
+        .reason = {reason.data(), reason.size()}});
+    if (close == TransportError::accepted || close == TransportError::completed ||
+        close == TransportError::closing || close == TransportError::draining ||
+        (close == TransportError::retired && connectionIdentityGone())) {
         connectionRetired_ = true;
         stopped_ = true;
         stopComplete_ = true;
@@ -684,20 +745,32 @@ bool Http3ServerStreamOutput::closeConnectionAndRelease() {
 bool Http3ServerStreamOutput::retireStream(StreamSlot& slot, StreamState terminalState,
     std::uint64_t errorCode) {
     slot.info.state = StreamState::kStopping;
-    slot.info.termination = transport_.terminateBidirectionalStream(
-        connectionId_, slot.info.streamId, errorCode);
-    const auto directionRetired = [](TransportError error) noexcept {
-        return error == TransportError::kNone || error == TransportError::kClosed ||
-               error == TransportError::kNoStream;
+    if ((slot.info.streamId & 3) == 3 && !slot.info.pushId) {
+        // A local critical stream cannot be reset independently (RFC 9114).
+        return closeConnectionAndRelease();
+    }
+    if (slot.info.pushId) {
+        slot.info.termination = {
+            .send = slot.info.sendFinAccepted ? TransportError::completed
+                                              : connection_.reset_stream(slot.info.streamId, errorCode),
+            .close = connection_.close_stream(slot.info.streamId)};
+    } else {
+        const auto terminated = connection_.terminate_bidirectional_stream(
+            slot.info.streamId, errorCode);
+        slot.info.termination = {.send = terminated, .close = terminated};
+    }
+    const auto direction_retired = [](TransportError status) noexcept {
+        return status == TransportError::accepted || status == TransportError::completed ||
+               status == TransportError::retired;
     };
-    if (directionRetired(slot.info.termination.send) &&
-        directionRetired(slot.info.termination.close)) {
+    if (direction_retired(slot.info.termination.send) &&
+        direction_retired(slot.info.termination.close)) {
         slot.info.state = terminalState;
         releaseStreamQueue(slot);
         requestScan();
         return true;
     }
-    if (slot.info.termination.close == TransportError::kNoConnection &&
+    if (slot.info.termination.close == TransportError::retired &&
         connectionIdentityGone()) {
         connectionRetired_ = true;
         stopped_ = true;
@@ -771,7 +844,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::failConnection(
 }
 
 Http3ServerStreamOutput::Result Http3ServerStreamOutput::handleWriteFailure(
-    StreamSlot& slot, StreamWrite::Status writeStatus) {
+    StreamSlot& slot, TransportError writeStatus) {
     slot.info.lastWriteStatus = writeStatus;
     slot.info.state = StreamState::kStopping;
     const bool retired = retireStream(slot, StreamState::kFailed,
@@ -789,9 +862,12 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::handleWriteFailure(
 
 bool Http3ServerStreamOutput::finishStream(StreamSlot& slot, TransportError& error) {
     if (!slot.info.sendFinAccepted) {
-        error = transport_.finishStream(connectionId_, slot.info.streamId);
+        error = connection_.finish_stream(slot.info.streamId);
         slot.info.finishError = error;
-        if (error != TransportError::kNone) {
+        if (error == TransportError::would_block || error == TransportError::need_input) {
+            return false;
+        }
+        if (error != TransportError::accepted) {
             slot.info.state = StreamState::kStopping;
             const bool retired = retireStream(slot, StreamState::kFailed,
                 static_cast<std::uint64_t>(Http3ConnectionErrorCode::kInternalError));
@@ -803,20 +879,22 @@ bool Http3ServerStreamOutput::finishStream(StreamSlot& slot, TransportError& err
         slot.info.sendFinAccepted = true;
     }
 
-    const auto retired = transport_.retireCompletedBidirectionalStream(
-        connectionId_, slot.info.streamId);
-    if (retired == TransportError::kWouldBlock) {
-        error = TransportError::kNone;
-        return true;
+    const auto retired = slot.info.pushId
+                             ? connection_.close_stream(slot.info.streamId)
+                             : connection_.retire_completed_stream(slot.info.streamId);
+    if (retired == TransportError::would_block || retired == TransportError::need_input) {
+        error = retired;
+        return false;
     }
-    if (retired == TransportError::kNone) {
+    if (retired == TransportError::accepted || retired == TransportError::completed ||
+        retired == TransportError::retired) {
         slot.info.state = StreamState::kFinished;
-        slot.info.finishError = TransportError::kNone;
+        slot.info.finishError = TransportError::accepted;
         return true;
     }
     error = retired;
     slot.info.finishError = retired;
-    if (retired == TransportError::kNoConnection && connectionIdentityGone()) {
+    if (retired == TransportError::retired && connectionIdentityGone()) {
         connectionRetired_ = true;
         stopped_ = true;
         stopComplete_ = true;
@@ -832,7 +910,7 @@ bool Http3ServerStreamOutput::finishStream(StreamSlot& slot, TransportError& err
 }
 
 bool Http3ServerStreamOutput::writeTimedOut(const StreamSlot& slot,
-    Http3QuicServerTransport::Clock::time_point now) const noexcept {
+    std::chrono::steady_clock::time_point now) const noexcept {
     const bool outputPending = slot.head != kNoNode ||
                                (slot.info.finalWireBytes &&
                                    slot.info.queuedWireBytes == 0 &&

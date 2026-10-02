@@ -4,10 +4,14 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <variant>
 
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/detail/http3/Http3WorkerMailboxScheduler.h"
 
 namespace ruvia::detail {
@@ -63,9 +67,19 @@ public:
         std::uint16_t remotePort{};
     };
 
+    static constexpr std::size_t kDatagramCapacity = 16;
+    static constexpr std::size_t kMaxDatagramBytes = 1200;
+    struct Datagram final {
+        Identity identity{};
+        std::uint64_t streamId{};
+        std::array<std::byte, kMaxDatagramBytes> bytes{};
+        std::size_t size{};
+    };
     struct Bind final {
         Identity identity{};
         ConnectionMetadataView metadata{};
+        Http3Settings settings{.enableConnectProtocol = true};
+        std::size_t maxQuicDatagramPayloadBytes{};
     };
 
     enum class RejectReason : std::uint8_t {
@@ -98,6 +112,7 @@ public:
         Identity identity{};
         TransportIntentToken token{};
         IntentSettlement settlement{IntentSettlement::kExecutedHandoff};
+        std::optional<Connection::PushStreamOpenResult> pushStream{};
     };
 
     struct TransportRetired final {
@@ -129,7 +144,11 @@ public:
     // controls are serialized there; worker controls are worker-affine. No
     // WorkerHandle::post fallback is used.
     explicit Http3ServerConnectionChannel(
-        Notification networkWake, Notification workerWake);
+        Notification networkWake, Notification workerWake, std::pmr::memory_resource* datagramResource = nullptr);
+    [[nodiscard]] Status publishRequestDatagram(Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] Status publishResponseDatagram(Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] Status receiveRequestDatagram(Datagram& datagram) noexcept;
+    [[nodiscard]] Status receiveResponseDatagram(Datagram& datagram) noexcept;
     ~Http3ServerConnectionChannel();
 
     Http3ServerConnectionChannel(const Http3ServerConnectionChannel&) = delete;
@@ -157,7 +176,7 @@ public:
     [[nodiscard]] Status peekGrant(Identity& identity) const noexcept;
     [[nodiscard]] Status commitAccepted(Identity identity) noexcept;
     [[nodiscard]] Status commitAccepted(
-        Identity identity, ConnectionMetadataView metadata) noexcept;
+        Identity identity, ConnectionMetadataView metadata, Http3Settings settings = {.enableConnectProtocol = true}, std::size_t maxQuicDatagramPayloadBytes = 0) noexcept;
     [[nodiscard]] Status revokeGrant() noexcept;
     [[nodiscard]] Status receiveRevoke(Identity& identity) noexcept;
     [[nodiscard]] Status acknowledgeRevoke(Http3WorkerMailboxScheduler& scheduler,
@@ -176,7 +195,7 @@ public:
         RejectReason reason) noexcept;
     [[nodiscard]] Status receiveAttachResult(AttachResult& result) noexcept;
 
-    // Stream-reset intents retain the complete TransportIntent value in a fixed
+    // Stream-reset and push-open intents retain the complete value in a fixed
     // CONTROL lane. On kFull, keep the scheduler StepResult/intent and do not
     // acknowledge it; retry that exact value after the dequeue wake. Connection-
     // close intents use a separate sticky record, independent of lane capacity.
@@ -186,10 +205,11 @@ public:
     // Call after either an executed handoff or physical-retirement supersession
     // of this exact received token. Superseded is valid only after this generation
     // has published TransportRetired. A full ACK lane retains the exact token and
-    // settlement so the caller can retry without changing its claim.
+    // settlement and optional push-open result so retries preserve the exact claim.
     [[nodiscard]] Status acknowledgeIntentAfterHandoff(Identity identity,
         const TransportIntentToken& token,
-        IntentSettlement settlement = IntentSettlement::kExecutedHandoff) noexcept;
+        IntentSettlement settlement = IntentSettlement::kExecutedHandoff,
+        std::optional<Connection::PushStreamOpenResult> pushStream = {}) noexcept;
     [[nodiscard]] Status receiveIntentAck(TransportIntentAck& acknowledgement) noexcept;
 
     // The server network owner records physical retirement only after its
@@ -294,6 +314,14 @@ private:
         std::size_t read_{};   // consumer-owned
     };
 
+    struct DatagramLanes final {
+        SpscLane<Datagram, kDatagramCapacity> requests;
+        SpscLane<Datagram, kDatagramCapacity> responses;
+    };
+    [[nodiscard]] Status publishDatagram(bool request, Identity identity,
+        std::uint64_t streamId, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] Status receiveDatagram(bool request, Datagram& datagram) noexcept;
+    void discardDatagrams(bool request) noexcept;
     struct IntentMessage final {
         Identity identity{};
         TransportIntent intent{};
@@ -336,6 +364,7 @@ private:
     void notifyNetworkBorrowed() noexcept;
     void notifyWorkerBorrowed() noexcept;
 
+    std::unique_ptr<DatagramLanes, PmrObjectDeleter<DatagramLanes>> datagrams_;
     const Notification networkWake_;
     const Notification workerWake_;
     const std::thread::id networkOwner_;

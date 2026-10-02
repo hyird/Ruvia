@@ -2,12 +2,20 @@
 
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientTunnelRequestView.h"
+#include "ruvia/http/HttpConnectUdp.h"
+#include "ruvia/web/HttpClientAdvertisement.h"
+#include "ruvia/web/HttpClientExchange.h"
+#include "ruvia/web/HttpClientPush.h"
 #include "ruvia/web/HttpClientResponse.h"
+#include "ruvia/web/HttpClientTunnel.h"
+#include "ruvia/web/HttpClientTunnelConfig.h"
 #include "ruvia/web/HttpClientTypes.h"
 
 namespace ruvia {
@@ -27,7 +35,16 @@ public:
     [[nodiscard]] HttpClientHandle withOptions(OperationOptions options) const;
     [[nodiscard]] ScopedOperation<HttpClientResponse> send(
         const HttpClientRequestView& request) const;
+    [[nodiscard]] ScopedOperation<HttpClientExchange> openRequest(
+        const HttpClientRequestView& head, HttpClientUploadConfig upload = {}) const;
+    [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openTunnel(const HttpClientTunnelRequestView& request, HttpClientTunnelConfig config = {}) const;
+    // Negotiates RFC 9298 and returns an accepted tunnel or ordinary rejection.
+    // The proxy authority comes from this registered origin. Capsule-Protocol
+    // and HTTP/1 Upgrade fields are driver-owned. Use acceptedTunnel.udp().
+    [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView& request, HttpClientTunnelConfig config = {}) const;
     [[nodiscard]] HttpClientStats stats() const;
+    [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() const;
+    [[nodiscard]] std::optional<HttpClientPush> nextPush() const;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

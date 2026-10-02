@@ -14,9 +14,9 @@ protocol library do not require the full Web framework.
 - **Layered by design** — `ruvia::core` (runtime), `ruvia::http` (protocol),
   and `ruvia::web` (framework) install and import as independent package
   components.
-- **Sans-I/O protocol library** — one HTTP/1, HTTP/2, WebSocket, and HPACK
-  implementation shared by the server and the outbound client; callers feed
-  bytes and consume typed events. No sockets, no Asio, no TLS inside.
+- **Sans-I/O protocol library** — HTTP/1, HTTP/2, HTTP/3/QUIC, WebSocket, and
+  HPACK implementations shared by the server and outbound clients; callers feed
+  protocol input and drive external I/O. No sockets, Asio, or TLS inside.
 - **Coroutine-first Web framework** — controllers, typed JSON
   models, validation, middleware, streaming, SSE, and WebSocket routes, all
   finalized at startup with no per-request rebuilding.
@@ -126,9 +126,10 @@ HTTPS automatically enables QUIC/HTTP/3 over UDP on the same address and
 numeric port; an HTTP-only listener does not enable HTTP/3 automatically. Set
 `.http3.mode = ruvia::Http3Mode::kDisabled` to opt out, or use
 `kEnabled` to require HTTP/3 explicitly; the remaining HTTP/3 fields override
-its handshake and drain timeouts. TCP listener and UDP/QUIC preparation is
-atomic: startup fails instead of serving HTTPS while advertising an unavailable
-HTTP/3 endpoint.
+its handshake and drain timeouts. HTTP/3 always uses the same QUIC protocol
+implementation; there is no backend selection. TCP listener and UDP/QUIC
+preparation is atomic: startup fails instead of serving HTTPS while advertising
+an unavailable HTTP/3 endpoint.
 
 `ServerConfig::workerCount` is the number of business workers. The runtime also
 uses one dedicated server network thread (in addition to any `BlockingPool` and
@@ -154,12 +155,26 @@ longer applies to its tunnel; write timeout applies only while output is
 pending. WebSocket heartbeat and close-handshake settings govern its liveness.
 The idle timeout applies to the QUIC connection.
 
-The server HTTP/3 surface supports normal buffered controller routes, including
-request bodies and buffered byte responses, and RFC 9220 WebSocket Extended
-CONNECT. The same WebSocket route therefore serves RFC 6455 over HTTP/1.1, RFC
-8441 over HTTP/2, and RFC 9220 over HTTP/3. Ordinary CONNECT, streaming request
-or response routes, SSE, buffered file payloads, WebTransport, 0-RTT, connection
-migration, server push, and dynamic QPACK remain unsupported.
+The HTTP/3 server supports buffered and streaming request routes, byte and file
+responses, response streams, SSE, ordinary CONNECT and Extended CONNECT. The
+same WebSocket route serves RFC 6455 over HTTP/1.1, RFC 8441 over HTTP/2, and RFC
+9220 over HTTP/3. HTTP/2 and HTTP/3 server push, dynamic QPACK, informational
+responses, trailers and RFC 9218 priority updates are available through the
+same application capabilities. `Http3ListenConfig::qpack` configures receive
+limits; setting `maxTableCapacity` to zero disables dynamic entries and setting
+`maxBlockedStreams` to zero forbids blocked field sections.
+
+CONNECT-UDP (RFC 9298) uses `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler)`.
+The framework negotiates GET Upgrade/101 over HTTP/1.1 and Extended CONNECT/2xx
+over HTTP/2 or HTTP/3, including `Capsule-Protocol: ?1`. The handler can use
+`HttpUdpTunnel` with `c.tunnel().datagrams()` for one receive path that accepts
+both native QUIC DATAGRAM and reliable DATAGRAM capsules; the default automatic
+send policy uses QUIC only when it was negotiated and the packet fits, otherwise
+it sends a reliable capsule. Native sends are best-effort: a full bounded send
+queue may drop a packet, with no delivery or retry guarantee. The application
+middleware controls authorization and target policy, and opens and drives its
+UDP socket. WebTransport, 0-RTT and explicit connection migration APIs are not
+exposed.
 
 When HTTP/3 is active, TLS HTTP/1.1 and HTTP/2 responses automatically advertise
 its real port, for example `Alt-Svc: h3=":443"; ma=86400`; HTTP/3 responses do
@@ -220,8 +235,8 @@ if (const auto* tls = info.tls()) {
 | Directory | CMake target | Purpose |
 | --- | --- | --- |
 | `ruvia-core/` | `ruvia::core` | Coroutine tasks, Asio integration, PMR memory, connection scanning, and runtime helpers. |
-| `ruvia-http/` | `ruvia::http` | Pure sans-I/O HTTP, HTTP/2, HTTP/3 varint/frame codecs, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
-| `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server and outbound-client I/O, TLS, streaming, WebSocket routes, validation, static files, and optional integrations. |
+| `ruvia-http/` | `ruvia::http` | Sans-I/O HTTP/1, HTTP/2, HTTP/3 and QUIC protocol core, WebSocket, multipart, SSE, content-coding, and outbound-client protocol primitives. |
+| `ruvia-web/` | `ruvia::web` | App, Context, Router, middleware, server and outbound-client I/O, TLS/EVP callbacks, UDP runtime, streaming, WebSocket routes, validation, static files, and optional integrations. |
 
 Dependency direction is fixed:
 
@@ -229,9 +244,12 @@ Dependency direction is fixed:
 ruvia-web   ->  ruvia-core + ruvia-http
 ```
 
-`ruvia-http` is a sans-I/O protocol library: callers feed bytes and consume
-typed events. `ruvia-web` drives those primitives with worker-local DNS,
-sockets, TLS/ALPN, connection reuse, timeouts, and cancellation.
+`ruvia-http` owns HTTP and QUIC protocol processing, using ngtcp2's QUIC core;
+callers provide input and consume typed protocol results. `ruvia-web` directly
+depends on `ruvia::core`, `ruvia::http`, and OpenSSL, and drives the public HTTP
+interfaces with worker-local DNS, sockets, TLS/ALPN and EVP callbacks, UDP,
+connection reuse, timeouts, and cancellation. ngtcp2 is an HTTP component
+dependency, not a direct Web dependency.
 
 ## Outbound HTTP Client
 
@@ -338,10 +356,90 @@ Cleartext HTTP/2 uses RFC 9113 prior knowledge when `kHttp2Only` is selected. HT
 `Upgrade: h2c` is not performed implicitly, so a server that only accepts the
 Upgrade transition must be configured for HTTP/1 or exposed through TLS/ALPN.
 
-The Controller-facing surface provides one `send(HttpClientRequestView)`
-operation, immutable `withOptions(OperationOptions)` derivation, origin
-inspection, and a single `stats()` snapshot. Requests are awaited as scoped
-coroutine operations; there are no blocking overloads or callback ownership model.
+`HttpClient` and Controller handles expose `send(HttpClientRequestView)`,
+`openRequest()` for streaming uploads, `openTunnel()` for CONNECT and
+`openUdpTunnel()` for CONNECT-UDP. `withOptions(OperationOptions)` derives
+immutable operation policy. Requests are awaited as scoped coroutine operations;
+inputs are owned before each operation is returned. Origin inspection and
+`stats()` describe the same registered client. There are no blocking overloads.
+
+`openRequest()` returns an `HttpClientExchange` whose `body().write()` accepts
+bounded owned chunks and whose `body().end(trailers)` sends request completion.
+`response()` can run concurrently with upload, so an early final response is
+observable without finishing the request body. `HttpClientUploadConfig` selects
+chunk bounds, optional content length and `100-continue` policy. Discarding a cold
+operation performs no I/O; moving the exchange preserves existing operations.
+
+`response.informationalResponses()` retains interim status/header sections.
+`response.reprioritize(HttpPriority{...})` sends live HTTP/2 or HTTP/3 priority
+updates. Enable `.push = {.enabled = true}` on `HttpClientConfig` to receive
+bounded push offers with `nextPush()`; a pushed response has its own body and
+cancellation lifetime. `.advertisements` selects bounded ORIGIN/ALTSVC
+observations obtained through `nextAdvertisement()`. Observations do not change
+the client's registered origin or TLS identity. HTTP/3 receive QPACK limits use
+`HttpClientConfig::qpack`.
+
+### CONNECT and Capsule channels
+
+```cpp
+#include <ruvia/web/HttpClient.h>
+#include <ruvia/web/HttpUdpTunnel.h>
+
+ruvia::Task<void> exchangePackets(ruvia::HttpClient& proxy) {
+    // Already-expanded URI template path; encodeHttpConnectUdpPath() expands
+    // the RFC 9298 default template from a host and port when needed.
+    auto opened = co_await proxy.openUdpTunnel({
+        .target = "/.well-known/masque/udp/target.example/443/",
+    });
+    if (auto* rejection = opened.response()) {
+        auto body = co_await rejection->body().readAll();
+        co_return;
+    }
+    auto udp = std::move(*opened.tunnel()).udp();
+    co_await udp.send("packet");
+    co_await udp.finish();
+    while (auto packet = co_await udp.read()) {
+        // packet owns its bytes; empty payload is a UDP packet, not EOF.
+    }
+}
+```
+
+Ordinary `openTunnel({.authority = "target.example:443"})` uses CONNECT;
+extended tunnels additionally supply `.protocol` and `.target`. Accepted results
+expose `HttpClientTunnel`, while rejections retain ordinary HTTP status, headers
+and body. Extended CONNECT waits for the peer's enabling SETTINGS. The
+CONNECT-UDP entry supplies its proxy authority and required Capsule field and
+validates the response before exposing a tunnel.
+
+`HttpClientTunnel::read()` borrows bytes until the next read; `write()` owns its
+input before returning. `finish()` closes only the sending direction, allowing
+reads to continue. Consume an established client tunnel with
+`std::move(tunnel).capsules()` to obtain an `HttpCapsuleStream`, or with
+`std::move(tunnel).datagrams()` / `.udp()` after CONNECT-UDP negotiation. The
+datagram stream can mix native QUIC DATAGRAM and capsule receives and uses the
+same automatic send policy described above; set `HttpDatagramConfig::sendPolicy`
+to `kCapsule` or `kQuic` to choose explicitly. Capsules and UDP datagram results
+own their PMR storage across subsequent reads and client shutdown. Destroy them
+on their worker before that EventLoop retires. A null optional is EOF; an empty
+capsule or datagram remains data. `abort()` wakes pending I/O; await/join all
+started operations before destroying their channel. One read and one
+write/finish lane may coexist, and moving a channel preserves cold operations.
+Use a Capsule adapter exclusively, without interleaving raw tunnel reads or
+writes.
+
+Server handlers register ordinary CONNECT with `RUVIA_CONNECT(authority,
+handler)` and Extended CONNECT with `RUVIA_CONNECT_PROTOCOL(protocol, path,
+handler)`. They return `Task<void>` and use `c.tunnel()`; authorization middleware
+can reject before the handshake is committed. Ordinary authorities match exactly
+or use `"*"`; extended paths support normal route parameters and group prefixes.
+`HttpTunnelRouteConfig::peerTransportFinTimeout` bounds transport cleanup after
+the handler returns. Within the handler, send FIN does not end the receive lane.
+
+`Context::inform()` sends interim responses; `Context::push()` dispatches promised
+GET/HEAD requests through normal routing and middleware when the peer permits
+push. `advertiseOrigins()` and `advertiseAlternativeService()` publish explicit
+connection advertisements, and request trailers are available through
+`c.req().trailers()` after body completion.
 
 Every response has one linear body reader. `read()` consumes one borrowed
 `std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
@@ -439,9 +537,12 @@ ruvia::WebSocketClient client(loop, {
 auto completed = loop.start(consumeEvents(client));
 ```
 
-The opening handshake uses HTTP/1.1 Upgrade, validates the server accept key and
-selected subprotocol, and rejects unsolicited extensions. Client frames use a
-cryptographically generated mask; inbound masked server frames are rejected.
+`WebSocketClientConfig::protocol` selects `kHttp1`, `kHttp2` or `kHttp3`.
+HTTP/1.1 uses Upgrade and validates the accept key; HTTP/2 and HTTP/3 use Extended
+CONNECT after the peer's enabling SETTINGS. Each validates the selected
+subprotocol and extension response. `.deflate` negotiates RFC 7692 compression
+on all three versions. Client frames use cryptographic masks and masked server
+frames are rejected on all three versions.
 The driver automatically answers Ping, completes peer-initiated Close, enforces
 one concurrent read and one concurrent write, bounds complete messages, and
 closes the transport when an operation is cancelled or times out. An operation's
@@ -923,30 +1024,29 @@ upgrade routes reject before committing their response head.
 - vcpkg.
 - Supported build platforms: Linux and Windows 10 or newer. Windows builds
   require MSVC.
-- Component dependencies: core uses Asio; HTTP uses zlib, Brotli, and zstd;
-  Web adds OpenSSL 3.6.4 or newer with QUIC enabled. The HTTP/3 server also
-  requires listener-level QUIC idle-timeout configuration; this repository's
-  vcpkg overlay provides it for OpenSSL 3.6.4. An unpatched OpenSSL 3.6.4
-  cannot reliably serve fast handshakes with Ruvia's configured timeout.
+- Component dependencies: core uses Asio; HTTP uses zlib, Brotli, zstd, and
+  the QUIC core from ngtcp2 1.25 or newer (without ngtcp2's OpenSSL feature).
+  Web adds OpenSSL 3.5 or newer for TLS and the QUIC crypto-provider callbacks.
+  HTTP-only builds do not require OpenSSL; Web receives ngtcp2 transitively
+  through `ruvia::http` and does not directly depend on it.
 - Optional vcpkg features: MariaDB, PostgreSQL, Redis, and JWT.
 
 ## Build
 
 For a standalone Ruvia build, set `VCPKG_ROOT` to the root of your vcpkg
 checkout. Ruvia automatically uses its toolchain unless
-`CMAKE_TOOLCHAIN_FILE` was set explicitly. Its manifest uses the repository's
-OpenSSL overlay when Web is enabled; core-only and HTTP-only builds do not
-install OpenSSL.
+`CMAKE_TOOLCHAIN_FILE` was set explicitly. Its manifest selects ngtcp2's core
+(with default features disabled) when HTTP is enabled, and OpenSSL when Web is
+enabled. Core-only and HTTP-only builds do not install OpenSSL.
 
 When Ruvia is included with `FetchContent` or `add_subdirectory`, the parent
 project owns its toolchain, vcpkg manifest features, triplets, and cache-wide
 compiler policy. Select the dependencies needed by the enabled `RUVIA_*`
-options in the parent manifest. If Web/HTTP/3 is enabled, the parent must also
-select this repository's OpenSSL overlay (for example, set
-`VCPKG_OVERLAY_PORTS` to `<Ruvia source>/ruvia-web/vcpkg-overlay` before
-configuring the parent) or an OpenSSL build providing the same listener-level
-QUIC idle-timeout capability. Ruvia does not change a parent's vcpkg
-configuration. On MSVC, select the static runtime before
+options in the parent manifest: HTTP needs ngtcp2 with default features disabled,
+and Web additionally needs OpenSSL 3.5 or newer. No OpenSSL QUIC feature or
+repository overlay is needed; QUIC protocol processing uses the HTTP component,
+while Web supplies TLS/EVP callbacks and UDP/runtime I/O. Ruvia does not change a
+parent's vcpkg configuration. On MSVC, select the static runtime before
 creating parent targets that link Ruvia; Ruvia applies `/MT` or `/MTd` only to
 targets in its own directory tree.
 
@@ -1904,9 +2004,10 @@ target_link_libraries(my_app PRIVATE ruvia::web)
 
 Ruvia's Windows archives use the static MSVC runtime (`/MT`, or `/MTd` for
 Debug), so Windows consumers must select the same runtime before creating
-targets that link them. A consumer linking an installed Web archive must also
-use the matching OpenSSL build; the installed CMake package does not install
-or patch OpenSSL for its caller.
+targets that link them. A consumer linking the installed Web component must
+provide OpenSSL 3.5 or newer for TLS and QUIC crypto callbacks. The HTTP
+component's ngtcp2 dependency is part of the imported dependency closure; the
+installed CMake package does not install external dependencies for its caller.
 
 Narrower consumers can request only core or HTTP:
 
@@ -2403,11 +2504,14 @@ Use `QueryModel<T>` for structured request validation; use `and_then()` and
 
 ## HTTP Protocol Library
 
-`ruvia::http` is a standalone sans-I/O protocol library. Both client and
-server drivers supply their own transport, clocks, cancellation, TLS identity,
-and QUIC streams. The library owns HTTP message validation, wire framing,
-compression, connection rules, and protocol failures; it has no dependency on
-`ruvia::core`, Asio, sockets, or OpenSSL.
+`ruvia::http` is a standalone protocol library. Client and server drivers supply
+transport I/O, clocks, cancellation, and TLS/EVP callbacks. The HTTP component
+owns HTTP semantics and the QUIC protocol core: packet protection and key
+updates, packet and connection-ID processing, streams and flow control,
+acknowledgments and loss recovery/retransmission, datagrams, and connection
+close. It uses ngtcp2's QUIC core, but has no dependency on `ruvia::core`, Asio,
+sockets, or OpenSSL. Web implements the crypto callbacks with OpenSSL EVP and
+drives UDP I/O through its runtime.
 
 | Protocol | Client entry points | Server entry points |
 | --- | --- | --- |
@@ -2416,9 +2520,10 @@ compression, connection rules, and protocol failures; it has no dependency on
 | HTTP/3 | `Http3Connection` with client role, `Http3ClientRequestHead`, `Http3RequestWriter`, `Http3ClientResponse`, `Http3DataWritePlan` | `Http3Connection` with server role, `Http3MessageHead`, `Http3ResponseWriter`, `Http3DataWritePlan` |
 | WebSocket | `Http1WebSocketClientHandshake` or `WebSocketClientNegotiation`, then `WebSocketConnection` with client role | HTTP/1 Upgrade or HTTP/2/3 Extended CONNECT handshake helpers, then `WebSocketConnection` with server role |
 
-The protocol interfaces implement HTTP semantics/framing from RFC 9110, 9112, 9113, and 9114,
-HPACK (RFC 7541), QPACK (RFC 9204), WebSocket (RFC 6455), and these published
-optional extensions:
+The protocol interfaces implement HTTP semantics/framing from RFC 9110, 9112,
+9113, and 9114; QUIC transport, TLS integration, and loss recovery from RFC 9000,
+9001, and 9002; HPACK (RFC 7541), QPACK (RFC 9204), WebSocket (RFC 6455), and
+these published optional extensions:
 
 - HTTP/2 and HTTP/3 server push, including promise metadata and cancellation.
   HTTP/2 clients opt in with `Http2ConnectionOptions::enablePush`; HTTP/3 clients
@@ -2456,9 +2561,12 @@ output on their respective critical streams and keep those streams open.
 The independent request/response encoders also have dynamic QPACK overloads;
 share one encoder across the whole connection when using them separately.
 
-HTTP/3 stream I/O, flow control, and resets belong to the QUIC transport.
-Message writers produce field sections and scatter-gather DATA plans; drivers
-preserve write ordering and commit plans only after successful transmission.
+HTTP/3 uses the same QUIC core as the rest of the protocol library. QUIC packet
+processing, stream I/O, flow control, acknowledgments, loss recovery, retransmission,
+and resets are protocol responsibilities; the Web runtime only supplies UDP I/O
+and TLS/EVP callbacks. Message writers produce field sections and scatter-gather
+DATA plans; drivers preserve write ordering and commit plans only after successful
+transmission.
 For trailing HEADERS, complete the body plan, write the trailer section, then
 commit the finishing plan and FIN. `cancelRequest()` queues QPACK cancellation
 before releasing a parser. Returned PMR results can survive later operations;
@@ -2481,7 +2589,10 @@ Use the negotiated `WebSocketCompression` value when constructing the connection
 
 The Web runtime uses these protocol primitives with its own enabled capabilities;
 protocol-library extension support does not enable an App transport feature by
-itself. `ruvia::web` drives HTTP/3 with OpenSSL 3.6.4 or newer, as described above.
+itself. HTTP/3 always uses ngtcp2 through `ruvia::http`; Web uses OpenSSL 3.5 or
+newer for TLS and EVP callbacks and supplies the UDP/runtime integration. The
+HTTP component does not require OpenSSL, and Web does not directly depend on or
+call ngtcp2.
 
 HTTP message helpers also cover multipart, ranges, conditional requests, cookies,
 content negotiation, redirects, and content coding. Parse `Content-Encoding`

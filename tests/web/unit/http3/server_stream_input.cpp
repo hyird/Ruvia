@@ -17,6 +17,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamInput.h"
@@ -56,10 +57,10 @@ struct Fixture final {
     Mailbox mailbox;
     Input input;
 
-    explicit Fixture(std::size_t capacity = 16)
+    explicit Fixture(std::size_t capacity = 16, ruvia::Http3ConnectionConfig connection = {.enableConnectProtocol = true})
         : routes(),
           worker(),
-          session(routes.implementation.routeTable(), worker),
+          session(routes.implementation.routeTable(), worker, {.connection = connection}),
           mailbox(16, 16, 8),
           input(session, worker, kEpoch, kGeneration, capacity) {}
 };
@@ -721,4 +722,70 @@ RUVIA_TEST(http3ServerStreamInputReturnsWorkerPmrStateAtConnectionRetirement) {
     }
     RUVIA_CHECK(upstream.liveAllocations() == 0);
     RUVIA_CHECK(upstream.allocationCount() == upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3ServerStreamInputRetainsQpackBlockedSuffixAndFinUntilEncoderAdvances) {
+    Fixture fixture(16, {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2, .enableConnectProtocol = true});
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, fixture.worker.resource());
+    const std::array<ruvia::Http3FieldSectionFieldView, 1> fields{{{"x-dynamic", "retained"}}};
+    auto head = ruvia::encodeHttp3ClientRequestHead(encoder, 0,
+        {.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7},
+        {}, fixture.worker.resource());
+    RUVIA_CHECK(head.has_value());
+    if (!head) {
+        return;
+    }
+    auto wire = frame(1, std::string_view(head->fieldSection.data(), head->fieldSection.size())) + frame(0, "payload");
+    RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
+    Mailbox::BorrowedBlock block;
+    RUVIA_CHECK(fixture.mailbox.tryReceive(block));
+    const auto accepted = fixture.input.acceptData(block);
+    block.release();
+    RUVIA_CHECK(accepted.status == Input::Status::kDeferredQpack);
+    RUVIA_CHECK(!fixture.input.canAcceptInput(0));
+    RUVIA_CHECK(fixture.input.acceptControl({.kind = Control::Kind::kStreamFin, .id = {kEpoch, kGeneration, 0}, .value = wire.size()}).status == Input::Status::kDeferredQpack);
+    RUVIA_CHECK(!fixture.input.resumeQpack());
+    std::string instructions(1, char{2});
+    const auto pending = encoder.pendingEncoderOutput();
+    instructions.append(pending.data(), pending.size());
+    RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 6}, instructions));
+    RUVIA_CHECK(fixture.mailbox.tryReceive(block));
+    RUVIA_CHECK(fixture.input.acceptData(block).status == Input::Status::kFed);
+    block.release();
+    const auto resumed = fixture.input.resumeQpack();
+    RUVIA_CHECK(resumed && resumed->streamId == 0 && resumed->result.status == Input::Status::kFinished);
+    RUVIA_CHECK(fixture.input.canAcceptInput(0));
+    RUVIA_CHECK(fixture.session.streamState(0) == Engine::StreamState::kReady);
+    const auto* request = fixture.session.request(0);
+    RUVIA_CHECK(request != nullptr);
+    if (request) {
+        const auto body = request->request().bodyBytes();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "payload");
+        RUVIA_CHECK_EQ(request->request().header("x-dynamic").value_or(""), "retained");
+    }
+    RUVIA_CHECK(!fixture.input.resumeQpack());
+}
+
+RUVIA_TEST(http3ServerStreamInputResetAfterBlockedFinReleasesSuffixAndCancelsDecoderSection) {
+    Fixture fixture(16, {.qpackMaxTableCapacity = 256, .qpackBlockedStreams = 2, .enableConnectProtocol = true});
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 256, .maxBlockedStreams = 2}, fixture.worker.resource());
+    const std::array fields{ruvia::Http3FieldSectionFieldView{"x-dynamic", "retained"}};
+    auto head = ruvia::encodeHttp3ClientRequestHead(encoder, 0,
+        {.method = "POST", .scheme = "https", .authority = "example.test", .path = "/items", .fields = fields, .bodyLength = 7}, {}, fixture.worker.resource());
+    RUVIA_CHECK(head.has_value());
+    if (!head) {
+        return;
+    }
+    const auto wire = frame(1, {head->fieldSection.data(), head->fieldSection.size()}) + frame(0, "payload");
+    RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
+    Mailbox::BorrowedBlock block;
+    RUVIA_CHECK(fixture.mailbox.tryReceive(block));
+    RUVIA_CHECK(fixture.input.acceptData(block).status == Input::Status::kDeferredQpack);
+    block.release();
+    RUVIA_CHECK(fixture.input.acceptControl({Control::Kind::kStreamFin, {kEpoch, kGeneration, 0}, wire.size()}).status == Input::Status::kDeferredQpack);
+    RUVIA_CHECK(fixture.input.acceptControl({Control::Kind::kStreamReset, {kEpoch, kGeneration, 0}, wire.size()}).status == Input::Status::kReset);
+    RUVIA_CHECK(!fixture.input.stopped());
+    RUVIA_CHECK(!fixture.input.resumeQpack());
+    RUVIA_CHECK_EQ(fixture.input.activeRequestStreamCount(), std::size_t{0});
+    RUVIA_CHECK(!fixture.session.pendingQpackDecoderOutput().empty());
 }

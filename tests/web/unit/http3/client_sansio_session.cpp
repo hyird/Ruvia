@@ -949,3 +949,85 @@ RUVIA_TEST(http3ClientSansIoSessionAllocationFailureTerminatesEveryLiveStream) {
     RUVIA_CHECK_EQ(worker.allocations, worker.deallocations);
     RUVIA_CHECK_EQ(worker.liveBytes, 0U);
 }
+
+RUVIA_TEST(http3_client_push_events_associate_out_of_order_streams_and_control_frames_commit_once) {
+    CountingResource memory;
+    using Engine = ruvia::detail::Http3ClientSansIoSessionEngine;
+    struct Observed final {
+        std::vector<ruvia::Http3ConnectionEventKind> events;
+        std::string path;
+        std::string body;
+        std::uint64_t stream{};
+        std::uint64_t push{};
+        bool reentryRejected{};
+        Engine* engine{};
+    } observed;
+    {
+        Engine client(&memory);
+        ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &memory);
+        observed.engine = &client;
+        client.observePushes([](void* raw, const ruvia::Http3ConnectionEvent& event) {
+            auto& state = *static_cast<Observed*>(raw);
+            state.events.push_back(event.kind);
+            state.push = *event.pushId;
+            state.stream = event.streamId;
+            if (event.kind == ruvia::Http3ConnectionEventKind::kPushPromise) {
+                state.path = event.head->path;
+                state.reentryRejected = !state.engine->queueCancelPush(*event.pushId) &&
+                                        !state.engine->queueMaxPushId(100) && !state.engine->retirePushStream(3);
+            }
+            if (event.kind == ruvia::Http3ConnectionEventKind::kBody) {
+                state.body.append(event.body.data(), event.body.size());
+            }
+        },
+            &observed);
+        RUVIA_CHECK(client.registerRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        memory.reject = true;
+        bool failed = false;
+        try {
+            (void)client.queueMaxPushId(0);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        memory.reject = false;
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK(client.pendingControlOutput().empty());
+        RUVIA_CHECK(client.queueMaxPushId(0));
+        const char prefix[]{0, 4, 0};
+        RUVIA_CHECK(server.feed(2, prefix, false, false, [](void*, const ruvia::Http3ConnectionEvent&) {}, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(server.feed(2, client.pendingControlOutput(), false, false, [](void*, const ruvia::Http3ConnectionEvent&) {}, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(server.peerMaxPushId() == 0);
+        RUVIA_CHECK(client.consumeControlOutput(client.pendingControlOutput().size()));
+        auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
+        RUVIA_CHECK(promise.has_value());
+        const char pushPrefix[]{1, 0};
+        auto pending = client.feed(3, pushPrefix);
+        RUVIA_CHECK(pending.status == ruvia::detail::Http3ClientSansIoSessionStatus::kPushPromisePending);
+        RUVIA_CHECK(observed.events.size() == 1 && observed.events[0] == ruvia::Http3ConnectionEventKind::kPushStream);
+        RUVIA_CHECK(observed.stream == 3 && observed.push == 0);
+        RUVIA_CHECK(client.feed(0, *promise).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(observed.path == "/asset" && observed.reentryRejected);
+        auto wire = responseHead("200", "5");
+        auto payload = body("asset");
+        wire.insert(wire.end(), payload.begin(), payload.end());
+        RUVIA_CHECK(client.feed(3, wire, true).status == ruvia::detail::Http3ClientSansIoSessionStatus::kMessageEnd);
+        RUVIA_CHECK(observed.body == "asset");
+        RUVIA_CHECK(client.retirePushStream(3));
+        RUVIA_CHECK(client.queuePushPriorityUpdate(0, {.urgency = 1, .incremental = true}));
+        RUVIA_CHECK(client.queueMaxPushId(1));
+        RUVIA_CHECK(client.consumeControlOutput(client.pendingControlOutput().size()));
+        RUVIA_CHECK(client.queueCancelPush(0));
+        RUVIA_CHECK(client.pendingControlOutput().size() == 3);
+        RUVIA_CHECK(client.consumeControlOutput(3));
+        RUVIA_CHECK(client.pendingControlOutput().empty());
+        const auto liveBeforeRepeatedOutput = memory.liveBytes;
+        for (std::uint64_t maximum = 2; maximum < 102; ++maximum) {
+            RUVIA_CHECK(client.queueMaxPushId(maximum));
+            RUVIA_CHECK(client.consumeControlOutput(client.pendingControlOutput().size()));
+            RUVIA_CHECK(memory.liveBytes == liveBeforeRepeatedOutput);
+        }
+        RUVIA_CHECK(client.cancelRequest(0));
+        RUVIA_CHECK(client.release(0));
+    }
+    RUVIA_CHECK(memory.liveBytes == 0 && memory.allocations == memory.deallocations);
+}

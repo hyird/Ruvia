@@ -32,6 +32,8 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
 #include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
 #include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -89,6 +91,7 @@ public:
     }
 
     void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) {
+        interimOutput_ = context != nullptr ? ContextAccess::interimOutput(*context) : nullptr;
         state_.bindContext(context, streamingHead);
     }
 
@@ -298,6 +301,9 @@ private:
             compression_.prepare(requestMethod_, response, kind_);
             const auto commitBodyPlan = planHttpResponseBody(requestMethod_, response.status());
             compression_.activate(commitBodyPlan);
+            if (interimOutput_ != nullptr && interimOutput_->busy()) {
+                throw std::logic_error("interim response output is still active");
+            }
             const auto headResult = connection_.submitStreamingResponseHead(
                 streamId_, std::move(response), kind_, trailerIntent);
             const auto* submittedHead = headResult.submitted();
@@ -306,6 +312,9 @@ private:
                     throw std::system_error(std::make_error_code(std::errc::connection_reset));
                 }
                 throw std::logic_error("HTTP/2 streaming response head submission failed");
+            }
+            if (interimOutput_ != nullptr) {
+                interimOutput_->commitFinal();
             }
             state_.markCommitted(*submittedHead);
             wakeWriter();
@@ -335,6 +344,7 @@ private:
     std::uint32_t streamId_;
     ResponseStreamKind kind_;
     ResponseStreamState state_;
+    HttpInterimResponseOutput* interimOutput_{};
     WorkerSignal& writeSignal_;
     Http2SansIoStreamSignal& streamSignal_;
     Http2DataOutputBudget* outputBudget_{nullptr};

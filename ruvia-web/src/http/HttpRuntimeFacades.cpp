@@ -166,6 +166,14 @@ void SseWriter::expireCapability(detail::ScopedCapabilityNode& capability) noexc
     static_cast<SseWriter&>(capability).writer_ = nullptr;
 }
 
+HttpTunnel& Context::tunnel() const {
+    const auto* output = responseOutput().tunnel();
+    if (output == nullptr) {
+        throw std::logic_error("HTTP tunnel is available only in an established CONNECT route");
+    }
+    return output->tunnel();
+}
+
 WebSocket& Context::webSocket() const {
     const auto* output = responseOutput().webSocket();
     if (output == nullptr) {

@@ -1,75 +1,50 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <system_error>
 #include <thread>
 
+#include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
 #include "ruvia/web/detail/http3/Http3UdpSocket.h"
 
 namespace ruvia::detail {
 
-// Owner-thread adapter for a UDP socket owned by the server network thread and
-// its QUIC datagram BIO bridge. Wildcard binds retain the packet's concrete local destination through
-// pktinfo so OpenSSL can emit replies from the address the peer contacted. It
-// owns no QUIC/TLS object or timer and is not App wiring.
+// Owner-thread UDP boundary for the server network runtime. Packet bytes remain
+// borrowed until the caller consumes the receive slot; sends use a fixed owned slot.
 class Http3DatagramEndpoint final {
 public:
-    using Udp = asio::ip::udp;
+    using udp = asio::ip::udp;
 
-    enum class NotificationKind : std::uint8_t {
-        kInputAvailable,
-        kOutputDrained,
-        kStopping,
-    };
-
-    struct Notification final {
-        // The caller owns context and keeps it alive through endpoint drain.
+    enum class notification_kind : std::uint8_t { input_available,
+        output_drained,
+        stopping };
+    struct notification final {
         void* context{};
-        void (*notify)(void*, NotificationKind) noexcept {};
+        void (*notify)(void*, notification_kind) noexcept {};
     };
 
-    enum class PumpResult : std::uint8_t {
-        kIdle,
-        kPending,
-        kBackpressured,
-        kStopped,
-        kError,
+    enum class pump_result : std::uint8_t { idle,
+        pending,
+        stopped,
+        error };
+    enum class stop_status : std::uint8_t { pending,
+        done,
+        error };
+
+    struct received_datagram final {
+        std::span<const std::byte> bytes;
+        udp::endpoint peer;
+        udp::endpoint local_destination;
     };
 
-    enum class StopStatus : std::uint8_t {
-        kPending,
-        kDone,
-        kError,
-    };
-
-    // A lease keeps the endpoint's bridge alive while its SSL-side BIO is owned
-    // elsewhere. Destroy that BIO owner before releasing the lease.
-    class BridgeLease final {
-    public:
-        BridgeLease(BridgeLease&& other) noexcept;
-        BridgeLease& operator=(BridgeLease&& other) noexcept;
-        ~BridgeLease();
-
-        BridgeLease(const BridgeLease&) = delete;
-        BridgeLease& operator=(const BridgeLease&) = delete;
-
-        [[nodiscard]] Http3QuicDatagramBridge& bridge() const noexcept;
-
-    private:
-        friend class Http3DatagramEndpoint;
-        explicit BridgeLease(Http3DatagramEndpoint& owner) noexcept;
-        void reset() noexcept;
-
-        Http3DatagramEndpoint* owner_{};
-    };
-
-    Http3DatagramEndpoint(asio::io_context& networkIo, Udp::endpoint bindEndpoint,
-        Notification notification);
+    Http3DatagramEndpoint(asio::io_context& network_io, udp::endpoint bind_endpoint,
+        notification notification);
     ~Http3DatagramEndpoint();
 
     Http3DatagramEndpoint(const Http3DatagramEndpoint&) = delete;
@@ -77,73 +52,53 @@ public:
     Http3DatagramEndpoint(Http3DatagramEndpoint&&) = delete;
     Http3DatagramEndpoint& operator=(Http3DatagramEndpoint&&) = delete;
 
-    // prepare() opens/binds UDP first, then constructs the bridge using the actual
-    // bound port. A requested port of zero selects an ephemeral port.
     void prepare();
-    [[nodiscard]] std::uint16_t boundPort() const noexcept;
-    [[nodiscard]] BridgeLease acquireBridge();
+    [[nodiscard]] std::uint16_t bound_port() const noexcept;
+    [[nodiscard]] pump_result start() noexcept;
+    [[nodiscard]] std::optional<received_datagram> receive_slot() const noexcept;
+    [[nodiscard]] pump_result consume_receive() noexcept;
+    [[nodiscard]] pump_result send_datagram(std::span<const std::byte> bytes,
+        const udp::endpoint& source, const udp::endpoint& peer) noexcept;
+    [[nodiscard]] bool send_in_flight() const noexcept;
+    [[nodiscard]] bool outbound_quiescent() const noexcept;
 
-    // start() arms the single receive slot. Notifications run synchronously on the
-    // owner thread under a callback-depth lifetime guard. A callback may re-enter
-    // requestStop(); kStopping is emitted once and stopping state is committed first.
-    // Callbacks must not destroy this endpoint. kInputAvailable signals successful injection or first BIO backpressure;
-    // kOutputDrained is emitted only when a send completion drains the queue. Calling
-    // sendPending() after external QUIC progress does not notify when already idle.
-    // kBackpressured retains the completed receive view without rearming; retry it
-    // after protocol progress. Sends are serialized and advanced by completion.
-    [[nodiscard]] PumpResult start() noexcept;
-    [[nodiscard]] PumpResult retryHeldReceive() noexcept;
-    [[nodiscard]] PumpResult sendPending() noexcept;
-    // Owner-thread-only observation of the serialized UDP send slot.
-    [[nodiscard]] bool sendInFlight() const noexcept;
-    [[nodiscard]] bool outboundQuiescent() const noexcept;
-
-    // Nonblocking owner-thread shutdown. socketDone() includes all socket callback
-    // storage retirement; stopStatus() also waits for every BridgeLease to be released.
-    void requestStop() noexcept;
-    [[nodiscard]] bool socketDone() const noexcept;
-    [[nodiscard]] StopStatus stopStatus() const noexcept;
+    void request_stop() noexcept;
+    [[nodiscard]] bool socket_done() const noexcept;
+    [[nodiscard]] stop_status status() const noexcept;
     [[nodiscard]] std::error_code error() const noexcept;
 
 private:
-    static Udp::endpoint checkedBindEndpoint(Udp::endpoint endpoint);
-    static Notification checkedNotification(Notification notification);
-    static void receiveCompletion(void* context, std::error_code error,
+    static udp::endpoint checked_bind_endpoint(udp::endpoint endpoint);
+    static notification checked_notification(notification notification);
+    static void receive_completion(void* context, std::error_code error,
         Http3UdpSocket::ReceiveView view) noexcept;
-    static void sendCompletion(void* context, std::error_code error,
+    static void send_completion(void* context, std::error_code error,
         std::size_t size) noexcept;
 
-    void requireOwnerThread() const noexcept;
-    void releaseBridgeLease() noexcept;
-    [[nodiscard]] bool armReceive() noexcept;
-    [[nodiscard]] PumpResult injectHeldReceive() noexcept;
-    [[nodiscard]] PumpResult sendPendingImpl(bool notifyWhenDrained) noexcept;
-    void handleReceive(std::error_code error, Http3UdpSocket::ReceiveView view) noexcept;
-    void handleSend(std::error_code error, std::size_t size) noexcept;
-    void notify(NotificationKind kind) noexcept;
+    void require_owner_thread() const noexcept;
+    [[nodiscard]] bool arm_receive() noexcept;
+    void handle_receive(std::error_code error, Http3UdpSocket::ReceiveView view) noexcept;
+    void handle_send(std::error_code error, std::size_t size) noexcept;
+    void notify(notification_kind kind) noexcept;
     void fail(std::error_code error) noexcept;
 
-    Udp::endpoint bindEndpoint_;
-    Udp::endpoint boundEndpoint_;
-    std::thread::id ownerThread_;
+    udp::endpoint bind_endpoint_;
+    udp::endpoint bound_endpoint_;
+    std::thread::id owner_thread_;
     Http3UdpSocket socket_;
-    Notification notification_;
-    std::optional<Http3QuicDatagramBridge> bridge_;
-    Http3UdpSocket::ReceiveView heldReceive_;
+    notification notification_;
+    Http3UdpSocket::ReceiveView held_receive_;
+    std::array<std::byte, Http3UdpSocket::kDatagramBufferSize> send_buffer_{};
     std::error_code error_;
-    // Synchronous callback lifetime guard; stopStatus stays pending while nonzero.
-    std::size_t callbackDepth_{};
-    std::size_t sendSize_{};
+    std::size_t callback_depth_{};
+    std::size_t send_size_{};
     bool prepared_{};
     bool started_{};
-    bool receiveArmed_{};
-    bool hasHeldReceive_{};
-    // A retained packet gets one wakeup until it is accepted or discarded.
-    bool heldReceiveBackpressureNotified_{};
-    bool sendInFlight_{};
+    bool receive_armed_{};
+    bool has_held_receive_{};
+    bool send_in_flight_{};
     bool stopping_{};
-    bool stoppingNotified_{};
-    bool bridgeLeaseActive_{};
+    bool stopping_notified_{};
 };
 
 }  // namespace ruvia::detail

@@ -56,10 +56,11 @@ HttpResponseBodyPlan planHttpResponseBody(
     HttpKnownMethod requestMethod, HttpStatusCode responseStatus) noexcept {
     const auto policy = detail::responseWritePolicy(responseStatus);
     const auto semantics = detail::httpResponseContentSemantics(requestMethod, responseStatus);
+    const bool connectTunnel = semantics == HttpResponseContentSemantics::kConnectTunnel;
     return HttpResponseBodyPlan(requestMethod, responseStatus, semantics, policy.bodyAllowed(),
         !policy.bodyAllowed() || semantics != HttpResponseContentSemantics::kWithContent,
-        policy.autoContentLengthAllowed(), policy.explicitContentLengthAllowed(),
-        policy.transferEncodingAllowed());
+        !connectTunnel && policy.autoContentLengthAllowed(), !connectTunnel && policy.explicitContentLengthAllowed(),
+        !connectTunnel && policy.transferEncodingAllowed());
 }
 
 namespace {

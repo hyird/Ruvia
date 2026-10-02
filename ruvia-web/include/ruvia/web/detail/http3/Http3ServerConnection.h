@@ -27,6 +27,10 @@ class RouteTable;
 struct HttpServerOptions;
 class Http3WorkerMailboxScheduler;
 
+struct Http3ServerDatagramOutput final {
+    void* context{};
+    void (*send)(void*, std::uint64_t, std::span<const std::byte>){};
+};
 struct Http3ServerConnectionConfig final {
     std::uint64_t epoch{};
     std::uint64_t connectionGeneration{};
@@ -34,11 +38,12 @@ struct Http3ServerConnectionConfig final {
     std::size_t maxTrackedStreams{32};
     ConnectionScanner* connectionScanner{};
     asio::any_io_executor executor{};
+    Http3ServerDatagramOutput datagramOutput{};
 };
 
 // Worker-affine, transport-independent owner for one HTTP/3 server connection.
-// Ordinary request bodies are buffered; WebSocket CONNECT streams use a bounded
-// tunnel path. It accepts one routed mailbox block/control at a time, never
+// Ordinary request bodies are buffered; explicit stream routes and WebSocket
+// CONNECT streams use bounded input. It accepts one routed block/control at a time, never
 // drains or stops either shared mailbox, and never waits for capacity.
 // All borrowed owners, including ContextServices' worker/token/capability and
 // connection-metadata borrows, must outlive this object and its joined tasks.
@@ -60,7 +65,16 @@ public:
     using Session = Http3SansIoSessionEngine;
 
     enum class TransportIntentKind : std::uint8_t { kStreamReset,
+        kOpenPushStream,
         kConnectionClose };
+
+    struct PushStreamOpenResult final {
+        enum class Status : std::uint8_t { kOpened,
+            kUnavailable,
+            kStopped };
+        Status status{Status::kUnavailable};
+        std::uint64_t streamId{};
+    };
 
     enum class TransportCloseReason : std::uint8_t {
         kNone,
@@ -92,7 +106,7 @@ public:
             const TransportIntentToken& right) noexcept {
             return left.kind == right.kind && left.id.epoch == right.id.epoch &&
                    left.id.connectionGeneration == right.id.connectionGeneration &&
-                   left.id.streamId == right.id.streamId && left.sequence == right.sequence;
+                   left.id.streamId == right.id.streamId && left.id.pushId == right.id.pushId && left.sequence == right.sequence;
         }
     };
 
@@ -205,6 +219,7 @@ public:
     struct WorkerActivation final {
         WorkState work{};
         std::optional<TransportIntentToken> transportIntent{};
+        bool inputCapacityAvailable{false};
     };
 
     // Borrowed typed activation endpoint. The endpoint is called only on this
@@ -227,6 +242,7 @@ public:
     struct PublishAttempt final {
         PublishStatus status{PublishStatus::kNoReadyRequest};
         std::uint64_t streamId{};
+        std::optional<Http3CriticalStreamOutput::Kind> criticalKind{};
         // When status is kAttempted this is the exact result returned by the
         // selected dispatch, including notifyPeer and the mailbox block lane.
         Dispatch::PublishResult publication{};
@@ -253,6 +269,8 @@ public:
     // block after return. A validated request FIN automatically starts one
     // buffered dispatch when the session is ready.
     [[nodiscard]] EventResult acceptData(const Http3StreamMailbox::BorrowedBlock& block) &;
+    [[nodiscard]] bool resumeQpackInput() noexcept;
+    [[nodiscard]] bool canAcceptInput(std::uint64_t streamId, std::size_t wireBytes) const noexcept;
     EventResult acceptData(const Http3StreamMailbox::BorrowedBlock&) && = delete;
     [[nodiscard]] EventResult acceptControl(const Http3StreamControl& control) &;
     EventResult acceptControl(const Http3StreamControl&) && = delete;
@@ -278,6 +296,7 @@ public:
     // input, records a persistent typed close intent, cancels active handlers,
     // and wakes the scheduler; it does not touch the transport or either shared
     // mailbox.
+    void receiveDatagram(std::span<const std::byte> bytes) noexcept;
     [[nodiscard]] bool requestStop() & noexcept;
     bool requestStop() && = delete;
 
@@ -315,7 +334,8 @@ public:
     // from a successful reset-control send. join() alone is not transport
     // retirement or responsibility transfer.
     [[nodiscard]] std::optional<TransportIntent> peekTransportIntent() const noexcept;
-    [[nodiscard]] bool ackTransportIntent(const TransportIntentToken& token) & noexcept;
+    [[nodiscard]] bool ackTransportIntent(const TransportIntentToken& token,
+        std::optional<PushStreamOpenResult> opened = {}) & noexcept;
     bool ackTransportIntent(const TransportIntentToken&) && = delete;
     [[nodiscard]] bool takeOverTransportRetirement(
         TransportRetirementTakeover takeover) & noexcept;
@@ -329,6 +349,7 @@ public:
 private:
     friend class Http3WorkerMailboxScheduler;
     friend struct Http3ServerConnectionResetIntentTestAccess;
+    friend struct http3_worker_server_test_access;
 
     static constexpr std::size_t kNoIntentSlot = static_cast<std::size_t>(-1);
     static constexpr std::uint64_t kReservedCloseIntentSequence =
@@ -351,9 +372,20 @@ private:
         RequestIndexSlot* tail{};
     };
 
+    struct PendingInterimResponse final {
+        std::pmr::vector<char> frame;
+        std::size_t offset{};
+    };
+
     struct RequestIndexSlot final {
         std::uint64_t streamId{};
+        std::optional<std::uint64_t> pushId{};
+        bool pushCancelled{};
+        std::optional<std::pmr::vector<char>> pushPrefix{};
         RequestEntry* entry{};
+        std::optional<PendingInterimResponse> interimResponse{};
+        std::uint64_t responsePreludeBytes{};
+        bool requestStarted{};
         RejectionEntry* rejectionEntry{};
         RequestIndexSlot* queuePrevious{};
         RequestIndexSlot* queueNext{};
@@ -373,6 +405,12 @@ private:
 
     struct EntryRetirement;
     struct RequestRetirement;
+    struct PendingPush;
+
+    [[nodiscard]] Task<bool> pushRequest(std::uint64_t parentStreamId, HttpPushRequestView request);
+    void processPushCancellations() noexcept;
+    void observePushCancellation(std::uint64_t pushId) noexcept;
+    void retireRequestInput(std::uint64_t streamId) noexcept;
 
     [[nodiscard]] Task<void> runRequest(std::uint64_t streamId);
     [[nodiscard]] EventResult handleInputResult(std::uint64_t streamId,
@@ -392,6 +430,8 @@ private:
     [[nodiscard]] RequestIndexSlot* findRequestSlot(std::uint64_t streamId) noexcept;
     [[nodiscard]] const RequestIndexSlot* findRequestSlot(std::uint64_t streamId) const noexcept;
     void enqueueRunnable(RequestIndexSlot& slot, QueueKind kind, bool notify) noexcept;
+    [[nodiscard]] bool queueContinueResponse(std::uint64_t streamId);
+    [[nodiscard]] PublishAttempt publishInterimResponse(RequestIndexSlot& slot) noexcept;
     void enqueueForDemand(RequestIndexSlot& slot, bool notify) noexcept;
     void enqueueBlocked(RequestIndexSlot& slot, Dispatch::PublishBlockReason reason) noexcept;
     void removeQueued(RequestIndexSlot& slot) noexcept;
@@ -414,6 +454,7 @@ private:
         std::optional<Http3ConnectionErrorCode> errorCode = {}) noexcept;
     void finishEntry(RequestEntry& entry) noexcept;
     void initialize();
+    Http3ServerDatagramOutput datagramOutput_{};
     [[nodiscard]] bool onWorker() const noexcept;
     [[nodiscard]] bool attachTunnelScanner(std::uint64_t streamId,
         ConnectionScanner::Entry& entry) noexcept;
@@ -422,6 +463,7 @@ private:
     static bool attachTunnelScannerThunk(void* context, std::uint64_t streamId,
         ConnectionScanner::Entry& entry) noexcept;
     static void tunnelOutputReadyThunk(void* context, std::uint64_t streamId) noexcept;
+    static void requestInputConsumedThunk(void* context) noexcept;
     static void abortTunnelThunk(void* context, std::uint64_t streamId) noexcept;
     [[nodiscard]] static std::size_t indexCapacity(std::size_t maxTrackedStreams);
 
@@ -440,6 +482,13 @@ private:
     Input input_;
     TaskScope tasks_;
     std::pmr::vector<RequestIndexSlot> requestIndex_;
+    PendingPush* pendingPushHead_{};
+    PendingPush* pendingPushTail_{};
+    PendingPush* pushIntentHead_{};
+    PendingPush* pushIntentTail_{};
+    std::size_t pendingPushCount_{};
+    std::size_t pendingPushIntentCount_{};
+    std::uint64_t nextPushId_{};
     IntrusiveQueue dataRunnable_{};
     IntrusiveQueue controlRunnable_{};
     IntrusiveQueue localRunnable_{};
@@ -454,6 +503,9 @@ private:
     std::size_t readyRequestCount_{};
     std::size_t blockedRequestCount_{};
     WorkLane nextPublishLane_{WorkLane::kData};
+    bool criticalOutputBlocked_{};
+    bool preferCriticalOutput_{true};
+    std::size_t nextCriticalOutput_{};
     bool admissionClosed_{};
     bool stopRequested_{};
     bool transportCloseRequired_{};

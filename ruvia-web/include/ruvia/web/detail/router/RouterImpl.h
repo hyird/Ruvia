@@ -84,6 +84,10 @@ public:
     void registerSseRoute(HttpKnownMethod method, std::pmr::string path, RouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
         std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerTunnelRoute(std::string_view protocol, std::pmr::string target,
+        RouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, HttpTunnelRouteConfig config = {});
     void registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path,
         RouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
@@ -194,7 +198,7 @@ private:
 
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
     void validateRouteTarget(
-        HttpKnownMethod method, std::string_view methodToken, std::string_view path) const;
+        HttpKnownMethod method, std::string_view methodToken, std::string_view path, const RouteEndpoint& endpoint) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     void appendMaterializedMiddlewares(std::pmr::vector<RouteMiddleware>& frames,
         std::span<const ControllerMiddlewareDescriptor> descriptors);

@@ -3,6 +3,7 @@
 #include <array>
 #include <charconv>
 
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpDatagram.h"
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/UrlEncoding.h"
@@ -150,5 +151,77 @@ std::expected<void, HttpConnectUdpError> validateHttpConnectUdpResponse(HttpProt
         return std::unexpected(HttpConnectUdpError::kInvalidResponse);
     }
     return {};
+}
+bool isHttpConnectUdpUpgradeRequest(const HttpRequest& request) noexcept {
+    return request.knownMethod() == HttpKnownMethod::kGet &&
+           same(detail::httpTrimOws(request.header("upgrade").value_or("")), "connect-udp");
+}
+std::expected<void, HttpConnectUdpError> validateHttpConnectUdpRequest(const HttpRequest& request) noexcept {
+    return validateHttpConnectUdpRequest({.version = request.protocolVersion(), .method = request.method(), .scheme = request.scheme(), .authority = request.authority().empty() ? request.header("host").value_or("") : request.authority(), .path = request.target(), .headers = request.headers()});
+}
+std::expected<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse response, HttpProtocolVersion version) {
+    if (version == HttpProtocolVersion::kHttp10 || !response.status().isSuccessful() ||
+        response.fileBody() || !response.bodyBytes().empty()) {
+        return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+    }
+    for (const auto& field : response.headers()) {
+        if (same(field.name(), "connection") || same(field.name(), "upgrade") ||
+            same(field.name(), "content-length") || same(field.name(), "transfer-encoding") ||
+            same(field.name(), "content-type") || same(field.name(), "content-encoding") || same(field.name(), "trailer")) {
+            return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+        }
+    }
+    if (const auto capsule = response.header("capsule-protocol")) {
+        const auto enabled = parseHttpCapsuleProtocol(*capsule);
+        if (!enabled || !*enabled) {
+            return std::unexpected(HttpConnectUdpError::kInvalidCapsuleProtocol);
+        }
+    }
+    response.header("Capsule-Protocol", "?1");
+    if (version == HttpProtocolVersion::kHttp11) {
+        response.statusCode_ = http_status::kSwitchingProtocols;
+        response.header("Connection", "Upgrade");
+        response.header("Upgrade", "connect-udp");
+    }
+    std::pmr::vector<HttpHeaderView> fields(response.resource());
+    for (const auto& field : response.headers()) {
+        fields.emplace_back(field.name(), field.value());
+    }
+    if (const auto valid = validateHttpConnectUdpResponse(version, response.status().value(), fields); !valid) {
+        return std::unexpected(valid.error());
+    }
+    return response;
+}
+std::expected<Http1ResponseHeadPlan, HttpConnectUdpError> prepareHttp1ConnectUdpResponseHead(const HttpResponse& response) noexcept {
+    if (response.status() != http_status::kSwitchingProtocols || response.fileBody() || !response.bodyBytes().empty()) {
+        return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+    }
+    bool capsule{}, upgrade{}, connection{};
+    for (const auto& field : response.headers()) {
+        if (same(field.name(), "capsule-protocol")) {
+            const auto enabled = parseHttpCapsuleProtocol(field.value());
+            if (capsule || !enabled || !*enabled) {
+                return std::unexpected(HttpConnectUdpError::kInvalidCapsuleProtocol);
+            }
+            capsule = true;
+        } else if (same(field.name(), "upgrade")) {
+            if (upgrade || !same(field.value(), "connect-udp")) {
+                return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+            }
+            upgrade = true;
+        } else if (same(field.name(), "connection")) {
+            if (connection || !same(field.value(), "Upgrade")) {
+                return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+            }
+            connection = true;
+        } else if (same(field.name(), "content-length") || same(field.name(), "transfer-encoding") ||
+                   same(field.name(), "content-type") || same(field.name(), "content-encoding") || same(field.name(), "trailer")) {
+            return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+        }
+    }
+    if (!capsule || !upgrade || !connection) {
+        return std::unexpected(HttpConnectUdpError::kInvalidResponse);
+    }
+    return http1CloseDelimitedResponseStreamHeadPlan(planHttpResponseBody(HttpKnownMethod::kGet, response.status()), Http1RequestConnectionPlan::http11Close());
 }
 }  // namespace ruvia

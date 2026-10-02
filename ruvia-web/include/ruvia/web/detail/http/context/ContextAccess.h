@@ -22,6 +22,11 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request,
     detail::ContextServices services)
     : memory_(memory),
       request_(request),
+      requestTrailers_(services.requestTrailers()),
+      requestPriorityUpdate_(services.requestPriorityUpdate()),
+      interimOutput_(services.interimOutput()),
+      connectionAdvertisements_(services.connectionAdvertisements()),
+      pushOutput_(services.pushOutput()),
       connInfo_(services.resolveConnInfo(request)),
       worker_(services.worker()),
       stopToken_(services.stopToken()),
@@ -54,6 +59,7 @@ inline Context::Context(RequestMemory& memory, const HttpRequest& request,
 namespace ruvia::detail {
 
 class ContextWebSocketBinding;
+class ContextTunnelBinding;
 
 struct ContextAccess final {
     [[nodiscard]] static Context make(
@@ -84,6 +90,10 @@ struct ContextAccess final {
     [[nodiscard]] static HttpResponse staticFileWithPrecompressedVariants(
         Context& context, const StaticRoot& root, StaticFileResponseOptions options) {
         return context.staticFile(root, options, StaticFileSelectionMode::kPrecompressed);
+    }
+
+    [[nodiscard]] static HttpInterimResponseOutput* interimOutput(Context& context) noexcept {
+        return context.interimOutput_;
     }
 
     [[nodiscard]] static const HttpRequest& request(const Context& context) noexcept {
@@ -136,6 +146,12 @@ struct ContextAccess final {
         return context.requestStorage().webSocketHandshakeStarted;
     }
 
+    static void markTunnelHandshakeStarted(Context& context) noexcept {
+        context.requestStorage().tunnelHandshakeStarted = true;
+    }
+    [[nodiscard]] static bool tunnelHandshakeStarted(const Context& context) noexcept {
+        return context.requestStorage().tunnelHandshakeStarted;
+    }
     static void setError(Context& context, std::exception_ptr exception) noexcept {
         context.storeError(std::move(exception));
     }
@@ -180,6 +196,12 @@ struct ContextAccess final {
 
 private:
     friend class ContextWebSocketBinding;
+    friend class ContextTunnelBinding;
+    [[nodiscard]] static ContextResponseOutput bindTunnel(Context& context, HttpTunnel& tunnel) noexcept {
+        auto previous = context.responseOutput();
+        context.responseOutput() = ContextResponseOutput::tunnel(tunnel);
+        return previous;
+    }
 
     [[nodiscard]] static ContextResponseOutput bindWebSocket(
         Context& context, WebSocket& webSocket) noexcept {
@@ -191,6 +213,22 @@ private:
     static void restoreResponseOutput(Context& context, ContextResponseOutput output) noexcept {
         context.responseOutput() = output;
     }
+};
+
+class ContextTunnelBinding final {
+public:
+    ContextTunnelBinding(Context& context, HttpTunnel& tunnel) noexcept
+        : context_(context),
+          previous_(ContextAccess::bindTunnel(context, tunnel)) {}
+    ContextTunnelBinding(const ContextTunnelBinding&) = delete;
+    ContextTunnelBinding& operator=(const ContextTunnelBinding&) = delete;
+    ~ContextTunnelBinding() {
+        ContextAccess::restoreResponseOutput(context_, previous_);
+    }
+
+private:
+    Context& context_;
+    ContextResponseOutput previous_;
 };
 
 // The facade borrowed by Context is valid only while the established session

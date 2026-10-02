@@ -80,9 +80,16 @@ private:
 };
 
 class Http2StreamingRequestContent final {
+public:
+    [[nodiscard]] constexpr std::optional<std::uint64_t> expectedLength() const noexcept {
+        return length_;
+    }
+
 private:
     friend class Http2RequestContent;
-    constexpr Http2StreamingRequestContent() noexcept = default;
+    explicit constexpr Http2StreamingRequestContent(std::optional<std::uint64_t> length) noexcept
+        : length_(length) {}
+    std::optional<std::uint64_t> length_{};
 };
 
 class Http2RequestContent final {
@@ -93,8 +100,8 @@ public:
     [[nodiscard]] static constexpr Http2RequestContent knownLength(std::uint64_t length) noexcept {
         return Http2RequestContent(Http2KnownLengthRequestContent(length));
     }
-    [[nodiscard]] static constexpr Http2RequestContent streaming() noexcept {
-        return Http2RequestContent(Http2StreamingRequestContent());
+    [[nodiscard]] static constexpr Http2RequestContent streaming(std::optional<std::uint64_t> length = {}) noexcept {
+        return Http2RequestContent(Http2StreamingRequestContent(length));
     }
     [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const& noexcept {
         return std::get_if<Http2RequestWithoutContent>(&value_);
@@ -749,11 +756,18 @@ public:
         std::span<const HttpHeaderView> trailers = {});
     [[nodiscard]] Http2RequestContentReleaseStatus releaseRequestContent(
         std::uint32_t streamId) noexcept;
+    // Commits a promise and returns the server request/storage lease used to
+    // produce its response. Release or abandon it exactly like an incoming request.
+    [[nodiscard]] std::expected<Http2RequestHeadEvent, Http2PushSubmitError> submitPushRequest(
+        std::uint32_t associatedStreamId, HttpPushRequestView request);
+
     [[nodiscard]] std::expected<std::uint32_t, Http2PushSubmitError> submitPushPromise(
         std::uint32_t associatedStreamId, HttpPushRequestView request);
     [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
         std::uint32_t streamId, const HttpInterimResponseHead& response);
     [[nodiscard]] Http2SubmitStatus submitBufferedResponse(
+        std::uint32_t streamId, const HttpResponse& response);
+    [[nodiscard]] Http2SubmitStatus submitConnectResponseHead(
         std::uint32_t streamId, const HttpResponse& response);
     [[nodiscard]] Http2WebSocketHandshakeSubmitResult submitWebSocketHandshake(
         std::uint32_t streamId, const HttpRequest& request,

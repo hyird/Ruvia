@@ -202,14 +202,14 @@ ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientHandle::read() c
     return state_->read(options_);
 }
 
-ScopedOperation<void> WebSocketClientHandle::text(std::string_view payload) const {
+ScopedOperation<void> WebSocketClientHandle::text(std::string_view payload, WebSocketSendOptions options) const {
     requireActive();
-    return state_->write(WebSocketOpcode::kText, payload, options_);
+    return state_->write(WebSocketOpcode::kText, payload, options_, options);
 }
 
-ScopedOperation<void> WebSocketClientHandle::binary(std::string_view payload) const {
+ScopedOperation<void> WebSocketClientHandle::binary(std::string_view payload, WebSocketSendOptions options) const {
     requireActive();
-    return state_->write(WebSocketOpcode::kBinary, payload, options_);
+    return state_->write(WebSocketOpcode::kBinary, payload, options_, options);
 }
 
 ScopedOperation<void> WebSocketClientHandle::ping(std::string_view payload) const {
@@ -254,12 +254,12 @@ ScopedOperation<std::optional<WebSocketMessage>> WebSocketClient::read() const& 
     return withOptions({}).read();
 }
 
-ScopedOperation<void> WebSocketClient::text(std::string_view payload) const& {
-    return withOptions({}).text(payload);
+ScopedOperation<void> WebSocketClient::text(std::string_view payload, WebSocketSendOptions options) const& {
+    return withOptions({}).text(payload, options);
 }
 
-ScopedOperation<void> WebSocketClient::binary(std::string_view payload) const& {
-    return withOptions({}).binary(payload);
+ScopedOperation<void> WebSocketClient::binary(std::string_view payload, WebSocketSendOptions options) const& {
+    return withOptions({}).binary(payload, options);
 }
 
 ScopedOperation<void> WebSocketClient::ping(std::string_view payload) const& {

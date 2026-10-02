@@ -20,6 +20,7 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 #include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -116,6 +117,35 @@ std::string data(std::string_view payload) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http3_server_priority_updates_remain_live_through_request_lease) {
+    ruvia::detail::Router router;
+    auto& implementation = ruvia::detail::RouterImpl::from(router);
+    routing_test::addRoute(implementation, ruvia::HttpKnownMethod::kGet, "/priority");
+    implementation.finalize();
+    ruvia::WorkerMemory worker;
+    ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker);
+    auto prefixes = ruvia::Http3LocalCriticalStreams::create({});
+    const auto prefix = prefixes->controlPrefix();
+    RUVIA_CHECK(session.feed(2, std::string_view(prefix.data(), prefix.size())).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(session.feed(0, requestHeaders(worker, "GET", "/priority"), true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+    auto lease = session.acquireRequest(0);
+    RUVIA_CHECK(lease.has_value());
+    const auto* observed = session.requestPriorityUpdate(0);
+    RUVIA_CHECK(observed && !*observed);
+    std::array<char, 32> bytes{};
+    for (const auto urgency : {1, 7, 2}) {
+        const auto encoded = ruvia::encodeHttp3PriorityUpdate(bytes, {.elementId = 0,
+                                                                         .fields = {.urgency = static_cast<std::uint8_t>(urgency), .incremental = urgency == 7}});
+        RUVIA_CHECK(encoded.has_value());
+        RUVIA_CHECK(session.feed(2, std::string_view(bytes.data(), *encoded)).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(observed == session.requestPriorityUpdate(0));
+        RUVIA_CHECK(observed->has_value() && observed->value().urgency == urgency && observed->value().incremental == (urgency == 7));
+    }
+    lease.reset();
+    RUVIA_CHECK(session.release(0));
+    RUVIA_CHECK(!session.requestPriorityUpdate(0));
+}
 
 RUVIA_TEST(http3BufferedSansIoSessionLeasePinsRequestsAcrossResetAndStopWithoutAllocation) {
     using Engine = ruvia::detail::Http3SansIoSessionEngine;
@@ -738,7 +768,7 @@ RUVIA_TEST(http3BufferedSansIoSessionAppliesStrictBodyAndExpectationRejectionsEa
     RUVIA_CHECK(session.rejection(0) ==
                 ruvia::detail::Http3SansIoSessionEngine::Rejection::kBodyTooLarge);
 
-    const std::array expect{ruvia::Http3FieldSectionFieldView{"expect", "100-continue"}};
+    const std::array expect{ruvia::Http3FieldSectionFieldView{"expect", "custom-expectation"}};
     const auto expectHead = requestHeaders(worker, "POST", "/items", std::nullopt, expect);
     RUVIA_CHECK(session.feed(4, expectHead).status == ruvia::Http3ConnectionStatus::kNeedMoreData);
     RUVIA_CHECK(session.rejection(4) ==

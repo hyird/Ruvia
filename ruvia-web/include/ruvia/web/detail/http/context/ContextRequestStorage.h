@@ -53,6 +53,7 @@ public:
     // Monotonic: survives buffered error construction by middleware after the
     // handshake has started, when returning to HTTP response mode is impossible.
     bool webSocketHandshakeStarted{false};
+    bool tunnelHandshakeStarted{false};
     bool queryInvalid{false};
     bool routeParamsInvalid{false};
 };

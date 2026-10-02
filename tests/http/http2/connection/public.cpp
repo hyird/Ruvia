@@ -1337,3 +1337,110 @@ RUVIA_TEST(http2_public_client_reset_before_terminal_events_drain_keeps_events_r
     RUVIA_CHECK(sawHead);
     RUVIA_CHECK(sawEnd);
 }
+
+RUVIA_TEST(http2_public_streaming_known_length_keeps_upload_open_for_trailers) {
+    for (const std::uint64_t length : {0U, 3U}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = ruvia::Http2Connection::client({.resource = &resource});
+        auto server = ruvia::Http2Connection::server({.resource = &resource});
+        auto exchange = [&](auto& from, auto& to) {
+            const auto wire = from.pendingOutput();
+            RUVIA_CHECK(to.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+            RUVIA_CHECK(from.consumeOutput(wire.size()) == ruvia::Http2OutputConsumeStatus::kDrained);
+        };
+        exchange(client, server);
+        exchange(server, client);
+        const auto head = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+            .method = "POST", .scheme = "https", .authority = "example.test", .target = "/upload", .content = ruvia::Http2RequestContent::streaming(length)});
+        RUVIA_CHECK(head.submitted() != nullptr);
+        exchange(client, server);
+        bool sawEnd = false;
+        std::optional<ruvia::Http2RequestHeadEvent> lease;
+        while (auto event = server.nextEvent()) {
+            if (auto* request = event->requestHead()) {
+                RUVIA_CHECK_EQ(request->request().header("content-length").value_or(""), length == 0 ? "0" : "3");
+                lease.emplace(std::move(*request));
+            }
+            sawEnd |= event->messageEnd() != nullptr;
+        }
+        RUVIA_CHECK(!sawEnd);
+        if (length != 0) {
+            RUVIA_CHECK(client.submitData(1, "abc", ruvia::Http2EndStream::kKeepOpen) == ruvia::Http2DataSubmitStatus::kAccepted);
+        }
+        const std::array<ruvia::HttpHeaderView, 1> trailers{{{"x-end", "retained"}}};
+        RUVIA_CHECK(client.finishRequest(1, trailers) == ruvia::Http2FinishRequestStatus::kAccepted);
+        exchange(client, server);
+        while (auto event = server.nextEvent()) {
+            if (const auto* end = event->messageEnd()) {
+                sawEnd = true;
+                RUVIA_CHECK_EQ(end->trailers().size(), std::size_t{1});
+                if (!end->trailers().empty()) {
+                    RUVIA_CHECK_EQ(end->trailers()[0].value(), "retained");
+                }
+            }
+        }
+        RUVIA_CHECK(sawEnd);
+    }
+}
+
+RUVIA_TEST(http2_public_push_request_lease_preserves_fields_and_releases_repeated_streams) {
+    AccountingAllocationResource resource;
+    {
+        auto client = ruvia::Http2Connection::client({.resource = &resource, .enablePush = true});
+        auto server = ruvia::Http2Connection::server({.resource = &resource});
+        auto exchange = [&](auto& from, auto& to) {
+            const auto wire = from.pendingOutput();
+            RUVIA_CHECK(to.feed(wire) == ruvia::Http2FeedResult::kAccepted);
+            (void)from.consumeOutput(wire.size());
+        };
+        exchange(client, server);
+        exchange(server, client);
+        const auto submitted = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+            .method = "GET", .scheme = "https", .authority = "example.test", .target = "/"});
+        RUVIA_CHECK(submitted.submitted() != nullptr);
+        exchange(client, server);
+        std::optional<ruvia::Http2RequestHeadEvent> parent;
+        while (auto event = server.nextEvent()) {
+            if (auto* head = event->requestHead()) {
+                parent.emplace(std::move(*head));
+            }
+        }
+        RUVIA_CHECK(parent.has_value());
+        const std::array<ruvia::HttpHeaderView, 3> headers{{{"host", "EXAMPLE.test:443"}, {"cookie", "a=1"}, {"x-push", "request"}}};
+        for (unsigned repeat = 0; repeat != 100; ++repeat) {
+            auto pushed = server.submitPushRequest(submitted.submitted()->streamId(),
+                {.authority = "example.test", .path = "/asset?version=1", .headers = headers});
+            RUVIA_CHECK(pushed.has_value());
+            if (!pushed) {
+                break;
+            }
+            const auto& request = pushed->request();
+            RUVIA_CHECK(request.scheme() == "https" && request.authority() == "example.test");
+            RUVIA_CHECK(request.path() == "/asset" && request.queryString() == "version=1");
+            RUVIA_CHECK(request.header("cookie") == "a=1");
+            RUVIA_CHECK(request.header("host") == "EXAMPLE.test:443");
+            RUVIA_CHECK(request.header("x-push") == "request");
+            ruvia::HttpResponse response;
+            RUVIA_CHECK(server.submitBufferedResponse(pushed->streamId(), response) == ruvia::Http2SubmitStatus::kAccepted);
+            exchange(server, client);
+            unsigned promised = 0;
+            unsigned ended = 0;
+            while (auto event = client.nextEvent()) {
+                if (const auto* promise = event->pushPromise()) {
+                    ++promised;
+                    RUVIA_CHECK(promise->request.path == "/asset?version=1");
+                }
+                if (event->messageEnd()) {
+                    ++ended;
+                }
+            }
+            RUVIA_CHECK(promised == 1 && ended == 1);
+            RUVIA_CHECK(server.release(std::move(*pushed)) == ruvia::Http2ServerRequestReleaseStatus::kReleased);
+            exchange(client, server);
+            while (server.nextEvent()) {
+            }
+        }
+        RUVIA_CHECK(server.release(std::move(*parent)) == ruvia::Http2ServerRequestReleaseStatus::kReleased);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}

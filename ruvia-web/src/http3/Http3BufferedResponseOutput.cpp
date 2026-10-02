@@ -11,17 +11,18 @@ namespace ruvia::detail {
 
 Http3BufferedResponseOutput::Http3BufferedResponseOutput(const HttpResponse& response,
     Http3StreamMailbox& mailbox, MessageId messageId,
-    Http3BufferedResponseWrite cursor) noexcept
+    Http3BufferedResponseWrite cursor, std::uint64_t initialPublishedWireBytes) noexcept
     : response_(&response),
       mailbox_(mailbox),
       messageId_(messageId),
-      cursor_(std::move(cursor)) {}
+      cursor_(std::move(cursor)),
+      publishedWireBytes_(initialPublishedWireBytes) {}
 
 std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response,
     const HttpBufferedResponseWritePlan& writePlan, WorkerMemory& worker,
     Http3StreamMailbox& mailbox, MessageId messageId,
-    std::optional<std::uint64_t> peerMaxFieldSectionSize) noexcept {
+    std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
     auto cursor = Http3BufferedResponseWrite::create(response, writePlan, worker.resource());
     if (!cursor) {
         return std::unexpected(cursorError(cursor.error()));
@@ -31,7 +32,20 @@ Http3BufferedResponseOutput::create(const HttpResponse& response,
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
     return Http3BufferedResponseOutput(
-        response, mailbox, messageId, std::move(*cursor));
+        response, mailbox, messageId, std::move(*cursor), initialPublishedWireBytes);
+}
+
+std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
+Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
+    WorkerMemory& worker, Http3StreamMailbox& mailbox, MessageId messageId, std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
+    if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
+        return std::unexpected(Error::kPeerFieldSectionLimit);
+    }
+    auto cursor = Http3BufferedResponseWrite::create(response, writePlan, std::move(encodedHead), worker.resource());
+    if (!cursor) {
+        return std::unexpected(cursorError(cursor.error()));
+    }
+    return Http3BufferedResponseOutput(response, mailbox, messageId, std::move(*cursor), initialPublishedWireBytes);
 }
 
 Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() noexcept {

@@ -85,8 +85,11 @@ void ServerNetworkRuntime::prepareHttp3Owners() {
             .writeTimeout = target.http3WriteTimeout,
         });
     }
+    auto configuredListener = *listener;
+    const auto listenerIndex = static_cast<std::size_t>(std::distance(listenerDefinitions_.begin(), listener));
+    configuredListener.endpoint = listeners_[listenerIndex]->endpoint;
     http3Servers_.push_back(makePmrObject<Http3NetworkRuntime>(processResource(),
-        workerRuntime_, *listener, configuredTargets,
+        workerRuntime_, configuredListener, configuredTargets,
         Http3NetworkRuntime::FailureNotification{this, &http3Failed}));
     http3Servers_.back()->stageWorkerLinks();
 }

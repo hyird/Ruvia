@@ -36,6 +36,13 @@ namespace ruvia::detail {
 class Http3WorkerServer;
 struct HttpServerListenerDefinition;
 
+[[nodiscard]] bool queue_http3_initial_offer(
+    std::pmr::vector<ruvia::quic_initial_offer>& pending_offers,
+    const ruvia::quic_initial_offer& offer) noexcept;
+[[nodiscard]] Http3DatagramEndpoint::pump_result send_http3_version_negotiation(
+    ruvia::quic_server& server, ruvia::quic_version_negotiation_plan& plan,
+    Http3DatagramEndpoint& endpoint, std::span<std::byte> packet_buffer);
+
 // Runs on the server network thread and owns long-lived HTTP/3 UDP/QUIC wire
 // I/O. SSL*, BIO, UDP, timers, critical streams, and response output stay here.
 class Http3NetworkRuntime final {
@@ -88,7 +95,7 @@ private:
         enum class ReceivePhase : std::uint8_t { kHeaders,
             kBody };
 
-        Http3QuicServerTransport::StreamId id{};
+        std::uint64_t id{};
         std::uint64_t receivedBytes{};
         std::optional<Http3StreamControl> pendingControl;
         std::unique_ptr<Http3StreamFrames, PmrObjectDeleter<Http3StreamFrames>> frameTracker;
@@ -144,15 +151,23 @@ private:
     };
 
     struct Connection final {
+        struct PushStream final {
+            std::uint64_t streamId{};
+            std::uint64_t pushId{};
+            bool terminalNotified{};
+        };
         explicit Connection(std::pmr::memory_resource* resource)
             : streams(resource),
+              pushStreams(resource),
               output(nullptr, PmrObjectDeleter<Http3ServerStreamOutput>{resource}),
               critical(nullptr, PmrObjectDeleter<Http3CriticalStreamDriver>{resource}) {}
 
         Http3ServerConnectionChannel::Identity identity{};
         bool hasLastIdentity{};
-        Http3QuicServerTransport::ConnectionId transportId{};
+        ruvia::quic_connection_token transportId{};
+        std::optional<std::chrono::steady_clock::time_point> handshakeDeadline{};
         std::pmr::vector<Stream> streams;
+        std::pmr::vector<PushStream> pushStreams;
         std::size_t nextInputStreamIndex{};
         std::size_t nextTunnelHandshakeStreamIndex{};
         std::size_t tunnelHandshakeScanRemaining{};
@@ -168,6 +183,7 @@ private:
             Http3ServerConnection::TransportIntentToken token{};
             Http3ServerConnectionChannel::IntentSettlement settlement{
                 Http3ServerConnectionChannel::IntentSettlement::kExecutedHandoff};
+            std::optional<Http3ServerConnection::PushStreamOpenResult> pushStream{};
         };
         std::optional<PendingIntentSettlement> pendingIntentAck;
         std::optional<Http3ServerRequestAdmissionPlanner> admissionPlanner;
@@ -217,7 +233,8 @@ private:
 
     static void networkWake(void* context) noexcept;
     static void workerWake(void* context) noexcept;
-    [[nodiscard]] bool protocolPump() noexcept;
+    [[nodiscard]] bool protocolPump(http3_quic_server_transport* transport = nullptr,
+        Http3DatagramEndpoint* endpoint = nullptr) noexcept;
     void requireOwnerThread() const noexcept;
     void requestStopOnOwner() noexcept;
     void reportFailure(std::exception_ptr failure) noexcept;
@@ -229,31 +246,33 @@ private:
     [[nodiscard]] bool retireUnbound(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool requestRevoke(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool attach(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool pumpInput(WorkerLink& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool pumpInput(WorkerLink& worker, std::size_t index);
     [[nodiscard]] bool pumpResponses(WorkerLink& worker) noexcept;
     [[nodiscard]] static TunnelEstablishedResult acceptTunnelEstablished(Connection& connection,
         const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept;
     [[nodiscard]] static bool confirmTunnelEstablished(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId,
+        std::uint64_t streamId,
         std::uint64_t acceptedWireBytes) noexcept;
     static void notePeerFin(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId) noexcept;
+        std::uint64_t streamId) noexcept;
     static void noteInputReset(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId) noexcept;
+        std::uint64_t streamId) noexcept;
     static void completeInputTerminal(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId) noexcept;
+        std::uint64_t streamId) noexcept;
     void terminateRequestStream(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId, std::uint64_t errorCode) noexcept;
+        std::uint64_t streamId, std::uint64_t errorCode);
     void stopRequestInput(Connection& connection,
-        Http3QuicServerTransport::StreamId streamId) noexcept;
-    [[nodiscard]] bool pumpOutput(WorkerLink& worker, std::size_t index) noexcept;
+        std::uint64_t streamId) noexcept;
+    [[nodiscard]] bool pumpOutput(WorkerLink& worker, std::size_t index);
     [[nodiscard]] bool announceGoaway(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool sealAdmission(WorkerLink& worker, std::size_t index) noexcept;
     [[nodiscard]] bool rejectRequestStream(WorkerLink& worker, std::size_t index,
-        Http3QuicServerTransport::StreamId streamId) noexcept;
-    [[nodiscard]] bool retire(WorkerLink& worker, std::size_t index) noexcept;
+        std::uint64_t streamId);
+    [[nodiscard]] bool retire(WorkerLink& worker, std::size_t index);
+    [[nodiscard]] bool pump_datagrams(WorkerLink& worker, std::size_t index);
     [[nodiscard]] Connection* findConnection(
         WorkerLink& worker, Http3StreamMessageId id) noexcept;
+    [[nodiscard]] Connection* findConnection(WorkerLink& worker, std::uint64_t epoch, std::uint64_t generation) noexcept;
     void closeConnection(Connection& connection,
         Http3ConnectionErrorCode reason) noexcept;
     void notifyWorker(WorkerLink& worker) noexcept;
@@ -263,9 +282,10 @@ private:
     const std::thread::id ownerThread_;
     WorkerMemory memory_;
     asio::ip::address bindAddress_;
-    Http3QuicTlsContext tls_;
+    http3_quic_tls_context tls_;
     Http3QuicWireOwner wire_;
     std::pmr::vector<std::unique_ptr<WorkerLink, PmrObjectDeleter<WorkerLink>>> workers_;
+    std::pmr::vector<ruvia::quic_initial_offer> pendingOffers_;
     asio::steady_timer monitorTimer_;
     FailureNotification failureNotification_{};
     std::exception_ptr failure_;
@@ -273,6 +293,9 @@ private:
     std::size_t nextWorker_{};
     std::size_t pumpBudget_{512};
     std::chrono::milliseconds drainTimeout_{};
+    std::chrono::milliseconds handshakeTimeout_{};
+    Http3Settings localSettings_{};
+    std::array<std::byte, Http3UdpSocket::kDatagramBufferSize> packetBuffer_{};
     bool staged_{};
     bool running_{};
     bool stopping_{};

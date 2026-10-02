@@ -6,6 +6,8 @@
 #include <cstring>
 #include <system_error>
 
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequestContentSemantics.h"
@@ -209,7 +211,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
         !addHeadBytes(headBytes, targetBytes) ||
         !addHeadBytes(headBytes, kHttp11RequestLineSuffix.size()) ||
         !addHeadBytes(headBytes, kHostPrefix.size()) ||
-        !addHeadBytes(headBytes, authorityLength(origin, false)) ||
+        !addHeadBytes(headBytes, authorityLength(origin, connect)) ||
         !addHeadBytes(headBytes, kCrlf.size()) || !addHeadBytes(headBytes, headerFacts.wireBytes) ||
         (chunked && !addHeadBytes(headBytes, kChunked.size())) ||
         (explicitContent && !chunked &&
@@ -246,7 +248,7 @@ void appendHeaders(char*& cursor, std::span<const HttpHeaderView> headers) noexc
     }
     appendView(cursor, kHttp11RequestLineSuffix);
     appendView(cursor, kHostPrefix);
-    appendAuthority(cursor, origin, false);
+    appendAuthority(cursor, origin, connect);
     appendView(cursor, kCrlf);
     appendHeaders(cursor, headers);
     if (chunked) {
@@ -399,6 +401,26 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareStreaming(const
     return prepareRequest(origin, request.method, request.target, false, request.headers, HttpClientRequestContentView::none(), headBuffer, policy, resource_, &request);
 }
 
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnectUdp(const HttpOriginView& origin,
+    BorrowedText target, std::span<const HttpHeaderView> headers, std::span<char> headBuffer) const {
+    std::pmr::vector<HttpHeaderView> fields(resource_);
+    fields.reserve(headers.size() + 3);
+    for (const auto& field : headers) {
+        if (httpAsciiEqualsIgnoreCase(field.name(), "connection") || httpAsciiEqualsIgnoreCase(field.name(), "upgrade")) {
+            return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidUpgrade);
+        }
+        fields.push_back(field);
+    }
+    fields.emplace_back("Connection", "Upgrade");
+    fields.emplace_back("Upgrade", "connect-udp");
+    fields.emplace_back("Host", origin.host());
+    if (!validateHttpConnectUdpRequest({.version = HttpProtocolVersion::kHttp11, .method = "GET", .authority = origin.host(), .path = target.view(), .headers = fields})) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidHeader);
+    }
+    fields.pop_back();
+    return prepare(origin, {.method = "GET", .target = target, .headers = fields}, headBuffer);
+}
+
 Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(
     const HttpOriginView& tunnelOrigin, std::span<const HttpHeaderView> headers,
     std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const {
@@ -416,6 +438,16 @@ Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(
     }
     return prepareRequest(tunnelOrigin, "CONNECT", {}, true, headers,
         HttpClientRequestContentView::none(), headBuffer, policy, resource_);
+}
+
+Http1ClientRequestPrepareResult Http1ClientRequestWriter::prepareConnect(BorrowedText authority,
+    std::span<const HttpHeaderView> headers, std::span<char> headBuffer, Http1ClientRequestWirePolicy policy) const {
+    detail::RequestTargetView target;
+    const auto parsed = detail::parseHttpAuthority(authority.view());
+    if (!detail::parseRequestTarget(HttpKnownMethod::kConnect, authority.view(), target) || !parsed || !parsed->port() || *parsed->port() == 0) {
+        return detail::Http1ClientRequestPrepareResultAccess::failure(Http1ClientRequestPrepareError::kInvalidConnectOrigin);
+    }
+    return prepareConnect(HttpOriginView::http({.host = parsed->host(), .port = *parsed->port()}), headers, headBuffer, policy);
 }
 
 }  // namespace ruvia

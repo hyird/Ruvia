@@ -126,6 +126,14 @@ void detail::ControllerRouteBuilder::registerSseRoute(HttpKnownMethod method, st
             impl_->middlewares(), middlewares);
 }
 
+void detail::ControllerRouteBuilder::registerTunnelRoute(std::string_view protocol,
+    std::string_view target, ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares, HttpTunnelRouteConfig config) const {
+    auto ownedTarget = protocol.empty() ? std::pmr::string(target, registrationResource())
+                                        : joinControllerPaths(impl_->prefix(), target);
+    RouterImpl::from(impl_->router()).registerTunnelRoute(protocol, std::move(ownedTarget), handler, impl_->middlewares(), middlewares, config);
+}
+
 void detail::ControllerRouteBuilder::registerWebSocketRoute(HttpKnownMethod method,
     std::string_view path, ControllerRouteStreamHandler handler,
     std::span<const ControllerMiddlewareDescriptor> middlewares,

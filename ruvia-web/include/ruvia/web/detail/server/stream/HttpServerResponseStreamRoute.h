@@ -15,6 +15,7 @@
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
+#include "ruvia/web/detail/server/route/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
 
@@ -23,7 +24,19 @@ namespace ruvia::detail {
 template <typename Stream>
 Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(Http1RouteDispatch<Stream> d,
     ResponseHeadBuffer& responseHead, const Http1ServerRequestHeadReady& requestHead,
-    const ResolvedRoute& resolved) {
+    const ResolvedRoute& resolved, std::string_view bodyAndPipeline, ProtocolByteLimit bodyLimit) {
+    HttpLazyBufferedBodyRouteState<Stream> bodyState;
+    std::exception_ptr bodySetupFailure;
+    try {
+        prepareHttpLazyBufferedBodyRoute(bodyState, d, bodyLimit, bodyAndPipeline);
+    } catch (...) {
+        bodySetupFailure = std::current_exception();
+    }
+    if (bodySetupFailure != nullptr) {
+        co_return co_await completeFailedHttpBodyRoute(d.scannerEntry, bodySetupFailure, d.parsed,
+            d.routes, d.requestMemory, d.baseRouteServices, d.response);
+    }
+    d.baseRouteServices = bodyState.withLoader(d.baseRouteServices);
     const auto streamPlan =
         http1PlanResponseStream(d.parsed, d.requestSequence.nextResponseClosePolicy());
     auto connectionPlan = streamPlan.requestConnectionPlan();

@@ -18,6 +18,59 @@ void add(ruvia::Http3MessageHead& head, std::string_view name, std::string_view 
     head.headers.emplace_back(name, value, head.headers.get_allocator().resource());
 }
 }  // namespace
+RUVIA_TEST(websocket_client_http2_tunnel_peer_fin_keeps_local_send_open) {
+    auto client = ruvia::Http2Connection::client();
+    auto server = ruvia::Http2Connection::server();
+    std::string wire(server.pendingOutput());
+    (void)server.consumeOutput(wire.size());
+    RUVIA_CHECK(client.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    ruvia::WebSocketClientNegotiation negotiation({});
+    const auto submitted = negotiation.submitHttp2Request(client, "https", "example.com", "/chat");
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    wire.assign(client.pendingOutput());
+    (void)client.consumeOutput(wire.size());
+    RUVIA_CHECK(server.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto request = server.nextEvent();
+    RUVIA_CHECK(request && request->requestHead());
+    if (!request || !request->requestHead()) {
+        return;
+    }
+    const auto validation = ruvia::validateHttp2WebSocketHandshake(server, 1, request->requestHead()->request());
+    const auto handshake = server.submitWebSocketHandshake(1, request->requestHead()->request(), validation);
+    RUVIA_CHECK(handshake.submitted() != nullptr);
+    wire.assign(server.pendingOutput());
+    (void)server.consumeOutput(wire.size());
+    RUVIA_CHECK(client.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto response = client.nextEvent();
+    RUVIA_CHECK(response && response->responseHead());
+    RUVIA_CHECK(server.submitData(1, "peer", ruvia::Http2EndStream::kEndStream) == ruvia::Http2DataSubmitStatus::kAccepted);
+    wire.assign(server.pendingOutput());
+    (void)server.consumeOutput(wire.size());
+    RUVIA_CHECK(client.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto data = client.nextEvent();
+    RUVIA_CHECK(data && data->tunnelData());
+    auto end = client.nextEvent();
+    RUVIA_CHECK(end && end->tunnelEnd());
+    data.reset();
+    RUVIA_CHECK(!client.streamAborted(1));
+    RUVIA_CHECK(client.submitData(1, "local", ruvia::Http2EndStream::kKeepOpen) == ruvia::Http2DataSubmitStatus::kAccepted);
+    wire.assign(client.pendingOutput());
+    (void)client.consumeOutput(wire.size());
+    RUVIA_CHECK(server.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto localData = server.nextEvent();
+    RUVIA_CHECK(localData && localData->tunnelData());
+    if (localData && localData->tunnelData()) {
+        RUVIA_CHECK_EQ(localData->tunnelData()->bytes(), std::string_view("local"));
+    }
+    RUVIA_CHECK(client.submitData(1, {}, ruvia::Http2EndStream::kEndStream) == ruvia::Http2DataSubmitStatus::kAccepted);
+    wire.assign(client.pendingOutput());
+    (void)client.consumeOutput(wire.size());
+    RUVIA_CHECK(server.feed(wire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto localEnd = server.nextEvent();
+    RUVIA_CHECK(localEnd && localEnd->tunnelEnd());
+    RUVIA_CHECK(client.submitData(1, "late", ruvia::Http2EndStream::kKeepOpen) == ruvia::Http2DataSubmitStatus::kClosed);
+}
+
 RUVIA_TEST(websocket_client_extended_connect_requires_peer_setting_and_emits_protocol) {
     const std::array protocols{std::string_view("chat")};
     ruvia::WebSocketClientNegotiation client({.subprotocols = protocols, .deflate = {.enabled = true}});
@@ -34,6 +87,20 @@ RUVIA_TEST(websocket_client_extended_connect_requires_peer_setting_and_emits_pro
     auto connection = ruvia::Http2Connection::client();
     auto submitted = client.submitHttp2Request(connection, "https", "example.com", "/chat");
     RUVIA_CHECK(submitted.failure() != nullptr);
+    auto server = ruvia::Http2Connection::server();
+    const std::string peerSettings(server.pendingOutput());
+    RUVIA_CHECK(connection.feed(peerSettings) != ruvia::Http2FeedResult::kProtocolFailure);
+    submitted = client.submitHttp2Request(connection, "https", "example.com", "/chat");
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    const std::string requestWire(connection.pendingOutput());
+    RUVIA_CHECK(server.feed(requestWire) != ruvia::Http2FeedResult::kProtocolFailure);
+    auto request = server.nextEvent();
+    RUVIA_CHECK(request && request->requestHead());
+    if (request && request->requestHead()) {
+        const auto validation = ruvia::validateHttp2WebSocketHandshake(server,
+            request->requestHead()->streamId(), request->requestHead()->request());
+        RUVIA_CHECK(validation.accepted() != nullptr);
+    }
 }
 RUVIA_TEST(websocket_client_negotiation_accepts_asymmetric_context_and_window_parameters) {
     const std::array protocols{std::string_view("chat")};
@@ -94,7 +161,7 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     std::array<char, 2048> buffer{};
     auto prepared = client.prepareRequest(ruvia::HttpOriginView::https({.host = "example.com"}), "/", buffer);
     RUVIA_CHECK(prepared.prepared() != nullptr);
-    RUVIA_CHECK(prepared.prepared()->head().contains("Sec-WebSocket-Extensions: permessage-deflate"));
+    RUVIA_CHECK(prepared.prepared()->head().contains("sec-websocket-extensions: permessage-deflate"));
     ruvia::Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
     auto response = parser.parse("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n\r\n");
     RUVIA_CHECK(response.parsed() != nullptr);

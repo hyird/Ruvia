@@ -22,7 +22,7 @@ void detail::RouteTable::buildPerfectHash() {
         // ENUM and the path, so two extension routes on one path -- which is
         // ordinary, e.g. PROPFIND and PURGE on the same resource -- would be
         // indistinguishable and no seed could ever separate them.
-        if (!route.dynamic() && route.method() != HttpKnownMethod::kUnknown) {
+        if (!route.dynamic() && isRoutableMethod(route.method())) {
             exactRoutes.push_back(routeIndex);
         }
     }

@@ -54,6 +54,13 @@ void detail::RouterImpl::registerSseRoute(HttpKnownMethod method, std::pmr::stri
         routeMiddlewares);
 }
 
+void detail::RouterImpl::registerTunnelRoute(std::string_view protocol, std::pmr::string target,
+    RouteStreamHandler handler, std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares, HttpTunnelRouteConfig config) {
+    registerEndpoint(HttpKnownMethod::kConnect, std::move(target), RouteEndpoint::tunnel(resource_, handler, protocol, config),
+        controllerMiddlewares, routeMiddlewares);
+}
+
 void detail::RouterImpl::registerWebSocketRoute(HttpKnownMethod method, std::pmr::string path,
     RouteStreamHandler handler,
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
@@ -155,8 +162,8 @@ void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
     if (routeTable_) {
         throw std::logic_error("cannot register route after router finalize");
     }
-    validateRouteTarget(route.method(), route.methodToken(), route.path());
-    route.setDynamic(RouteTable::isDynamicPath(route.path()));
+    validateRouteTarget(route.method(), route.methodToken(), route.path(), route.endpoint());
+    route.setDynamic((route.endpoint().tunnel() == nullptr || !route.endpoint().tunnel()->protocol().empty()) && RouteTable::isDynamicPath(route.path()));
     pendingRoutes_.push_back(std::move(route));
 }
 

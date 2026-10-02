@@ -17,7 +17,9 @@
 #include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/WebSocketClientNegotiation.h"
 #include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/web/Http3QpackConfig.h"
 #include "ruvia/web/TlsPeerVerification.h"
 #include "ruvia/web/WebSocket.h"
 
@@ -28,14 +30,22 @@ enum class WebSocketScheme : std::uint8_t {
     kWss,
 };
 
+enum class WebSocketClientProtocol : std::uint8_t { kHttp1,
+    kHttp2,
+    kHttp3 };
+
 struct WebSocketClientConfig final {
     WebSocketScheme scheme{WebSocketScheme::kWss};
+    WebSocketClientProtocol protocol{WebSocketClientProtocol::kHttp1};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host{};
     std::optional<std::uint16_t> port{};
     std::string target{"/"};
     std::vector<std::pair<std::string, std::string>> headers{};
     std::vector<std::string> subprotocols{};
+    WebSocketClientDeflateOffer deflate{};
+    int compressionLevel{6};
+    Http3QpackConfig qpack{};
     std::size_t maxMessageBytes{kDefaultMaxWebSocketMessageBytes};
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> readTimeout{};
@@ -94,8 +104,8 @@ public:
 
     [[nodiscard]] WebSocketClientHandle withOptions(OperationOptions options) const;
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() const;
-    [[nodiscard]] ScopedOperation<void> text(std::string_view payload) const;
-    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload) const;
+    [[nodiscard]] ScopedOperation<void> text(std::string_view payload, WebSocketSendOptions options = {}) const;
+    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload, WebSocketSendOptions options = {}) const;
     [[nodiscard]] ScopedOperation<void> ping(std::string_view payload = {}) const;
     [[nodiscard]] ScopedOperation<void> pong(std::string_view payload) const;
     [[nodiscard]] ScopedOperation<void> close(WebSocketCloseOptions options) const;
@@ -133,10 +143,10 @@ public:
     WebSocketClientHandle withOptions(OperationOptions) const&& = delete;
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read() const&;
     ScopedOperation<std::optional<WebSocketMessage>> read() const&& = delete;
-    [[nodiscard]] ScopedOperation<void> text(std::string_view payload) const&;
-    ScopedOperation<void> text(std::string_view) const&& = delete;
-    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload) const&;
-    ScopedOperation<void> binary(std::string_view) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> text(std::string_view payload, WebSocketSendOptions options = {}) const&;
+    ScopedOperation<void> text(std::string_view, WebSocketSendOptions = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<void> binary(std::string_view payload, WebSocketSendOptions options = {}) const&;
+    ScopedOperation<void> binary(std::string_view, WebSocketSendOptions = {}) const&& = delete;
     [[nodiscard]] ScopedOperation<void> ping(std::string_view payload = {}) const&;
     ScopedOperation<void> ping(std::string_view = {}) const&& = delete;
     [[nodiscard]] ScopedOperation<void> pong(std::string_view payload) const&;

@@ -4,12 +4,15 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
+#include "ruvia/http/quic_connection.h"
 #include "ruvia/web/detail/http3/Http3ClientSansIoSessionEngine.h"
-#include "ruvia/web/detail/http3/Http3QuicStreamSet.h"
 
 namespace ruvia::detail {
 
@@ -21,7 +24,7 @@ namespace ruvia::detail {
 class Http3ClientReceiveDriver final {
 public:
     static constexpr std::size_t kReadBlockBytes = 16 * 1024;
-    using StreamId = Http3QuicStreamSet::StreamId;
+    using StreamId = std::uint64_t;
     enum class Status : std::uint8_t {
         kBlocked,
         kProgress,
@@ -36,16 +39,29 @@ public:
         Status status{Status::kBlocked};
         std::size_t bytes{};
         Http3ClientSansIoSessionEngine::Result protocol{};
-        std::optional<std::uint64_t> peerResetErrorCode{};
+        std::optional<std::uint64_t> peer_reset_error_code{};
         bool peerReportsUnprocessed{false};
     };
 
     explicit Http3ClientReceiveDriver(Http3ClientSansIoSessionEngine& engine) noexcept
-        : engine_(engine) {}
+        : engine_(engine),
+          pending_(engine.resource()) {}
+    [[nodiscard]] Result acceptReset(StreamId id, std::optional<std::uint64_t> peerErrorCode) {
+        const bool unprocessed = peerErrorCode && engine_.peerReportsUnprocessed(id, peerErrorCode);
+        auto result = feed(id, {}, false, true, 0);
+        if (result.status == Status::kStreamReset) {
+            result.peer_reset_error_code = peerErrorCode;
+            result.peerReportsUnprocessed = unprocessed;
+        }
+        return result;
+    }
+    void retire(StreamId id) noexcept {
+        pending_.erase(id);
+    }
     Http3ClientReceiveDriver(const Http3ClientReceiveDriver&) = delete;
     Http3ClientReceiveDriver& operator=(const Http3ClientReceiveDriver&) = delete;
 
-    // read(id, output) -> Http3QuicStreamSet::StreamRead. The caller must stop
+    // read(id, output) -> quic_stream_read_result. The caller must stop
     // visiting a stream after terminal status; a connection-scope failure must
     // close the QUIC transport before any response is delivered as successful.
     // A streaming owner can pass remaining producer capacity as readBudget.
@@ -69,34 +85,36 @@ public:
                 driving = false;
             }
         } guard{driving_};
+        if (const auto pending = pending_.find(id); pending != pending_.end()) {
+            if (pending->second.bytes.size() > readBudget) {
+                return {};
+            }
+            return feed(id, pending->second.bytes, pending->second.fin, false, 0);
+        }
         const auto input = read(id,
             std::span<char>(scratch_).first(std::min(readBudget, scratch_.size())));
-        using ReadStatus = Http3QuicStreamSet::StreamRead::Status;
+        using ReadStatus = ruvia::quic_stream_read_status;
         switch (input.status) {
-            case ReadStatus::kWouldBlock:
+            case ReadStatus::would_block:
                 return {};
-            case ReadStatus::kData:
+            case ReadStatus::data:
                 if (input.size == 0 || input.size > std::min(readBudget, scratch_.size())) {
                     return transportError();
                 }
                 return feed(id, {scratch_.data(), input.size}, false, false, input.size);
-            case ReadStatus::kFin:
+            case ReadStatus::fin:
                 return feed(id, {}, true, false, 0);
-            case ReadStatus::kReset: {
-                const bool unprocessed = input.peerResetErrorCode &&
-                                         engine_.peerReportsUnprocessed(id, input.peerResetErrorCode);
+            case ReadStatus::reset: {
+                const bool unprocessed = input.peer_reset_error_code &&
+                                         engine_.peerReportsUnprocessed(id, input.peer_reset_error_code);
                 auto result = feed(id, {}, false, true, 0);
                 if (result.status == Status::kStreamReset) {
-                    result.peerResetErrorCode = input.peerResetErrorCode;
+                    result.peer_reset_error_code = input.peer_reset_error_code;
                     result.peerReportsUnprocessed = unprocessed;
                 }
                 return result;
             }
-            case ReadStatus::kClosed:
-            case ReadStatus::kFatal:
-            case ReadStatus::kNoConnection:
-            case ReadStatus::kNoStream:
-            case ReadStatus::kWrongDirection:
+            case ReadStatus::closed:
                 return transportError();
         }
         return transportError();
@@ -120,6 +138,21 @@ private:
             parsed.status == Http3ClientSansIoSessionStatus::kStreamLimitExceeded) {
             return transportError();
         }
+        if (parsed.status == Http3ClientSansIoSessionStatus::kQpackBlocked || parsed.status == Http3ClientSansIoSessionStatus::kPushPromisePending) {
+            if (parsed.consumedBytes > bytes.size()) {
+                return transportError();
+            }
+            if (!pending_.contains(id) && pending_.size() >= engine_.maxLiveStreams()) {
+                return transportError();
+            }
+            auto [pending, inserted] = pending_.try_emplace(id, engine_.resource());
+            pending->second.bytes.assign(std::string_view(bytes.data(), bytes.size()).substr(parsed.consumedBytes));
+            pending->second.fin = fin;
+            return {.status = acceptedBytes != 0 || parsed.consumedBytes != 0 ? Status::kProgress : Status::kBlocked,
+                .bytes = acceptedBytes,
+                .protocol = parsed};
+        }
+        pending_.erase(id);
         if (reset) {
             return {.status = Status::kStreamReset, .protocol = parsed};
         }
@@ -140,7 +173,14 @@ private:
             .protocol = failure};
     }
 
+    struct PendingInput final {
+        explicit PendingInput(std::pmr::memory_resource* resource)
+            : bytes(resource) {}
+        std::pmr::string bytes;
+        bool fin{};
+    };
     Http3ClientSansIoSessionEngine& engine_;
+    std::pmr::unordered_map<StreamId, PendingInput> pending_;
     std::array<char, kReadBlockBytes> scratch_{};
     bool driving_{};
 };

@@ -7,8 +7,8 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/http/quic_connection.h"
 #include "ruvia/web/detail/http3/Http3CriticalStreamOutput.h"
-#include "ruvia/web/detail/http3/Http3QuicStreamSet.h"
 
 namespace ruvia::detail {
 
@@ -20,7 +20,7 @@ namespace ruvia::detail {
 class Http3CriticalStreamDriver final {
 public:
     using Kind = Http3CriticalStreamOutput::Kind;
-    using StreamId = Http3QuicStreamSet::StreamId;
+    using StreamId = std::uint64_t;
     enum class Result : std::uint8_t { kBlocked,
         kProgress,
         kReady,
@@ -33,8 +33,8 @@ public:
     Http3CriticalStreamDriver(Http3CriticalStreamDriver&&) = delete;
     Http3CriticalStreamDriver& operator=(Http3CriticalStreamDriver&&) = delete;
 
-    // open(Kind) -> Http3QuicStreamSet::OpenStream; write(id, bytes) ->
-    // Http3QuicStreamSet::StreamWrite. At most one write per stream per tick.
+    // open(Kind) -> quic_stream_open_result; write(id, bytes) ->
+    // quic_stream_write_result. At most one write per stream per tick.
     // Partial acceptance returns kProgress, so the owner can schedule another
     // tick; WANT/stream credit returns kBlocked without consuming any input.
     template <typename Open, typename Write>
@@ -47,15 +47,15 @@ public:
             const auto kind = static_cast<Kind>(i);
             if (!streams_[i]) {
                 const auto created = open(kind);
-                if (created.error == Http3QuicStreamSet::Error::kStreamLimitRetry ||
-                    created.error == Http3QuicStreamSet::Error::kHandshakePending) {
+                if (created.status == ruvia::quic_operation_status::would_block ||
+                    created.status == ruvia::quic_operation_status::need_input) {
                     continue;
                 }
-                if (created.error != Http3QuicStreamSet::Error::kNone) {
+                if (created.status != ruvia::quic_operation_status::accepted) {
                     fatal_ = true;
                     return Result::kFatal;
                 }
-                streams_[i] = created.id;
+                streams_[i] = created.stream_id;
                 progress = true;
             }
             const auto offered = output_.next(kind);
@@ -64,15 +64,16 @@ public:
             }
             const auto result = write(*streams_[i], offered);
             switch (result.status) {
-                case Http3QuicStreamSet::StreamWrite::Status::kAccepted:
-                    if (result.bytes > offered.size() ||
-                        !output_.acknowledge(kind, result.bytes)) {
+                case ruvia::quic_operation_status::accepted:
+                    if (result.accepted > offered.size() ||
+                        !output_.acknowledge(kind, result.accepted)) {
                         fatal_ = true;
                         return Result::kFatal;
                     }
-                    progress = progress || result.bytes != 0;
+                    progress = progress || result.accepted != 0;
                     break;
-                case Http3QuicStreamSet::StreamWrite::Status::kWouldBlock:
+                case ruvia::quic_operation_status::would_block:
+                case ruvia::quic_operation_status::need_input:
                     (void)output_.acknowledge(kind, 0);
                     break;
                 default:

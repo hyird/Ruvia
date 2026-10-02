@@ -239,7 +239,7 @@ ruvia::Task<void> emitStreamingRoute(tcp::socket& socket, const ruvia::detail::R
         .response = response,
         .requestSequence = requestSequence};
     static_cast<void>(co_await ruvia::detail::dispatchHttpResponseStreamRoute(
-        dispatch, responseHead, *requestHead, *resolved));
+        dispatch, responseHead, *requestHead, *resolved, {}, ruvia::ProtocolByteLimit::limited(ruvia::kDefaultMaxBufferedBodyBytes)));
 }
 
 ruvia::Task<void> emitWebSocketRoute(tcp::socket& socket,

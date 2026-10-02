@@ -67,6 +67,7 @@ public:
     [[nodiscard]] std::pmr::memory_resource* workerResource() const noexcept;
 
 private:
+    [[nodiscard]] Task<bool> pushRequest(std::uint32_t associatedStreamId, HttpPushRequestView request);
     [[nodiscard]] Task<void> dispatchOneInner(std::uint32_t streamId);
     [[nodiscard]] Task<void> dispatchOne(std::uint32_t streamId);
     [[nodiscard]] bool admitStream(std::uint32_t streamId);

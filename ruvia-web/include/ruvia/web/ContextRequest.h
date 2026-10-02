@@ -13,7 +13,10 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpPriority.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Attributes.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
@@ -87,7 +90,15 @@ public:
     [[nodiscard]] std::string_view method() const noexcept;
     [[nodiscard]] HttpKnownMethod knownMethod() const noexcept;
     [[nodiscard]] std::string_view path() const noexcept;
+    [[nodiscard]] std::string_view scheme() const noexcept;
+    [[nodiscard]] std::string_view authority() const noexcept;
+    [[nodiscard]] std::string_view target() const noexcept;
+    [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept;
+    [[nodiscard]] HttpRequestTargetForm targetForm() const noexcept;
     [[nodiscard]] std::string_view routePath() const noexcept;
+    // Initial Priority fields, replaced by the latest RFC 9218 update when a
+    // live HTTP/2 or HTTP/3 peer reprioritizes this request.
+    [[nodiscard]] HttpPriority priority() const noexcept;
 
     // Accept uses media ranges; language uses RFC 4647 basic filtering;
     // encoding and charset match tokens or '*'.
@@ -96,6 +107,10 @@ public:
         kEncoding,
         kCharset };
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
+    // Read after body completion to observe the complete terminal section.
+    // Trailers never replace initial headers or change route selection.
+    [[nodiscard]] std::span<const HttpHeader> trailers() const noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     // Client weights select a caller-owned supported value; server order breaks
     // ties. An absent field selects the first offer, no acceptable offer is nullopt.

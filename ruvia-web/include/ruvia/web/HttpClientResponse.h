@@ -8,6 +8,8 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpPriority.h"
+#include "ruvia/web/HttpClientInformationalResponse.h"
 #include "ruvia/web/HttpClientResponseBytes.h"
 
 namespace ruvia {
@@ -15,6 +17,7 @@ namespace ruvia {
 namespace detail {
 class HttpClientPool;
 class HttpClientResponseState;
+class HttpCapsuleStreamState;
 }  // namespace detail
 
 class ResponseStreamWriter;
@@ -83,8 +86,14 @@ public:
     HttpClientResponse& operator=(HttpClientResponse&& other) noexcept;
     ~HttpClientResponse();
 
+    [[nodiscard]] std::span<const HttpClientInformationalResponse> informationalResponses() const& noexcept;
+    std::span<const HttpClientInformationalResponse> informationalResponses() const&& = delete;
     [[nodiscard]] HttpStatusCode status() const noexcept;
     [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept;
+    // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 or HTTP/3 response.
+    // Worker-affine; the connection driver owns writing the queued frame.
+    void reprioritize(HttpPriority priority) &;
+    void reprioritize(HttpPriority) && = delete;
     [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept;
     [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;
     [[nodiscard]] std::span<const HttpHeader> trailers() const& noexcept;
@@ -101,6 +110,13 @@ public:
 
 private:
     friend class detail::HttpClientPool;
+    friend class HttpClientExchange;
+    friend class HttpClientTunnel;
+    friend class HttpCapsuleStream;
+    friend class HttpDatagramStream;
+    friend class detail::HttpCapsuleStreamState;
+    friend class HttpClientPush;
+    friend class HttpClientRequestBodyWriter;
 
     explicit HttpClientResponse(detail::HttpClientPool& pool);
     HttpClientResponse(detail::HttpClientResponseState* state, bool retain) noexcept;

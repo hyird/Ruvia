@@ -152,12 +152,6 @@ void setIdentity(ruvia::detail::HttpServerListenerDefinition::TlsIdentity& ident
 }  // namespace
 
 RUVIA_TEST(http3QuicTlsContextConfiguresTlsAndCertificatePolicies) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    ruvia::detail::HttpServerListenerDefinition::Tls tls;
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        ruvia::detail::Http3QuicTlsContext context(tls, std::pmr::get_default_resource());
-    }));
-#else
     using namespace ruvia::detail;
 
     TemporaryDirectory directory;
@@ -176,35 +170,34 @@ RUVIA_TEST(http3QuicTlsContextConfiguresTlsAndCertificatePolicies) {
         policy.requirement = requirement;
         tls.clientCertificates = policy;
 
-        Http3QuicTlsContext context(tls, std::pmr::get_default_resource());
-        SSL_CTX* const defaultContext = context.defaultContext();
-        RUVIA_CHECK(defaultContext != nullptr);
-        // The OpenSSL QUIC method is TLS 1.3-only; its protocol min/max
-        // getters return zero even after successful set calls.
-        RUVIA_CHECK(SSL_CTX_get_ssl_method(defaultContext) == OSSL_QUIC_server_method());
-        RUVIA_CHECK(SSL_CTX_check_private_key(defaultContext) == 1);
-        RUVIA_CHECK(SSL_CTX_get_verify_mode(defaultContext) ==
+        http3_quic_tls_context context(tls, std::pmr::get_default_resource());
+        SSL_CTX* const default_context = context.default_context();
+        RUVIA_CHECK(default_context != nullptr);
+        RUVIA_CHECK(SSL_CTX_get_ssl_method(default_context) == TLS_method());
+        RUVIA_CHECK(SSL_CTX_get_min_proto_version(default_context) == TLS1_3_VERSION);
+        RUVIA_CHECK(SSL_CTX_get_max_proto_version(default_context) == TLS1_3_VERSION);
+        RUVIA_CHECK(SSL_CTX_check_private_key(default_context) == 1);
+        RUVIA_CHECK(SSL_CTX_get_verify_mode(default_context) ==
                     (SSL_VERIFY_PEER | (requirement == ruvia::TlsClientCertificateRequirement::kRequired
                                                ? SSL_VERIFY_FAIL_IF_NO_PEER_CERT
                                                : 0)));
 
-        X509* const defaultCertificate = SSL_CTX_get0_certificate(defaultContext);
-        RUVIA_CHECK(defaultCertificate != nullptr);
-        char defaultName[128]{};
-        RUVIA_CHECK(X509_NAME_get_text_by_NID(X509_get_subject_name(defaultCertificate),
-                        NID_commonName, defaultName, static_cast<int>(sizeof(defaultName))) > 0);
-        RUVIA_CHECK(std::string_view(defaultName) == "default.ruvia-test.local");
+        X509* const default_certificate = SSL_CTX_get0_certificate(default_context);
+        RUVIA_CHECK(default_certificate != nullptr);
+        char default_name[128]{};
+        RUVIA_CHECK(X509_NAME_get_text_by_NID(X509_get_subject_name(default_certificate),
+                        NID_commonName, default_name, static_cast<int>(sizeof(default_name))) > 0);
+        RUVIA_CHECK(std::string_view(default_name) == "default.ruvia-test.local");
     }
 
     HttpServerListenerDefinition::Tls missingCertificate;
     missingCertificate.identity.privateKeyFile = defaultFiles.keyFile.string();
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        Http3QuicTlsContext context(missingCertificate, std::pmr::get_default_resource());
+        http3_quic_tls_context context(missingCertificate, std::pmr::get_default_resource());
     }));
     HttpServerListenerDefinition::Tls missingKey;
     missingKey.identity.certificateChainFile = defaultFiles.certificateFile.string();
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        Http3QuicTlsContext context(missingKey, std::pmr::get_default_resource());
+        http3_quic_tls_context context(missingKey, std::pmr::get_default_resource());
     }));
-#endif
 }

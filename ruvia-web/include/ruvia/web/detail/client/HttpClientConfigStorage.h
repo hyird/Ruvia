@@ -34,6 +34,9 @@ struct HttpClientConfigStorage final {
     std::optional<std::chrono::milliseconds> acquireTimeout;
     std::size_t maxResponseBytes;
     HttpClientProtocol protocol;
+    Http3QpackConfig http3Qpack;
+    HttpClientAdvertisementConfig advertisements;
+    HttpClientPushConfig push;
     ClientTransportConfigStorage transport;
     HttpClientReceivedCookiePolicy receivedCookies;
     std::pmr::string userAgent;
@@ -63,6 +66,9 @@ private:
           acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes),
           protocol(source.protocol),
+          http3Qpack(source.qpack),
+          advertisements(source.advertisements),
+          push(source.push),
           transport(clientTransportConfigView(source), resource),
           receivedCookies(source.receivedCookies),
           userAgent(source.userAgent, resource),
@@ -90,6 +96,9 @@ private:
           acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes),
           protocol(source.protocol),
+          http3Qpack(source.http3Qpack),
+          advertisements(source.advertisements),
+          push(source.push),
           transport(source.transport, resource),
           receivedCookies(source.receivedCookies),
           userAgent(source.userAgent, resource),

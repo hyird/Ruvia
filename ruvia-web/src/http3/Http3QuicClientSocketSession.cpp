@@ -10,20 +10,29 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/Async.h"
+#include "ruvia/web/detail/http3/Http3QuicPacketIo.h"
 #include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
 
 namespace ruvia::detail {
 namespace {
 
-Http3QuicDatagramAddress datagramAddress(const asio::ip::udp::endpoint& endpoint) {
-    // The BIO representation intentionally cannot retain IPv6 scope identifiers.
-    // Scoped/link-local/mapped and wildcard endpoints are rejected; consequently
-    // IPv6 scope changes and UDP peer migration are not supported by this session.
-    auto result = toHttp3QuicDatagramAddress(endpoint);
+http3_quic_datagram_address datagram_address(const asio::ip::udp::endpoint& endpoint) {
+    auto result = to_http3_quic_datagram_address(endpoint);
     if (!result) {
         throw std::invalid_argument("QUIC UDP endpoint is not a supported concrete address");
     }
     return *result;
+}
+
+ruvia::quic_connection_config client_connection_config(
+    const asio::ip::udp::endpoint& local, const asio::ip::udp::endpoint& peer) {
+    ruvia::quic_connection_config config{};
+    config.role = ruvia::quic_role::client;
+    config.local_address = to_quic_address(datagram_address(local));
+    config.peer_address = to_quic_address(datagram_address(peer));
+    config.local_transport_parameters.max_datagram_frame_size =
+        config.limits.max_datagram_size;
+    return config;
 }
 
 // This awaiter lives inside the single driver's coroutine frame. Socket and
@@ -268,8 +277,6 @@ asio::ip::udp::socket Http3QuicClientSocketSession::makeSocket(asio::io_context&
     if (error) {
         throw std::system_error(error, "open QUIC UDP socket");
     }
-    // Connect before enabling nonblocking mode. If a platform nevertheless reports
-    // EINPROGRESS, it is not success: this synchronous session cannot finish connect.
     socket.connect(peer, error);
     if (error) {
         if (error == asio::error::in_progress || error == asio::error::would_block ||
@@ -292,27 +299,40 @@ asio::ip::udp::endpoint Http3QuicClientSocketSession::concreteLocalEndpoint(
     if (error) {
         throw std::system_error(error, "read QUIC UDP local endpoint");
     }
-    (void)datagramAddress(endpoint);
+    (void)datagram_address(endpoint);
     return endpoint;
 }
 
 Http3QuicClientSocketSession::Http3QuicClientSocketSession(asio::io_context& io,
-    const asio::ip::udp::endpoint& peer, std::string_view tlsHostname,
-    Http3QuicClientTlsContext& tls)
+    const asio::ip::udp::endpoint& peer, std::string_view tls_hostname,
+    http3_quic_client_tls_context& tls, Http3Settings settings)
     : ownerThread_(std::this_thread::get_id()),
       peer_(peer),
-      peerAddress_(datagramAddress(peer_)),
       socket_(makeSocket(io, peer_)),
       eventTimer_(io),
       workTimer_(io),
       localEndpoint_(concreteLocalEndpoint(socket_)),
-      bridge_(datagramAddress(localEndpoint_)),
-      transport_(tls, bridge_, peerAddress_, tlsHostname) {
-    const auto prefixes = Http3LocalCriticalStreams::create();
+      transport_(tls, client_connection_config(localEndpoint_, peer_), tls_hostname,
+          std::chrono::steady_clock::now()) {
+    const auto prefixes = Http3LocalCriticalStreams::create(settings);
     if (!prefixes) {
         throw std::logic_error("failed to prepare local HTTP/3 critical streams");
     }
     criticalStreams_.emplace(*prefixes);
+}
+
+ruvia::quic_stream_write_result Http3QuicClientSocketSession::writeCriticalStream(
+    Http3CriticalStreamOutput::Kind kind, std::span<const char> bytes) {
+    requireOwnerThread();
+    if (!criticalStreams_ || !criticalStreams_->complete()) {
+        return {.status = ruvia::quic_operation_status::would_block};
+    }
+    const auto id = criticalStreams_->streamId(kind);
+    if (!id) {
+        return {.status = ruvia::quic_operation_status::closing};
+    }
+    const auto input = std::as_bytes(bytes);
+    return transport_.connection().write_stream(*id, input);
 }
 
 Http3QuicClientSocketSession::~Http3QuicClientSocketSession() {
@@ -328,6 +348,25 @@ void Http3QuicClientSocketSession::requireOwnerThread() const {
     }
 }
 
+bool Http3QuicClientSocketSession::sendPending(PumpResult& result) {
+    if (pending_packet_size_ == 0) {
+        return true;
+    }
+    asio::error_code error;
+    const auto size = socket_.send(asio::buffer(packetBuffer_.data(), pending_packet_size_), 0, error);
+    if (error == asio::error::would_block || error == asio::error::try_again) {
+        result.outputBackpressured = true;
+        return true;
+    }
+    if (error || size != pending_packet_size_) {
+        result.status = PumpStatus::kFatal;
+        return false;
+    }
+    pending_packet_size_ = 0;
+    ++result.sent;
+    return true;
+}
+
 Http3QuicClientSocketSession::PumpResult Http3QuicClientSocketSession::pump() {
     requireOwnerThread();
     PumpResult result;
@@ -336,72 +375,52 @@ Http3QuicClientSocketSession::PumpResult Http3QuicClientSocketSession::pump() {
         return result;
     }
 
-    bool sawWouldBlock = false;
-    for (std::size_t packet = 0; packet != kBatchSize; ++packet) {
-        if (pendingSize_ != 0) {
-            const auto injected = bridge_.inject(
-                std::span<const std::byte>(pendingDatagram_.data(), pendingSize_), peerAddress_);
-            if (injected == Http3QuicDatagramBridge::InjectResult::kFatal) {
-                result.status = PumpStatus::kFatal;
-                return result;
-            }
-            if (injected == Http3QuicDatagramBridge::InjectResult::kFull) {
-                break;
-            }
-            pendingSize_ = 0;
-        }
+    if (!sendPending(result) || result.outputBackpressured) {
+        return result;
+    }
 
+    auto& connection = transport_.connection();
+    for (std::size_t packet = 0; packet < kBatchSize; ++packet) {
         asio::ip::udp::endpoint sender;
         asio::error_code error;
-        const std::size_t size = socket_.receive_from(asio::buffer(receiveBuffer_), sender, 0, error);
+        const auto size = socket_.receive_from(asio::buffer(receiveBuffer_), sender, 0, error);
         if (error == asio::error::would_block || error == asio::error::try_again) {
-            sawWouldBlock = true;
             break;
         }
         if (error) {
             result.status = PumpStatus::kFatal;
             return result;
         }
-        ++result.received;
-        // A connected UDP socket must never feed a datagram from a different peer
-        // to the TLS connection, even if a platform unexpectedly surfaces one.
         if (sender != peer_) {
-            result.status = PumpStatus::kFatal;
-            return result;
+            continue;
         }
+        ++result.received;
         if (size == 0) {
-            continue;  // An empty UDP datagram cannot contain a QUIC packet.
+            continue;
         }
-        const auto injected = bridge_.inject(
-            std::span<const std::byte>(receiveBuffer_.data(), size), peerAddress_);
-        if (injected == Http3QuicDatagramBridge::InjectResult::kFatal) {
-            result.status = PumpStatus::kFatal;
-            return result;
-        }
-        if (injected == Http3QuicDatagramBridge::InjectResult::kFull) {
-            std::copy_n(receiveBuffer_.begin(), size, pendingDatagram_.begin());
-            pendingSize_ = size;
-            break;
-        }
+        const auto datagram = ruvia::quic_datagram_view{
+            std::span<const std::byte>(receiveBuffer_.data(), size),
+            to_quic_address(datagram_address(localEndpoint_)),
+            to_quic_address(datagram_address(sender))};
+        (void)connection.receive(datagram, std::chrono::steady_clock::now());
     }
 
-    const auto state = started_ ? transport_.handleEvents() : transport_.startConnect();
-    started_ = true;
-    if (state == Http3QuicClientTransport::State::kTlsFailure ||
-        state == Http3QuicClientTransport::State::kAlpnMismatch ||
-        state == Http3QuicClientTransport::State::kTransportClosed) {
-        result.status = state == Http3QuicClientTransport::State::kTransportClosed
-                            ? PumpStatus::kClosed
-                            : PumpStatus::kFatal;
+    const auto now = std::chrono::steady_clock::now();
+    (void)transport_.handle_expiry(now);
+
+    const auto connection_info = connection.info();
+    if (connection_info.state == ruvia::quic_connection_state::failed ||
+        connection_info.state == ruvia::quic_connection_state::retired) {
+        result.status = PumpStatus::kFatal;
         return result;
     }
-    if (state == Http3QuicClientTransport::State::kH3Ready) {
+    if (connection_info.state == ruvia::quic_connection_state::ready) {
         const auto critical = criticalStreams_->drive(
-            [this](Http3CriticalStreamDriver::Kind) {
-                return transport_.openLocalUnidirectionalStream();
+            [&connection](Http3CriticalStreamDriver::Kind) {
+                return connection.open_stream(true);
             },
-            [this](Http3QuicClientTransport::StreamId id, std::span<const char> bytes) {
-                return transport_.writeStream(id, bytes);
+            [&connection](std::uint64_t id, std::span<const char> bytes) {
+                return connection.write_stream(id, std::as_bytes(bytes));
             });
         if (critical == Http3CriticalStreamDriver::Result::kFatal) {
             result.status = PumpStatus::kFatal;
@@ -409,64 +428,51 @@ Http3QuicClientSocketSession::PumpResult Http3QuicClientSocketSession::pump() {
         }
         result.criticalStreamsReady = critical == Http3CriticalStreamDriver::Result::kReady;
         result.criticalOutputProgress = critical == Http3CriticalStreamDriver::Result::kProgress;
-        // Once prefixes finish, the startup driver stops writing. Still check
-        // every open critical stream after each QUIC event: a peer STOP_SENDING
-        // or connection failure must not silently leave a broken H3 session.
-        for (std::size_t index = 0; index != 3; ++index) {
+        for (std::size_t index = 0; index < 3; ++index) {
             const auto id = criticalStreams_->streamId(
                 static_cast<Http3CriticalStreamDriver::Kind>(index));
-            if (id && transport_.streamWriteHealth(*id) != Http3QuicStreamSet::Error::kNone) {
+            if (!id) {
+                continue;
+            }
+            const auto health = connection.write_health(*id);
+            if (health != ruvia::quic_operation_status::accepted &&
+                health != ruvia::quic_operation_status::would_block &&
+                health != ruvia::quic_operation_status::need_input) {
                 result.status = PumpStatus::kFatal;
                 return result;
             }
         }
     }
 
-    for (std::size_t packet = 0; packet != kBatchSize; ++packet) {
-        if (!outboundOutstanding_) {
-            const auto available = bridge_.takeOutbound(outbound_);
-            if (available == Http3QuicDatagramBridge::OutboundResult::kEmpty) {
-                break;
-            }
-            if (available == Http3QuicDatagramBridge::OutboundResult::kBusy) {
-                break;
-            }
-            if (available == Http3QuicDatagramBridge::OutboundResult::kFatal) {
-                result.status = PumpStatus::kFatal;
-                return result;
-            }
-            outboundOutstanding_ = true;
+    for (std::size_t packet = 0; packet < kBatchSize; ++packet) {
+        const auto output = transport_.write_packet(packetBuffer_, now);
+        if (output.size == 0) {
+            break;
         }
-        const auto target = toHttp3UdpEndpoint(outbound_.destination);
-        const auto source = outbound_.hasSource
-                                ? toHttp3UdpEndpoint(outbound_.source)
-                                : decltype(target){};
-        if (!target || *target != peer_ ||
-            (outbound_.hasSource && (!source || *source != localEndpoint_))) {
-            // A connected UDP socket cannot implement source or peer migration.
+        if (output.size > packetBuffer_.size()) {
             result.status = PumpStatus::kFatal;
             return result;
         }
-        asio::error_code error;
-        const std::size_t size = socket_.send(asio::buffer(outbound_.bytes.data(), outbound_.bytes.size()), 0, error);
-        if (error == asio::error::would_block || error == asio::error::try_again) {
-            sawWouldBlock = true;
-            break;  // Keep the bridge's borrowed span outstanding for the next pump.
-        }
-        bridge_.completeOutbound();
-        outboundOutstanding_ = false;
-        if (error || size != outbound_.bytes.size()) {
+        const auto target = to_udp_endpoint(from_quic_address(output.peer));
+        if (!target || *target != peer_) {
             result.status = PumpStatus::kFatal;
             return result;
         }
-        ++result.sent;
+        pending_packet_size_ = output.size;
+        if (!sendPending(result) || result.outputBackpressured) {
+            break;
+        }
     }
 
-    result.inputBackpressured = pendingSize_ != 0;
-    result.outputBackpressured = outboundOutstanding_;
-    result.eventTimeout = transport_.eventTimeout();
-    if (sawWouldBlock && result.received == 0 && result.sent == 0 &&
-        !result.criticalOutputProgress) {
+    if (connection.info().state == ruvia::quic_connection_state::ready) {
+        result.criticalStreamsReady = criticalStreams_->complete();
+    }
+    if (const auto expiry = transport_.next_expiry()) {
+        result.eventTimeout = *expiry > now ? *expiry - now
+                                            : std::chrono::steady_clock::duration::zero();
+    }
+    if (result.received == 0 && result.sent == 0 && !result.criticalOutputProgress &&
+        result.status == PumpStatus::kActive) {
         result.status = PumpStatus::kWouldBlock;
     }
     return result;
@@ -538,8 +544,7 @@ void Http3QuicClientSocketSession::close() noexcept {
     asio::error_code ignored;
     socket_.close(ignored);
     closed_ = true;
-    pendingSize_ = 0;
-    outboundOutstanding_ = false;
+    pending_packet_size_ = 0;
 }
 
 }  // namespace ruvia::detail

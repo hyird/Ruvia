@@ -40,7 +40,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(Http1RouteDispat
                 d.options.maxBufferedBodyBytes, routeLimit),
             d.scannerEntry);
         d.response = co_await d.routes.dispatch(d.parsed.request, routeResolution, d.requestMemory,
-            d.baseRouteServices.withStreamingRequestBody(bodyReader->facade()));
+            d.baseRouteServices.withStreamingRequestBody(bodyReader->facade()).withRequestTrailers(bodyReader->reader().trailers()));
     } catch (...) {
         exception = std::current_exception();
     }
@@ -48,7 +48,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(Http1RouteDispat
     if (exception != nullptr) {
         auto exceptionServices = d.baseRouteServices;
         if (bodyReader) {
-            exceptionServices = exceptionServices.withStreamingRequestBody(bodyReader->facade());
+            exceptionServices = exceptionServices.withStreamingRequestBody(bodyReader->facade()).withRequestTrailers(bodyReader->reader().trailers());
         }
         co_return co_await completeFailedHttpBodyRoute(d.scannerEntry, exception, d.parsed,
             d.routes, d.requestMemory, exceptionServices, d.response);

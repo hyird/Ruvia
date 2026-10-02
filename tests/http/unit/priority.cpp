@@ -2,6 +2,7 @@
 #include <string_view>
 
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpPriority.h"
 
 #include "test_harness.h"
@@ -20,6 +21,21 @@ RUVIA_TEST(http_priority_structured_dictionary_types_duplicates_and_parameters) 
         RUVIA_CHECK(!ruvia::parseHttpPriority(invalid));
     }
 }
+RUVIA_TEST(http_priority_repeated_headers_combine_members_and_replace_invalid_values) {
+    const std::array headers{ruvia::HttpHeaderView{"Priority", "u=2, i"},
+        ruvia::HttpHeaderView{"X-Other", "u=0"},
+        ruvia::HttpHeaderView{"pRIORITY", "u=\"ignored\""}};
+    const auto parsed = ruvia::parseHttpPriority(headers);
+    RUVIA_CHECK(parsed && !parsed->urgency && parsed->incremental == true);
+    const std::array malformed{ruvia::HttpHeaderView{"priority", "u=2"},
+        ruvia::HttpHeaderView{"priority", "i=?2"}};
+    RUVIA_CHECK(!ruvia::parseHttpPriority(malformed));
+    const std::array emptyRepeated{ruvia::HttpHeaderView{"priority", ""},
+        ruvia::HttpHeaderView{"priority", "u=1"}};
+    RUVIA_CHECK(!ruvia::parseHttpPriority(emptyRepeated));
+    RUVIA_CHECK(ruvia::parseHttpPriority(std::span<const ruvia::HttpHeaderView>{})->requestPriority().urgency == 3);
+}
+
 RUVIA_TEST(http_priority_http2_http3_frame_roundtrips_and_output_bounds) {
     std::array<char, 64> bytes{};
     auto h2 = ruvia::encodeHttp2PriorityUpdate(bytes, 5, {.urgency = 1, .incremental = true});
