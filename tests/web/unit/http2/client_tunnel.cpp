@@ -64,6 +64,7 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
     auto attachment = ruvia::attachEventLoop(io);
     ruvia::test::CountingMemoryResource allocation;
     std::exception_ptr failure;
+    std::optional<ruvia::HttpClientTunnel> retained_tunnel;
     auto run = [&]() -> ruvia::Task<void> {
         const auto& worker = attachment.loop().handle();
         asio::ip::tcp::acceptor acceptor(io, {asio::ip::address_v4::loopback(), 0});
@@ -79,8 +80,8 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
         tasks.spawn(serveClientTunnel(acceptor, worker, routes.routeTable(), memory));
         ruvia::HttpClient client(attachment.loop(), {.scheme = ruvia::HttpScheme::kHttp, .host = "127.0.0.1", .port = acceptor.local_endpoint().port(), .connectionCount = 1, .requestTimeout = std::chrono::seconds(5), .maxResponseBytes = 16384, .protocol = ruvia::HttpClientProtocol::kHttp2Only});
         try {
-            for (unsigned round = 0; round != 3; ++round) {
-                observation.finishFirst = round == 2;
+            for (unsigned round = 0; round != 4; ++round) {
+                observation.finishFirst = round >= 2;
                 std::string authority = round == 1 ? "proxy.test" : "target.test:443";
                 auto cold = client.openTunnel({.authority = authority, .protocol = round == 1 ? "test-protocol" : "", .target = round == 1 ? "/tunnel" : ""});
                 authority.assign("mutated");
@@ -103,6 +104,26 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
                     RUVIA_CHECK(echoed == "greeting");
                 }
                 ruvia::TaskScope readers(worker);
+                if (round == 3) {
+                    tunnel.abort();
+                    bool half_closed_write_rejected = false;
+                    try {
+                        auto late_write = tunnel.write("late");
+                        static_cast<void>(late_write);
+                    } catch (const ruvia::HttpClientError& error) {
+                        half_closed_write_rejected = error.code() == ruvia::HttpClientError::Code::kCancelled;
+                    }
+                    RUVIA_CHECK(half_closed_write_rejected);
+                    co_await readers.join();
+                    auto sibling = co_await client.send({.target = "/sibling"});
+                    std::string sibling_body;
+                    while (auto bytes = co_await sibling.body().text()) {
+                        sibling_body.append(*bytes);
+                    }
+                    RUVIA_CHECK(sibling_body == "sibling");
+                    retained_tunnel.emplace(std::move(tunnel));
+                    continue;
+                }
                 if (!observation.finishFirst) {
                     readers.spawn(receive());
                 }
@@ -137,6 +158,19 @@ RUVIA_TEST(http2_client_tunnel_owns_cold_input_half_closes_and_preserves_sibling
             failure = std::current_exception();
         }
         co_await client.shutdown();
+        if (retained_tunnel) {
+            retained_tunnel->abort();
+            retained_tunnel->abort();
+            bool late_write_rejected = false;
+            try {
+                auto late_write = retained_tunnel->write("late");
+                static_cast<void>(late_write);
+            } catch (const ruvia::HttpClientError&) {
+                late_write_rejected = true;
+            }
+            RUVIA_CHECK(late_write_rejected);
+            retained_tunnel.reset();
+        }
         std::error_code ignored;
         acceptor.close(ignored);
         co_await tasks.join();

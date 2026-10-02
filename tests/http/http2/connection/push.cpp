@@ -208,9 +208,11 @@ namespace {
 struct PushResource final : std::pmr::memory_resource {
     std::size_t live_bytes{0};
     std::size_t live_allocations{0};
-    bool fail{false};
+    std::size_t reject_at_least{0};
+    std::size_t rejected_allocations{0};
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail) {
+        if (reject_at_least != 0 && bytes >= reject_at_least) {
+            ++rejected_allocations;
             throw std::bad_alloc();
         }
         auto* pointer = std::pmr::new_delete_resource()->allocate(bytes, alignment);
@@ -299,17 +301,33 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
             }
             RUVIA_CHECK(retained->pushPromise()->request.path == "/retained");
         }
-        const auto outputSize = server.pendingOutput().size();
-        resource.fail = true;
+        std::string request_path(16 * 1024, 'p');
+        request_path.front() = '/';
+        resource.reject_at_least = request_path.size();
+        const auto pending_output = std::string(server.pendingOutput());
         bool threw = false;
         try {
-            (void)server.submitPushPromise(1, {.authority = "example.test", .path = "/allocation-failure"});
+            (void)server.submitPushPromise(1, {.authority = "example.test", .path = request_path});
         } catch (const std::bad_alloc&) {
             threw = true;
         }
         RUVIA_CHECK(threw);
-        resource.fail = false;
-        RUVIA_CHECK_EQ(server.pendingOutput().size(), outputSize);
+        RUVIA_CHECK_EQ(resource.rejected_allocations, 1u);
+        RUVIA_CHECK_EQ(std::string(server.pendingOutput()), pending_output);
+        RUVIA_CHECK_EQ(resource.live_bytes, baseline_bytes);
+        RUVIA_CHECK_EQ(resource.live_allocations, baseline_allocations);
+        RUVIA_CHECK_EQ(retained->pushPromise()->request.path, "/retained");
+
+        resource.reject_at_least = 0;
+        const auto retry = server.submitPushPromise(1, {.authority = "example.test", .path = request_path});
+        RUVIA_CHECK(retry);
+        transfer(server, client);
+        auto retried_promise = client.nextEvent();
+        RUVIA_CHECK(retried_promise && retried_promise->pushPromise());
+        if (retried_promise && retried_promise->pushPromise()) {
+            const auto& retry_path = retried_promise->pushPromise()->request.path;
+            RUVIA_CHECK(std::string_view(retry_path.data(), retry_path.size()) == request_path);
+        }
     }
     RUVIA_CHECK_EQ(resource.live_bytes, 0u);
     RUVIA_CHECK_EQ(resource.live_allocations, 0u);

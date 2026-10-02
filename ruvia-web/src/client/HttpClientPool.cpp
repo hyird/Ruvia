@@ -1002,7 +1002,7 @@ Task<HttpClientTunnelResult> HttpClientPool::openTunnel(HttpClientRequestStorage
     HttpClientResponse response(*this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
-    state->tunnel.emplace(worker_, state->resource, config);
+    state->tunnel.emplace(state->memoryDomain()->worker(), state->resource, config);
     state->tunnel->udp = ownedRequest.tunnelProtocol() == "connect-udp";
     if (state->tunnel->udp) {
         state->tunnel->config.datagrams = true;
@@ -1047,7 +1047,7 @@ Task<HttpClientExchange> HttpClientPool::openRequest(HttpClientRequestStorage re
     HttpClientResponse response(*this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
-    state->upload.emplace(worker_, state->resource, upload);
+    state->upload.emplace(state->memoryDomain()->worker(), state->resource, upload);
     state->upload->contentReleased = upload.expectation == HttpClientRequestExpectation::kNone;
     ownedRequest.bindUpload(*state->upload);
     backgroundTasks_.spawn(executeInto(std::move(ownedRequest), std::move(options), state));
