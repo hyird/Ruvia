@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <string_view>
 
 #if defined(_WIN32) && defined(_DEBUG)
@@ -65,7 +66,13 @@ int main() {
         ctx.current = c.name;
         std::printf("[ RUN ] %s (#%zu)\n", c.name, caseIndex);
         std::fflush(stdout);
-        c.fn(ctx);
+        try {
+            c.fn(ctx);
+        } catch (const std::exception& error) {
+            reportFailure(ctx, __FILE__, __LINE__, error.what());
+        } catch (...) {
+            reportFailure(ctx, __FILE__, __LINE__, "unknown exception");
+        }
         if (ctx.failures == 0) {
             std::printf("[ ok ] %s\n", c.name);
         } else {

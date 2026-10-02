@@ -731,6 +731,24 @@ private:
                         if (!request.requestFinished || request.responseFinished) {
                             continue;
                         }
+                        if (connectionIndex == 0 && !goAwaySent()) {
+                            if (connection.criticalOffsets[0] != criticalBytes_[0].size()) {
+                                continue;
+                            }
+                            const auto written = transport.write_stream(*connection.criticalIds[0],
+                                std::as_bytes(std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset)));
+                            if (written.status == ruvia::quic_operation_status::accepted) {
+                                connection.goAwayOffset += written.accepted;
+                                if (connection.goAwayOffset == goAwayBytes_.size()) {
+                                    goAwaySent_.store(true, std::memory_order_release);
+                                }
+                            } else if (written.status != ruvia::quic_operation_status::would_block) {
+                                throw std::runtime_error("HTTP/3 GOAWAY peer control write failed");
+                            }
+                            // Send the cutoff before releasing the first response.
+                            // Completing that response must not race control delivery.
+                            continue;
+                        }
                         if (request.responseOffset < responseBytes_.size()) {
                             const auto written = transport.write_stream(request.stream,
                                 std::as_bytes(std::span<const char>(responseBytes_).subspan(request.responseOffset)));
@@ -746,24 +764,6 @@ private:
                         }
                         if (request.responseOffset != responseBytes_.size()) {
                             continue;
-                        }
-                        if (connectionIndex == 0 && !goAwaySent()) {
-                            if (connection.criticalOffsets[0] != criticalBytes_[0].size()) {
-                                continue;
-                            }
-                            const auto written = transport.write_stream(*connection.criticalIds[0],
-                                std::as_bytes(std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset)));
-                            if (written.status == ruvia::quic_operation_status::accepted) {
-                                connection.goAwayOffset += written.accepted;
-                                if (connection.goAwayOffset == goAwayBytes_.size()) {
-                                    goAwaySent_.store(true, std::memory_order_release);
-                                }
-                            } else if (written.status != ruvia::quic_operation_status::would_block) {
-                                throw std::runtime_error("HTTP/3 GOAWAY peer control write failed");
-                            }
-                            if (!goAwaySent()) {
-                                continue;
-                            }
                         }
                         const auto finished = transport.finish_stream(request.stream);
                         if (finished == ruvia::quic_operation_status::accepted) {

@@ -289,10 +289,13 @@ RUVIA_TEST(quic_tls_driver_retirement_releases_held_lease_once_and_cold_retires)
         ruvia::detail::quic_connection_state state(config(), provider(),
             {.context = &violating_driver, .drive = drive_with_held_lease, .retire = leave_held_lease_driver},
             &child_resource, {});
-        state.append_crypto(ruvia::quic_encryption_level::initial, bytes("no-release", 10));
+        state.append_crypto(ruvia::quic_encryption_level::initial, bytes("deferred", 8));
         state.tls_driver_active_ = true;
         (void)state.tls_driver_.drive(state.tls_driver_.context, state.tls_handshake());
         state.tls_driver_active_ = false;
+        if (!violating_driver.lease.has_value()) {
+            std::_Exit(1);
+        }
         state.retire();
         std::_Exit(0);
     }

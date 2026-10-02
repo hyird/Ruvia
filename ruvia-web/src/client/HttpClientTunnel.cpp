@@ -22,15 +22,15 @@ void requireOutput(detail::HttpClientResponseState* state, bool finishing) {
     if (state == nullptr) {
         throw std::logic_error("HTTP client tunnel is empty");
     }
-    if (!state->tunnel || state->pool == nullptr || state->tunnel->stopped || !state->tunnel->accepted ||
-        state->abandoned || state->failure || state->errorCode) {
-        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel is closed");
-    }
     if (auto* domain = state->memoryDomain(); domain != nullptr && !domain->worker().isCurrent()) {
         throw std::logic_error("HTTP client tunnel requires its owner worker");
     }
-    if (finishing && state->tunnel->ended && !state->tunnel->outputScope.hasPendingOperations()) {
+    if (finishing && state->tunnel && state->tunnel->ended && !state->tunnel->outputScope.hasPendingOperations()) {
         return;
+    }
+    if (!state->tunnel || state->pool == nullptr || state->tunnel->stopped || !state->tunnel->accepted ||
+        state->abandoned || state->failure || state->errorCode) {
+        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel is closed");
     }
     auto& output = *state->tunnel;
     if (output.outputScope.hasPendingOperations()) {
