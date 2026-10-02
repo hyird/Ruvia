@@ -56,6 +56,7 @@ public:
     ScopedOperation<void> write(std::string_view) && = delete;
     [[nodiscard]] ScopedOperation<void> write(std::span<const std::byte> bytes) &;
     ScopedOperation<void> write(std::span<const std::byte>) && = delete;
+    // A successful finish stays idempotent after transport retirement.
     [[nodiscard]] ScopedOperation<void> finish() &;
     ScopedOperation<void> finish() && = delete;
     void abort() & noexcept;

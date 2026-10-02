@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <string_view>
 
 #if defined(_WIN32) && defined(_DEBUG)
