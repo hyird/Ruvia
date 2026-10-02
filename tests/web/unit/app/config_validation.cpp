@@ -291,7 +291,7 @@ RUVIA_TEST(http3_server_limits_bound_every_downstream_capacity) {
     options = HttpServerOptions{};
     options.maxRequestsPerConnection = 1000;
     RUVIA_CHECK(!rejects(std::move(options)));
-    RUVIA_CHECK_EQ(ruvia::detail::http3WorkerTrackedStreamCapacity(1000), std::size_t{1064});
+    RUVIA_CHECK_EQ(ruvia::detail::http3WorkerTrackedStreamCapacity(1000), std::size_t{1192});
     RUVIA_CHECK_EQ(ruvia::detail::http3TransportLifetimeStreamCapacity(1000), std::size_t{1128});
 
     options = HttpServerOptions{};

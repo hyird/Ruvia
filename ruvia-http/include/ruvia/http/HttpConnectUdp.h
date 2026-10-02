@@ -7,10 +7,19 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia {
+// Already-expanded proxy URI path, borrowed until openUdpTunnel() returns.
+struct HttpClientUdpTunnelRequestView final {
+    std::string_view target{};
+    std::span<const HttpHeaderView> headers{};
+};
+
 struct HttpConnectUdpTargetView final {
     std::string_view host{};
     std::uint16_t port{0};
@@ -47,4 +56,12 @@ struct HttpConnectUdpRequestView final {
 [[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpRequest(HttpConnectUdpRequestView request) noexcept;
 [[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpResponse(
     HttpProtocolVersion version, std::uint16_t status, std::span<const HttpHeaderView> headers) noexcept;
+// Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
+[[nodiscard]] bool isHttpConnectUdpUpgradeRequest(const HttpRequest& request) noexcept;
+[[nodiscard]] std::expected<void, HttpConnectUdpError> validateHttpConnectUdpRequest(const HttpRequest& request) noexcept;
+// Takes application response metadata, validates it, and supplies the required
+// Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
+// can only be produced by this dedicated driver boundary.
+[[nodiscard]] std::expected<HttpResponse, HttpConnectUdpError> prepareHttpConnectUdpResponse(HttpResponse response, HttpProtocolVersion version);
+[[nodiscard]] std::expected<Http1ResponseHeadPlan, HttpConnectUdpError> prepareHttp1ConnectUdpResponseHead(const HttpResponse& response) noexcept;
 }  // namespace ruvia

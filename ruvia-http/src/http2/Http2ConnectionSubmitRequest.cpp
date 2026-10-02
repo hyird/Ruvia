@@ -191,6 +191,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
     const bool withoutContent = content.withoutContent() != nullptr;
     const auto* knownLengthContent = content.knownLengthContent();
     const bool streamingContent = content.streamingContent() != nullptr;
+    const auto expectedLength = knownLengthContent != nullptr ? std::optional{knownLengthContent->length()} : streamingContent ? content.streamingContent()->expectedLength()
+                                                                                                                               : std::nullopt;
     if (!withoutContent && knownLengthContent == nullptr && !streamingContent) {
         return Http2RequestHeadSubmitResult::makeFailure(
             Http2RequestHeadSubmitError::kInvalidMessage);
@@ -207,10 +209,12 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
     } else if (knownLengthContent != nullptr) {
         endStream = knownLengthContent->length() == 0 ? Http2EndStream::kEndStream
                                                       : Http2EndStream::kKeepOpen;
+    }
+    if (expectedLength) {
         // 20 bytes always hold the canonical decimal form of uint64_t. Do this
         // before mutating stream/HPACK state so every rejection is transactional.
         if (const auto [end, ec] = std::to_chars(lengthBuffer.data(),
-                lengthBuffer.data() + lengthBuffer.size(), knownLengthContent->length());
+                lengthBuffer.data() + lengthBuffer.size(), *expectedLength);
             ec == std::errc{}) {
             lengthBytes = static_cast<std::size_t>(end - lengthBuffer.data());
         } else {
@@ -243,7 +247,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
         if (expectation == HttpClientRequestExpectation::kContinue) {
             HpackEncoder::encodeHeader(block, "expect", kHttpContinueExpectationToken);
         }
-        if (knownLengthContent != nullptr) {
+        if (expectedLength) {
             HpackEncoder::encodeHeaderWithNameIndex(block, HpackStaticIndex::kContentLength,
                 std::string_view(lengthBuffer.data(), lengthBytes));
         }
@@ -253,8 +257,8 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(std::stri
         appendResponseHeaderFrames(stream, std::string_view(block), endStream);
         if (withoutContent) {
             stream.beginLocalContentForbidden();
-        } else if (knownLengthContent != nullptr) {
-            stream.beginLocalContentKnownLength(knownLengthContent->length());
+        } else if (expectedLength) {
+            stream.beginLocalContentKnownLength(*expectedLength);
         } else if (streamingContent) {
             stream.beginLocalContentUnbounded();
         }
@@ -392,6 +396,22 @@ std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPr
         stream->assignRequestScheme(request.scheme);
         stream->assignRequestAuthority(request.authority);
         stream->assignRequestPath(request.path);
+        stream->markScheme(httpUriSchemeDefaultPort(request.scheme));
+        stream->markAuthority();
+        stream->markPath();
+        for (const auto& header : request.headers) {
+            const auto kind = classifyRequestHeader(header.name());
+            if (kind == RequestHeaderKind::kHost) {
+                stream->markHost();
+            }
+            if (kind == RequestHeaderKind::kCookie) {
+                if (!http2AppendCookieHeaderValue(*stream, header.value())) {
+                    throw std::length_error("HTTP/2 push request cookie is too large");
+                }
+            } else if (!stream->appendRemoteHeader(header.name(), header.value(), kind)) {
+                throw std::length_error("HTTP/2 push request has too many fields");
+            }
+        }
         (void)stream->recordRemoteHeadEndStream();
         (void)stream->finalizeRemoteContentHead();
         stream->reservePush(Http2PushReservation::kLocal);

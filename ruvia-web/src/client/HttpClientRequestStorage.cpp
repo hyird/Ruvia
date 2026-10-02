@@ -6,6 +6,8 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpAscii.h"
+#include "ruvia/web/detail/client/HttpClientTunnelState.h"
+#include "ruvia/web/detail/client/HttpClientUploadState.h"
 
 namespace ruvia::detail {
 
@@ -14,14 +16,21 @@ HttpClientRequestStorage::HttpClientRequestStorage(
     : method_(method, pmrResourceOrDefault(resource)),
       target_(target, method_.get_allocator().resource()),
       headers_(std::initializer_list<Header>{}, method_.get_allocator().resource()),
-      body_(std::string_view{}, method_.get_allocator().resource()) {}
+      body_(std::string_view{}, method_.get_allocator().resource()),
+      tunnelAuthority_(resource),
+      tunnelProtocol_(resource) {}
 
 HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& other) noexcept
     : method_(std::move(other.method_)),
       target_(std::move(other.target_)),
       headers_(std::move(other.headers_)),
       body_(std::move(other.body_)),
-      hasBody_(std::exchange(other.hasBody_, false)) {
+      tunnelAuthority_(std::move(other.tunnelAuthority_)),
+      tunnelProtocol_(std::move(other.tunnelProtocol_)),
+      isTunnel_(other.isTunnel_),
+      tunnel_(std::exchange(other.tunnel_, nullptr)),
+      hasBody_(std::exchange(other.hasBody_, false)),
+      upload_(std::exchange(other.upload_, nullptr)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
@@ -42,7 +51,21 @@ HttpClientRequestStorage HttpClientRequestStorage::intoResource(
     }
     result.body_.assign(body_);
     result.hasBody_ = hasBody_;
+    result.upload_ = upload_;
+    result.tunnel_ = tunnel_;
+    result.isTunnel_ = isTunnel_;
+    result.tunnelAuthority_.assign(tunnelAuthority_);
+    result.tunnelProtocol_.assign(tunnelProtocol_);
     return result;
+}
+
+void HttpClientRequestStorage::setTunnel(std::string_view authority, std::string_view protocol) {
+    tunnelAuthority_.assign(authority);
+    tunnelProtocol_.assign(protocol);
+    isTunnel_ = true;
+}
+HttpClientOutputQueue* HttpClientRequestStorage::output() const noexcept {
+    return tunnel_ != nullptr ? static_cast<HttpClientOutputQueue*>(tunnel_) : static_cast<HttpClientOutputQueue*>(upload_);
 }
 
 HttpClientRequestStorage& HttpClientRequestStorage::appendHeader(

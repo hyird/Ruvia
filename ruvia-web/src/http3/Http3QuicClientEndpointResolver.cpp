@@ -266,7 +266,7 @@ Task<Http3QuicClientEndpointResolver::Result> Http3QuicClientEndpointResolver::r
     if (result.status == Status::kResolved) {
         for (const auto& entry : outcome.results) {
             const auto endpoint = entry.endpoint();
-            if (!toHttp3QuicDatagramAddress(endpoint) ||
+            if (!to_http3_quic_datagram_address(endpoint) ||
                 std::find(result.endpoints.begin(), result.endpoints.end(), endpoint) !=
                     result.endpoints.end()) {
                 continue;

@@ -15,6 +15,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/HttpTunnelRouteConfig.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 #include "ruvia/web/detail/router/RouteModes.h"
@@ -112,6 +113,9 @@ private:
     void registerSseRoute(HttpKnownMethod method, std::string_view path,
         ControllerRouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> middlewares = {}) const;
+    void registerTunnelRoute(std::string_view protocol, std::string_view target,
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {}, HttpTunnelRouteConfig config = {}) const;
     void registerWebSocketRoute(HttpKnownMethod method, std::string_view path,
         ControllerRouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> middlewares = {},

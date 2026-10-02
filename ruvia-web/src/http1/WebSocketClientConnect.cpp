@@ -62,7 +62,7 @@ Task<void> WebSocketClientState::establishTransport() {
 
 Task<void> WebSocketClientState::performTlsHandshake() {
     const auto tlsSetup = prepareClientTlsStream(
-        stream_, config_.host, config_.transport.view(), ClientAlpnMode::kHttp11);
+        stream_, config_.host, config_.transport.view(), config_.protocol == WebSocketClientProtocol::kHttp2 ? ClientAlpnMode::kHttp2 : ClientAlpnMode::kHttp11);
     if (tlsSetup != ClientTlsSetupError::kNone) {
         throw WebSocketClientError(
             WebSocketClientError::Code::kTlsFailed, clientTlsSetupErrorMessage(tlsSetup));
@@ -78,9 +78,10 @@ Task<void> WebSocketClientState::performTlsHandshake() {
     }
 
     const auto alpn = selectedClientAlpn(stream_.native_handle());
-    if (!alpn.empty() && alpn != "http/1.1") {
+    if ((config_.protocol == WebSocketClientProtocol::kHttp2 && alpn != "h2") ||
+        (config_.protocol == WebSocketClientProtocol::kHttp1 && !alpn.empty() && alpn != "http/1.1")) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
-            "upstream did not negotiate HTTP/1.1 for WebSocket");
+            "upstream did not negotiate the requested HTTP protocol for WebSocket");
     }
 }
 
@@ -95,13 +96,26 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
     state->abortReason_ = AbortReason::kNone;
     state->connectInFlight_ = true;
     try {
-        co_await state->establishTransport();
-        co_await state->performHandshake();
+        if (state->config_.protocol == WebSocketClientProtocol::kHttp3) {
+            state->arm(state->connectTimer_, state->config_.connectTimeout, AbortReason::kTimeout);
+            state->http3_.emplace(*state, state->worker_, state->memory_.resource());
+            co_await state->http3_->connect();
+        } else {
+            co_await state->establishTransport();
+        }
+        if (state->config_.protocol == WebSocketClientProtocol::kHttp2) {
+            state->http2_.emplace(*state, state->worker_, state->memory_.resource());
+            co_await state->http2_->connect();
+        } else if (state->config_.protocol == WebSocketClientProtocol::kHttp1) {
+            co_await state->performHandshake();
+        }
         state->protocol_.emplace(WebSocketConnectionOptions{
             .resource = state->memory_.resource(),
             .messageLimit = ProtocolByteLimit::limited(state->config_.maxMessageBytes),
+            .compression = state->negotiatedCompression_,
             .role = WebSocketConnectionRole::kClient,
-            .maskKeyGenerator = &WebSocketClientState::generateMask});
+            .maskKeyGenerator = &WebSocketClientState::generateMask,
+            .compressionLevel = state->config_.compressionLevel});
         (void)state->protocol_->feed(state->input_);
         std::pmr::string(state->input_.get_allocator()).swap(state->input_);
         state->disarm(state->connectTimer_);
@@ -146,7 +160,7 @@ Task<void> WebSocketClientState::performHandshake() {
         subprotocols.push_back(protocol);
     }
     Http1WebSocketClientHandshake handshake(
-        {.nonce = nonce, .headers = headers, .subprotocols = subprotocols, .userAgent = config_.userAgent},
+        {.nonce = nonce, .headers = headers, .subprotocols = subprotocols, .userAgent = config_.userAgent, .deflate = config_.deflate},
         memory_.resource());
 
     std::array<char, kMaxHttpHeaderBytes + kWebSocketClientHandshakeRequestBufferExtraBytes>
@@ -210,6 +224,7 @@ Task<void> WebSocketClientState::performHandshake() {
                 "invalid WebSocket handshake response");
         }
         selectedSubprotocol_.assign(validated->selectedSubprotocol);
+        negotiatedCompression_ = validated->compression;
         input_.erase(0, parsed->consumedBytes());
         co_return;
     }

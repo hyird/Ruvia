@@ -15,45 +15,45 @@ namespace ruvia::detail {
 
 // Owns the default QUIC context and auxiliary contexts holding preloaded SNI identities.
 // Connections created from the default context must not outlive this object.
-class Http3QuicTlsContext final {
+class http3_quic_tls_context final {
 public:
-    Http3QuicTlsContext(const HttpServerListenerDefinition::Tls& tls,
+    http3_quic_tls_context(const HttpServerListenerDefinition::Tls& tls,
         std::pmr::memory_resource* resource);
-    ~Http3QuicTlsContext();
+    ~http3_quic_tls_context();
 
-    Http3QuicTlsContext(const Http3QuicTlsContext&) = delete;
-    Http3QuicTlsContext& operator=(const Http3QuicTlsContext&) = delete;
-    Http3QuicTlsContext(Http3QuicTlsContext&&) = delete;
-    Http3QuicTlsContext& operator=(Http3QuicTlsContext&&) = delete;
+    http3_quic_tls_context(const http3_quic_tls_context&) = delete;
+    http3_quic_tls_context& operator=(const http3_quic_tls_context&) = delete;
+    http3_quic_tls_context(http3_quic_tls_context&&) = delete;
+    http3_quic_tls_context& operator=(http3_quic_tls_context&&) = delete;
 
-    [[nodiscard]] SSL_CTX* defaultContext() const noexcept {
-        return defaultContext_;
+    [[nodiscard]] SSL_CTX* default_context() const noexcept {
+        return default_context_;
     }
 
 private:
-    struct SniIdentity final {
+    struct sni_identity final {
         std::pmr::string host;
         SSL_CTX* context;
         X509* certificate;
-        EVP_PKEY* privateKey;
+        EVP_PKEY* private_key;
         STACK_OF(X509) * chain;
     };
 
-    static int selectCertificate(SSL* ssl, void* argument) noexcept;
-    static int selectAlpnProtocol(SSL* ssl, const unsigned char** output,
-        unsigned char* outputLength, const unsigned char* input, unsigned int inputLength,
+    static int select_certificate(SSL* ssl, void* argument) noexcept;
+    static int select_alpn_protocol(SSL* ssl, const unsigned char** output,
+        unsigned char* output_length, const unsigned char* input, unsigned int input_length,
         void* argument) noexcept;
 
-    struct ContextDeleter {
+    struct context_deleter {
         void operator()(SSL_CTX* context) const noexcept;
     };
-    using ContextOwner = std::unique_ptr<SSL_CTX, ContextDeleter>;
+    using context_owner = std::unique_ptr<SSL_CTX, context_deleter>;
 
     // Auxiliary contexts own the cert/key/chain that the callback borrows.
-    ContextOwner defaultContextOwner_;
-    std::pmr::vector<ContextOwner> identityContexts_;
-    std::pmr::vector<SniIdentity> sniIdentities_;
-    SSL_CTX* defaultContext_{nullptr};
+    context_owner default_context_owner_;
+    std::pmr::vector<context_owner> identity_contexts_;
+    std::pmr::vector<sni_identity> sni_identities_;
+    SSL_CTX* default_context_{nullptr};
 };
 
 }  // namespace ruvia::detail

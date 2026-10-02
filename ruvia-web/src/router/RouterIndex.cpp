@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <bit>
 
+#include "ruvia/http/HttpConnectUdp.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {
@@ -15,10 +17,43 @@ detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) 
     // An unclassified method can only be served by an extension route, and a
     // classified one can only be served by the enum-indexed structures, so the
     // two lookups never both run.
+    if (isHttpConnectUdpUpgradeRequest(request)) {
+        return resolveConnect("connect-udp", request.path());
+    }
     if (request.knownMethod() == HttpKnownMethod::kUnknown) {
         return resolveExtensionMethod(request.method(), request.path());
     }
     return resolve(request.knownMethod(), request.path());
+}
+
+detail::RouteResolution detail::RouteTable::resolveConnect(std::string_view protocol, std::string_view target) const noexcept {
+    const RouteEntry* fallback = nullptr;
+    for (const auto index : plan_->connectRouteIndices_) {
+        const auto& route = routes_[index];
+        if (route.endpoint().tunnel()->protocol() != protocol) {
+            continue;
+        }
+        if (!route.dynamic() && (protocol.empty() ? httpAuthoritiesEqual(route.path(), target, 0) : route.path() == target)) {
+            return RouteResolution::resolved(route);
+        }
+        if (protocol.empty() && route.path() == "*") {
+            fallback = &route;
+        }
+    }
+    if (!protocol.empty()) {
+        for (const auto& index : plan_->connectProtocols_) {
+            if (index.protocol != protocol) {
+                continue;
+            }
+            RouteMatch match;
+            const auto found = findDynamicNode(index.root, target, match);
+            if (found != kNoRouteIndex) {
+                return RouteResolution::resolved(routes_[found], match);
+            }
+            break;
+        }
+    }
+    return fallback == nullptr ? RouteResolution{} : RouteResolution::resolved(*fallback);
 }
 
 detail::RouteResolution detail::RouteTable::resolveExtensionMethod(
@@ -97,6 +132,9 @@ std::span<const std::string_view> detail::RouteTable::extensionMethodsForServer(
 
 detail::RouteResolution detail::RouteTable::resolve(
     HttpKnownMethod method, std::string_view path) const noexcept {
+    if (method == HttpKnownMethod::kConnect) {
+        return resolveConnect({}, path);
+    }
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
     // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the

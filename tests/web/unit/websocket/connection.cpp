@@ -62,7 +62,7 @@ public:
         return io_->get_executor();
     }
 
-    [[nodiscard]] ruvia::Task<ruvia::detail::WsTransportReadResult> readMore(std::pmr::string&) {
+    [[nodiscard]] ruvia::Task<ruvia::detail::HttpStreamReadResult> readMore(std::pmr::string&) {
         if (std::exchange(state_->suspendNextRead, false)) {
             static_cast<void>(co_await ruvia::asyncAsio<void>([state = state_](auto completion) mutable {
                 state->completeRead = [completion = std::move(completion)]() mutable {
@@ -71,9 +71,9 @@ public:
             }));
         }
         if (state_->readError) {
-            co_return ruvia::detail::WsTransportReadResult::makeFailure(state_->readError);
+            co_return ruvia::detail::HttpStreamReadResult::makeFailure(state_->readError);
         }
-        co_return ruvia::detail::WsTransportReadResult::makeEnd();
+        co_return ruvia::detail::HttpStreamReadResult::makeEnd();
     }
 
     [[nodiscard]] ruvia::Task<std::error_code> writeBytes(

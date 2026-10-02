@@ -363,3 +363,27 @@ RUVIA_TEST(http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline) 
         RUVIA_CHECK(observation.consumption == ruvia::Http1RequestBodyConsumption::kIncomplete);
     }
 }
+
+RUVIA_TEST(http1_body_reader_retains_terminal_fields_before_compacting_pipeline) {
+    auto& io = ruvia::test::newTestIoContext();
+    SegmentedBodyStream stream{&io, {"3\r\nabc\r\n0\r\nx-checksum: first\r\nx-checksum: final\r\n\r\nGET /next HTTP/1.1\r\nHost: x\r\n\r\n"}};
+    ruvia::ConnectionScanner::Entry scanner;
+    std::pmr::monotonic_buffer_resource resource;
+    auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
+    ruvia::detail::StreamBodyReader<SegmentedBodyStream> reader(stream, std::pmr::polymorphic_allocator<char>(&resource), {}, plan,
+        ruvia::ProtocolByteLimit::limited(1024), scanner);
+    auto run = [&]() -> ruvia::Task<void> {
+        RUVIA_CHECK(reader.trailers().fields().empty());
+        std::pmr::string body(&resource);
+        RUVIA_CHECK_EQ(co_await reader.readAll(body), "abc");
+        RUVIA_CHECK_EQ(reader.trailers().field("X-Checksum").value_or(""), "final");
+        RUVIA_CHECK_EQ(reader.trailers().fields().size(), std::size_t{2});
+        std::pmr::string pipeline(&resource);
+        reader.takePipeline(pipeline);
+        RUVIA_CHECK_EQ(pipeline, "GET /next HTTP/1.1\r\nHost: x\r\n\r\n");
+        RUVIA_CHECK_EQ(reader.trailers().fields()[0].value(), "first");
+    };
+    auto future = asio::co_spawn(io, ruvia::asAwaitable(run()), asio::use_future);
+    io.run();
+    future.get();
+}

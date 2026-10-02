@@ -76,7 +76,7 @@ RUVIA_TEST(websocket_client_handshake_prepares_rfc_request) {
     RUVIA_CHECK(wire.find("Host: example.com\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") !=
                 std::string::npos);
-    RUVIA_CHECK(wire.find("Sec-WebSocket-Protocol: chat\r\n") != std::string::npos);
+    RUVIA_CHECK(wire.find("sec-websocket-protocol: chat\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("User-Agent: RuviaTest/1\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("X-Trace: one\r\n") != std::string::npos);
 }
@@ -217,7 +217,7 @@ RUVIA_TEST(websocket_client_handshake_prepares_ipv6_host_and_owns_configuration)
     const std::string wire(prepared.prepared()->head());
     RUVIA_CHECK(wire.find("Host: [2001:db8::1]:8443\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("X-Trace: initial\r\n") != std::string::npos);
-    RUVIA_CHECK(wire.find("Sec-WebSocket-Protocol: chat\r\n") != std::string::npos);
+    RUVIA_CHECK(wire.find("sec-websocket-protocol: chat\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("User-Agent: initial-agent\r\n") != std::string::npos);
 }
 

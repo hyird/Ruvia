@@ -5,10 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/Http3Connection.h"
+#include "ruvia/web/detail/http3/Http3CriticalStreamOutput.h"
 
 namespace ruvia::detail {
 
@@ -16,7 +19,18 @@ struct Http3StreamMessageId final {
     std::uint64_t epoch{};
     std::uint64_t connectionGeneration{};
     std::uint64_t streamId{};
+    // A response on a real server-initiated UNI stream binds its Push ID.
+    // Ordinary request streams leave this empty; critical streams use their
+    // separate mailbox destination and cannot masquerade as pushed responses.
+    std::optional<std::uint64_t> pushId{};
 };
+
+struct Http3CriticalStreamMessageId final {
+    std::uint64_t epoch{};
+    std::uint64_t connectionGeneration{};
+    Http3CriticalStreamOutput::Kind kind{Http3CriticalStreamOutput::Kind::kQpackEncoder};
+};
+using Http3MailboxDestination = std::variant<Http3StreamMessageId, Http3CriticalStreamMessageId>;
 
 struct Http3StreamControl final {
     enum class Kind : std::uint8_t { kConnectionClosed,
@@ -137,18 +151,21 @@ public:
         }
         [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
         [[nodiscard]] const Http3StreamMessageId& id() const noexcept {
-            return id_;
+            return std::get<Http3StreamMessageId>(id_);
+        }
+        [[nodiscard]] const Http3CriticalStreamMessageId* critical() const noexcept {
+            return std::get_if<Http3CriticalStreamMessageId>(&id_);
         }
         void release() noexcept;
 
     private:
         friend class Http3StreamMailbox;
         BorrowedBlock(Http3StreamMailbox* owner, std::uint32_t index, std::size_t size,
-            Http3StreamMessageId id) noexcept;
+            Http3MailboxDestination id) noexcept;
         Http3StreamMailbox* owner_{};
         std::uint32_t index_{};
         std::size_t size_{};
-        Http3StreamMessageId id_{};
+        Http3MailboxDestination id_{};
     };
 
     // Capacities are fixed and preallocated at construction. The resource must outlive the
@@ -171,6 +188,7 @@ public:
     // Single producer only. A failed send consumes neither the input bytes nor a queue slot.
     // While this producer owns a DataReservation, DATA trySend is rejected with
     // kReservationActive; the CONTROL lane remains independently usable.
+    [[nodiscard]] SendResult trySendCritical(Http3CriticalStreamMessageId id, std::span<const std::byte> bytes) noexcept;
     [[nodiscard]] SendResult trySend(Http3StreamMessageId id,
         std::span<const std::byte> bytes) noexcept;
     // Reserves the current DATA slot and one free block before exposing writable
@@ -213,13 +231,14 @@ public:
     [[nodiscard]] std::uint32_t blockCapacity() const noexcept;
 
 private:
+    [[nodiscard]] SendResult sendAddress(Http3MailboxDestination id, std::span<const std::byte> bytes) noexcept;
     struct Block final {
         std::array<std::byte, kMaxBlockBytes> bytes{};
     };
     struct DataSlot final {
         std::uint32_t block{};
         std::uint32_t size{};
-        Http3StreamMessageId id{};
+        Http3MailboxDestination id{};
     };
 
     [[nodiscard]] bool beginPublish() noexcept;

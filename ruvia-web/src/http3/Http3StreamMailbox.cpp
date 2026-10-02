@@ -64,7 +64,7 @@ void Http3StreamMailbox::DataReservation::abort() noexcept {
 }
 
 Http3StreamMailbox::BorrowedBlock::BorrowedBlock(Http3StreamMailbox* owner,
-    std::uint32_t index, std::size_t size, Http3StreamMessageId id) noexcept
+    std::uint32_t index, std::size_t size, Http3MailboxDestination id) noexcept
     : owner_(owner),
       index_(index),
       size_(size),
@@ -139,8 +139,13 @@ Http3StreamMailbox::~Http3StreamMailbox() {
     }
 }
 
-Http3StreamMailbox::SendResult Http3StreamMailbox::trySend(Http3StreamMessageId id,
-    std::span<const std::byte> bytes) noexcept {
+Http3StreamMailbox::SendResult Http3StreamMailbox::trySend(Http3StreamMessageId id, std::span<const std::byte> bytes) noexcept {
+    return sendAddress(id, bytes);
+}
+Http3StreamMailbox::SendResult Http3StreamMailbox::trySendCritical(Http3CriticalStreamMessageId id, std::span<const std::byte> bytes) noexcept {
+    return sendAddress(id, bytes);
+}
+Http3StreamMailbox::SendResult Http3StreamMailbox::sendAddress(Http3MailboxDestination id, std::span<const std::byte> bytes) noexcept {
     if (dataReservationActive_) {
         return SendResult::kReservationActive;
     }

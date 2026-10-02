@@ -31,12 +31,16 @@ Http3ServerStreamInput::Http3ServerStreamInput(Http3SansIoSessionEngine& session
     if (maxTrackedStreams_ == 0) {
         throw std::invalid_argument("HTTP/3 stream input capacity must be greater than zero");
     }
-    streams_.resize(tableCapacity(maxTrackedStreams_));
+    const auto capacity = tableCapacity(maxTrackedStreams_);
+    streams_.reserve(capacity);
+    for (std::size_t i = 0; i < capacity; ++i) {
+        streams_.emplace_back(worker.resource());
+    }
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
     const Http3StreamMailbox::BorrowedBlock& block) noexcept {
-    if (!block) {
+    if (!block || block.critical() != nullptr) {
         return {Status::kInvalidInput};
     }
     const auto& id = block.id();
@@ -60,6 +64,9 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
         return finalSizeFailure();
     }
     const bool resetPending = state->phase == StreamPhase::kResetPending;
+    if (state->qpackBlocked && !resetPending) {
+        return {Status::kInvalidInput};
+    }
     if (state->phase != StreamPhase::kOpen && !resetPending) {
         return {Status::kClosedStream};
     }
@@ -77,6 +84,13 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
     const bool fin = !resetPending && state->finalSize.has_value() &&
                      newWireBytes == *state->finalSize;
     const auto wire = std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    if (state->qpackBlocked && resetPending) {
+        state->wireBytes = newWireBytes;
+        if (newWireBytes == *state->resetPublishedBytes) {
+            return applyPeerReset(id.streamId, *state);
+        }
+        return {Status::kDeferredReset};
+    }
     auto result = feedSession(id.streamId, wire, fin, *state);
     if (result.status == Status::kFed && fin) {
         result.status = Status::kFinished;
@@ -121,7 +135,8 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
             if (state->phase != StreamPhase::kOpen && state->phase != StreamPhase::kFinished) {
                 return {Status::kClosedStream};
             }
-            if ((state->finalSize.has_value() && state->phase != StreamPhase::kFinished) ||
+            if ((state->finalSize.has_value() && state->phase != StreamPhase::kFinished &&
+                    !(state->qpackBlocked && state->pendingFin && *state->finalSize == state->wireBytes)) ||
                 control.value > kHttp3VarIntMax || control.value < state->wireBytes ||
                 (state->phase == StreamPhase::kFinished && control.value != state->wireBytes)) {
                 return finalSizeFailure();
@@ -159,6 +174,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::cancelRequest(std::uint64
     if (state->phase != StreamPhase::kOpen && state->phase != StreamPhase::kFinished) {
         return {Status::kClosedStream};
     }
+    clearQpack(*state);
     state->phase = StreamPhase::kCancelled;
     finishRequestStream(*state);
     // Missing session state is normal before HEADERS or after response release.
@@ -173,6 +189,7 @@ void Http3ServerStreamInput::stop() noexcept {
     stopped_ = true;
     for (auto& slot : streams_) {
         if (slot.occupied) {
+            clearQpack(slot.state);
             slot.state.phase = StreamPhase::kConnectionClosed;
             finishRequestStream(slot.state);
         }
@@ -240,6 +257,10 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptFin(
     if (control.value != state->wireBytes) {
         return {Status::kDeferredFin};
     }
+    if (state->qpackBlocked) {
+        state->pendingFin = true;
+        return {Status::kDeferredQpack};
+    }
     return feedSession(control.id.streamId, {}, true, *state);
 }
 
@@ -247,6 +268,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::applyPeerReset(
     std::uint64_t streamId, StreamState& state) noexcept {
     state.phase = StreamPhase::kReset;
     const auto result = session_.feed(streamId, {}, false, true);
+    clearQpack(state);
     if (isProtocolError(result)) {
         if (result.scope == Http3ConnectionErrorScope::kConnection ||
             result.status == Http3ConnectionStatus::kConnectionError) {
@@ -282,6 +304,23 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::feedSession(std::uint64_t
         return {Status::kProtocolError, result};
     }
     state.wireBytes += bytes.size();
+    if (result.status == Http3ConnectionStatus::kQpackBlocked) {
+        if (result.consumedBytes > bytes.size()) {
+            return finalSizeFailure();
+        }
+        try {
+            state.pendingBytes.assign(bytes.substr(result.consumedBytes));
+        } catch (...) {
+            stop();
+            return {Status::kCapacityExhausted};
+        }
+        if (!state.qpackBlocked) {
+            state.qpackBlocked = true;
+            ++blockedQpackCount_;
+        }
+        state.pendingFin = fin;
+        return {Status::kDeferredQpack, result};
+    }
     if (fin) {
         state.phase = StreamPhase::kFinished;
         finishRequestStream(state);
@@ -325,7 +364,7 @@ Http3ServerStreamInput::StreamState* Http3ServerStreamInput::findOrCreate(
                 return nullptr;
             }
             slot.streamId = streamId;
-            slot.state = {};
+            slot.state = StreamState(streams_.get_allocator().resource());
             slot.state.requestStream = isHttp3RequestStreamId(streamId);
             slot.state.requestActive = slot.state.requestStream;
             slot.occupied = true;
@@ -350,10 +389,77 @@ void Http3ServerStreamInput::closeForConnectionError() noexcept {
     stopped_ = true;
     for (auto& slot : streams_) {
         if (slot.occupied) {
+            clearQpack(slot.state);
             slot.state.phase = StreamPhase::kConnectionClosed;
             finishRequestStream(slot.state);
         }
     }
+}
+
+void Http3ServerStreamInput::clearQpack(StreamState& state) noexcept {
+    if (state.qpackBlocked) {
+        if (blockedQpackCount_ == 0) {
+            std::terminate();
+        }
+        --blockedQpackCount_;
+        state.qpackBlocked = false;
+    }
+    state.pendingFin = false;
+    std::pmr::string(state.pendingBytes.get_allocator()).swap(state.pendingBytes);
+}
+
+bool Http3ServerStreamInput::canAcceptInput(std::uint64_t streamId) const noexcept {
+    if (blockedQpackCount_ == 0) {
+        return true;
+    }
+    for (const auto& slot : streams_) {
+        if (slot.occupied && slot.streamId == streamId) {
+            return !slot.state.qpackBlocked || slot.state.phase == StreamPhase::kResetPending;
+        }
+    }
+    return true;
+}
+
+std::optional<Http3ServerStreamInput::ResumedInput> Http3ServerStreamInput::resumeQpack() noexcept {
+    if (stopped_ || blockedQpackCount_ == 0) {
+        return std::nullopt;
+    }
+    for (std::size_t count = 0; count < streams_.size(); ++count) {
+        auto& slot = streams_[nextQpackResume_];
+        nextQpackResume_ = (nextQpackResume_ + 1) % streams_.size();
+        auto& state = slot.state;
+        if (!slot.occupied || !state.qpackBlocked || !session_.canAcceptInput(slot.streamId, state.pendingBytes.size())) {
+            continue;
+        }
+        const auto result = session_.feed(slot.streamId, state.pendingBytes, state.pendingFin);
+        if (result.status == Http3ConnectionStatus::kQpackBlocked) {
+            if (result.consumedBytes > state.pendingBytes.size()) {
+                return ResumedInput{slot.streamId, finalSizeFailure()};
+            }
+            if (result.consumedBytes == 0) {
+                continue;
+            }
+            state.pendingBytes.erase(0, result.consumedBytes);
+            return ResumedInput{slot.streamId, {Status::kDeferredQpack, result}};
+        }
+        const bool fin = state.pendingFin;
+        clearQpack(state);
+        if (isProtocolError(result)) {
+            if (result.scope == Http3ConnectionErrorScope::kConnection) {
+                closeForConnectionError();
+            } else {
+                state.phase = StreamPhase::kFailed;
+                finishRequestStream(state);
+            }
+            return ResumedInput{slot.streamId, {Status::kProtocolError, result}};
+        }
+        if (fin) {
+            state.phase = StreamPhase::kFinished;
+            finishRequestStream(state);
+        }
+        return ResumedInput{slot.streamId, {fin ? Status::kFinished : Status::kFed, result}};
+    }
+    return std::nullopt;
 }
 
 void Http3ServerStreamInput::finishRequestStream(StreamState& state) noexcept {

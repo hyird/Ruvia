@@ -35,6 +35,7 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3VarInt.h"
@@ -42,6 +43,7 @@
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
 #include "ruvia/web/detail/http3/Http3QuicServerTransport.h"
+#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
 #include "ruvia/web/detail/http3/Http3QuicTlsContext.h"
 
 #include "test_harness.h"
@@ -304,8 +306,7 @@ ruvia::Task<void> exercisePublicHttp3Dispatch(
     attachment.stop();
 }
 
-using TestQuicServer = ruvia::detail::Http3QuicServerTransport;
-using TestQuicAddress = ruvia::detail::Http3QuicDatagramAddress;
+using TestQuicAddress = ruvia::quic_address;
 
 [[nodiscard]] TestQuicAddress testQuicAddress(const Udp::endpoint& endpoint) {
     if (!endpoint.address().is_v4()) {
@@ -313,17 +314,19 @@ using TestQuicAddress = ruvia::detail::Http3QuicDatagramAddress;
     }
     TestQuicAddress address;
     const auto bytes = endpoint.address().to_v4().to_bytes();
-    std::copy(bytes.begin(), bytes.end(), address.address.begin());
+    std::transform(bytes.begin(), bytes.end(), address.bytes.begin(),
+        [](unsigned char value) { return std::byte{value}; });
     address.port = endpoint.port();
     return address;
 }
 
 [[nodiscard]] Udp::endpoint testUdpEndpoint(const TestQuicAddress& address) {
-    if (address.family != TestQuicAddress::Family::kIPv4) {
+    if (address.family != ruvia::quic_address_family::ipv4) {
         throw std::runtime_error("HTTP/3 GOAWAY peer received a non-IPv4 destination");
     }
     asio::ip::address_v4::bytes_type bytes{};
-    std::copy_n(address.address.begin(), bytes.size(), bytes.begin());
+    std::transform(address.bytes.begin(), address.bytes.begin() + bytes.size(), bytes.begin(),
+        [](std::byte value) { return std::to_integer<unsigned char>(value); });
     return {asio::ip::address_v4(bytes), address.port};
 }
 
@@ -425,15 +428,15 @@ private:
 
 class GoAwayRotationPeer final {
     struct Request final {
-        TestQuicServer::StreamId stream{};
+        std::uint64_t stream{};
         std::size_t responseOffset{};
         bool requestFinished{};
         bool responseFinished{};
         bool rejectionResetSent{};
     };
     struct Connection final {
-        TestQuicServer::ConnectionId id{};
-        std::array<std::optional<TestQuicServer::StreamId>, 3> criticalIds{};
+        ruvia::quic_connection_token id{};
+        std::array<std::optional<std::uint64_t>, 3> criticalIds{};
         std::array<std::size_t, 3> criticalOffsets{};
         std::vector<Request> requests;
         std::size_t goAwayOffset{};
@@ -561,9 +564,8 @@ private:
             ruvia::detail::HttpServerListenerDefinition::Tls tls;
             tls.identity.certificateChainFile = identity_.certificate().string();
             tls.identity.privateKeyFile = identity_.privateKey().string();
-            ruvia::detail::Http3QuicTlsContext tlsContext(tls, &resource);
-            ruvia::detail::Http3QuicDatagramBridge bridge(testQuicAddress(endpoint_));
-            TestQuicServer server(tlsContext, bridge);
+            ruvia::detail::http3_quic_tls_context tlsContext(tls, &resource);
+            ruvia::detail::http3_quic_server_transport server(tlsContext, {}, &resource);
             {
                 std::lock_guard lock(mutex_);
                 started_ = true;
@@ -592,73 +594,78 @@ private:
                     if (size == 0) {
                         continue;
                     }
-                    const auto injected = bridge.inject(
-                        std::span<const std::byte>(packet.data(), size), testQuicAddress(source));
-                    if (injected != ruvia::detail::Http3QuicDatagramBridge::InjectResult::kAccepted) {
-                        throw std::runtime_error("HTTP/3 GOAWAY peer rejected an input datagram");
+                    const auto bytes = std::span<const std::byte>(packet.data(), size);
+                    const auto local = ruvia::detail::from_quic_address(testQuicAddress(endpoint_));
+                    const auto remote = ruvia::detail::from_quic_address(testQuicAddress(source));
+                    const auto routed = server.route_datagram(bytes, local, remote);
+                    const auto now = std::chrono::steady_clock::now();
+                    if (routed.kind == ruvia::quic_server_route_kind::initial_offer) {
+                        const auto admitted = server.admit_initial(routed.offer, now);
+                        if (admitted.status == ruvia::quic_operation_status::accepted) {
+                            connections.push_back(Connection{.id = admitted.connection});
+                            acceptedConnections_.store(connections.size(), std::memory_order_release);
+                        }
+                    } else if (routed.kind == ruvia::quic_server_route_kind::existing_connection) {
+                        (void)server.server().receive(routed.connection,
+                            {bytes, testQuicAddress(endpoint_), testQuicAddress(source)}, now);
                     }
                 }
-                if (server.handleEvents() == TestQuicServer::EventResult::kFatal) {
-                    throw std::runtime_error("HTTP/3 GOAWAY peer QUIC event processing failed");
-                }
-                const auto accepted = server.acceptConnections(2);
-                for (std::size_t index = 0; index < accepted.size; ++index) {
-                    connections.push_back(Connection{.id = accepted.ids[index]});
-                    acceptedConnections_.store(connections.size(), std::memory_order_release);
-                }
+                (void)server.server().handle_expiry(std::chrono::steady_clock::now());
 
                 for (std::size_t connectionIndex = 0;
                     connectionIndex < connections.size(); ++connectionIndex) {
                     auto& connection = connections[connectionIndex];
-                    const auto info = server.connectionInfo(connection.id);
-                    if (!info || !info->handshakeComplete || !info->h3Negotiated || info->terminated) {
+                    if (connectionIndex == 0 && retiredRejectedConnection) {
+                        continue;
+                    }
+                    auto& transport = server.server().connection(connection.id);
+                    const auto info = transport.info();
+                    if (!info.quic_handshake_complete || info.state != ruvia::quic_connection_state::ready) {
                         continue;
                     }
                     for (std::size_t index = 0; index < connection.criticalIds.size(); ++index) {
                         if (!connection.criticalIds[index]) {
-                            const auto opened = server.openLocalUnidirectionalStream(connection.id);
-                            if (opened.error != TestQuicServer::Error::kNone) {
+                            const auto opened = transport.open_stream(true);
+                            if (opened.status != ruvia::quic_operation_status::accepted) {
                                 throw std::runtime_error("HTTP/3 GOAWAY peer critical stream open failed");
                             }
-                            connection.criticalIds[index] = opened.id;
+                            connection.criticalIds[index] = opened.stream_id;
                         }
                         auto& offset = connection.criticalOffsets[index];
                         if (offset < criticalBytes_[index].size()) {
-                            const auto written = server.writeStream(connection.id,
-                                *connection.criticalIds[index],
-                                std::span<const char>(criticalBytes_[index]).subspan(offset));
-                            if (written.status == TestQuicServer::StreamWrite::Status::kAccepted) {
-                                offset += written.bytes;
-                            } else if (written.status != TestQuicServer::StreamWrite::Status::kWouldBlock) {
+                            const auto written = transport.write_stream(*connection.criticalIds[index],
+                                std::as_bytes(std::span<const char>(criticalBytes_[index]).subspan(offset)));
+                            if (written.status == ruvia::quic_operation_status::accepted) {
+                                offset += written.accepted;
+                            } else if (written.status != ruvia::quic_operation_status::would_block) {
                                 throw std::runtime_error("HTTP/3 GOAWAY peer critical stream write failed");
                             }
                         }
                     }
 
-                    const auto newlyAccepted = server.acceptStreams(connection.id);
-                    if (newlyAccepted.error != TestQuicServer::Error::kNone &&
-                        newlyAccepted.error != TestQuicServer::Error::kHandshakePending &&
-                        newlyAccepted.error != TestQuicServer::Error::kStreamLimitRetry) {
+                    const auto newlyAccepted = transport.accept_streams();
+                    if (newlyAccepted.status != ruvia::quic_operation_status::accepted &&
+                        newlyAccepted.status != ruvia::quic_operation_status::need_input) {
                         throw std::runtime_error("HTTP/3 GOAWAY peer stream acceptance failed");
                     }
                     for (std::size_t index = 0; index < newlyAccepted.size; ++index) {
                         const auto& stream = newlyAccepted.streams[index];
-                        if (!stream.readable || !stream.writeable) {
+                        if (!stream.readable || !stream.writable) {
                             continue;
                         }
-                        connection.requests.push_back(Request{.stream = stream.id});
+                        connection.requests.push_back(Request{.stream = stream.stream_id});
                         if (connectionIndex == 0) {
                             std::uint64_t unobserved = kUnobservedStream;
                             static_cast<void>(firstRequestStream_.compare_exchange_strong(
-                                unobserved, stream.id, std::memory_order_release,
+                                unobserved, stream.stream_id, std::memory_order_release,
                                 std::memory_order_relaxed));
-                            if (stream.id == 4) {
+                            if (stream.stream_id == 4) {
                                 firstConnectionSawStream4_.store(true, std::memory_order_release);
                             }
                         } else if (connectionIndex == 1) {
                             std::uint64_t unobserved = kUnobservedStream;
                             static_cast<void>(secondRequestStream_.compare_exchange_strong(
-                                unobserved, stream.id, std::memory_order_release,
+                                unobserved, stream.stream_id, std::memory_order_release,
                                 std::memory_order_relaxed));
                         }
                     }
@@ -666,14 +673,13 @@ private:
                     for (auto& request : connection.requests) {
                         if (!request.requestFinished) {
                             for (;;) {
-                                const auto read = server.readStream(connection.id,
-                                    request.stream, requestBytes);
-                                if (read.status == TestQuicServer::StreamRead::Status::kData) {
+                                const auto read = transport.read_stream(request.stream, std::as_writable_bytes(std::span(requestBytes)));
+                                if (read.status == ruvia::quic_stream_read_status::data) {
                                     continue;
                                 }
-                                if (read.status == TestQuicServer::StreamRead::Status::kFin) {
+                                if (read.status == ruvia::quic_stream_read_status::fin) {
                                     request.requestFinished = true;
-                                } else if (read.status != TestQuicServer::StreamRead::Status::kWouldBlock) {
+                                } else if (read.status != ruvia::quic_stream_read_status::would_block) {
                                     throw std::runtime_error("HTTP/3 GOAWAY peer request read failed");
                                 }
                                 break;
@@ -691,15 +697,14 @@ private:
                                 if (connection.criticalOffsets[0] != criticalBytes_[0].size()) {
                                     continue;
                                 }
-                                const auto written = server.writeStream(connection.id,
-                                    *connection.criticalIds[0],
-                                    std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset));
-                                if (written.status == TestQuicServer::StreamWrite::Status::kAccepted) {
-                                    connection.goAwayOffset += written.bytes;
+                                const auto written = transport.write_stream(*connection.criticalIds[0],
+                                    std::as_bytes(std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset)));
+                                if (written.status == ruvia::quic_operation_status::accepted) {
+                                    connection.goAwayOffset += written.accepted;
                                     if (connection.goAwayOffset == goAwayBytes_.size()) {
                                         goAwaySent_.store(true, std::memory_order_release);
                                     }
-                                } else if (written.status != TestQuicServer::StreamWrite::Status::kWouldBlock) {
+                                } else if (written.status != ruvia::quic_operation_status::would_block) {
                                     throw std::runtime_error(
                                         "HTTP/3 GOAWAY replay control write failed");
                                 }
@@ -707,10 +712,10 @@ private:
                                     continue;
                                 }
                             }
-                            const auto reset = server.resetStream(connection.id, request.stream,
+                            const auto reset = transport.reset_stream(request.stream,
                                 static_cast<std::uint64_t>(
                                     ruvia::Http3ConnectionErrorCode::kRequestRejected));
-                            if (reset != TestQuicServer::Error::kNone) {
+                            if (reset != ruvia::quic_operation_status::accepted) {
                                 throw std::runtime_error(
                                     "HTTP/3 GOAWAY replay request reset failed");
                             }
@@ -722,16 +727,15 @@ private:
                             continue;
                         }
                         if (request.responseOffset < responseBytes_.size()) {
-                            const auto written = server.writeStream(connection.id,
-                                request.stream,
-                                std::span<const char>(responseBytes_).subspan(request.responseOffset));
-                            if (written.status == TestQuicServer::StreamWrite::Status::kAccepted) {
-                                request.responseOffset += written.bytes;
-                                if (connectionIndex == 0 && written.bytes != 0) {
+                            const auto written = transport.write_stream(request.stream,
+                                std::as_bytes(std::span<const char>(responseBytes_).subspan(request.responseOffset)));
+                            if (written.status == ruvia::quic_operation_status::accepted) {
+                                request.responseOffset += written.accepted;
+                                if (connectionIndex == 0 && written.accepted != 0) {
                                     firstConnectionApplicationResponseStarted_.store(
                                         true, std::memory_order_release);
                                 }
-                            } else if (written.status != TestQuicServer::StreamWrite::Status::kWouldBlock) {
+                            } else if (written.status != ruvia::quic_operation_status::would_block) {
                                 throw std::runtime_error("HTTP/3 GOAWAY peer response write failed");
                             }
                         }
@@ -742,57 +746,53 @@ private:
                             if (connection.criticalOffsets[0] != criticalBytes_[0].size()) {
                                 continue;
                             }
-                            const auto written = server.writeStream(connection.id,
-                                *connection.criticalIds[0],
-                                std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset));
-                            if (written.status == TestQuicServer::StreamWrite::Status::kAccepted) {
-                                connection.goAwayOffset += written.bytes;
+                            const auto written = transport.write_stream(*connection.criticalIds[0],
+                                std::as_bytes(std::span<const char>(goAwayBytes_).subspan(connection.goAwayOffset)));
+                            if (written.status == ruvia::quic_operation_status::accepted) {
+                                connection.goAwayOffset += written.accepted;
                                 if (connection.goAwayOffset == goAwayBytes_.size()) {
                                     goAwaySent_.store(true, std::memory_order_release);
                                 }
-                            } else if (written.status != TestQuicServer::StreamWrite::Status::kWouldBlock) {
+                            } else if (written.status != ruvia::quic_operation_status::would_block) {
                                 throw std::runtime_error("HTTP/3 GOAWAY peer control write failed");
                             }
                             if (!goAwaySent()) {
                                 continue;
                             }
                         }
-                        const auto finished = server.finishStream(connection.id, request.stream);
-                        if (finished == TestQuicServer::Error::kNone) {
+                        const auto finished = transport.finish_stream(request.stream);
+                        if (finished == ruvia::quic_operation_status::accepted) {
                             request.responseFinished = true;
-                        } else if (finished != TestQuicServer::Error::kWouldBlock) {
+                        } else if (finished != ruvia::quic_operation_status::would_block) {
                             throw std::runtime_error("HTTP/3 GOAWAY peer response FIN failed");
                         }
                     }
                 }
 
-                for (unsigned count = 0; count != 64; ++count) {
-                    ruvia::detail::Http3QuicOutboundDatagram outbound;
-                    const auto result = bridge.takeOutbound(outbound);
-                    if (result == ruvia::detail::Http3QuicDatagramBridge::OutboundResult::kEmpty) {
-                        break;
+                for (std::size_t index = 0; index < connections.size(); ++index) {
+                    if (index == 0 && retiredRejectedConnection) {
+                        continue;
                     }
-                    if (result != ruvia::detail::Http3QuicDatagramBridge::OutboundResult::kReady) {
-                        throw std::runtime_error("HTTP/3 GOAWAY peer outbound datagram failed");
+                    auto& transport = server.server().connection(connections[index].id);
+                    for (unsigned count = 0; count != 64; ++count) {
+                        const auto outbound = transport.write_packet(packet, std::chrono::steady_clock::now());
+                        if (outbound.size == 0) {
+                            break;
+                        }
+                        asio::error_code error;
+                        const auto sent = socket_.send_to(
+                            asio::buffer(packet.data(), outbound.size), testUdpEndpoint(outbound.peer), 0, error);
+                        if (error || sent != outbound.size) {
+                            throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
+                                "send HTTP/3 GOAWAY test datagram");
+                        }
                     }
-                    const auto destination = testUdpEndpoint(outbound.destination);
-                    asio::error_code error;
-                    const auto sent = socket_.send_to(
-                        asio::buffer(outbound.bytes.data(), outbound.bytes.size()), destination, 0, error);
-                    if (error || sent != outbound.bytes.size()) {
-                        throw std::system_error(error ? error : std::make_error_code(std::errc::io_error),
-                            "send HTTP/3 GOAWAY test datagram");
-                    }
-                    bridge.completeOutbound();
                 }
                 if (rejectFirstRequestAsUnprocessed_ && rejectionResetSent() &&
                     !retiredRejectedConnection) {
                     // The reset datagrams are sent; release the rejected QUIC
                     // connection before admitting the replay on a new one.
-                    if (server.retireConnectionLocally(connections.front().id) !=
-                        TestQuicServer::Error::kNone) {
-                        throw std::runtime_error("HTTP/3 GOAWAY peer rejected connection retirement failed");
-                    }
+                    server.retire(connections.front().id);
                     retiredRejectedConnection = true;
                 }
                 {
@@ -803,7 +803,7 @@ private:
                 std::this_thread::sleep_for(1ms);
             }
             for (const auto& connection : connections) {
-                static_cast<void>(server.retireConnectionLocally(connection.id));
+                server.retire(connection.id);
             }
         } catch (...) {
             {

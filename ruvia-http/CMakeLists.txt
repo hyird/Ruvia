@@ -1,3 +1,5 @@
+ruvia_find_ngtcp2_core()
+
 find_package(ZLIB REQUIRED)
 find_package(unofficial-brotli CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
@@ -56,6 +58,8 @@ target_link_libraries(ruvia-http
         unofficial::brotli::brotlidec
         unofficial::brotli::brotlicommon
         ${RUVIA_ZSTD_TARGET}
+    PRIVATE
+        ruvia_http_ngtcp2_core
 )
 
 ruvia_install_target(ruvia-http http)

@@ -307,11 +307,20 @@ public:
         const HttpClientRequestView& request, std::span<char> headBuffer,
         Http1ClientRequestWirePolicy policy = {}) const;
 
+    // RFC 9298 HTTP/1.1 GET Upgrade. Capsule-Protocol is validated; Upgrade and
+    // Connection are driver-owned, and Host remains owned by the writer.
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnectUdp(const HttpOriginView& origin,
+        BorrowedText target, std::span<const HttpHeaderView> headers, std::span<char> headBuffer) const;
+
     [[nodiscard]] Http1ClientRequestPrepareResult prepareStreaming(const HttpOriginView& origin,
         const Http1ClientRequestHeadView& request, std::span<char> headBuffer,
         Http1ClientRequestWirePolicy policy = {}) const;
 
     [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(const HttpOriginView& tunnelOrigin,
+        std::span<const HttpHeaderView> headers, std::span<char> headBuffer,
+        Http1ClientRequestWirePolicy policy = {}) const;
+
+    [[nodiscard]] Http1ClientRequestPrepareResult prepareConnect(BorrowedText authority,
         std::span<const HttpHeaderView> headers, std::span<char> headBuffer,
         Http1ClientRequestWirePolicy policy = {}) const;
 

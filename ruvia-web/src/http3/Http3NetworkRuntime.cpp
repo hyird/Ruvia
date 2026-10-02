@@ -9,6 +9,7 @@
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3PeerStreams.h"
 #include "ruvia/http/Http3StreamFrames.h"
+#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
 #include "ruvia/web/detail/http3/Http3WorkerServer.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
@@ -53,13 +54,15 @@ const HttpServerListenerDefinition::Tls& requireTls(
     return *tls;
 }
 
-Http3QuicServerTransportConfig transportConfig(
-    const HttpServerListenerDefinition& listener,
+ruvia::quic_server_config transportConfig(
     std::span<const Http3NetworkRuntime::WorkerTarget> workers) {
     if (workers.empty()) {
         throw std::invalid_argument("HTTP/3 server network requires at least one worker");
     }
     const auto& first = workers.front();
+    // The QUIC transport parameter follows the normalized per-worker server
+    // timeout (zero disables the local idle deadline); Http3ListenConfig owns
+    // handshake/drain deadlines, not idle policy.
     const auto idleTimeout = first.idleTimeout;
     if (std::ranges::any_of(workers,
             [&first](const Http3NetworkRuntime::WorkerTarget& worker) {
@@ -71,11 +74,15 @@ Http3QuicServerTransportConfig transportConfig(
             })) {
         throw std::invalid_argument("HTTP/3 workers require normalized phase timeouts");
     }
-    return {.maxActiveConnections = totalConnectionCapacity(workers),
-        .maxLifetimePeerStreams =
-            http3TransportLifetimeStreamCapacity(first.maxRequestsPerConnection),
-        .handshakeTimeout = listener.http3->handshakeTimeout,
-        .idleTimeout = idleTimeout};
+    ruvia::quic_server_config config;
+    config.max_active_connections = totalConnectionCapacity(workers);
+    config.max_pending_connections = config.max_active_connections;
+    config.limits.max_lifetime_peer_streams =
+        http3TransportLifetimeStreamCapacity(first.maxRequestsPerConnection);
+    config.local_transport_parameters.idle_timeout_ms =
+        idleTimeout ? static_cast<std::uint64_t>(idleTimeout->count()) : 0;
+    config.local_transport_parameters.max_datagram_frame_size = 65536;
+    return config;
 }
 
 asio::ip::udp::endpoint udpEndpoint(const HttpServerListenerDefinition& listener) {
@@ -83,6 +90,46 @@ asio::ip::udp::endpoint udpEndpoint(const HttpServerListenerDefinition& listener
 }
 
 }  // namespace
+
+bool queue_http3_initial_offer(
+    std::pmr::vector<ruvia::quic_initial_offer>& pending_offers,
+    const ruvia::quic_initial_offer& offer) noexcept {
+    if (std::ranges::any_of(pending_offers, [&offer](const ruvia::quic_initial_offer& pending) {
+            return pending.offer_id == offer.offer_id;
+        }) ||
+        pending_offers.size() == pending_offers.capacity()) {
+        return false;
+    }
+    pending_offers.push_back(offer);
+    return true;
+}
+
+Http3DatagramEndpoint::pump_result send_http3_version_negotiation(
+    ruvia::quic_server& server, ruvia::quic_version_negotiation_plan& plan,
+    Http3DatagramEndpoint& endpoint, std::span<std::byte> packet_buffer) {
+    if (endpoint.send_in_flight()) {
+        return Http3DatagramEndpoint::pump_result::idle;
+    }
+    const auto packet = server.write_version_negotiation(plan, packet_buffer);
+    if (packet.status == ruvia::quic_operation_status::would_block) {
+        return Http3DatagramEndpoint::pump_result::idle;
+    }
+    if (packet.status != ruvia::quic_operation_status::accepted || packet.size == 0 ||
+        packet.size > packet_buffer.size()) {
+        throw std::runtime_error("QUIC server failed to serialize Version Negotiation");
+    }
+    const auto source = to_udp_endpoint(from_quic_address(packet.local));
+    const auto peer = to_udp_endpoint(from_quic_address(packet.peer));
+    if (!source || !peer) {
+        throw std::runtime_error("QUIC Version Negotiation returned invalid UDP addresses");
+    }
+    const auto sent = endpoint.send_datagram(
+        std::span<const std::byte>(packet_buffer).first(packet.size), *source, *peer);
+    if (sent == Http3DatagramEndpoint::pump_result::error) {
+        throw std::system_error(endpoint.error(), "send HTTP/3 Version Negotiation packet");
+    }
+    return sent;
+}
 
 Http3NetworkRuntime::WorkerLink::WorkerLink(std::pmr::memory_resource* resource,
     Http3NetworkRuntime& network, WorkerTarget configured)
@@ -102,7 +149,8 @@ Http3NetworkRuntime::WorkerLink::WorkerLink(std::pmr::memory_resource* resource,
         target.server, &Http3NetworkRuntime::workerWake};
     for (std::size_t i = 0; i < target.maxConnections; ++i) {
         channels.push_back(makePmrObject<Http3ServerConnectionChannel>(
-            resource, networkNotification, workerNotification));
+            resource, networkNotification, workerNotification,
+            network.localSettings_.h3Datagram ? resource : nullptr));
         channelViews.push_back(channels.back().get());
         connections.emplace_back(resource);
     }
@@ -117,10 +165,10 @@ Http3NetworkRuntime::Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRun
       memory_(),
       bindAddress_(listener.endpoint.address()),
       tls_(requireTls(listener), memory_.resource()),
-      wire_(ioContext_, udpEndpoint(listener), tls_, transportConfig(listener, workers),
-          memory_.resource(), {this, [](void* context, Http3QuicServerTransport&) noexcept {
+      wire_(ioContext_, udpEndpoint(listener), tls_, transportConfig(workers),
+          memory_.resource(), {this, [](void* context, http3_quic_server_transport& transport, Http3DatagramEndpoint& endpoint) noexcept {
                                    auto& self = *static_cast<Http3NetworkRuntime*>(context);
-                                   const bool progress = self.protocolPump();
+                                   const bool progress = self.protocolPump(&transport, &endpoint);
                                    if (self.failure_) {
                                        return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
                                    }
@@ -129,13 +177,17 @@ Http3NetworkRuntime::Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRun
                                               : Http3QuicWireOwner::ProtocolPumpResult::kIdle;
                                }}),
       workers_(memory_.resource()),
+      pendingOffers_(memory_.resource()),
       monitorTimer_(ioContext_),
       failureNotification_(failure),
-      drainTimeout_(listener.http3->drainTimeout) {
+      drainTimeout_(listener.http3->drainTimeout),
+      handshakeTimeout_(listener.http3->handshakeTimeout),
+      localSettings_{.qpackMaxTableCapacity = listener.http3->qpack.maxTableCapacity, .qpackBlockedStreams = listener.http3->qpack.maxBlockedStreams, .enableConnectProtocol = true, .h3Datagram = true} {
     if (drainTimeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("HTTP/3 drain timeout must be greater than zero");
     }
     workers_.reserve(workers.size());
+    pendingOffers_.reserve(totalConnectionCapacity(workers));
     for (const auto& worker : workers) {
         workers_.push_back(
             makePmrObject<WorkerLink>(memory_.resource(), memory_.resource(), *this, worker));
@@ -344,7 +396,8 @@ void Http3NetworkRuntime::monitor(const asio::error_code& error) noexcept {
     }
 }
 
-bool Http3NetworkRuntime::protocolPump() noexcept {
+bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
+    Http3DatagramEndpoint* endpoint) noexcept {
     requireOwnerThread();
     if (!running_ && !stopping_) {
         return false;
@@ -354,6 +407,99 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
         bool anyProgress = false;
         bool exhaustedBudget = true;
         transportActivityForPump_ = wire_.consumeTransportActivity();
+        if (transport == nullptr) {
+            transport = wire_.transport();
+        }
+        if (!stopping_ && transport != nullptr && endpoint != nullptr) {
+            const auto now = std::chrono::steady_clock::now();
+            (void)transport->server().handle_expiry(now);
+            if (const auto received = endpoint->receive_slot()) {
+                const auto local = to_http3_quic_datagram_address(received->local_destination);
+                const auto peer = to_http3_quic_datagram_address(received->peer);
+                if (local && peer) {
+                    ruvia::quic_server_route route;
+                    try {
+                        route = transport->route_datagram(received->bytes, *local, *peer);
+                    } catch (const ruvia::quic_error& error) {
+                        if (error.code() != ruvia::quic_error_code::protocol_failure) {
+                            throw;
+                        }
+                    }
+                    if (route.kind == ruvia::quic_server_route_kind::initial_offer) {
+                        (void)queue_http3_initial_offer(pendingOffers_, route.offer);
+                    } else if (route.kind == ruvia::quic_server_route_kind::version_negotiation) {
+                        if (send_http3_version_negotiation(transport->server(),
+                                route.version_negotiation, *endpoint, packetBuffer_) ==
+                            Http3DatagramEndpoint::pump_result::pending) {
+                            anyProgress = true;
+                        }
+                    } else if (route.kind == ruvia::quic_server_route_kind::existing_connection) {
+                        const ruvia::quic_datagram_view datagram{
+                            received->bytes, to_quic_address(*local), to_quic_address(*peer)};
+                        try {
+                            (void)transport->server().receive(route.connection, datagram, now);
+                        } catch (const ruvia::quic_error&) {
+                            for (auto& worker : workers_) {
+                                for (std::size_t index = 0; index < worker->connections.size(); ++index) {
+                                    auto& connection = worker->connections[index];
+                                    if (connection.accepted && connection.transportId == route.connection) {
+                                        if (connection.bindPublished) {
+                                            closeConnection(connection, kProtocolFailureCode);
+                                        } else {
+                                            transport->retire(route.connection);
+                                            connection.accepted = false;
+                                            (void)requestRevoke(*worker, index);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                const auto consumed = endpoint->consume_receive();
+                if (consumed == Http3DatagramEndpoint::pump_result::error) {
+                    throw std::system_error(endpoint->error(), "consume HTTP/3 UDP receive slot");
+                }
+            }
+            for (auto& worker : workers_) {
+                for (std::size_t index = 0; index < worker->connections.size(); ++index) {
+                    auto& connection = worker->connections[index];
+                    if (!connection.accepted) {
+                        continue;
+                    }
+                    try {
+                        const auto info = transport->server().connection(connection.transportId).info();
+                        if (connection.handshakeDeadline && now >= *connection.handshakeDeadline &&
+                            !info.quic_handshake_complete) {
+                            if (connection.bindPublished) {
+                                closeConnection(connection, kProtocolFailureCode);
+                            } else {
+                                (void)retireUnbound(*worker, index);
+                            }
+                            continue;
+                        }
+                        if (info.state == ruvia::quic_connection_state::failed ||
+                            info.state == ruvia::quic_connection_state::retired) {
+                            if (connection.bindPublished) {
+                                closeConnection(connection, kProtocolFailureCode);
+                            } else {
+                                transport->retire(connection.transportId);
+                                connection.accepted = false;
+                                (void)requestRevoke(*worker, index);
+                            }
+                        }
+                    } catch (const ruvia::quic_error&) {
+                        if (connection.bindPublished) {
+                            closeConnection(connection, kProtocolFailureCode);
+                        } else {
+                            transport->retire(connection.transportId);
+                            connection.accepted = false;
+                            (void)requestRevoke(*worker, index);
+                        }
+                    }
+                }
+            }
+        }
         for (std::size_t pass = 0; pass < pumpBudget_; ++pass) {
             bool progress = false;
             if (!workers_.empty()) {
@@ -368,6 +514,44 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
                 break;
             }
             anyProgress = true;
+        }
+
+        if (!stopping_ && transport != nullptr && endpoint != nullptr &&
+            !endpoint->send_in_flight()) {
+            for (auto& worker : workers_) {
+                for (auto& connection : worker->connections) {
+                    if (!connection.accepted) {
+                        continue;
+                    }
+                    try {
+                        auto& quic = transport->server().connection(connection.transportId);
+                        const auto packet = quic.write_packet(packetBuffer_,
+                            std::chrono::steady_clock::now());
+                        if (packet.size == 0) {
+                            continue;
+                        }
+                        const auto source = to_udp_endpoint(from_quic_address(packet.local));
+                        const auto peer = to_udp_endpoint(from_quic_address(packet.peer));
+                        if (!source || !peer || packet.size > packetBuffer_.size()) {
+                            closeConnection(connection, kProtocolFailureCode);
+                            continue;
+                        }
+                        const auto sent = endpoint->send_datagram(
+                            std::span<const std::byte>(packetBuffer_).first(packet.size),
+                            *source, *peer);
+                        if (sent == Http3DatagramEndpoint::pump_result::error) {
+                            throw std::system_error(endpoint->error(), "send HTTP/3 QUIC packet");
+                        }
+                        anyProgress = true;
+                        break;
+                    } catch (const ruvia::quic_error&) {
+                        closeConnection(connection, kProtocolFailureCode);
+                    }
+                }
+                if (endpoint->send_in_flight()) {
+                    break;
+                }
+            }
         }
 
         if (stopping_) {
@@ -408,31 +592,61 @@ bool Http3NetworkRuntime::protocolPump() noexcept {
 }
 
 bool Http3NetworkRuntime::pumpWorker(WorkerLink& worker) noexcept {
-    bool progress = pumpChannels(worker);
+    bool progress = false;
+    try {
+        progress = pumpChannels(worker);
+    } catch (...) {
+        reportFailure(std::current_exception());
+        return false;
+    }
     for (std::size_t i = 0; i < worker.connections.size(); ++i) {
         auto& connection = worker.connections[i];
         if (connection.attached && !connection.closeStarted &&
             !connection.gracefulCloseStarted) {
             auto* transport = wire_.transport();
-            const auto info = transport == nullptr
-                                  ? std::optional<Http3QuicServerTransport::ConnectionInfo>{}
-                                  : transport->connectionInfo(connection.transportId);
-            if (!info || info->terminated) {
-                // Peer CONNECTION_CLOSE and negotiated QUIC idle expiry are
-                // terminal even when there is no request stream left to make a
-                // read/write call observe them. Retire the worker binding and
-                // return its shared connection credit.
+            if (transport == nullptr) {
                 closeConnection(connection, kServerShutdownCode);
                 progress = true;
             } else {
-                progress = pumpInput(worker, i) || progress;
-                progress = pumpOutput(worker, i) || progress;
+                try {
+                    const auto state = transport->server().connection(connection.transportId).info().state;
+                    if (state == ruvia::quic_connection_state::failed ||
+                        state == ruvia::quic_connection_state::retired ||
+                        state == ruvia::quic_connection_state::closing ||
+                        state == ruvia::quic_connection_state::draining) {
+                        closeConnection(connection, kServerShutdownCode);
+                        progress = true;
+                    } else {
+                        progress = pumpInput(worker, i) || progress;
+                        progress = pump_datagrams(worker, i) || progress;
+                        progress = pumpOutput(worker, i) || progress;
+                    }
+                } catch (const ruvia::quic_error&) {
+                    closeConnection(connection, kProtocolFailureCode);
+                    progress = true;
+                } catch (...) {
+                    reportFailure(std::current_exception());
+                    return progress;
+                }
             }
         }
     }
-    progress = pumpResponses(worker) || progress;
+    try {
+        progress = pumpResponses(worker) || progress;
+    } catch (...) {
+        reportFailure(std::current_exception());
+        return progress;
+    }
     for (std::size_t i = 0; i < worker.connections.size(); ++i) {
-        progress = retire(worker, i) || progress;
+        try {
+            progress = retire(worker, i) || progress;
+        } catch (const ruvia::quic_error&) {
+            closeConnection(worker.connections[i], kProtocolFailureCode);
+            progress = true;
+        } catch (...) {
+            reportFailure(std::current_exception());
+            return progress;
+        }
     }
     return progress;
 }
@@ -468,7 +682,8 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
         if (connection.pendingIntentAck) {
             const auto acknowledged = channel.acknowledgeIntentAfterHandoff(
                 connection.identity, connection.pendingIntentAck->token,
-                connection.pendingIntentAck->settlement);
+                connection.pendingIntentAck->settlement,
+                connection.pendingIntentAck->pushStream);
             if (acknowledged == Http3ServerConnectionChannel::Status::kPublished) {
                 connection.pendingIntentAck.reset();
                 progress = true;
@@ -503,24 +718,64 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
                                                   kTransportRetiredSuperseded
                                             : Http3ServerConnectionChannel::IntentSettlement::
                                                   kExecutedHandoff;
+                std::optional<Http3ServerConnection::PushStreamOpenResult> pushStream;
+                if (intent.token.kind == Http3ServerConnection::TransportIntentKind::kOpenPushStream) {
+                    pushStream.emplace();
+                    if (settlement == Http3ServerConnectionChannel::IntentSettlement::kTransportRetiredSuperseded || stopping_) {
+                        pushStream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                    } else if (intent.token.id.pushId && connection.output != nullptr && connection.pushStreams.size() < connection.pushStreams.capacity()) {
+                        try {
+                            auto* transport = wire_.transport();
+                            if (transport == nullptr) {
+                                pushStream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                            } else {
+                                auto& quic = transport->server().connection(connection.transportId);
+                                const auto opened = quic.open_stream(true);
+                                if (opened.status == ruvia::quic_operation_status::accepted) {
+                                    const auto registered = connection.output->registerPushStream(
+                                        opened.stream_id, *intent.token.id.pushId);
+                                    if (registered.status == Http3ServerStreamOutput::Status::kAccepted) {
+                                        *pushStream = {
+                                            .status = Http3ServerConnection::PushStreamOpenResult::Status::kOpened,
+                                            .streamId = opened.stream_id};
+                                        connection.pushStreams.push_back(
+                                            {opened.stream_id, *intent.token.id.pushId});
+                                    } else {
+                                        (void)quic.close_stream(opened.stream_id);
+                                    }
+                                } else if (opened.status != ruvia::quic_operation_status::would_block &&
+                                           opened.status != ruvia::quic_operation_status::need_input) {
+                                    closeConnection(connection, kProtocolFailureCode);
+                                    pushStream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                                }
+                            }
+                        } catch (...) {
+                            closeConnection(connection, kProtocolFailureCode);
+                            pushStream->status = Http3ServerConnection::PushStreamOpenResult::Status::kStopped;
+                        }
+                    }
+                }
                 if (settlement ==
                     Http3ServerConnectionChannel::IntentSettlement::kExecutedHandoff) {
                     if (intent.token.kind ==
                         Http3ServerConnection::TransportIntentKind::kConnectionClose) {
                         closeConnection(connection,
                             intent.connectionErrorCode.value_or(kProtocolFailureCode));
-                    } else {
+                    } else if (intent.token.kind == Http3ServerConnection::TransportIntentKind::kStreamReset) {
                         terminateRequestStream(connection, intent.token.id.streamId,
                             static_cast<std::uint64_t>(intent.streamResetErrorCode));
-                        stopRequestInput(connection, intent.token.id.streamId);
+                        if (!intent.token.id.pushId) {
+                            stopRequestInput(connection, intent.token.id.streamId);
+                        }
                     }
                 }
                 const auto acknowledged = channel.acknowledgeIntentAfterHandoff(
-                    connection.identity, intent.token, settlement);
+                    connection.identity, intent.token, settlement, pushStream);
                 if (acknowledged == Http3ServerConnectionChannel::Status::kFull) {
                     connection.pendingIntentAck = Connection::PendingIntentSettlement{
                         .token = intent.token,
-                        .settlement = settlement};
+                        .settlement = settlement,
+                        .pushStream = pushStream};
                     break;
                 }
                 if (acknowledged != Http3ServerConnectionChannel::Status::kPublished) {
@@ -561,7 +816,7 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
         }
 
         if (connection.bindPublished && connection.admissionSealedPublished &&
-            !connection.drainCompleteReceived && !connection.transportRetiredPublished) {
+            !connection.drainCompleteReceived) {
             Http3ServerConnectionChannel::DrainComplete complete;
             const auto status = channel.receiveDrainComplete(complete);
             if (status == Http3ServerConnectionChannel::Status::kReceived) {
@@ -663,55 +918,74 @@ bool Http3NetworkRuntime::admit(WorkerLink& worker, std::size_t index) noexcept 
     bool progress = false;
     try {
         if (!connection.accepted) {
-            const auto accepted = transport->acceptConnections(1);
-            if (accepted.size == 0) {
+            if (pendingOffers_.empty()) {
                 return false;
             }
-            if (accepted.size != 1) {
-                std::terminate();
+            connection.streams.reserve(ruvia::quic_limits{}.max_streams);
+            connection.pushStreams.reserve(kHttp3ServerPushAllowance);
+            const auto admitted = transport->admit_initial(
+                pendingOffers_.front(), std::chrono::steady_clock::now());
+            if (admitted.status == ruvia::quic_operation_status::would_block ||
+                admitted.status == ruvia::quic_operation_status::need_input) {
+                return false;
             }
-            connection.transportId = accepted.ids[0];
+            pendingOffers_.erase(pendingOffers_.begin());
+            if (admitted.status != ruvia::quic_operation_status::accepted) {
+                return true;
+            }
+            connection.transportId = admitted.connection;
             connection.accepted = true;
+            connection.handshakeDeadline =
+                std::chrono::steady_clock::now() + handshakeTimeout_;
             progress = true;
-            try {
-                // Reuse network records after a terminal event. The QUIC
-                // wrapper cap bounds simultaneously live peer streams; a
-                // separate lifetime cap bounds accepted stream identifiers.
-                connection.streams.reserve(Http3QuicServerTransport::kMaxStreamsPerConnection);
-            } catch (...) {
-                progress = requestRevoke(worker, index) || progress;
-                return retireUnbound(worker, index) || progress;
-            }
         }
 
-        const auto info = transport->connectionInfo(connection.transportId);
-        if (!info) {
-            // Handshake expiry physically retires the transport record inside
-            // the QUIC owner. The worker reservation still needs a revoke ACK.
+        auto& quic = transport->server().connection(connection.transportId);
+        const auto info = quic.info();
+        if (info.state == ruvia::quic_connection_state::failed ||
+            info.state == ruvia::quic_connection_state::retired) {
+            transport->retire(connection.transportId);
             connection.accepted = false;
+            connection.handshakeDeadline.reset();
             return requestRevoke(worker, index) || progress;
         }
-        if (info->terminated ||
-            (info->handshakeComplete &&
-                (!info->h3Negotiated || info->remoteAddress.empty() || info->remotePort == 0))) {
-            progress = requestRevoke(worker, index) || progress;
-            return retireUnbound(worker, index) || progress;
-        }
-        if (!info->handshakeComplete) {
+        const auto tls_info = quic.tls_handshake().info();
+        const bool negotiated_h3 = tls_info.negotiated_alpn.size() == 2 &&
+                                   tls_info.negotiated_alpn[0] == std::byte{static_cast<unsigned char>('h')} &&
+                                   tls_info.negotiated_alpn[1] == std::byte{static_cast<unsigned char>('3')};
+        if (!info.tls_handshake_complete || !info.quic_handshake_complete ||
+            !info.confirmed || !negotiated_h3) {
             return progress;
         }
-
+        const auto peer = to_udp_endpoint(from_quic_address(info.peer_address));
+        if (!peer) {
+            transport->retire(connection.transportId);
+            connection.accepted = false;
+            connection.handshakeDeadline.reset();
+            (void)requestRevoke(worker, index);
+            return true;
+        }
+        const auto remote_address = peer->address().to_string();
         const auto committed = worker.channels[index]->commitAccepted(connection.identity,
-            {.remoteAddress = info->remoteAddress,
-                .clientCertificateSubject = info->clientCertificateSubject,
-                .remotePort = info->remotePort});
+            {.remoteAddress = remote_address,
+                .clientCertificateSubject = {},
+                .remotePort = peer->port()},
+            localSettings_, quic.max_datagram_payload_size());
         if (committed != Http3ServerConnectionChannel::Status::kPublished) {
             reportFailure(std::make_exception_ptr(
                 std::runtime_error("HTTP/3 accepted connection could not publish its Bind")));
             return progress;
         }
+        connection.handshakeDeadline.reset();
         connection.bindPublished = true;
         return true;
+    } catch (const ruvia::quic_error&) {
+        if (connection.accepted) {
+            transport->retire(connection.transportId);
+            connection.accepted = false;
+        }
+        connection.handshakeDeadline.reset();
+        return requestRevoke(worker, index) || progress;
     } catch (...) {
         reportFailure(std::current_exception());
         return progress;
@@ -729,22 +1003,10 @@ bool Http3NetworkRuntime::retireUnbound(WorkerLink& worker, std::size_t index) n
         if (transport == nullptr) {
             return false;
         }
-        const auto info = transport->connectionInfo(connection.transportId);
-        if (!info) {
-            connection.accepted = false;
-            progress = true;
-        } else {
-            // UDP receive/send callbacks borrow only the endpoint and bridge. They
-            // do not reference this connection's SSL state, so a serving socket
-            // must not hold one accepted connection's local retirement hostage.
-            const auto retired = transport->retireConnectionLocally(connection.transportId);
-            if (retired != Http3QuicServerTransport::Error::kNone &&
-                retired != Http3QuicServerTransport::Error::kNoConnection) {
-                return false;
-            }
-            connection.accepted = false;
-            progress = true;
-        }
+        transport->retire(connection.transportId);
+        connection.accepted = false;
+        connection.handshakeDeadline.reset();
+        progress = true;
     }
     return requestRevoke(worker, index) || progress;
 }
@@ -805,9 +1067,10 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
             return true;
         }
         connection.admissionPlanner.emplace(std::move(*planner));
+        auto& quic = transport->server().connection(connection.transportId);
         connection.output = makePmrObject<Http3ServerStreamOutput>(memory_.resource(),
-            *transport, connection.transportId, memory_.resource(),
-            connection.identity.epoch, connection.identity.connectionGeneration,
+            quic, memory_.resource(), connection.identity.epoch,
+            connection.identity.connectionGeneration,
             Http3ServerStreamOutputConfig{
                 .maxTrackedStreams = worker.target.maxRequestsPerConnection,
                 .maxQueuedBlocks = worker.target.mailboxCapacity,
@@ -821,18 +1084,18 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
     return true;
 }
 
-bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexcept {
+bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     auto& transport = *wire_.transport();
+    auto& quic = transport.server().connection(connection.transportId);
     bool progress = false;
 
     const auto critical = connection.critical->drive(
-        [&transport, &connection](Http3CriticalStreamDriver::Kind) {
-            return transport.openLocalUnidirectionalStream(connection.transportId);
+        [&quic](Http3CriticalStreamDriver::Kind) {
+            return quic.open_stream(true);
         },
-        [&transport, &connection](Http3QuicServerTransport::StreamId id,
-            std::span<const char> bytes) {
-            return transport.writeStream(connection.transportId, id, bytes);
+        [&quic](std::uint64_t id, std::span<const char> bytes) {
+            return quic.write_stream(id, std::as_bytes(bytes));
         });
     if (critical == Http3CriticalStreamDriver::Result::kFatal) {
         closeConnection(connection, kProtocolFailureCode);
@@ -843,17 +1106,15 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         connection.goawayBytesAccepted = true;
     }
 
-    const auto accepted = transport.acceptStreams(connection.transportId);
-    if (accepted.error != Http3QuicServerTransport::Error::kNone &&
-        accepted.error != Http3QuicServerTransport::Error::kStreamLimitRetry) {
-        closeConnection(connection,
-            accepted.error == Http3QuicServerTransport::Error::kConnectionPeerStreamLimit
-                ? Http3ConnectionErrorCode::kExcessiveLoad
-                : kProtocolFailureCode);
+    const auto accepted = quic.accept_streams();
+    if (accepted.status != ruvia::quic_operation_status::accepted &&
+        accepted.status != ruvia::quic_operation_status::need_input &&
+        accepted.status != ruvia::quic_operation_status::would_block) {
+        closeConnection(connection, kProtocolFailureCode);
         return true;
     }
     for (std::size_t i = 0; i < accepted.size; ++i) {
-        const auto streamId = accepted.streams[i].id;
+        const auto streamId = accepted.streams[i].stream_id;
         if (!accepted.streams[i].readable ||
             connection.streams.size() >= connection.streams.capacity()) {
             closeConnection(connection, Http3ConnectionErrorCode::kExcessiveLoad);
@@ -922,6 +1183,8 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         if (stream.pendingControl) {
             const auto sent = worker.requestMailbox.trySendControl(*stream.pendingControl);
             if (sent == Http3StreamMailbox::ControlResult::kFull) {
+                progress |= worker.requestMailbox.armCapacityWait(Http3StreamMailbox::CapacityInterest::kControl) ==
+                            Http3StreamMailbox::CapacityWaitResult::kReady;
                 continue;
             }
             if (sent == Http3StreamMailbox::ControlResult::kStopped) {
@@ -935,10 +1198,11 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
             if (!stream.requestStream) {
                 auto* streamTransport = wire_.transport();
                 const auto closed = streamTransport == nullptr
-                                        ? Http3QuicServerTransport::Error::kNoConnection
-                                        : streamTransport->closeStream(connection.transportId, stream.id);
-                if (closed != Http3QuicServerTransport::Error::kNone &&
-                    closed != Http3QuicServerTransport::Error::kNoStream) {
+                                        ? ruvia::quic_operation_status::retired
+                                        : streamTransport->server().connection(connection.transportId).close_stream(stream.id);
+                if (closed != ruvia::quic_operation_status::accepted &&
+                    closed != ruvia::quic_operation_status::completed &&
+                    closed != ruvia::quic_operation_status::retired) {
                     closeConnection(connection, kProtocolFailureCode);
                     return true;
                 }
@@ -981,6 +1245,8 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         const auto reserved = worker.requestMailbox.reserveData(messageId, reservation);
         if (reserved == Http3StreamMailbox::ReservationResult::kFull ||
             reserved == Http3StreamMailbox::ReservationResult::kNoBlock) {
+            progress |= worker.requestMailbox.armCapacityWait(Http3StreamMailbox::CapacityInterest::kData) ==
+                        Http3StreamMailbox::CapacityWaitResult::kReady;
             continue;
         }
         if (reserved != Http3StreamMailbox::ReservationResult::kReserved) {
@@ -990,9 +1256,9 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
         auto writableBytes = reservation.writableBytes();
         auto writable = std::span<char>(reinterpret_cast<char*>(writableBytes.data()),
             writableBytes.size());
-        const auto read = transport.readStream(connection.transportId, stream.id, writable);
+        const auto read = quic.read_stream(stream.id, std::as_writable_bytes(writable));
         switch (read.status) {
-            case Http3QuicServerTransport::StreamRead::Status::kData: {
+            case ruvia::quic_stream_read_status::data: {
                 if (read.size == 0 || read.size > writable.size() ||
                     read.size > std::numeric_limits<std::uint64_t>::max() -
                                     stream.receivedBytes) {
@@ -1037,10 +1303,10 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                 progress = true;
                 break;
             }
-            case Http3QuicServerTransport::StreamRead::Status::kWouldBlock:
+            case ruvia::quic_stream_read_status::would_block:
                 reservation.abort();
                 break;
-            case Http3QuicServerTransport::StreamRead::Status::kFin:
+            case ruvia::quic_stream_read_status::fin:
                 reservation.abort();
                 if (stream.frameTracker) {
                     // FIN observation is only needed to retire this duplicate
@@ -1065,7 +1331,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                 };
                 progress = true;
                 break;
-            case Http3QuicServerTransport::StreamRead::Status::kReset:
+            case ruvia::quic_stream_read_status::reset:
                 reservation.abort();
                 noteInputReset(connection, stream.id);
                 stream.frameTracker.reset();
@@ -1078,7 +1344,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
                     .id = messageId,
                     .value = stream.receivedBytes,
                     .streamResetErrorCode = static_cast<Http3ConnectionErrorCode>(
-                        read.peerResetErrorCode.value_or(static_cast<std::uint64_t>(
+                        read.peer_reset_error_code.value_or(static_cast<std::uint64_t>(
                             Http3ConnectionErrorCode::kRequestCancelled))),
                 };
                 progress = true;
@@ -1111,7 +1377,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) noexc
 }
 
 void Http3NetworkRuntime::terminateRequestStream(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId, std::uint64_t errorCode) noexcept {
+    std::uint64_t streamId, std::uint64_t errorCode) {
     bool terminateDirectly = connection.output == nullptr;
     if (connection.output != nullptr) {
         const auto beforeCancel = connection.output->streamInfo(streamId);
@@ -1159,12 +1425,14 @@ void Http3NetworkRuntime::terminateRequestStream(Connection& connection,
         closeConnection(connection, kProtocolFailureCode);
         return;
     }
-    const auto termination = transport->terminateBidirectionalStream(
-        connection.transportId, streamId, errorCode);
-    if ((termination.send != Http3QuicServerTransport::Error::kNone &&
-            termination.send != Http3QuicServerTransport::Error::kNoStream) ||
-        (termination.close != Http3QuicServerTransport::Error::kNone &&
-            termination.close != Http3QuicServerTransport::Error::kNoStream)) {
+    try {
+        const auto status = transport->server().connection(connection.transportId).terminate_bidirectional_stream(streamId, errorCode);
+        if (status != ruvia::quic_operation_status::accepted &&
+            status != ruvia::quic_operation_status::completed &&
+            status != ruvia::quic_operation_status::retired) {
+            closeConnection(connection, kProtocolFailureCode);
+        }
+    } catch (...) {
         closeConnection(connection, kProtocolFailureCode);
     }
 }
@@ -1200,7 +1468,7 @@ Http3NetworkRuntime::acceptTunnelEstablished(Connection& connection,
 }
 
 bool Http3NetworkRuntime::confirmTunnelEstablished(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId,
+    std::uint64_t streamId,
     std::uint64_t acceptedWireBytes) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
@@ -1220,7 +1488,7 @@ bool Http3NetworkRuntime::confirmTunnelEstablished(Connection& connection,
 }
 
 void Http3NetworkRuntime::notePeerFin(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId) noexcept {
+    std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
     if (found != connection.streams.end()) {
@@ -1229,7 +1497,7 @@ void Http3NetworkRuntime::notePeerFin(Connection& connection,
 }
 
 void Http3NetworkRuntime::noteInputReset(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId) noexcept {
+    std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
     if (found == connection.streams.end()) {
@@ -1251,7 +1519,7 @@ void Http3NetworkRuntime::noteInputReset(Connection& connection,
 }
 
 void Http3NetworkRuntime::completeInputTerminal(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId) noexcept {
+    std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
     if (found == connection.streams.end()) {
@@ -1268,7 +1536,7 @@ void Http3NetworkRuntime::completeInputTerminal(Connection& connection,
 }
 
 void Http3NetworkRuntime::stopRequestInput(Connection& connection,
-    Http3QuicServerTransport::StreamId streamId) noexcept {
+    std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
     if (found == connection.streams.end()) {
@@ -1326,7 +1594,7 @@ bool Http3NetworkRuntime::sealAdmission(WorkerLink& worker, std::size_t index) n
 }
 
 bool Http3NetworkRuntime::rejectRequestStream(WorkerLink& worker, std::size_t index,
-    Http3QuicServerTransport::StreamId streamId) noexcept {
+    std::uint64_t streamId) {
     auto& connection = worker.connections[index];
     if (connection.rejectedRequestCount >= kHttp3PostGoawayRequestAllowance) {
         closeConnection(connection, Http3ConnectionErrorCode::kExcessiveLoad);
@@ -1337,17 +1605,66 @@ bool Http3NetworkRuntime::rejectRequestStream(WorkerLink& worker, std::size_t in
         closeConnection(connection, kProtocolFailureCode);
         return false;
     }
-    const auto termination = transport->terminateBidirectionalStream(connection.transportId,
-        streamId, static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestRejected));
-    if ((termination.send != Http3QuicServerTransport::Error::kNone &&
-            termination.send != Http3QuicServerTransport::Error::kNoStream) ||
-        (termination.close != Http3QuicServerTransport::Error::kNone &&
-            termination.close != Http3QuicServerTransport::Error::kNoStream)) {
+    const auto status = transport->server().connection(connection.transportId).terminate_bidirectional_stream(streamId, static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestRejected));
+    if (status != ruvia::quic_operation_status::accepted &&
+        status != ruvia::quic_operation_status::completed &&
+        status != ruvia::quic_operation_status::retired) {
         closeConnection(connection, kProtocolFailureCode);
         return false;
     }
     ++connection.rejectedRequestCount;
     return true;
+}
+
+bool Http3NetworkRuntime::pump_datagrams(WorkerLink& worker, std::size_t index) {
+    auto& connection = worker.connections[index];
+    auto& quic = wire_.transport()->server().connection(connection.transportId);
+    auto& channel = *worker.channels[index];
+    bool progress{};
+    std::array<std::byte, Http3ServerConnectionChannel::kMaxDatagramBytes> input{};
+    for (std::size_t count = 0; count < Http3ServerConnectionChannel::kDatagramCapacity; ++count) {
+        const auto result = quic.read_datagram(input);
+        if (result.status == ruvia::quic_datagram_status::would_block ||
+            result.status == ruvia::quic_datagram_status::unavailable) {
+            break;
+        }
+        progress = true;
+        if (result.status != ruvia::quic_datagram_status::received) {
+            continue;
+        }
+        const auto bytes = std::span<const std::byte>(input).first(result.size);
+        const auto decoded = decodeHttp3Datagram({reinterpret_cast<const char*>(bytes.data()), bytes.size()});
+        if (!decoded) {
+            closeConnection(connection, static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
+            break;
+        }
+        const auto stream = std::ranges::find(connection.streams, decoded->streamId, &Stream::id);
+        const auto planned = planHttp3DatagramReceive(*decoded,
+            {.localH3Datagram = localSettings_.h3Datagram,
+                .streamExists = stream != connection.streams.end(),
+                .receiveOpen = stream != connection.streams.end() && !stream->inputTerminal && !stream->inputReset,
+                .supportsDatagrams = stream != connection.streams.end() && stream->tunnelEstablished});
+        if (planned == Http3DatagramReceiveStatus::kConnectionError) {
+            closeConnection(connection, static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
+            break;
+        }
+        if (planned == Http3DatagramReceiveStatus::kDeliver) {
+            (void)channel.publishRequestDatagram(connection.identity, decoded->streamId, bytes);
+        }
+    }
+    for (std::size_t count = 0; count < Http3ServerConnectionChannel::kDatagramCapacity; ++count) {
+        Http3ServerConnectionChannel::Datagram output;
+        if (channel.receiveResponseDatagram(output) != Http3ServerConnectionChannel::Status::kReceived) {
+            break;
+        }
+        progress = true;
+        if (output.identity.epoch != connection.identity.epoch ||
+            output.identity.connectionGeneration != connection.identity.connectionGeneration) {
+            continue;
+        }
+        (void)quic.write_datagram(std::span<const std::byte>(output.bytes).first(output.size));
+    }
+    return progress;
 }
 
 bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
@@ -1404,14 +1721,25 @@ bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
             break;
         }
         if (worker.pendingResponse) {
-            auto* connection = findConnection(worker, worker.pendingResponse->id());
+            const auto* critical = worker.pendingResponse->critical();
+            auto* connection = critical
+                                   ? findConnection(worker, critical->epoch, critical->connectionGeneration)
+                                   : findConnection(worker, worker.pendingResponse->id());
             if (connection == nullptr || connection->output == nullptr) {
                 worker.pendingResponse->release();
                 worker.pendingResponse.reset();
                 ++processed;
                 progress = true;
             } else {
-                const auto result = connection->output->acceptData(*worker.pendingResponse);
+                const auto critical_stream = critical && connection->critical
+                                                 ? connection->critical->streamId(critical->kind)
+                                                 : std::nullopt;
+                if (critical && !critical_stream) {
+                    break;  // The local critical stream must be opened before output handoff.
+                }
+                const auto result = critical
+                                        ? connection->output->acceptCriticalData(*worker.pendingResponse, *critical_stream)
+                                        : connection->output->acceptData(*worker.pendingResponse);
                 if (result.status == Http3ServerStreamOutput::Status::kBackpressured) {
                     break;
                 }
@@ -1454,7 +1782,7 @@ bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
     return progress;
 }
 
-bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) noexcept {
+bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     if (connection.output == nullptr) {
         return false;
@@ -1536,7 +1864,7 @@ bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) noex
            connection.tunnelHandshakeScanRemaining != 0;
 }
 
-bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept {
+bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     if (!connection.accepted || !connection.bindPublished || !connection.attachResolved ||
         connection.transportRetiredPublished) {
@@ -1569,37 +1897,51 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept
     if (transport == nullptr) {
         return false;
     }
-    bool forceLocalRetirement = connection.gracefulCloseStarted &&
-                                connection.gracefulCloseAbandoned;
-    Http3QuicServerTransport::ConnectionCloseResult close{};
-    if (connection.gracefulCloseStarted && !forceLocalRetirement) {
-        close = transport->requestGracefulConnectionClose(connection.transportId);
-        if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kFailure) {
+    auto& quic = transport->server().connection(connection.transportId);
+    bool forceLocalRetirement = stopping_ || connection.gracefulCloseAbandoned;
+    const auto state = quic.info().state;
+    if (state == ruvia::quic_connection_state::failed) {
+        forceLocalRetirement = true;
+    }
+    if (state != ruvia::quic_connection_state::retired &&
+        state != ruvia::quic_connection_state::closing &&
+        state != ruvia::quic_connection_state::draining) {
+        static constexpr std::string_view graceful_reason = "HTTP/3 drain complete";
+        static constexpr std::string_view close_reason = "HTTP/3 connection closed";
+        const auto reason = connection.gracefulCloseStarted ? graceful_reason : close_reason;
+        try {
+            const auto close = quic.close({
+                .kind = ruvia::quic_close_kind::application,
+                .code = static_cast<std::uint64_t>(
+                    connection.closeErrorCode.value_or(kServerShutdownCode)),
+                .reason = {reason.data(), reason.size()},
+            });
+            if (close == ruvia::quic_operation_status::would_block ||
+                close == ruvia::quic_operation_status::need_input) {
+                if (!forceLocalRetirement) {
+                    return false;
+                }
+            }
+            if (close != ruvia::quic_operation_status::accepted &&
+                close != ruvia::quic_operation_status::completed &&
+                close != ruvia::quic_operation_status::closing &&
+                close != ruvia::quic_operation_status::draining &&
+                close != ruvia::quic_operation_status::retired) {
+                connection.gracefulCloseAbandoned = true;
+                forceLocalRetirement = true;
+            }
+        } catch (const ruvia::quic_error&) {
             connection.gracefulCloseAbandoned = true;
             forceLocalRetirement = true;
-        } else if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kPending) {
-            return false;
-        } else if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kConflict) {
-            std::terminate();
-        } else if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kNoConnection) {
-            forceLocalRetirement = true;
-        }
-    } else if (connection.closeStarted && !forceLocalRetirement) {
-        close = transport->requestConnectionClose(connection.transportId,
-            connection.closeErrorCode.value_or(kServerShutdownCode));
-        if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kConflict) {
-            // closeConnection() latches the rapid-path reason before the first
-            // transport call; a different retry would violate owner state.
-            std::terminate();
-        }
-        if (close.status == Http3QuicServerTransport::ConnectionCloseStatus::kPending) {
-            return false;
         }
     }
+    if (!forceLocalRetirement &&
+        quic.info().state != ruvia::quic_connection_state::retired) {
+        return false;
+    }
 
-    // The UDP send span is bridge-owned and receives never borrow this SSL. The
-    // output owner below separately proves that no stream write retry still
-    // borrows request memory before its records are released.
+    // Stop the stream writer before retiring its connection so all borrowed
+    // mailbox blocks are returned only after Core accepts or invalidates writes.
     if (connection.output != nullptr) {
         const auto stopped = connection.output->stop();
         if (stopped.status == Http3ServerStreamOutput::Status::kUnsafeToRelease) {
@@ -1608,11 +1950,7 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept
         connection.output.reset();
     }
     connection.critical.reset();
-    const auto retired = transport->retireConnectionLocally(connection.transportId);
-    if (retired != Http3QuicServerTransport::Error::kNone &&
-        retired != Http3QuicServerTransport::Error::kNoConnection) {
-        return false;
-    }
+    transport->retire(connection.transportId);
     if (worker.channels[index]->publishTransportRetired(connection.identity) !=
         Http3ServerConnectionChannel::Status::kPublished) {
         std::terminate();
@@ -1624,9 +1962,14 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) noexcept
 
 Http3NetworkRuntime::Connection* Http3NetworkRuntime::findConnection(
     WorkerLink& worker, Http3StreamMessageId id) noexcept {
-    const auto found = std::ranges::find_if(worker.connections, [&id](const Connection& value) {
-        return value.attached && value.identity.epoch == id.epoch &&
-               value.identity.connectionGeneration == id.connectionGeneration;
+    return findConnection(worker, id.epoch, id.connectionGeneration);
+}
+
+Http3NetworkRuntime::Connection* Http3NetworkRuntime::findConnection(
+    WorkerLink& worker, std::uint64_t epoch, std::uint64_t generation) noexcept {
+    const auto found = std::ranges::find_if(worker.connections, [epoch, generation](const Connection& value) {
+        return value.attached && value.identity.epoch == epoch &&
+               value.identity.connectionGeneration == generation;
     });
     return found == worker.connections.end() ? nullptr : &*found;
 }
@@ -1637,16 +1980,22 @@ void Http3NetworkRuntime::closeConnection(Connection& connection,
         return;
     }
     if (connection.gracefulCloseStarted) {
-        // Once SSL_shutdown_ex has entered graceful mode its flags cannot be
-        // changed. The owner instead waits for all borrowed output to quiesce
-        // and performs local retirement.
         connection.gracefulCloseAbandoned = true;
         return;
     }
     connection.closeStarted = true;
     connection.closeErrorCode = reason;
     if (auto* transport = wire_.transport(); transport != nullptr) {
-        (void)transport->requestConnectionClose(connection.transportId, reason);
+        static constexpr std::string_view close_reason = "HTTP/3 connection closing";
+        try {
+            (void)transport->server().connection(connection.transportId).close({
+                .kind = ruvia::quic_close_kind::application,
+                .code = static_cast<std::uint64_t>(reason),
+                .reason = {close_reason.data(), close_reason.size()},
+            });
+        } catch (...) {
+            connection.gracefulCloseAbandoned = true;
+        }
     }
 }
 

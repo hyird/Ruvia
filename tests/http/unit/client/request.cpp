@@ -199,7 +199,7 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
     if (prepared != nullptr) {
         RUVIA_CHECK(prepared->head() ==
                     "CONNECT example.test:443 HTTP/1.1\r\n"
-                    "Host: example.test\r\n\r\n");
+                    "Host: example.test:443\r\n\r\n");
         RUVIA_CHECK(prepared->contentPlan().withoutContent() != nullptr);
     }
 
@@ -209,7 +209,7 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
     RUVIA_CHECK(ipv6.prepared() != nullptr);
     if (ipv6.prepared() != nullptr) {
         RUVIA_CHECK(
-            ipv6.prepared()->head().starts_with("CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]\r\n"));
+            ipv6.prepared()->head().starts_with("CONNECT [::1]:443 HTTP/1.1\r\nHost: [::1]:443\r\n"));
     }
 
     std::array<char, 128> invalidBuffer;

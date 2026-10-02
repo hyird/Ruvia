@@ -33,11 +33,15 @@ struct WebSocketClientConfigStorage final {
               ValidatedConfigTag{}, validate(source), pmrResourceOrDefault(resource)) {}
 
     WebSocketScheme scheme;
+    WebSocketClientProtocol protocol;
     std::pmr::string host;
     std::optional<std::uint16_t> port;
     std::pmr::string target;
     std::pmr::vector<WebSocketClientStoredHeader> headers;
     std::pmr::vector<std::pmr::string> subprotocols;
+    WebSocketClientDeflateOffer deflate{};
+    int compressionLevel{6};
+    Http3QpackConfig qpack{};
     std::size_t maxMessageBytes;
     std::chrono::milliseconds connectTimeout;
     std::optional<std::chrono::milliseconds> readTimeout;
@@ -59,11 +63,15 @@ private:
     WebSocketClientConfigStorage(ValidatedConfigTag, const WebSocketClientConfig& source,
         std::pmr::memory_resource* resource)
         : scheme(source.scheme),
+          protocol(source.protocol),
           host(source.host, resource),
           port(source.port),
           target(source.target, resource),
           headers(resource),
           subprotocols(resource),
+          deflate(source.deflate),
+          compressionLevel(source.compressionLevel),
+          qpack(source.qpack),
           maxMessageBytes(source.maxMessageBytes),
           connectTimeout(source.connectTimeout),
           readTimeout(source.readTimeout),

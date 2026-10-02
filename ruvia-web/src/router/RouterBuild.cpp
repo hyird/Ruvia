@@ -119,6 +119,12 @@ void detail::RouteTable::captureRouteIdentities() {
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kResponseStream;
             identity.responseStreamKind = stream->kind();
             identity.streamInvoke = stream->handler().invoke();
+        } else if (const auto* tunnel = endpoint.tunnel()) {
+            identity.endpointKind = CompiledRoutePlan::EndpointKind::kTunnel;
+            identity.streamInvoke = tunnel->handler().invoke();
+            identity.tunnelProtocol = tunnel->protocol();
+            identity.tunnelPeerTransportFinTimeoutMs = tunnel->config().peerTransportFinTimeout.count();
+            identity.tunnelDatagrams = tunnel->config().datagrams;
         } else {
             const auto& webSocket = *endpoint.webSocket();
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kWebSocket;
@@ -203,6 +209,11 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
                 identity.endpointKind == CompiledRoutePlan::EndpointKind::kResponseStream &&
                 identity.responseStreamKind == stream->kind() &&
                 identity.streamInvoke == stream->handler().invoke();
+        } else if (const auto* tunnel = endpoint.tunnel()) {
+            endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kTunnel &&
+                              identity.streamInvoke == tunnel->handler().invoke() && identity.tunnelProtocol == tunnel->protocol() &&
+                              identity.tunnelPeerTransportFinTimeoutMs == tunnel->config().peerTransportFinTimeout.count() &&
+                              identity.tunnelDatagrams == tunnel->config().datagrams;
         } else {
             const auto& webSocket = *endpoint.webSocket();
             const auto pingIntervalMs = webSocket.lifecycle().heartbeat.pingInterval.has_value()
@@ -258,7 +269,9 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
         }
         for (std::size_t j = i + 1; j < routes.size(); ++j) {
             const auto& right = routes[j];
-            if (!right.dynamic() || left.method() != right.method()) {
+            if (!right.dynamic() || left.method() != right.method() ||
+                (left.endpoint().tunnel() != nullptr && right.endpoint().tunnel() != nullptr &&
+                    left.endpoint().tunnel()->protocol() != right.endpoint().tunnel()->protocol())) {
                 continue;
             }
             if (RouteTable::sameDynamicShape(left.path(), right.path())) {
@@ -389,6 +402,9 @@ void detail::RouterImpl::buildRouteTable(
     }
 
     for (std::size_t i = 0; i < table.routes_.size(); ++i) {
+        if (table.routes_[i].endpoint().tunnel() != nullptr) {
+            table.ownedPlan_->connectRouteIndices_.push_back(i);
+        }
         if (table.routes_[i].method() == HttpKnownMethod::kUnknown) {
             table.ownedPlan_->extensionRouteIndices_.push_back(i);
         }

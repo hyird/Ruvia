@@ -13,6 +13,9 @@
 #include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/web/Http3QpackConfig.h"
+#include "ruvia/web/HttpClientAdvertisementConfig.h"
+#include "ruvia/web/HttpClientPushConfig.h"
 #include "ruvia/web/TlsPeerVerification.h"
 
 namespace ruvia {
@@ -56,6 +59,9 @@ struct HttpClientConfig final {
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{kDefaultMaxBufferedBodyBytes};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
+    Http3QpackConfig qpack{};
+    HttpClientAdvertisementConfig advertisements{};
+    HttpClientPushConfig push{};
     TlsPeerVerificationPolicy tlsPeerVerification{TlsPeerVerificationPolicy::kVerify};
     TcpNoDelayPolicy tcpNoDelay{TcpNoDelayPolicy::kEnable};
     TcpKeepAlivePolicy tcpKeepAlive{TcpKeepAlivePolicy::kEnable};
@@ -106,6 +112,9 @@ struct HttpClientStats final {
     std::size_t failedRequests{0};
     std::size_t bytesSent{0};
     std::size_t bytesReceived{0};
+    std::size_t droppedAdvertisements{0};
+    std::size_t receivedPushes{0};
+    std::size_t rejectedPushes{0};
 };
 
 }  // namespace ruvia

@@ -26,7 +26,7 @@ public:
         return stream_.get_executor();
     }
 
-    [[nodiscard]] Task<WsTransportReadResult> readMore(std::pmr::string& buffer) {
+    [[nodiscard]] Task<HttpStreamReadResult> readMore(std::pmr::string& buffer) {
         const auto oldSize = buffer.size();
         ::ruvia::resizePmrStringForOverwrite(buffer, oldSize + 4096);
         auto readCompletion = co_await ruvia::asyncAsio<std::size_t>([this, oldSize, &buffer](
@@ -38,14 +38,14 @@ public:
         const auto bytesRead = readCompletion.result();
         if (ec) {
             buffer.resize(oldSize);
-            co_return WsTransportReadResult::makeFailure(ec);
+            co_return HttpStreamReadResult::makeFailure(ec);
         }
         if (bytesRead == 0) {
             buffer.resize(oldSize);
-            co_return WsTransportReadResult::makeEnd();
+            co_return HttpStreamReadResult::makeEnd();
         }
         buffer.resize(oldSize + bytesRead);
-        co_return WsTransportReadResult::makeData();
+        co_return HttpStreamReadResult::makeData();
     }
 
     [[nodiscard]] Task<std::error_code> writeBytes(

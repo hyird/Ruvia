@@ -36,7 +36,7 @@ struct HttpLazyBufferedBodyRouteState final {
     }
 
     [[nodiscard]] ContextServices withLoader(ContextServices services) noexcept {
-        return services.withLazyRequestBody(body->facade());
+        return services.withLazyRequestBody(body->facade()).withRequestTrailers(body->loader().trailers());
     }
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {

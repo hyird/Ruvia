@@ -35,6 +35,11 @@ Http3ServerRequest::Http3ServerRequest(const Http3MessageHead& callbackHead,
       cookies_(normalizedResource(requestResource)),
       body_(normalizedResource(bodyPool)) {
     copyHead(head_, callbackHead);
+    for (const auto& field : head_.headers) {
+        if (field.name == "expect") {
+            expectations_.parseField(field.value);
+        }
+    }
     buildRequest();
 }
 

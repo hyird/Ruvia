@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -23,17 +25,16 @@ namespace ruvia::detail {
 // App/workers. The io_context and borrowed TLS context must outlive this owner.
 class Http3QuicWireOwner final {
 public:
-    using Clock = Http3QuicServerTransport::Clock;
+    using Clock = std::chrono::steady_clock;
 
-    enum class ProtocolPumpResult : std::uint8_t {
-        kIdle,
+    enum class ProtocolPumpResult : std::uint8_t { kIdle,
         kProgress,
-        kFatal,
-    };
+        kFatal };
 
     struct ProtocolPump final {
         void* context{};
-        ProtocolPumpResult (*drive)(void*, Http3QuicServerTransport&) noexcept {};
+        ProtocolPumpResult (*drive)(void*, http3_quic_server_transport&,
+            Http3DatagramEndpoint&) noexcept {};
     };
 
     struct StopStatus final {
@@ -41,25 +42,24 @@ public:
         bool socketDone{};
         bool timerHandlersRetired{};
         bool transportDestroyed{};
-        bool bridgeLeaseReleased{};
         bool sendInFlight{};
         bool failed{};
 
         [[nodiscard]] bool complete() const noexcept {
             return stopping && socketDone && timerHandlersRetired && transportDestroyed &&
-                   bridgeLeaseReleased && !sendInFlight;
+                   !sendInFlight;
         }
     };
 
     // timerHandlerResource is borrowed through owner destruction and supplies
     // the associated allocator for timer waits and their retirement posts.
     Http3QuicWireOwner(asio::io_context& networkIo,
-        Http3DatagramEndpoint::Udp::endpoint bindEndpoint, Http3QuicTlsContext& tls,
-        Http3QuicServerTransportConfig transportConfig = {},
+        Http3DatagramEndpoint::udp::endpoint bindEndpoint, http3_quic_tls_context& tls,
+        ruvia::quic_server_config transportConfig = {},
         std::pmr::memory_resource* timerHandlerResource = nullptr);
     Http3QuicWireOwner(asio::io_context& networkIo,
-        Http3DatagramEndpoint::Udp::endpoint bindEndpoint, Http3QuicTlsContext& tls,
-        Http3QuicServerTransportConfig transportConfig,
+        Http3DatagramEndpoint::udp::endpoint bindEndpoint, http3_quic_tls_context& tls,
+        ruvia::quic_server_config transportConfig,
         std::pmr::memory_resource* timerHandlerResource, ProtocolPump protocolPump);
     ~Http3QuicWireOwner();
 
@@ -68,9 +68,9 @@ public:
     Http3QuicWireOwner(Http3QuicWireOwner&&) = delete;
     Http3QuicWireOwner& operator=(Http3QuicWireOwner&&) = delete;
 
-    // Bind UDP, lease the BIO bridge, and construct/listen the QUIC transport
-    // without receiving packets or scheduling timers. Called once on the owner
-    // thread before the application's serving barrier is released.
+    // Bind UDP and construct the HTTP QUIC server without receiving packets or
+    // scheduling timers. Called once on the owner thread before the application's
+    // serving barrier is released.
     // Failure starts shutdown and is rethrown; pollStop() must complete before
     // destruction, just as after a failed start().
     void prepare();
@@ -91,15 +91,15 @@ public:
     void pollStop() noexcept;
     [[nodiscard]] StopStatus stopStatus() const noexcept;
     [[nodiscard]] std::uint16_t boundPort() const noexcept;
-    [[nodiscard]] Http3QuicServerTransport* transport() noexcept {
+    [[nodiscard]] http3_quic_server_transport* transport() noexcept {
         return transport_ ? &*transport_ : nullptr;
     }
     [[nodiscard]] bool outboundQuiescent() const noexcept {
-        return endpoint_.outboundQuiescent();
+        return endpoint_.outbound_quiescent();
     }
     [[nodiscard]] bool socketIoQuiescent() const noexcept {
         requireOwnerThread();
-        return endpoint_.socketDone() && !endpoint_.sendInFlight();
+        return endpoint_.socket_done() && !endpoint_.send_in_flight();
     }
     [[nodiscard]] bool consumeTransportActivity() noexcept {
         requireOwnerThread();
@@ -156,10 +156,10 @@ private:
     };
 
     static void endpointNotification(void* context,
-        Http3DatagramEndpoint::NotificationKind kind) noexcept;
+        Http3DatagramEndpoint::notification_kind kind) noexcept;
 
     void requireOwnerThread() const noexcept;
-    void onEndpointNotification(Http3DatagramEndpoint::NotificationKind kind) noexcept;
+    void onEndpointNotification(Http3DatagramEndpoint::notification_kind kind) noexcept;
     void drive() noexcept;
     void updateDeadline();
     void reconcileTimer() noexcept;
@@ -177,14 +177,13 @@ private:
 
     std::thread::id ownerThread_;
     asio::io_context& networkIo_;
-    Http3QuicTlsContext& tls_;
-    Http3QuicServerTransportConfig transportConfig_;
+    http3_quic_tls_context& tls_;
+    ruvia::quic_server_config transportConfig_;
     Http3DatagramEndpoint endpoint_;
     asio::steady_timer timer_;
     std::pmr::polymorphic_allocator<std::byte> timerHandlerAllocator_;
     ProtocolPump protocolPump_{};
-    std::optional<Http3DatagramEndpoint::BridgeLease> bridgeLease_;
-    std::optional<Http3QuicServerTransport> transport_;
+    std::optional<http3_quic_server_transport> transport_;
     std::optional<Clock::time_point> desiredDeadline_;
     std::optional<Clock::time_point> armedDeadline_;
     std::exception_ptr failure_;
@@ -204,7 +203,6 @@ private:
     bool timerWakeOutstanding_{};
     bool timerHandlersRetired_{true};
     bool transportDestroyed_{true};
-    bool bridgeLeaseReleased_{true};
     bool transportRetirementReleased_{true};
     bool transportActivity_{};
 };

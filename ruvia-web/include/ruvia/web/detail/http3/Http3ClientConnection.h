@@ -1,5 +1,6 @@
 #pragma once
-
+#include <array>
+#include <bitset>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +23,10 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpDatagram.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/web/HttpClientPushConfig.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/http3/Http3ClientBodyBudget.h"
@@ -34,6 +37,24 @@
 #include "ruvia/web/detail/http3/Http3QuicClientSocketSession.h"
 
 namespace ruvia::detail {
+
+struct Http3ClientOriginObserver final {
+    void* context{};
+    std::size_t connectionSlot{};
+    void (*receive)(void*, std::size_t, const HttpOriginAdvertisement&){};
+};
+
+class Http3ClientConnection;
+// A pool accepts promises into its independent response-memory domain. receive
+// returns one retained state reference for the connection; finished balances
+// the pool's active-push admission. Neither callback may drive the protocol.
+struct Http3ClientPushObserver final {
+    void* context{};
+    std::size_t connectionSlot{};
+    HttpClientPushConfig config{};
+    HttpClientResponseState* (*receive)(void*, std::size_t, Http3ClientConnection&, std::uint64_t, const Http3MessageHead&){};
+    void (*finished)(void*) noexcept {};
+};
 
 // One address-stable connection backend owned by its HTTP client pool. The
 // pool's TaskScope owns its sole DNS/QUIC driver Task; request waiters never
@@ -94,7 +115,7 @@ public:
     // leases; null selects the connection-local budget, which is detached with
     // the response before this connection can be destroyed.
     Http3ClientConnection(asio::io_context& io, const WorkerHandle& worker,
-        TaskScope& poolTasks, Http3QuicClientTlsContext& tls, HttpOriginView origin,
+        TaskScope& poolTasks, http3_quic_client_tls_context& tls, HttpOriginView origin,
         std::chrono::milliseconds connectTimeout,
         std::pmr::memory_resource* resource, std::size_t maxRequests = 32,
         std::size_t maxResponseBytes = 16 * 1024 * 1024,
@@ -102,12 +123,12 @@ public:
         Http3ClientBodyBudget* receiveBodyBudget = nullptr,
         std::optional<std::chrono::milliseconds> writeTimeout = std::chrono::seconds(30));
     Http3ClientConnection(asio::io_context& io, const WorkerHandle& worker,
-        TaskScope& poolTasks, Http3QuicClientTlsContext& tls, HttpOriginView origin,
+        TaskScope& poolTasks, http3_quic_client_tls_context& tls, HttpOriginView origin,
         std::chrono::milliseconds connectTimeout, std::pmr::memory_resource* resource,
         std::size_t maxRequests, std::size_t maxResponseBytes,
         std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
         std::optional<std::chrono::milliseconds> writeTimeout,
-        LifecycleNotification lifecycleNotification);
+        LifecycleNotification lifecycleNotification, Http3QpackConfig qpack = {}, Http3ClientOriginObserver originObserver = {}, Http3ClientPushObserver pushObserver = {});
     ~Http3ClientConnection();
     Http3ClientConnection(const Http3ClientConnection&) = delete;
     Http3ClientConnection& operator=(const Http3ClientConnection&) = delete;
@@ -130,6 +151,7 @@ public:
     void start();
     void startIfNeeded();
     void cancel(RequestId id) noexcept;
+    [[nodiscard]] bool reprioritize(RequestId id, HttpPriority priority);
     [[nodiscard]] Task<void> wait(RequestId id);
     [[nodiscard]] const Response* result(RequestId id) const noexcept;
     [[nodiscard]] bool release(RequestId id) noexcept;
@@ -142,6 +164,8 @@ public:
     [[nodiscard]] bool releaseResponseRequest(RequestId id) noexcept;
     void abandonResponse(RequestId id) noexcept;
     void consumerReleased(RequestId id) noexcept;
+    [[nodiscard]] HttpDatagramSessionConfig datagramConfig(RequestId id) const;
+    [[nodiscard]] bool sendDatagram(RequestId id, std::span<const std::byte> wire);
     // Consumes a peer-rejected or locally unstarted terminal request after all waiters leave.
     // For a bound public response, detaches its empty response state without publishing the
     // rejection so the pool can retry once; any observed response data makes handoff unsafe.
@@ -154,7 +178,6 @@ public:
     }
     [[nodiscard]] bool accepting() const noexcept {
         return !stopping_ && !draining_ && !terminal_ &&
-               (!session_ || !session_->transport().requestBudgetExhausted()) &&
                requests_.size() < maxRequests_;
     }
     [[nodiscard]] bool terminal() const noexcept {
@@ -189,6 +212,7 @@ private:
         Response response;
         std::optional<TimePoint> deadline;
         std::optional<TimePoint> writeDeadline;
+        std::optional<TimePoint> continueDeadline;
         std::size_t waiters{};
         HttpClientResponseState* responseState_{};
         std::optional<Http3ClientResponseDelivery> delivery{};
@@ -197,10 +221,34 @@ private:
         bool streamRetired{};
         bool cancelRequested{};
     };
+    struct Push final {
+        RequestId id{};
+        std::uint64_t pushId{};
+        std::optional<std::uint64_t> streamId{};
+        std::optional<TimePoint> deadline{};
+        HttpClientResponseState* state{};
+        std::optional<Http3ClientResponseDelivery> delivery{};
+        bool cancelRequested{};
+        bool peerCancelled{};
+    };
+    struct PeerPushStream final {
+        std::uint64_t pushId{};
+        std::uint64_t streamId{};
+        std::optional<TimePoint> deadline{};
+    };
+    using PushList = std::pmr::list<Push>;
+    static constexpr std::size_t kMaxRememberedPushes = 128;
     using RequestList = std::pmr::list<Request>;
     using SessionOwner = std::unique_ptr<Http3QuicClientSocketSession,
         PmrObjectDeleter<Http3QuicClientSocketSession>>;
 
+    static void onPushEvent(void* context, const Http3ConnectionEvent& event);
+    [[nodiscard]] PushList::iterator findPush(RequestId id) noexcept;
+    [[nodiscard]] PushList::iterator findPushByStream(std::uint64_t streamId) noexcept;
+    void finishPush(PushList::iterator push, Outcome outcome);
+    void settlePush(std::uint64_t pushId) noexcept;
+    [[nodiscard]] bool sweepPushes();
+    [[nodiscard]] bool flushPushControl();
     void requireOwnerThread() const;
     static void onReceiveBodyBudgetReleased(void* context) noexcept;
     static void onResponseEvent(void* context, const Http3ConnectionEvent& event);
@@ -214,12 +262,14 @@ private:
     [[nodiscard]] bool sweep(bool requestsMayStart);
     [[nodiscard]] bool receivePeerStreams();
     [[nodiscard]] bool receiveRequests();
+    [[nodiscard]] bool receiveDatagrams();
     [[nodiscard]] bool driveRequestWriters();
+    [[nodiscard]] bool driveCriticalOutput();
     void finishRequest(Request& request, Outcome outcome);
     void maybeReleaseResponseRequest(Request& request) noexcept;
     void reapReleasedResponseRequests() noexcept;
     void finishAll(Outcome outcome) noexcept;
-    [[nodiscard]] bool retireRequest(Request& request) noexcept;
+    [[nodiscard]] bool retireRequest(Request& request, bool graceful = false) noexcept;
     [[nodiscard]] std::optional<TimePoint> nextDeadline(
         std::optional<TimePoint> connectDeadline) const noexcept;
 
@@ -227,7 +277,7 @@ private:
     asio::io_context& io_;
     const WorkerHandle& worker_;
     TaskScope& poolTasks_;
-    Http3QuicClientTlsContext& tls_;
+    http3_quic_client_tls_context& tls_;
     std::pmr::memory_resource* resource_;
     std::pmr::string host_;
     std::pmr::string authority_;
@@ -243,11 +293,23 @@ private:
     Http3ClientBodyBudget bodyBudget_;
     Http3ClientBodyBudget* receiveBodyBudget_{};
     LifecycleNotification lifecycleNotification_{};
+    Http3ClientOriginObserver originObserver_{};
+    Http3ClientPushObserver pushObserver_{};
     Http3ClientSansIoSessionEngine responseEngine_;
     Http3ClientReceiveDriver receiver_;
+    std::array<std::pmr::string, 3> criticalOutput_;
+    std::array<std::size_t, 3> criticalOutputOffset_{};
+    std::array<std::optional<TimePoint>, 3> criticalWriteDeadlines_{};
     SessionOwner session_;
     Http3ClientBodyBudget::WakeRegistration receiveBodyBudgetWake_;
     RequestList requests_;
+    PushList pushes_;
+    std::pmr::vector<PeerPushStream> peerPushStreams_;
+    std::bitset<kMaxRememberedPushes> seenPushes_{};
+    std::bitset<kMaxRememberedPushes> settledPushes_{};
+    std::bitset<kMaxRememberedPushes> cancelledPushes_{};
+    std::uint64_t authorizedPushId_{};
+    std::size_t pendingPushCredits_{};
     std::pmr::vector<std::uint64_t> peerStreams_;
     RequestId nextRequestId_{};
     std::size_t retainedResultBodyBytes_{};

@@ -9,6 +9,10 @@
 
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/Http3RequestWriter.h"
+#include "ruvia/web/detail/client/HttpClientTunnelState.h"
+#include "ruvia/web/detail/client/HttpClientUploadState.h"
+#include "ruvia/web/detail/http3/Http3ClientSansIoSessionEngine.h"
 
 namespace ruvia::detail {
 
@@ -22,8 +26,9 @@ Http3ClientRequestWrite::Http3ClientRequestWrite(PreparedTag,
     std::pmr::memory_resource* resource, HttpClientRequestStorage&& request,
     std::pmr::string&& scheme,
     std::pmr::string&& authority, std::pmr::vector<char>&& headers,
-    Http3DataWritePlan dataPlan) noexcept
+    Http3DataWritePlan dataPlan, Http3FieldSectionLimits limits) noexcept
     : workerPool_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+      fieldLimits_(limits),
       request_(std::move(request)),
       scheme_(std::move(scheme)),
       authority_(std::move(authority)),
@@ -47,6 +52,7 @@ Http3ClientRequestWrite& Http3ClientRequestWrite::requireNoOutstandingSegment(
 
 Http3ClientRequestWrite::Http3ClientRequestWrite(Http3ClientRequestWrite&& other)
     : workerPool_(requireNoOutstandingSegment(other).workerPool_),
+      fieldLimits_(other.fieldLimits_),
       request_(std::move(other.request_)),
       scheme_(std::move(other.scheme_), workerPool_),
       authority_(std::move(other.authority_), workerPool_),
@@ -59,7 +65,7 @@ Http3ClientRequestWrite::Http3ClientRequestWrite(Http3ClientRequestWrite&& other
       chunkPending_(other.chunkPending_),
       requestTaken_(other.requestTaken_) {
     if (chunkPending_) {
-        chunk_.payload = request_.body().substr(bodyOffset_, chunk_.payload.size());
+        chunk_.payload = (request_.output() != nullptr ? std::string_view(request_.output()->chunk) : request_.body()).substr(bodyOffset_, chunk_.payload.size());
     }
     other.state_ = State::kFailed;
     other.requestTaken_ = true;
@@ -100,15 +106,22 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
         for (const auto& field : HttpClientRequestStorageAccess::headers(*preparedRequest)) {
             fields.push_back({field.name, field.value, false});
         }
+        const auto* upload = preparedRequest->upload();
+        if (upload != nullptr && upload->config.expectation == HttpClientRequestExpectation::kContinue) {
+            if (std::ranges::any_of(fields, [](const auto& field) { return field.name == "expect"; })) {
+                return std::unexpected(Error::kInvalidRequest);
+            }
+            fields.push_back({"expect", "100-continue", false});
+        }
         const auto target = preparedRequest->target();
-        if (preparedRequest->method() == "CONNECT") {
-            // The buffered client has no tunnel lifecycle or bidirectional
-            // streaming API; a valid CONNECT head alone cannot offer one.
+        if (preparedRequest->method() == "CONNECT" && !preparedRequest->isTunnel()) {
             return std::unexpected(Error::kUnsupportedTunnel);
         }
-        if (target.empty() || (target.front() != '/' && target != "*") ||
-            target.find('#') != std::string_view::npos) {
+        if (!preparedRequest->isTunnel() && (target.empty() || (target.front() != '/' && target != "*") || target.find('#') != std::string_view::npos)) {
             return std::unexpected(Error::kInvalidRequest);
+        }
+        if (preparedRequest->isTunnel()) {
+            ownedAuthority.assign(preparedRequest->tunnelAuthority());
         }
         // Request framing is method-independent (RFC 9110 section 9.3.2).
         // HEAD suppresses response payload, not explicitly supplied request
@@ -131,13 +144,18 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
         // An explicitly declared length on a bodyless request must agree with
         // the actual zero-byte FIN, without adding Content-Length: 0 to every
         // GET/HEAD lacking that field.
-        const std::optional<std::uint64_t> bodyLength = sendsBody
-                                                            ? std::optional<std::uint64_t>(preparedRequest->body().size())
-                                                        : hasDeclaredLength ? std::optional<std::uint64_t>(0)
-                                                                            : std::nullopt;
-        auto encoded = encodeHttp3ClientRequestHead({preparedRequest->method(),
-                                                        ownedScheme, ownedAuthority, target, fields, bodyLength},
-            limits, resource);
+        const std::optional<std::uint64_t> bodyLength = upload != nullptr ? upload->config.contentLength : sendsBody       ? std::optional<std::uint64_t>(preparedRequest->body().size())
+                                                                                                       : hasDeclaredLength ? std::optional<std::uint64_t>(0)
+                                                                                                                           : std::nullopt;
+        // Extended CONNECT cannot be encoded before received SETTINGS authorize
+        // it. Keep an unbounded cursor with no provisional wire head; the sole
+        // connection driver encodes and validates it before the first write.
+        auto encoded = [&]() -> std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> {
+            if (preparedRequest->isTunnel() && !preparedRequest->tunnelProtocol().empty()) {
+                return Http3ClientRequestHead(resource);
+            }
+            return encodeHttp3ClientRequestHead({preparedRequest->method(), preparedRequest->isTunnel() ? std::string_view{} : std::string_view(ownedScheme), ownedAuthority, target, fields, bodyLength}, limits, resource);
+        }();
         if (!encoded) {
             return std::unexpected(Error::kRequestEncoding);
         }
@@ -162,16 +180,56 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
             HttpClientRequestStorage retired(std::move(request));
             return std::expected<Http3ClientRequestWrite, Error>(std::in_place, PreparedTag{}, resource,
                 std::move(*normalizedRequest), std::move(ownedScheme), std::move(ownedAuthority),
-                std::move(headers), std::move(dataPlan));
+                std::move(headers), std::move(dataPlan), limits);
         }
         return std::expected<Http3ClientRequestWrite, Error>(std::in_place, PreparedTag{}, resource,
             std::move(request), std::move(ownedScheme), std::move(ownedAuthority),
-            std::move(headers), std::move(dataPlan));
+            std::move(headers), std::move(dataPlan), limits);
     } catch (const std::bad_alloc&) {
         return std::unexpected(Error::kOutOfMemory);
     } catch (...) {
         return std::unexpected(Error::kRequestEncoding);
     }
+}
+
+bool Http3ClientRequestWrite::prepareConnectionHead(std::uint64_t streamId, Http3ClientSansIoSessionEngine& engine) {
+    if (state_ != State::kHeaders || offered_ || segmentOffset_ != 0) {
+        return false;
+    }
+    if (engine.peerSettings() && engine.peerSettings()->maxFieldSectionSize) {
+        fieldLimits_.maxDecodedBytes = static_cast<std::size_t>(std::min<std::uint64_t>(fieldLimits_.maxDecodedBytes, *engine.peerSettings()->maxFieldSectionSize));
+    }
+    if (!request_.isTunnel() && (!engine.peerSettings() || (engine.peerSettings()->qpackMaxTableCapacity == 0 && !engine.peerSettings()->maxFieldSectionSize))) {
+        return true;
+    }
+    std::pmr::vector<Http3FieldSectionFieldView> fields(workerPool_);
+    for (const auto& field : HttpClientRequestStorageAccess::headers(request_)) {
+        fields.push_back({field.name, field.value, false});
+    }
+    if (request_.upload() != nullptr && request_.upload()->config.expectation == HttpClientRequestExpectation::kContinue) {
+        fields.push_back({"expect", "100-continue", false});
+    }
+    const auto length = request_.upload() != nullptr ? request_.upload()->config.contentLength : HttpClientRequestStorageAccess::hasBody(request_) ? std::optional<std::uint64_t>{request_.body().size()}
+                                                                                                                                                   : std::nullopt;
+    const auto encoded = engine.encodeRequestHead(streamId, {.method = request_.method(),
+                                                                .scheme = request_.isTunnel() && request_.tunnelProtocol().empty() ? std::string_view{} : std::string_view(scheme_),
+                                                                .authority = authority_,
+                                                                .path = request_.target(),
+                                                                .fields = fields,
+                                                                .bodyLength = length,
+                                                                .protocol = request_.tunnelProtocol(),
+                                                                .peerEnableConnectProtocol = engine.peerSettings() && engine.peerSettings()->enableConnectProtocol});
+    if (!encoded) {
+        return false;
+    }
+    headers_.resize(kHttp3FrameHeaderMaxBytes + encoded->fieldSection.size());
+    const auto prefix = encodeHttp3FrameHeader(headers_, static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection.size());
+    if (!prefix) {
+        return false;
+    }
+    headers_.resize(*prefix + encoded->fieldSection.size());
+    std::copy(encoded->fieldSection.begin(), encoded->fieldSection.end(), headers_.begin() + static_cast<std::ptrdiff_t>(*prefix));
+    return true;
 }
 
 std::expected<Http3ClientRequestWrite::Segment, Http3ClientRequestWrite::Error>
@@ -186,7 +244,7 @@ Http3ClientRequestWrite::next() noexcept {
         if (auto result = prepareData(); !result) {
             return std::unexpected(result.error());
         }
-        if (state_ == State::kFin) {
+        if (state_ == State::kFin || (state_ == State::kDataHeader && !chunkPending_)) {
             return Segment{};
         }
     }
@@ -198,6 +256,7 @@ Http3ClientRequestWrite::next() noexcept {
 Http3ClientRequestWrite::Segment Http3ClientRequestWrite::activeSegment() const noexcept {
     switch (state_) {
         case State::kHeaders:
+        case State::kTrailers:
             return Segment(headers_).subspan(segmentOffset_);
         case State::kDataHeader:
             return Segment(chunk_.frameHeader.data(), chunk_.frameHeaderSize).subspan(segmentOffset_);
@@ -212,13 +271,33 @@ std::expected<void, Http3ClientRequestWrite::Error> Http3ClientRequestWrite::pre
     if (!dataPlan_ || state_ != State::kDataHeader || chunkPending_) {
         return std::unexpected(Error::kInvalidState);
     }
-    const auto body = request_.body();
+    auto* upload = request_.output();
+    if (upload != nullptr) {
+        if (upload->stopped || (request_.tunnel() != nullptr ? !request_.tunnel()->accepted : !request_.upload()->contentReleased) || (!upload->chunkReady && !upload->endRequested)) {
+            return {};
+        }
+        if (upload->endRequested && !upload->chunkReady) {
+            auto ending = dataPlan_->planChunk(std::span<const char>{}, true);
+            if (!ending) {
+                return failPlan();
+            }
+            chunk_ = *ending;
+            chunkPending_ = true;
+            segmentOffset_ = 0;
+            if (request_.upload() != nullptr && !request_.upload()->trailers.empty()) {
+                return prepareTrailers();
+            }
+            state_ = State::kFin;
+            return {};
+        }
+    }
+    const auto body = upload != nullptr ? std::string_view(upload->chunk) : request_.body();
     if (bodyOffset_ > body.size()) {
         return failPlan();
     }
     const auto remaining = body.size() - bodyOffset_;
     const auto size = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, kHttp3VarIntMax));
-    const bool finishing = size == remaining;
+    const bool finishing = upload == nullptr && size == remaining;
     auto planned = dataPlan_->planChunk(body.substr(bodyOffset_, size), finishing);
     if (!planned) {
         return failPlan();
@@ -254,6 +333,8 @@ Http3ClientRequestWrite::acknowledge(std::size_t count) noexcept {
     segmentOffset_ = 0;
     if (state_ == State::kHeaders) {
         state_ = State::kDataHeader;
+    } else if (state_ == State::kTrailers) {
+        state_ = State::kFin;
     } else if (state_ == State::kDataHeader) {
         state_ = State::kDataBody;
     } else if (state_ == State::kDataBody) {
@@ -264,7 +345,12 @@ Http3ClientRequestWrite::acknowledge(std::size_t count) noexcept {
             if (!dataPlan_->commitPayload(bytes, false)) {
                 return failPlan();
             }
-            bodyOffset_ += bytes;
+            if (auto* upload = request_.output()) {
+                upload->acknowledgeChunk();
+                bodyOffset_ = 0;
+            } else {
+                bodyOffset_ += bytes;
+            }
             chunkPending_ = false;
             state_ = State::kDataHeader;
         }
@@ -288,8 +374,49 @@ Http3ClientRequestWrite::acknowledgeFin(bool successful) noexcept {
         return failPlan();
     }
     state_ = State::kFinished;
+    if (auto* upload = request_.output()) {
+        upload->finish();
+    }
     chunkPending_ = false;
     return {};
+}
+
+std::expected<void, Http3ClientRequestWrite::Error> Http3ClientRequestWrite::prepareTrailers() noexcept {
+    try {
+        std::pmr::vector<Http3FieldSectionFieldView> fields(workerPool_);
+        for (const auto& field : request_.upload()->trailers) {
+            fields.push_back({field.name(), field.value(), false});
+        }
+        auto encoded = encodeHttp3RequestTrailers(fields, fieldLimits_, workerPool_);
+        if (!encoded) {
+            return failPlan();
+        }
+        std::pmr::vector<char> frame(workerPool_);
+        frame.resize(kHttp3FrameHeaderMaxBytes + (*encoded).size());
+        const auto prefix = encodeHttp3FrameHeader(frame, static_cast<std::uint64_t>(Http3FrameType::kHeaders), (*encoded).size());
+        if (!prefix) {
+            return failPlan();
+        }
+        frame.resize(*prefix + (*encoded).size());
+        std::copy((*encoded).begin(), (*encoded).end(), frame.begin() + static_cast<std::ptrdiff_t>(*prefix));
+        headers_.swap(frame);
+        state_ = State::kTrailers;
+        return {};
+    } catch (...) {
+        return failPlan();
+    }
+}
+
+bool Http3ClientRequestWrite::waitingForContent() const noexcept {
+    const auto* output = request_.output();
+    return output != nullptr && state_ == State::kDataHeader && !chunkPending_ &&
+           ((request_.tunnel() != nullptr ? !request_.tunnel()->accepted : !request_.upload()->contentReleased) || (!output->chunkReady && !output->endRequested));
+}
+void Http3ClientRequestWrite::stopSending() noexcept {
+    state_ = State::kFinished;
+    offered_ = false;
+    chunkPending_ = false;
+    dataPlan_.reset();
 }
 
 bool Http3ClientRequestWrite::finReady() const noexcept {

@@ -18,7 +18,11 @@
       "dependencies": [
         "brotli",
         "zlib",
-        "zstd"
+        "zstd",
+        {
+          "name": "ngtcp2",
+          "default-features": false
+        }
       ]
     },
     "framework": {

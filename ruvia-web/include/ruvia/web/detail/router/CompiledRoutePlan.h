@@ -28,6 +28,8 @@ public:
         : resource_(pmrResourceOrDefault(resource)),
           identities_(resource_),
           extensionRouteIndices_(resource_),
+          connectRouteIndices_(resource_),
+          connectProtocols_(resource_),
           exactSlots_(resource_),
           dynamicRoots_{DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
               DynamicNode(resource_), DynamicNode(resource_), DynamicNode(resource_),
@@ -51,18 +53,23 @@ private:
         kBuffered,
         kResponseStream,
         kWebSocket,
+        kTunnel,
     };
 
     struct RouteIdentity final {
         explicit RouteIdentity(std::pmr::memory_resource* resource)
             : methodToken(resource),
               path(resource),
+              tunnelProtocol(resource),
               webSocketSubprotocols(resource),
               middlewareInvokes(resource) {}
 
         HttpKnownMethod method{HttpKnownMethod::kUnknown};
         std::pmr::string methodToken;
         std::pmr::string path;
+        std::pmr::string tunnelProtocol;
+        std::int64_t tunnelPeerTransportFinTimeoutMs{5000};
+        bool tunnelDatagrams{};
         bool dynamic{false};
         EndpointKind endpointKind{EndpointKind::kBuffered};
         RequestBodyMode requestBodyMode{RequestBodyMode::kBuffered};
@@ -103,9 +110,18 @@ private:
         std::size_t wildcardRouteIndex{kNoRouteIndex};
     };
 
+    struct ConnectProtocolIndex final {
+        ConnectProtocolIndex(std::pmr::memory_resource* resource, std::string_view value)
+            : protocol(value, resource),
+              root(resource) {}
+        std::pmr::string protocol;
+        DynamicNode root;
+    };
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteIdentity> identities_;
     std::pmr::vector<std::size_t> extensionRouteIndices_;
+    std::pmr::vector<std::size_t> connectRouteIndices_;
+    std::pmr::vector<ConnectProtocolIndex> connectProtocols_;
     std::pmr::vector<PerfectSlot> exactSlots_;
     std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_;
     std::pmr::vector<DynamicNode> dynamicNodeArena_;

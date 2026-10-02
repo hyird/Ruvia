@@ -132,7 +132,9 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 - HTTP/1 parser、chunk parser、request target parser。
 - cookie、cache、range、conditional request、content negotiation、header token/value helper。
 - multipart、form、URL encoding、SSE formatting 与纯 parser。
-- HTTP/1 与 HTTP/2 sans-I/O 协议状态、HTTP/3 varint/frame 纯编解码、HPACK、WebSocket sans-I/O 核心。
+- HTTP/1、HTTP/2、HTTP/3 与 QUIC sans-I/O 协议状态、HPACK、WebSocket sans-I/O 核心。
+- QUIC packet/key processing、connection IDs、stream 与 flow control、acknowledgments、loss recovery/retransmission、DATAGRAM 和 close 等协议语义。
+- QUIC 使用 ngtcp2 core；密钥派生所需的 crypto-provider callback contract 属于 HTTP 协议 API，具体 EVP 实现和 UDP/runtime I/O 由 Web 提供。ngtcp2 是 `ruvia-http` 的依赖，不是 `ruvia-web` 的直接依赖；HTTP 不依赖 OpenSSL、Asio、socket 或 `ruvia-core`。
 - content-coding、framing、connection、client role 等可由任意 runtime 驱动的纯协议 primitive。
 - 无分配的 `HttpProtocolError` 及其 HTTP status；不得携带 Web JSON error code/details。
 
@@ -154,7 +156,8 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 - App 配置和启动。
 - Context、Controller、Router、middleware、Next、route macro。
-- HTTP server runtime、TLS、HTTP/2 server、WebSocket route、response streaming。
+- HTTP server runtime、TLS、HTTP/2/HTTP/3 server、WebSocket route、response streaming。
+- 使用 OpenSSL 实现 TLS 与 QUIC crypto-provider callbacks，并提供 UDP/socket/runtime 驱动；Web 只能经 `ruvia::http` 的公开协议 API 驱动 QUIC，不得直接依赖或调用 ngtcp2。
 - Model、JSON/form parsing/serialization、validation middleware。
 - `HttpErrorInfo`、`HttpError`、RFC 9457 Problem Details 默认错误响应和自定义 error/not-found handler。
 - Session、CSRF、RateLimit、CORS、安全头、静态文件、AutoHTTPS redirect。
@@ -164,7 +167,7 @@ target 专属的支撑代码跟随所属 target，只有跨 target 的通用支�
 
 ### HTTP 协议与应用边界
 
-`ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、HTTP/3、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。
+`ruvia-http` 拥有 wire/message/framing/connection 语义，以及跨 server/client/runtime 复用的 sans-I/O 状态机和纯协议 helper。HTTP/1、HTTP/2、HTTP/3、QUIC、WebSocket、SSE、multipart、content-coding 等协议实现留在 `ruvia-http`。QUIC packet handling、key derivation contract、connection IDs、stream/flow control、ACK/loss recovery/retransmission、DATAGRAM 和 close 都由 HTTP 协议层负责；ngtcp2 core 是 `ruvia-http` 的实现依赖。`ruvia-web` 只使用 HTTP 的公开 API，提供 TLS/EVP callback 实现及 UDP/runtime 驱动，不依赖或调用 ngtcp2。
 
 outbound client 中借用调用方存储的公开类型必须以 `view` 单词结尾，具体拼写遵循 `STYLE.md`；当前契约是 `HttpOriginView`、`HttpClientRequestView`、`HttpClientRequestContentView`、`HttpClientRequestBytesView`，命名迁移须同步定义和使用方，不得恢复不表达生命周期的名字或兼容别名。
 
@@ -197,7 +200,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 - 每个 worker 拥有一个 standalone Asio `io_context`。
 - `io_context`、dispatcher endpoint 和稳定 `WorkerHandle` 必须由同一个 worker runtime context 组装和退役；不得让不同 runtime 各自复制 handle 发布、detach 或 executor 绑定逻辑。
-- `ServerNetworkRuntime` 拥有独立的 server network thread/runtime，负责 TCP accept/dispatch；每条新接受的 TCP 连接只交接一次到目标业务 worker，之后连接及其协议状态不得再跨线程迁移。启用 HTTP/3 时，同一线程/runtime 还负责长期 UDP/QUIC wire I/O。
+- `ServerNetworkRuntime` 拥有独立的 server network thread/runtime，负责 TCP accept/dispatch；每条新接受的 TCP 连接只交接一次到目标业务 worker，之后连接及其协议状态不得再跨线程迁移。启用 HTTP/3 时，同一线程/runtime 负责 UDP I/O，并在所属线程驱动 HTTP 公共 QUIC 协议状态；Web 层不得复制或接管 QUIC 协议判断。
 - `Task` 是 lazy structured coroutine owner：未启动任务可以丢弃，已启动任务必须在所属执行上下文运行到完成；取消只能显式请求后 await/join，禁止通过析构销毁或静默 detach 挂起中的协程帧。自建 `EventLoop` 的顶层任务统一由 `EventLoop::start()` 返回的 `RootTask<T>` 持有；遗弃 root 不得销毁挂起帧，未观察异常必须进入 loop failure sink。
 - `WorkerHandle` 直接持有可关闭的稳定 dispatcher endpoint；热路径操作不得通过 `weak_ptr::lock()` 临时取得所有权，context owner 必须在销毁执行上下文前 detach endpoint，使逃逸句柄安全失效。请求期 `ContextServices`/`Context` 只借用 server 中地址稳定的 handle，不复制其共享所有权。
 - DB stream/transaction 等线性 lease 同一时刻只允许一个异步操作；lazy Task 只能在真正启动时取得操作权，失败清理由 backend 唯一负责，失败后的 lease 不得复用。
@@ -209,7 +212,7 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 - `App::server(ServerConfig)` 原子配置进程内 Web runtime；`workerCount=N` 表示 N 个业务 worker，另外有一个 server network thread。额外线程数不包括 `BlockingPool` 和 signal 线程。每个业务 worker 只创建一份 worker-local DB、Redis、outbound HTTP client 和 user state；listener 数量不得乘增 worker 或数据资源。
 - 每个 Web worker 的 DB、Redis、outbound HTTP client、user state 和 rate limiter 必须由一个 worker capability owner 统一构造、启动、暴露和关闭；这些实例不得跨 worker 共享，也不得重新散落成相互独立的 runtime 生命周期字段。TLS、router 和 capabilities 均由各业务 worker 分别持有。
 - listener 通过一个 `App::listen(ListenConfig)` 原子配置统一的 bind address、可选 HTTP/HTTPS TCP 端口、TLS 和自动跳转；未填写的端口表示不开启，自动跳转要求同一配置同时提供 HTTP 与 HTTPS。只有 `ServerNetworkRuntime` 绑定全部配置的 HTTP/HTTPS TCP 端口；它接受连接后只向业务 worker 交接一次。交接成功后连接由目标业务 worker 持有并处理，不再迁移。
-- `App::run()` 为每个业务 worker 创建一个线程和完整 runtime，并创建一个 `ServerNetworkRuntime` 线程。server network thread/runtime 同时负责 TCP accept/dispatch，以及显式配置 HTTP/3 时 HTTPS 同号 UDP 上的长期 QUIC wire I/O；QUIC socket、BIO、`SSL*`、timer、critical stream 和 wire output 均由它持有、驱动和退役。QUIC 请求通过有界 mailbox 固定交给一个业务 worker，连接生命周期内不再迁移。
+- `App::run()` 为每个业务 worker 创建一个线程和完整 runtime，并创建一个 `ServerNetworkRuntime` 线程。server network thread/runtime 同时负责 TCP accept/dispatch，以及 HTTPS 同号 UDP 上的长期 HTTP/3 I/O；UDP socket、OpenSSL TLS/EVP 状态和定时驱动由网络 owner 持有并退役，QUIC 协议状态、packet processing、critical stream 与 wire-output 计划由 `ruvia-http` 所有。QUIC 请求通过有界 mailbox 固定交给一个业务 worker，连接生命周期内不再迁移。
 - Web 启动必须先完成所有业务 worker 的 prepare 和 server network TCP listener prepare，再启动并等待所有业务 worker 与 server network runtime ready，然后先使业务 worker、再使 server network 进入 serving；准备或启动失败不得留下部分系统对外服务。`onStart` 只在所有 worker 和 server network 都进入 serving 后执行。
 - `App::run()` 的调用线程是 App 生命周期的唯一执行线程，负责 `onStart`、`onStop`、join 和失败重抛。`App::stop()`、信号线程以及 worker/server network failure 只能提交单调 stop request 并关闭稳定 endpoint，不得在调用方线程执行用户 hook；App 单例的配置、运行和 runtime 借用必须继续受同一生命周期门禁保护。
 - outbound HTTP、DB 与 Redis 能力属于直接绑定 `EventLoop` 的一等 client 对象，不属于 `App`、HTTP `Context` 或特殊 worker context。应用自己创建或 attach 的 worker 默认可以构造同一套 `HttpClient` / `DbClient` / `RedisClient`；client 的连接、内存、取消和 shutdown 保持 worker-local，App 的 `Context`/`WebWorkerContext` 只提供同一底层实现的便捷入口。不得为自建 worker 增加聚合能力 service 或 `detail` 旁路。
@@ -312,13 +315,20 @@ DB 的 `query()` 只接受产出行集的语句并返回 `DbRows`，`execute()` 
 - 独立构建可以从环境初始化 vcpkg toolchain、triplet 和 manifest feature；作为
   `FetchContent` / `add_subdirectory` 子项目时不得修改父项目的 `CMAKE_*` 或
   `VCPKG_*` cache，生成的配置必须留在 Ruvia 自己的 binary tree。
-- outbound HTTP 的 wire/framing/HTTP/2 状态机保留在 `ruvia-http`；`ruvia-web` 可以提供 worker-local DNS、socket、TLS/ALPN、连接复用、超时和取消驱动，但不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
+- outbound HTTP 的 wire/framing/HTTP/2/HTTP/3/QUIC 状态机保留在 `ruvia-http`；ngtcp2 core 仅由 HTTP target 私有依赖。`ruvia-web` 直接依赖 core、HTTP 和 OpenSSL 3.5+，可提供 worker-local DNS、socket、TLS/ALPN/EVP callback、UDP、连接复用、超时和取消驱动，但不得直接依赖或调用 ngtcp2。core-only/http-only 不得查找 OpenSSL；Web 不得通过 HTTP target 以外的依赖关系接入 QUIC。Web 不提供含糊的 `fetch` 别名、proxy 或反向代理产品集成。
 - 安装包暴露 `ruvia::core`、`ruvia::http`、`ruvia::web`，不暴露历史别名。
 - 下游按需请求 `core`、`http` 或 `web` component；消费示例只放在 README。
 
 ## 验证要求
 
 改动完成前至少运行任务相关的最小验证。
+
+- 本地编译固定使用仓库根目录的 `build/`，跨任务、跨会话复用同一构建目录、CMake cache、依赖和编译产物；不得每轮验证创建新的构建目录。
+- 验证前先检查 `build/CMakeCache.txt` 和已有 target，沿用现有 generator、toolchain、build type 和 feature 配置。只有首次配置或本次任务确实需要调整配置时才运行 CMake configure；不得为普通测试反复切换配置导致大面积重编译。
+- Linux 构建统一使用 `-j$(nproc)`，按可用 CPU 数并行编译；Windows 使用 `--parallel`。
+- 日常验证优先使用 `cmake --build build --target <相关target> -j$(nproc)` 增量编译，再用 `ctest --test-dir build -R '<相关测试正则>' --output-on-failure` 运行相关测试；Windows 补充 `--config Debug` / `-C Debug`。必须先更新受影响的测试产物，不能用旧二进制代替验证。
+- 不得主动删除 `build/`、CMake cache 或依赖缓存，不使用 `--clean-first`，不为每次测试执行全量 rebuild。只有明确的缓存损坏、工具链不兼容或用户要求才清理，并在清理前说明原因。
+- 下方命令是首次配置及完整构建、测试、安装的参考流程，不要求每次改动全部执行。纯文档修改无需编译；扩大到全量验证应由改动影响范围决定。
 
 涉及长连接或异步操作内存归属的改动，功能单测必须验证重复操作的临时分配能归还、保留结果及握手数据不被后续操作破坏，并覆盖受影响的成功、异常、取消及未启动即丢弃路径。使用分配/归还计数或 arena 使用量验证生命周期，不能只检查析构函数被调用。内存池缓存与仍存活的分配应分别判断；RSS 不立即下降不能单独认定泄漏，短时单测也不能代替线上长时间观测。
 
@@ -337,7 +347,7 @@ cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DRUVIA_BUILD_TESTS=ON \
   -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build
+cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 cmake --install build --prefix build/install
 ```
@@ -347,13 +357,13 @@ Windows 使用 MSVC static 矩阵：
 ```powershell
 $env:VCPKG_DEFAULT_TRIPLET = "x64-windows-static"
 $env:VCPKG_DEFAULT_HOST_TRIPLET = "x64-windows-static"
-cmake -S . -B build/msvc -G "Visual Studio 17 2022" -A x64 `
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DRUVIA_BUILD_TESTS=ON `
   -DRUVIA_BUILD_EXAMPLES=ON
-cmake --build build/msvc --config Debug --parallel
-ctest --test-dir build/msvc -C Debug --output-on-failure
-cmake --install build/msvc --config Debug --prefix build/msvc/install
+cmake --build build --config Debug --parallel
+ctest --test-dir build -C Debug --output-on-failure
+cmake --install build --config Debug --prefix build/install
 ```
 
 不要提交 `build/`、`vcpkg_installed`、本地工具目录或 CodeGraph 索引。

@@ -12,7 +12,7 @@
 namespace ruvia::detail {
 namespace {
 
-int readPrivateKeyPassword(char* buffer, int size, int, void* argument) noexcept {
+int read_private_key_password(char* buffer, int size, int, void* argument) noexcept {
     if (buffer == nullptr || size <= 0 || argument == nullptr) {
         return 0;
     }
@@ -28,13 +28,15 @@ int readPrivateKeyPassword(char* buffer, int size, int, void* argument) noexcept
 
 }  // namespace
 
-Http3QuicClientTlsContext::Http3QuicClientTlsContext(ClientTransportConfigView config) {
+http3_quic_client_tls_context::http3_quic_client_tls_context(ClientTransportConfigView config,
+    std::pmr::memory_resource* resource)
+    : resource_(resource ? resource : std::pmr::get_default_resource()) {
     validateClientTransportConfig(config);
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    (void)config;
-    throw std::runtime_error("QUIC client TLS requires OpenSSL 3.6 or newer");
-#else
-    context_.reset(SSL_CTX_new(OSSL_QUIC_client_method()));
+    context_.reset(SSL_CTX_new(TLS_method()));
+    if (context_ && (SSL_CTX_set_min_proto_version(context_.get(), TLS1_3_VERSION) != 1 ||
+                        SSL_CTX_set_max_proto_version(context_.get(), TLS1_3_VERSION) != 1)) {
+        throw std::runtime_error("failed to configure QUIC TLS 1.3");
+    }
     if (!context_) {
         throw std::runtime_error("failed to create QUIC client TLS context");
     }
@@ -60,46 +62,38 @@ Http3QuicClientTlsContext::Http3QuicClientTlsContext(ClientTransportConfigView c
             throw std::runtime_error("failed to load client certificate chain");
         }
         if (!config.privateKeyPassword.empty()) {
-            SSL_CTX_set_default_passwd_cb(context_.get(), &readPrivateKeyPassword);
+            SSL_CTX_set_default_passwd_cb(context_.get(), &read_private_key_password);
             SSL_CTX_set_default_passwd_cb_userdata(context_.get(), &config);
         }
-        const int keyLoaded = SSL_CTX_use_PrivateKey_file(context_.get(),
+        const int key_loaded = SSL_CTX_use_PrivateKey_file(context_.get(),
             std::string(config.privateKeyFile).c_str(), SSL_FILETYPE_PEM);
         // Never retain either the callback or its borrowed configuration view.
         SSL_CTX_set_default_passwd_cb(context_.get(), nullptr);
         SSL_CTX_set_default_passwd_cb_userdata(context_.get(), nullptr);
-        if (keyLoaded != 1 || SSL_CTX_check_private_key(context_.get()) != 1) {
+        if (key_loaded != 1 || SSL_CTX_check_private_key(context_.get()) != 1) {
             throw std::runtime_error("failed to load or match client TLS private key");
         }
     }
-#endif
 }
 
-Http3QuicClientTlsContext::~Http3QuicClientTlsContext() = default;
+http3_quic_client_tls_context::~http3_quic_client_tls_context() = default;
 
-SSL_CTX* Http3QuicClientTlsContext::nativeHandle() const noexcept {
+SSL_CTX* http3_quic_client_tls_context::native_handle() const noexcept {
     return context_.get();
 }
 
-void Http3QuicClientTlsContext::prepare(SSL* ssl, std::string_view host) const {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    (void)ssl;
-    (void)host;
-    throw std::runtime_error("QUIC client TLS requires OpenSSL 3.6 or newer");
-#else
-    if (ssl == nullptr || !SSL_is_quic(ssl) || SSL_get_SSL_CTX(ssl) != context_.get() ||
-        SSL_get_SSL_CTX(ssl) == nullptr ||
-        SSL_CTX_get_ssl_method(SSL_get_SSL_CTX(ssl)) != OSSL_QUIC_client_method()) {
+void http3_quic_client_tls_context::prepare(SSL* ssl, std::string_view host) const {
+    if (ssl == nullptr || SSL_get_SSL_CTX(ssl) != context_.get()) {
         throw std::invalid_argument("SSL connection does not use this QUIC client TLS context");
     }
     validateClientOriginHost(host, "client TLS host is empty", "client TLS host is invalid");
 
-    const bool ipAddress = isClientIpAddress(host);
-    std::string normalized(host);
-    if (!ipAddress && normalized.ends_with('.')) {
+    const bool ip_address = isClientIpAddress(host);
+    std::pmr::string normalized(host, resource_);
+    if (!ip_address && normalized.ends_with('.')) {
         normalized.pop_back();
     }
-    if (!ipAddress && SSL_set_tlsext_host_name(ssl, normalized.c_str()) != 1) {
+    if (!ip_address && SSL_set_tlsext_host_name(ssl, normalized.c_str()) != 1) {
         throw std::runtime_error("failed to set client TLS SNI host");
     }
 
@@ -109,17 +103,16 @@ void Http3QuicClientTlsContext::prepare(SSL* ssl, std::string_view host) const {
 
     if (SSL_CTX_get_verify_mode(context_.get()) == SSL_VERIFY_PEER) {
         X509_VERIFY_PARAM* const parameters = SSL_get0_param(ssl);
-        const int configured = ipAddress
+        const int configured = ip_address
                                    ? X509_VERIFY_PARAM_set1_ip_asc(parameters, normalized.c_str())
                                    : SSL_set1_host(ssl, normalized.c_str());
         if (configured != 1) {
             throw std::runtime_error("failed to configure client TLS peer host verification");
         }
     }
-#endif
 }
 
-void Http3QuicClientTlsContext::ContextDeleter::operator()(SSL_CTX* context) const noexcept {
+void http3_quic_client_tls_context::context_deleter::operator()(SSL_CTX* context) const noexcept {
     SSL_CTX_free(context);
 }
 

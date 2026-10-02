@@ -34,6 +34,7 @@ struct Http3ClientResponseEvent final {
     // all other events leave it empty; unlike head/body views, it is not borrowed.
     std::optional<HttpResponseBodyPlan> responseBodyPlan{};
     std::optional<std::uint64_t> pushId{};
+    std::optional<HttpClientRequestContentSignal> requestContentSignal{};
 };
 
 using Http3ClientResponseCallback = void (*)(void*, const Http3ClientResponseEvent&);

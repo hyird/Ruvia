@@ -25,6 +25,12 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
         abortReason_ = reason;
     }
     stopSource_.requestStop();
+    if (http2_) {
+        http2_->stop();
+    }
+    if (http3_) {
+        http3_->stop();
+    }
     resolver_.cancel();
     disarm(connectTimer_);
     disarm(readTimer_);
@@ -39,6 +45,9 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
     std::error_code ignored;
     (void)stream_.lowest_layer().cancel(ignored);
     (void)stream_.lowest_layer().close(ignored);
+    if (http2_ || http3_) {
+        startCloseOnWorker();
+    }
 }
 
 void WebSocketClientState::requestAbort(AbortReason reason) noexcept {
@@ -110,6 +119,12 @@ Task<void> WebSocketClientState::closeOnWorker() {
         co_await closeState_.wait();
     }
     co_await operationScope_.closeAndJoin();
+    if (http2_) {
+        co_await http2_->join();
+    }
+    if (http3_) {
+        co_await http3_->join();
+    }
 }
 
 void WebSocketClientState::finishClose(const TaskCompletionResult<void>& result) {

@@ -141,6 +141,27 @@ private:                                                                        
         RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this),      \
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
+// Ordinary CONNECT uses an exact host:port authority or "*". Group prefixes
+// apply only to extended CONNECT paths; controller/group middleware always runs.
+#define RUVIA_CONNECT(authority, handler, ...)                                           \
+    RuviaControllerAccess::addTunnelRoute(ruviaRouteScope, {}, authority,                \
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
+#define RUVIA_CONNECT_PROTOCOL(protocol, path, handler, ...)                             \
+    RuviaControllerAccess::addTunnelRoute(ruviaRouteScope, protocol, path,               \
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
+
+#define RUVIA_CONNECT_OPTIONS(authority, handler, options, ...)                          \
+    RuviaControllerAccess::addTunnelRoute(ruviaRouteScope, {}, authority,                \
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>(), options)
+
+#define RUVIA_CONNECT_PROTOCOL_OPTIONS(protocol, path, handler, options, ...)            \
+    RuviaControllerAccess::addTunnelRoute(ruviaRouteScope, protocol, path,               \
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>(), options)
+
 #define RUVIA_GET_WS(path, handler, ...)                                                       \
     RuviaControllerAccess::addWebSocketRoute(ruviaRouteScope, ::ruvia::HttpKnownMethod::kGet,  \
         path, RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \

@@ -36,6 +36,8 @@ struct Http2ServerRequestRouteView final {
     std::string_view requestMethod{};
     std::string_view path{};
     bool webSocketConnect{false};
+    std::string_view authority{};
+    std::string_view protocol{};
 };
 
 // Read-only send-flow-control observation for a live stream. The available

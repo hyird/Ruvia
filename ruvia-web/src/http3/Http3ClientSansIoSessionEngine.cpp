@@ -29,6 +29,7 @@ Http3ClientSansIoSessionEngine::Http3ClientSansIoSessionEngine(
       localBodyBudget_(limits.maxTotalBodyBytes),
       bodyBudget_(&localBodyBudget_),
       connection_(Http3PeerRole::kClient, resource_, limits.connection),
+      controlOutput_(resource_),
       responses_(resource_) {
     if (limits_.maxLiveStreams == 0) {
         throw std::invalid_argument("HTTP/3 response session must allow at least one live stream");
@@ -43,6 +44,81 @@ Http3ClientSansIoSessionEngine::Http3ClientSansIoSessionEngine(
 
 Http3ClientSansIoSessionEngine::~Http3ClientSansIoSessionEngine() {
     bodyBudget_->release(retainedBodyBytes_);
+}
+
+bool Http3ClientSansIoSessionEngine::queuePriorityUpdate(std::uint64_t streamId, HttpPriority priority) {
+    if (feeding_ || connectionFailure_.scope != Http3ConnectionErrorScope::kNone ||
+        !responses_.contains(streamId) || responses_.at(streamId).terminal || priority.urgency > 7) {
+        return false;
+    }
+    auto frame = connection_.preparePriorityUpdate({.elementId = streamId,
+        .fields = {.urgency = priority.urgency, .incremental = priority.incremental}});
+    if (!frame || frame->size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
+        return false;
+    }
+    controlOutput_.append(frame->data(), frame->size());
+    return true;
+}
+
+bool Http3ClientSansIoSessionEngine::queueMaxPushId(std::uint64_t maximum) {
+    if (feeding_ || connectionFailure_.scope != Http3ConnectionErrorScope::kNone || controlOutput_.size() > kMaxHttpHeaderBytes - 24) {
+        return false;
+    }
+    // Reserve before the protocol core commits authorization. Appending the
+    // complete bounded control frame cannot allocate after that commit.
+    controlOutput_.reserve(controlOutput_.size() + 24);
+    auto frame = connection_.prepareMaxPushId(maximum);
+    if (!frame) {
+        return false;
+    }
+    controlOutput_.append(frame->data(), frame->size());
+    return true;
+}
+
+bool Http3ClientSansIoSessionEngine::queueCancelPush(std::uint64_t pushId) {
+    if (feeding_ || connectionFailure_.scope != Http3ConnectionErrorScope::kNone || controlOutput_.size() > kMaxHttpHeaderBytes - 24) {
+        return false;
+    }
+    controlOutput_.reserve(controlOutput_.size() + 24);
+    auto frame = connection_.prepareCancelPush(pushId);
+    if (!frame) {
+        return false;
+    }
+    controlOutput_.append(frame->data(), frame->size());
+    return true;
+}
+
+bool Http3ClientSansIoSessionEngine::queuePushPriorityUpdate(std::uint64_t pushId, HttpPriority priority) {
+    if (feeding_ || connectionFailure_.scope != Http3ConnectionErrorScope::kNone || priority.urgency > 7) {
+        return false;
+    }
+    auto frame = connection_.preparePriorityUpdate({.elementId = pushId, .push = true, .fields = {.urgency = priority.urgency, .incremental = priority.incremental}});
+    if (!frame || frame->size() > kMaxHttpHeaderBytes - std::min(controlOutput_.size(), kMaxHttpHeaderBytes)) {
+        return false;
+    }
+    controlOutput_.append(frame->data(), frame->size());
+    return true;
+}
+
+bool Http3ClientSansIoSessionEngine::retirePushStream(std::uint64_t streamId) {
+    if (feeding_) {
+        return false;
+    }
+    const auto result = connection_.cancelRequest(streamId);
+    // A peer FIN/reset may have already released the push parser.
+    return result.scope == Http3ConnectionErrorScope::kNone ||
+           (result.scope == Http3ConnectionErrorScope::kStream && result.code == Http3ConnectionErrorCode::kStreamCreationError);
+}
+
+bool Http3ClientSansIoSessionEngine::consumeControlOutput(std::size_t bytes) noexcept {
+    if (bytes > controlOutput_.size()) {
+        return false;
+    }
+    controlOutput_.erase(0, bytes);
+    if (controlOutput_.empty()) {
+        std::pmr::string(resource_).swap(controlOutput_);
+    }
+    return true;
 }
 
 Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::registerRequest(
@@ -139,7 +215,7 @@ Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::feed(
             stored.terminal = true;
             return stored.result;
         }
-        return {};
+        return fromConnection(result);
     } catch (...) {
         failConnection(connectionError(Http3ConnectionErrorCode::kInternalError));
         throw;
@@ -148,6 +224,16 @@ Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::feed(
 
 void Http3ClientSansIoSessionEngine::onEvent(void* context, const Http3ConnectionEvent& event) {
     auto& self = *static_cast<Http3ClientSansIoSessionEngine*>(context);
+    if (event.kind == Http3ConnectionEventKind::kOriginAdvertisement && self.originObserver_.callback != nullptr) {
+        self.originObserver_.callback(self.originObserver_.context, event);
+        return;
+    }
+    if (event.pushId) {
+        if (self.pushObserver_.callback != nullptr) {
+            self.pushObserver_.callback(self.pushObserver_.context, event);
+        }
+        return;
+    }
     auto found = self.responses_.find(event.streamId);
     if (found == self.responses_.end()) {
         return;
@@ -230,6 +316,7 @@ void Http3ClientSansIoSessionEngine::onEvent(void* context, const Http3Connectio
                 response.sink.callback(response.sink.context, event);
             }
             return;
+        case Http3ConnectionEventKind::kPushStream:
         case Http3ConnectionEventKind::kPushPromise:
         case Http3ConnectionEventKind::kPushCanceled:
         case Http3ConnectionEventKind::kOriginAdvertisement:
@@ -330,6 +417,7 @@ Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::stop() no
         return {Http3ClientSansIoSessionStatus::kInvalidState};
     }
     (void)connection_.retire();
+    std::pmr::string(resource_).swap(controlOutput_);
     failConnection({Http3ClientSansIoSessionStatus::kTransportError,
         Http3ConnectionErrorScope::kConnection, Http3ConnectionErrorCode::kNoError});
     return connectionFailure_;
@@ -339,11 +427,11 @@ Http3ClientSansIoSessionEngine::Result Http3ClientSansIoSessionEngine::fromConne
     Http3ConnectionResult result) const noexcept {
     switch (result.status) {
         case Http3ConnectionStatus::kQpackBlocked:
+            return {Http3ClientSansIoSessionStatus::kQpackBlocked, result.scope, result.code, result.consumedBytes};
         case Http3ConnectionStatus::kPushPromisePending:
-            return {Http3ClientSansIoSessionStatus::kConnectionError, Http3ConnectionErrorScope::kConnection,
-                Http3ConnectionErrorCode::kInternalError};
+            return {Http3ClientSansIoSessionStatus::kPushPromisePending, result.scope, result.code, result.consumedBytes};
         case Http3ConnectionStatus::kNeedMoreData:
-            return {};
+            return {Http3ClientSansIoSessionStatus::kNeedMoreData, result.scope, result.code, result.consumedBytes};
         case Http3ConnectionStatus::kMessageEnd:
             return {Http3ClientSansIoSessionStatus::kMessageEnd, result.scope, result.code};
         case Http3ConnectionStatus::kReset:

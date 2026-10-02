@@ -9,6 +9,7 @@
 #include "ruvia/http/Attributes.h"
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpExpectations.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -47,6 +48,12 @@ public:
                    : request_.knownMethod();
     }
 
+    [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy policy) const noexcept {
+        const bool contentRemaining = !bodyComplete_ && !bodyAborted_ && request_.knownMethod() != HttpKnownMethod::kConnect &&
+                                      (!head_.contentLength || *head_.contentLength > body_.size());
+        return expectations_.serverPlan(contentRemaining ? HttpRequestContentIndication::kWillFollow : HttpRequestContentIndication::kNoContent, policy);
+    }
+
     [[nodiscard]] bool bodyComplete() const noexcept {
         return bodyComplete_;
     }
@@ -65,6 +72,7 @@ private:
     std::pmr::string cookies_;
     std::pmr::vector<std::byte> body_;
     HttpRequest request_;
+    HttpRequestExpectations expectations_{};
     bool bodyComplete_{false};
     bool bodyAborted_{false};
 };

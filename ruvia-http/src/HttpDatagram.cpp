@@ -58,11 +58,17 @@ HttpCapsuleDecoder::HttpCapsuleDecoder(HttpCapsuleConfig config)
     }
 }
 HttpCapsuleStatus HttpCapsuleDecoder::feed(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context) {
+    return feedImpl(input, fin, callback, context, false).status;
+}
+HttpCapsuleFeedResult HttpCapsuleDecoder::feedOne(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context) {
+    return feedImpl(input, fin, callback, context, true);
+}
+HttpCapsuleFeedResult HttpCapsuleDecoder::feedImpl(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context, bool one) {
     if (feeding_) {
         throw std::logic_error("recursive capsule feed");
     }
     if (status_ != HttpCapsuleStatus::kNeedMoreData) {
-        return status_;
+        return {.status = status_};
     }
     struct Guard {
         bool& value;
@@ -74,6 +80,8 @@ HttpCapsuleStatus HttpCapsuleDecoder::feed(std::span<const char> input, bool fin
             value = false;
         }
     } guard(feeding_);
+    const auto initialSize = input.size();
+    bool completed{};
     try {
         while (!input.empty()) {
             if (!payload_) {
@@ -92,14 +100,21 @@ HttpCapsuleStatus HttpCapsuleDecoder::feed(std::span<const char> input, bool fin
                     continue;
                 }
                 if (length->value > config_.maxCapsuleLength) {
-                    return status_ = HttpCapsuleStatus::kLimit;
+                    status_ = HttpCapsuleStatus::kLimit;
+                    return {.status = status_, .consumedBytes = initialSize - input.size()};
                 }
                 remaining_ = length->value;
                 payload_ = remaining_ != 0;
                 headerSize_ = 0;
                 typeSize_ = 0;
-                if (!payload_ && callback) {
-                    callback(context, {type_, {}, true});
+                if (!payload_) {
+                    if (callback) {
+                        callback(context, {type_, {}, true});
+                    }
+                    completed = true;
+                    if (one) {
+                        break;
+                    }
                 }
             } else {
                 auto count = static_cast<std::size_t>(std::min<std::uint64_t>(input.size(), remaining_));
@@ -110,17 +125,34 @@ HttpCapsuleStatus HttpCapsuleDecoder::feed(std::span<const char> input, bool fin
                 if (callback) {
                     callback(context, {type_, part, !payload_});
                 }
+                if (!payload_) {
+                    completed = true;
+                    if (one) {
+                        break;
+                    }
+                }
             }
         }
-        if (fin) {
+        if (fin && input.empty()) {
             status_ = payload_ || headerSize_ ? HttpCapsuleStatus::kTruncated : HttpCapsuleStatus::kEnd;
         }
-        return status_;
+        return {.status = status_, .consumedBytes = initialSize - input.size(), .capsuleComplete = completed};
     } catch (...) {
         status_ = HttpCapsuleStatus::kTruncated;
         throw;
     }
 }
+Http3DatagramReceiveStatus planHttp3DatagramReceive(Http3DatagramView datagram,
+    Http3DatagramReceiveContext context) noexcept {
+    if (!isHttp3RequestStreamId(datagram.streamId) || !context.localH3Datagram) {
+        return Http3DatagramReceiveStatus::kConnectionError;
+    }
+    if (!context.streamExists || !context.receiveOpen) {
+        return Http3DatagramReceiveStatus::kDrop;
+    }
+    return context.supportsDatagrams ? Http3DatagramReceiveStatus::kDeliver : Http3DatagramReceiveStatus::kStreamError;
+}
+
 HttpDatagramSession::HttpDatagramSession(HttpDatagramSessionConfig config)
     : config_(config) {
     if (config.http3StreamId && !isHttp3RequestStreamId(*config.http3StreamId)) {
@@ -131,6 +163,51 @@ bool HttpDatagramSession::quicDatagramsEnabled() const noexcept {
     return config_.http3StreamId && config_.localH3Datagram && config_.peerH3Datagram &&
            config_.quicDatagram && config_.maxQuicPayloadBytes > 0;
 }
+std::expected<HttpDatagramWritePlan, HttpDatagramError> HttpDatagramSession::prepareDatagram(
+    std::span<const char> payload, HttpDatagramTransport transport) const noexcept {
+    if (!sendOpen_) {
+        return std::unexpected(HttpDatagramError::kSendClosed);
+    }
+    HttpDatagramWritePlan plan{.payload = payload, .transport = transport};
+    if (transport == HttpDatagramTransport::kQuic) {
+        if (!quicDatagramsEnabled()) {
+            return std::unexpected(HttpDatagramError::kNotNegotiated);
+        }
+        const auto prefix = encodeHttp3DatagramPrefix(plan.prefix, *config_.http3StreamId);
+        plan.prefixSize = *prefix;
+        if (plan.prefixSize > config_.maxQuicPayloadBytes || payload.size() > config_.maxQuicPayloadBytes - plan.prefixSize) {
+            return std::unexpected(HttpDatagramError::kPayloadTooLarge);
+        }
+    } else {
+        const auto prefix = encodeHttpCapsuleHeader(plan.prefix, kHttpDatagramCapsuleType, payload.size());
+        if (!prefix) {
+            return std::unexpected(HttpDatagramError::kPayloadTooLarge);
+        }
+        plan.prefixSize = *prefix;
+    }
+    return plan;
+}
+std::expected<std::optional<std::span<const char>>, HttpDatagramError> HttpDatagramSession::receiveDatagram(
+    std::span<const char> input, HttpDatagramTransport transport) const noexcept {
+    if (transport == HttpDatagramTransport::kQuic) {
+        if (!config_.http3StreamId || !config_.localH3Datagram) {
+            return std::unexpected(HttpDatagramError::kNotNegotiated);
+        }
+        const auto decoded = decodeHttp3Datagram(input);
+        if (!decoded) {
+            return std::unexpected(HttpDatagramError::kMalformed);
+        }
+        if (decoded->streamId != *config_.http3StreamId) {
+            return std::unexpected(HttpDatagramError::kWrongStream);
+        }
+        input = decoded->payload;
+    }
+    if (!receiveOpen_) {
+        return std::nullopt;
+    }
+    return input;
+}
+
 std::expected<HttpUdpDatagramWritePlan, HttpDatagramError> HttpDatagramSession::prepareUdpDatagram(
     std::span<const char> payload, HttpDatagramTransport transport) const noexcept {
     if (!sendOpen_) {
@@ -160,7 +237,7 @@ std::expected<HttpUdpDatagramWritePlan, HttpDatagramError> HttpDatagramSession::
 std::expected<std::optional<HttpUdpDatagramView>, HttpDatagramError> HttpDatagramSession::receiveUdpDatagram(
     std::span<const char> input, HttpDatagramTransport transport) const noexcept {
     if (transport == HttpDatagramTransport::kQuic) {
-        if (!quicDatagramsEnabled()) {
+        if (!config_.http3StreamId || !config_.localH3Datagram) {
             return std::unexpected(HttpDatagramError::kNotNegotiated);
         }
         const auto datagram = decodeHttp3Datagram(input);

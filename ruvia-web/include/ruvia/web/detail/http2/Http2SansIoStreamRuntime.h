@@ -15,6 +15,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/detail/http2/Http2SansIoRequestBody.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/http2/Http2SansIoTermination.h"
@@ -104,7 +105,24 @@ class Http2SansIoStreamRuntime final {
 public:
     Http2SansIoStreamRuntime(std::uint32_t streamId, std::pmr::memory_resource* resource)
         : streamId_(streamId),
-          resource_(pmrResourceOrDefault(resource)) {}
+          resource_(pmrResourceOrDefault(resource)),
+          trailers_(resource_) {}
+
+    void bindPushParent(std::uint32_t id) noexcept {
+        pushParent_ = id;
+    }
+    [[nodiscard]] std::uint32_t pushParent() const noexcept {
+        return pushParent_;
+    }
+    [[nodiscard]] HttpRequestTrailers& trailers() & noexcept {
+        return trailers_;
+    }
+    [[nodiscard]] const std::optional<HttpPriority>& priorityUpdate() const& noexcept {
+        return priorityUpdate_;
+    }
+    void reprioritize(HttpPriority priority) noexcept {
+        priorityUpdate_ = priority;
+    }
 
     [[nodiscard]] std::uint32_t streamId() const noexcept {
         return streamId_;
@@ -166,19 +184,22 @@ private:
         return selected != nullptr ? selected->beginDispatch(worker, termination) : nullptr;
     }
 
-    void markWebSocketTunnel() noexcept {
-        webSocketTunnel_ = true;
+    void markTunnel() noexcept {
+        tunnel_ = true;
     }
 
-    [[nodiscard]] bool webSocketTunnel() const noexcept {
-        return webSocketTunnel_;
+    [[nodiscard]] bool tunnel() const noexcept {
+        return tunnel_;
     }
 
     std::uint32_t streamId_;
+    std::uint32_t pushParent_{};
     std::pmr::memory_resource* resource_;
+    HttpRequestTrailers trailers_;
+    std::optional<HttpPriority> priorityUpdate_{};
     std::optional<Http2SansIoSelectedRoute> selectedRoute_;
     std::optional<Http2RequestHeadEvent> requestHead_;
-    bool webSocketTunnel_{false};
+    bool tunnel_{false};
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
@@ -264,13 +285,13 @@ public:
     }
     Http2SansIoStreamSignal* beginDispatch(std::uint32_t, WorkerHandle&&) = delete;
 
-    [[nodiscard]] bool markWebSocketTunnel(std::uint32_t streamId) noexcept {
+    [[nodiscard]] bool markTunnel(std::uint32_t streamId) noexcept {
         auto* runtime = find(streamId);
-        if (runtime == nullptr || runtime->webSocketTunnel()) {
+        if (runtime == nullptr || runtime->tunnel()) {
             return false;
         }
-        runtime->markWebSocketTunnel();
-        ++webSocketTunnelCount_;
+        runtime->markTunnel();
+        ++tunnelCount_;
         return true;
     }
 
@@ -306,8 +327,8 @@ public:
         return dispatchedCount_;
     }
 
-    [[nodiscard]] std::size_t webSocketTunnelCount() const noexcept {
-        return webSocketTunnelCount_;
+    [[nodiscard]] std::size_t tunnelCount() const noexcept {
+        return tunnelCount_;
     }
 
     template <typename Callback>
@@ -336,8 +357,8 @@ private:
         if (runtime.dispatched()) {
             --dispatchedCount_;
         }
-        if (runtime.webSocketTunnel()) {
-            --webSocketTunnelCount_;
+        if (runtime.tunnel()) {
+            --tunnelCount_;
         }
     }
 
@@ -347,7 +368,7 @@ private:
     std::pmr::vector<OverflowRuntime> overflow_;
     std::size_t size_{0};
     std::size_t dispatchedCount_{0};
-    std::size_t webSocketTunnelCount_{0};
+    std::size_t tunnelCount_{0};
 };
 
 }  // namespace ruvia::detail

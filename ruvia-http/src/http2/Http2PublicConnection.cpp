@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
+#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
@@ -28,7 +29,7 @@ namespace {
     if (const auto* known = content.knownLengthContent()) {
         return detail::Http2RequestContent::knownLength(known->length());
     }
-    return detail::Http2RequestContent::streaming();
+    return detail::Http2RequestContent::streaming(content.streamingContent()->expectedLength());
 }
 
 }  // namespace
@@ -152,6 +153,7 @@ public:
     }
 
     enum class DeferredReleaseKind : std::uint8_t { kAfterCredits,
+        kAfterTunnelEnd,
         kAbandon };
     struct DeferredRelease final {
         std::uint32_t streamId{0};
@@ -181,7 +183,7 @@ public:
 
     void defer(std::uint32_t streamId, DeferredReleaseKind kind) noexcept {
         if (auto* existing = deferred(streamId)) {
-            if (kind == DeferredReleaseKind::kAbandon ||
+            if (kind == DeferredReleaseKind::kAfterTunnelEnd || kind == DeferredReleaseKind::kAbandon ||
                 (existing->kind == DeferredReleaseKind::kAbandon &&
                     kind == DeferredReleaseKind::kAfterCredits)) {
                 existing->kind = kind;
@@ -274,9 +276,10 @@ public:
             }
             return;
         }
-        if (pending->kind == DeferredReleaseKind::kAfterCredits) {
+        if (pending->kind == DeferredReleaseKind::kAfterCredits || pending->kind == DeferredReleaseKind::kAfterTunnelEnd) {
             const auto* stream = connection.stream(streamId);
-            if ((stream != nullptr && stream->windowDebt() != 0) ||
+            if ((stream != nullptr && (stream->windowDebt() != 0 ||
+                                          (pending->kind == DeferredReleaseKind::kAfterTunnelEnd && !detail::http2StreamIsClosed(*stream)))) ||
                 connection.hasPendingEvents(streamId)) {
                 return;
             }
@@ -607,7 +610,7 @@ std::optional<Http2Event> Http2Connection::nextEvent() {
     if (const auto* value = event->tunnelEnd()) {
         auto result = Http2Event::tunnelEnd(value->streamId());
         if (impl_->role == Http2Role::kClient) {
-            impl_->releaseOwnerAfterCredits(value->streamId());
+            impl_->defer(value->streamId(), Impl::DeferredReleaseKind::kAfterTunnelEnd);
         }
         impl_->connection.consumeEvent();
         return std::optional<Http2Event>(std::move(result));
@@ -687,12 +690,18 @@ Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
 
 Http2DataSubmitStatus Http2Connection::submitData(
     std::uint32_t streamId, std::string_view bytes, Http2EndStream endStream) {
-    return impl_->connection.submitData(streamId, bytes, endStream);
+    const auto result = impl_->connection.submitData(streamId, bytes, endStream);
+    impl_->retryDeferred();
+    return result;
 }
 Http2RequestContentReleaseStatus Http2Connection::releaseRequestContent(
     std::uint32_t streamId) noexcept {
     return impl_->connection.releaseRequestContent(streamId);
 }
+Http2SubmitStatus Http2Connection::submitConnectResponseHead(std::uint32_t streamId, const HttpResponse& response) {
+    return impl_->connection.submitConnectResponseHead(streamId, response);
+}
+
 Http2SubmitStatus Http2Connection::submitInterimResponseHead(
     std::uint32_t streamId, const HttpInterimResponseHead& response) {
     return impl_->connection.submitInterimResponseHead(streamId, response);
@@ -794,6 +803,31 @@ std::expected<std::uint32_t, Http2PushSubmitError> Http2Connection::submitPushPr
     return impl_->connection.submitPushPromise(associatedStreamId, request);
 }
 
+std::expected<Http2RequestHeadEvent, Http2PushSubmitError> Http2Connection::submitPushRequest(
+    std::uint32_t associatedStreamId, HttpPushRequestView request) {
+    const auto id = submitPushPromise(associatedStreamId, request);
+    if (!id) {
+        return std::unexpected(id.error());
+    }
+    try {
+        auto built = buildHttp2ServerRequest(impl_->connection, *id, impl_->resource, {});
+        if (!built) {
+            (void)impl_->connection.submitReset(*id, detail::Http2ErrorCode::kCancel);
+            return std::unexpected(Http2PushSubmitError::kInvalidRequest);
+        }
+        impl_->connection.pinStream(*id);
+        return Http2RequestHeadEvent(impl_->endpoint, *id, std::move(*built), {},
+            HttpRequestContentIndication::kNoContent, {});
+    } catch (...) {
+        const auto original = std::current_exception();
+        try {
+            (void)impl_->connection.submitReset(*id, detail::Http2ErrorCode::kCancel);
+        } catch (...) {
+        }
+        std::rethrow_exception(original);
+    }
+}
+
 Http2SubmitStatus Http2Connection::submitOriginAdvertisement(std::span<const std::string_view> origins) {
     return impl_->connection.submitOriginAdvertisement(origins);
 }
@@ -871,6 +905,8 @@ std::optional<Http2ServerRequestRouteView> detail::Http2Connection::serverReques
         .requestMethod = streamState->requestMethod(),
         .path = detail::Http2RequestBuilder::requestPath(*streamState),
         .webSocketConnect = webSocketConnect,
+        .authority = streamState->requestAuthority(),
+        .protocol = streamState->requestProtocol(),
     };
 }
 std::optional<Http2ServerRequestRouteView> Http2Connection::serverRequestRoute(

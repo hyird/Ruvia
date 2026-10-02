@@ -1,19 +1,16 @@
 #include "ruvia/web/detail/http3/Http3DatagramEndpoint.h"
 
-#include <cstddef>
+#include <algorithm>
 #include <exception>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 
 #include <asio/error.hpp>
 
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-
 namespace ruvia::detail {
 namespace {
 
-bool isConcreteUnicast(const asio::ip::address& address) noexcept {
+bool is_concrete_unicast(const asio::ip::address& address) noexcept {
     if (address.is_v4()) {
         const auto bytes = address.to_v4().to_bytes();
         return bytes[0] != 0 && bytes[0] < 224;
@@ -26,379 +23,242 @@ bool isConcreteUnicast(const asio::ip::address& address) noexcept {
            !ipv6.is_link_local() && ipv6.scope_id() == 0;
 }
 
-bool isSupportedBindAddress(const asio::ip::address& address) noexcept {
-    return address.is_unspecified() || isConcreteUnicast(address);
-}
-
-bool matchesBoundDestination(
-    const asio::ip::udp::endpoint& destination, const asio::ip::udp::endpoint& bound) noexcept {
+bool matches_bound_destination(const asio::ip::udp::endpoint& destination,
+    const asio::ip::udp::endpoint& bound) noexcept {
     return destination.port() == bound.port() &&
            destination.address().is_v4() == bound.address().is_v4() &&
-           isConcreteUnicast(destination.address()) &&
+           is_concrete_unicast(destination.address()) &&
            (bound.address().is_unspecified() || destination.address() == bound.address());
 }
 
-std::error_code invalidDatagram() noexcept {
+std::error_code invalid_datagram() noexcept {
     return std::make_error_code(std::errc::bad_message);
 }
 
-std::error_code operationNotPermitted() noexcept {
+std::error_code operation_not_permitted() noexcept {
     return std::make_error_code(std::errc::operation_not_permitted);
 }
 
-std::error_code ioFailure() noexcept {
+std::error_code io_failure() noexcept {
     return std::make_error_code(std::errc::io_error);
 }
 
 }  // namespace
 
-Http3DatagramEndpoint::BridgeLease::BridgeLease(
-    Http3DatagramEndpoint& owner) noexcept
-    : owner_(&owner) {}
-
-Http3DatagramEndpoint::BridgeLease::BridgeLease(BridgeLease&& other) noexcept
-    : owner_(std::exchange(other.owner_, nullptr)) {}
-
-Http3DatagramEndpoint::BridgeLease&
-Http3DatagramEndpoint::BridgeLease::operator=(BridgeLease&& other) noexcept {
-    if (this != &other) {
-        reset();
-        owner_ = std::exchange(other.owner_, nullptr);
-    }
-    return *this;
-}
-
-Http3DatagramEndpoint::BridgeLease::~BridgeLease() {
-    reset();
-}
-
-Http3QuicDatagramBridge& Http3DatagramEndpoint::BridgeLease::bridge() const noexcept {
-    if (owner_ == nullptr || !owner_->bridge_) {
-        std::terminate();
-    }
-    owner_->requireOwnerThread();
-    return *owner_->bridge_;
-}
-
-void Http3DatagramEndpoint::BridgeLease::reset() noexcept {
-    if (owner_ != nullptr) {
-        auto* const owner = std::exchange(owner_, nullptr);
-        owner->releaseBridgeLease();
-    }
-}
-
-Http3DatagramEndpoint::Http3DatagramEndpoint(asio::io_context& networkIo,
-    Udp::endpoint bindEndpoint, Notification notification)
-    : bindEndpoint_(checkedBindEndpoint(std::move(bindEndpoint))),
-      ownerThread_(std::this_thread::get_id()),
-      socket_(networkIo, bindEndpoint_),
-      notification_(checkedNotification(notification)) {}
+Http3DatagramEndpoint::Http3DatagramEndpoint(asio::io_context& network_io,
+    udp::endpoint bind_endpoint, notification callback)
+    : bind_endpoint_(checked_bind_endpoint(std::move(bind_endpoint))),
+      owner_thread_(std::this_thread::get_id()),
+      socket_(network_io, bind_endpoint_),
+      notification_(checked_notification(callback)) {}
 
 Http3DatagramEndpoint::~Http3DatagramEndpoint() {
-    requireOwnerThread();
+    require_owner_thread();
     if (!stopping_) {
-        requestStop();
+        request_stop();
     }
-    if (callbackDepth_ != 0 || bridgeLeaseActive_ || !socket_.done()) {
+    if (callback_depth_ != 0 || !socket_.done()) {
         std::terminate();
     }
 }
 
-Http3DatagramEndpoint::Udp::endpoint
-Http3DatagramEndpoint::checkedBindEndpoint(Udp::endpoint endpoint) {
-    if (!isSupportedBindAddress(endpoint.address())) {
+Http3DatagramEndpoint::udp::endpoint
+Http3DatagramEndpoint::checked_bind_endpoint(udp::endpoint endpoint) {
+    if (!(endpoint.address().is_unspecified() || is_concrete_unicast(endpoint.address()))) {
         throw std::invalid_argument(
-            "HTTP/3 server network datagram bind requires a wildcard or unicast IPv4/IPv6 address without IPv6 scope");
+            "HTTP/3 UDP bind requires wildcard or unicast IPv4/IPv6 without IPv6 scope");
     }
     return endpoint;
 }
 
-Http3DatagramEndpoint::Notification
-Http3DatagramEndpoint::checkedNotification(Notification notification) {
-    if (notification.notify == nullptr) {
-        throw std::invalid_argument("HTTP/3 server network datagram notification is required");
+Http3DatagramEndpoint::notification
+Http3DatagramEndpoint::checked_notification(notification callback) {
+    if (callback.notify == nullptr) {
+        throw std::invalid_argument("HTTP/3 UDP notification is required");
     }
-    return notification;
+    return callback;
 }
 
 void Http3DatagramEndpoint::prepare() {
-    requireOwnerThread();
+    require_owner_thread();
     if (prepared_ || stopping_) {
-        throw std::logic_error("HTTP/3 server network datagram endpoint cannot be prepared in this state");
+        throw std::logic_error("HTTP/3 UDP endpoint cannot prepare in this state");
     }
-
     try {
         socket_.prepare();
-        boundEndpoint_ = Udp::endpoint(bindEndpoint_.address(), socket_.boundPort());
-        const auto boundAddress = toHttp3QuicBindAddress(boundEndpoint_);
-        if (!boundAddress) {
-            throw std::invalid_argument("HTTP/3 server network UDP bind address cannot be represented by QUIC BIO");
-        }
-        bridge_.emplace(*boundAddress);
+        bound_endpoint_ = udp::endpoint(bind_endpoint_.address(), socket_.boundPort());
         prepared_ = true;
     } catch (...) {
-        requestStop();
+        request_stop();
         throw;
     }
 }
 
-std::uint16_t Http3DatagramEndpoint::boundPort() const noexcept {
-    requireOwnerThread();
-    return prepared_ ? boundEndpoint_.port() : 0;
+std::uint16_t Http3DatagramEndpoint::bound_port() const noexcept {
+    require_owner_thread();
+    return prepared_ ? bound_endpoint_.port() : 0;
 }
 
-Http3DatagramEndpoint::BridgeLease
-Http3DatagramEndpoint::acquireBridge() {
-    requireOwnerThread();
-    if (!prepared_ || stopping_ || !bridge_ || bridgeLeaseActive_) {
-        throw std::logic_error("HTTP/3 server network datagram bridge is not available for leasing");
-    }
-    bridgeLeaseActive_ = true;
-    return BridgeLease(*this);
-}
-
-Http3DatagramEndpoint::PumpResult Http3DatagramEndpoint::start() noexcept {
-    requireOwnerThread();
+Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::start() noexcept {
+    require_owner_thread();
     if (stopping_) {
-        return PumpResult::kStopped;
+        return pump_result::stopped;
     }
     if (!prepared_ || started_) {
-        fail(operationNotPermitted());
-        return PumpResult::kError;
+        fail(operation_not_permitted());
+        return pump_result::error;
     }
     started_ = true;
-    return armReceive() ? PumpResult::kPending : PumpResult::kError;
+    return arm_receive() ? pump_result::pending : pump_result::error;
 }
 
-Http3DatagramEndpoint::PumpResult
-Http3DatagramEndpoint::retryHeldReceive() noexcept {
-    requireOwnerThread();
+std::optional<Http3DatagramEndpoint::received_datagram>
+Http3DatagramEndpoint::receive_slot() const noexcept {
+    require_owner_thread();
+    if (!has_held_receive_) {
+        return std::nullopt;
+    }
+    return received_datagram{held_receive_.bytes, held_receive_.peer,
+        held_receive_.localDestination};
+}
+
+Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::consume_receive() noexcept {
+    require_owner_thread();
     if (stopping_) {
-        return PumpResult::kStopped;
+        return pump_result::stopped;
     }
-    if (!hasHeldReceive_) {
-        return PumpResult::kIdle;
+    if (!has_held_receive_) {
+        return pump_result::idle;
     }
-    return injectHeldReceive();
+    held_receive_ = {};
+    has_held_receive_ = false;
+    return arm_receive() ? pump_result::pending : pump_result::error;
 }
 
-Http3DatagramEndpoint::PumpResult
-Http3DatagramEndpoint::sendPending() noexcept {
-    requireOwnerThread();
-    return sendPendingImpl(false);
-}
-
-Http3DatagramEndpoint::PumpResult
-Http3DatagramEndpoint::sendPendingImpl(bool notifyWhenDrained) noexcept {
+Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_datagram(
+    std::span<const std::byte> bytes, const udp::endpoint& source,
+    const udp::endpoint& peer) noexcept {
+    require_owner_thread();
     if (stopping_) {
-        return PumpResult::kStopped;
+        return pump_result::stopped;
     }
-    if (!prepared_ || !bridge_) {
-        fail(operationNotPermitted());
-        return PumpResult::kError;
-    }
-    if (sendInFlight_) {
-        return PumpResult::kPending;
-    }
-
-    Http3QuicOutboundDatagram outbound;
-    switch (bridge_->takeOutbound(outbound)) {
-        case Http3QuicDatagramBridge::OutboundResult::kEmpty:
-            if (notifyWhenDrained) {
-                notify(NotificationKind::kOutputDrained);
-            }
-            return stopping_ ? PumpResult::kStopped : PumpResult::kIdle;
-        case Http3QuicDatagramBridge::OutboundResult::kBusy:
-            return PumpResult::kPending;
-        case Http3QuicDatagramBridge::OutboundResult::kFatal:
-            fail(ioFailure());
-            return PumpResult::kError;
-        case Http3QuicDatagramBridge::OutboundResult::kReady:
-            break;
-    }
-
-    const auto destination = toHttp3UdpEndpoint(outbound.destination);
-    if (!destination) {
-        bridge_->completeOutbound();
-        fail(invalidDatagram());
-        return PumpResult::kError;
-    }
-
-    Udp::endpoint source = boundEndpoint_;
-    if (outbound.hasSource) {
-        const auto explicitSource = toHttp3UdpEndpoint(outbound.source);
-        if (!explicitSource || !matchesBoundDestination(*explicitSource, boundEndpoint_)) {
-            bridge_->completeOutbound();
-            fail(invalidDatagram());
-            return PumpResult::kError;
+    const std::size_t max_payload = bound_endpoint_.address().is_v4() ? 65507 : 65527;
+    if (!prepared_ || !started_ || bytes.empty() ||
+        bytes.size() > max_payload || send_in_flight_ ||
+        !matches_bound_destination(source, bound_endpoint_) ||
+        !is_concrete_unicast(peer.address()) || peer.port() == 0 ||
+        peer.address().is_v4() != bound_endpoint_.address().is_v4()) {
+        if (send_in_flight_) {
+            return pump_result::pending;
         }
-        source = *explicitSource;
-    } else if (boundEndpoint_.address().is_unspecified()) {
-        // A wildcard socket needs the concrete pktinfo-derived source address
-        // OpenSSL attached to this datagram; sending from the wildcard would
-        // let the kernel choose a different local address than the peer used.
-        bridge_->completeOutbound();
-        fail(invalidDatagram());
-        return PumpResult::kError;
+        fail(bytes.size() > max_payload ? std::make_error_code(std::errc::message_size)
+                                                : invalid_datagram());
+        return pump_result::error;
     }
-
-    sendSize_ = outbound.bytes.size();
-    sendInFlight_ = true;
-    if (!socket_.asyncSend(Http3UdpSocket::SendView{source, *destination, outbound.bytes},
-            this, &Http3DatagramEndpoint::sendCompletion)) {
-        sendInFlight_ = false;
-        sendSize_ = 0;
-        bridge_->completeOutbound();
-        fail(ioFailure());
-        return PumpResult::kError;
+    std::ranges::copy(bytes, send_buffer_.begin());
+    send_size_ = bytes.size();
+    send_in_flight_ = true;
+    const auto accepted = socket_.asyncSend(
+        Http3UdpSocket::SendView{source, peer, std::span<const std::byte>(send_buffer_).first(send_size_)},
+        this, &Http3DatagramEndpoint::send_completion);
+    if (!accepted) {
+        send_in_flight_ = false;
+        send_size_ = 0;
+        fail(io_failure());
+        return pump_result::error;
     }
-    return PumpResult::kPending;
+    return pump_result::pending;
 }
 
-void Http3DatagramEndpoint::requestStop() noexcept {
-    requireOwnerThread();
+bool Http3DatagramEndpoint::send_in_flight() const noexcept {
+    require_owner_thread();
+    return send_in_flight_;
+}
+
+bool Http3DatagramEndpoint::outbound_quiescent() const noexcept {
+    require_owner_thread();
+    return !send_in_flight_;
+}
+
+void Http3DatagramEndpoint::request_stop() noexcept {
+    require_owner_thread();
     if (stopping_) {
         return;
     }
     stopping_ = true;
-    heldReceive_ = {};
-    hasHeldReceive_ = false;
-    heldReceiveBackpressureNotified_ = false;
+    held_receive_ = {};
+    has_held_receive_ = false;
     socket_.requestStop();
-    if (!stoppingNotified_) {
-        stoppingNotified_ = true;
-        notify(NotificationKind::kStopping);
+    if (!stopping_notified_) {
+        stopping_notified_ = true;
+        notify(notification_kind::stopping);
     }
 }
 
-bool Http3DatagramEndpoint::socketDone() const noexcept {
-    requireOwnerThread();
+bool Http3DatagramEndpoint::socket_done() const noexcept {
+    require_owner_thread();
     return socket_.done();
 }
 
-Http3DatagramEndpoint::StopStatus
-Http3DatagramEndpoint::stopStatus() const noexcept {
-    requireOwnerThread();
-    if (!stopping_ || callbackDepth_ != 0 || bridgeLeaseActive_ || sendInFlight_ ||
-        !socket_.done()) {
-        return StopStatus::kPending;
+Http3DatagramEndpoint::stop_status Http3DatagramEndpoint::status() const noexcept {
+    require_owner_thread();
+    if (!stopping_ || callback_depth_ != 0 || send_in_flight_ || !socket_.done()) {
+        return stop_status::pending;
     }
-    return error_ ? StopStatus::kError : StopStatus::kDone;
-}
-
-bool Http3DatagramEndpoint::sendInFlight() const noexcept {
-    requireOwnerThread();
-    return sendInFlight_;
-}
-
-bool Http3DatagramEndpoint::outboundQuiescent() const noexcept {
-    requireOwnerThread();
-    return bridge_.has_value() && bridge_->outboundQuiescent();
+    return error_ ? stop_status::error : stop_status::done;
 }
 
 std::error_code Http3DatagramEndpoint::error() const noexcept {
-    requireOwnerThread();
+    require_owner_thread();
     return error_;
 }
 
-void Http3DatagramEndpoint::receiveCompletion(void* context, std::error_code error,
+void Http3DatagramEndpoint::receive_completion(void* context, std::error_code error,
     Http3UdpSocket::ReceiveView view) noexcept {
     auto& self = *static_cast<Http3DatagramEndpoint*>(context);
-    ++self.callbackDepth_;
-    self.receiveArmed_ = false;
-    self.handleReceive(error, std::move(view));
-    --self.callbackDepth_;
+    ++self.callback_depth_;
+    self.receive_armed_ = false;
+    self.handle_receive(error, std::move(view));
+    --self.callback_depth_;
 }
 
-void Http3DatagramEndpoint::sendCompletion(void* context, std::error_code error,
+void Http3DatagramEndpoint::send_completion(void* context, std::error_code error,
     std::size_t size) noexcept {
     auto& self = *static_cast<Http3DatagramEndpoint*>(context);
-    ++self.callbackDepth_;
-    self.handleSend(error, size);
-    --self.callbackDepth_;
+    ++self.callback_depth_;
+    self.handle_send(error, size);
+    --self.callback_depth_;
 }
 
-void Http3DatagramEndpoint::requireOwnerThread() const noexcept {
-    if (std::this_thread::get_id() != ownerThread_) {
+void Http3DatagramEndpoint::require_owner_thread() const noexcept {
+    if (std::this_thread::get_id() != owner_thread_) {
         std::terminate();
     }
 }
 
-void Http3DatagramEndpoint::releaseBridgeLease() noexcept {
-    requireOwnerThread();
-    if (!bridgeLeaseActive_) {
-        std::terminate();
-    }
-    bridgeLeaseActive_ = false;
-}
-
-bool Http3DatagramEndpoint::armReceive() noexcept {
-    if (stopping_ || !started_ || receiveArmed_ || hasHeldReceive_) {
+bool Http3DatagramEndpoint::arm_receive() noexcept {
+    if (stopping_ || !started_ || receive_armed_ || has_held_receive_) {
         return false;
     }
-    receiveArmed_ = true;
-    if (!socket_.asyncReceive(this, &Http3DatagramEndpoint::receiveCompletion)) {
-        receiveArmed_ = false;
-        fail(ioFailure());
+    receive_armed_ = true;
+    if (!socket_.asyncReceive(this, &Http3DatagramEndpoint::receive_completion)) {
+        receive_armed_ = false;
+        fail(io_failure());
         return false;
     }
     return true;
 }
 
-Http3DatagramEndpoint::PumpResult
-Http3DatagramEndpoint::injectHeldReceive() noexcept {
-    if (!hasHeldReceive_ || !bridge_) {
-        fail(operationNotPermitted());
-        return PumpResult::kError;
-    }
-
-    const auto peer = toHttp3QuicDatagramAddress(heldReceive_.peer);
-    const auto local = toHttp3QuicDatagramAddress(heldReceive_.localDestination);
-    if (!peer || !local ||
-        !matchesBoundDestination(heldReceive_.localDestination, boundEndpoint_)) {
-        // A malformed or misdirected peer packet must not close the shared UDP socket.
-        heldReceive_ = {};
-        hasHeldReceive_ = false;
-        heldReceiveBackpressureNotified_ = false;
-        return armReceive() ? PumpResult::kPending : PumpResult::kError;
-    }
-
-    switch (bridge_->inject(heldReceive_.bytes, *peer, *local)) {
-        case Http3QuicDatagramBridge::InjectResult::kFull:
-            if (!heldReceiveBackpressureNotified_) {
-                heldReceiveBackpressureNotified_ = true;
-                notify(NotificationKind::kInputAvailable);
-            }
-            return stopping_ ? PumpResult::kStopped : PumpResult::kBackpressured;
-        case Http3QuicDatagramBridge::InjectResult::kFatal:
-            fail(invalidDatagram());
-            return PumpResult::kError;
-        case Http3QuicDatagramBridge::InjectResult::kAccepted:
-            heldReceive_ = {};
-            hasHeldReceive_ = false;
-            heldReceiveBackpressureNotified_ = false;
-            notify(NotificationKind::kInputAvailable);
-            if (!stopping_) {
-                (void)armReceive();
-            }
-            return error_      ? PumpResult::kError
-                   : stopping_ ? PumpResult::kStopped
-                               : PumpResult::kPending;
-    }
-    std::terminate();
-}
-
-void Http3DatagramEndpoint::handleReceive(std::error_code error,
+void Http3DatagramEndpoint::handle_receive(std::error_code error,
     Http3UdpSocket::ReceiveView view) noexcept {
     if (error) {
-        if (!stopping_) {
-            // Truncated datagrams and malformed pktinfo are packet-local errors.
-            // Continue receiving rather than letting one datagram stop the server network runtime.
-            if (error == invalidDatagram()) {
-                (void)armReceive();
-            } else {
-                fail(error);
-            }
+        if (stopping_) {
+            return;
+        }
+        if (error == invalid_datagram()) {
+            (void)arm_receive();
+        } else {
+            fail(error);
         }
         return;
     }
@@ -406,50 +266,53 @@ void Http3DatagramEndpoint::handleReceive(std::error_code error,
         return;
     }
     if (view.bytes.empty()) {
-        (void)armReceive();
+        (void)arm_receive();
         return;
     }
-    if (hasHeldReceive_) {
+    if (has_held_receive_) {
         std::terminate();
     }
-    heldReceive_ = std::move(view);
-    hasHeldReceive_ = true;
-    (void)injectHeldReceive();
+    if (!is_concrete_unicast(view.peer.address()) || view.peer.port() == 0 ||
+        !matches_bound_destination(view.localDestination, bound_endpoint_)) {
+        (void)arm_receive();
+        return;
+    }
+    held_receive_ = std::move(view);
+    has_held_receive_ = true;
+    notify(notification_kind::input_available);
 }
 
-void Http3DatagramEndpoint::handleSend(std::error_code error,
+void Http3DatagramEndpoint::handle_send(std::error_code error,
     std::size_t size) noexcept {
-    if (!sendInFlight_ || !bridge_) {
+    if (!send_in_flight_) {
         std::terminate();
     }
-    sendInFlight_ = false;
-    const std::size_t expectedSize = sendSize_;
-    sendSize_ = 0;
-    bridge_->completeOutbound();
-
+    send_in_flight_ = false;
+    const auto expected_size = send_size_;
+    send_size_ = 0;
     if (stopping_) {
         return;
     }
     if (error) {
         fail(error);
-    } else if (size != expectedSize) {
-        fail(ioFailure());
+    } else if (size != expected_size) {
+        fail(io_failure());
     } else {
-        (void)sendPendingImpl(true);
+        notify(notification_kind::output_drained);
     }
 }
 
-void Http3DatagramEndpoint::notify(NotificationKind kind) noexcept {
-    ++callbackDepth_;
+void Http3DatagramEndpoint::notify(notification_kind kind) noexcept {
+    ++callback_depth_;
     notification_.notify(notification_.context, kind);
-    --callbackDepth_;
+    --callback_depth_;
 }
 
 void Http3DatagramEndpoint::fail(std::error_code error) noexcept {
     if (!error_) {
-        error_ = error ? error : ioFailure();
+        error_ = error ? error : io_failure();
     }
-    requestStop();
+    request_stop();
 }
 
 }  // namespace ruvia::detail

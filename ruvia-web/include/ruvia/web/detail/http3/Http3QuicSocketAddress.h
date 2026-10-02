@@ -9,25 +9,25 @@
 
 namespace ruvia::detail {
 
-enum class Http3QuicSocketAddressError : std::uint8_t {
-    kUnspecifiedAddress,
-    kZeroPort,
-    kIPv6ScopeNotSupported,
-    kIPv6LinkLocalNotSupported,
-    kIPv4MappedIPv6NotSupported,
-    kUnsupportedFamily,
+enum class http3_quic_socket_address_error : std::uint8_t {
+    unspecified_address,
+    zero_port,
+    ipv6_scope_not_supported,
+    ipv6_link_local_not_supported,
+    ipv4_mapped_ipv6_not_supported,
+    unsupported_family,
 };
 
 // Address bytes retain network order; ports are represented in host byte order.
 // Datagram peer/source/destination addresses must be concrete; bind addresses may
 // be wildcard because received packets retain their concrete local destination.
-[[nodiscard]] std::expected<Http3QuicDatagramAddress, Http3QuicSocketAddressError>
-toHttp3QuicDatagramAddress(const asio::ip::udp::endpoint& endpoint) noexcept;
+[[nodiscard]] std::expected<http3_quic_datagram_address, http3_quic_socket_address_error>
+to_http3_quic_datagram_address(const asio::ip::udp::endpoint& endpoint) noexcept;
 
-[[nodiscard]] std::expected<Http3QuicDatagramAddress, Http3QuicSocketAddressError>
-toHttp3QuicBindAddress(const asio::ip::udp::endpoint& endpoint) noexcept;
+[[nodiscard]] std::expected<http3_quic_datagram_address, http3_quic_socket_address_error>
+to_http3_quic_bind_address(const asio::ip::udp::endpoint& endpoint) noexcept;
 
-[[nodiscard]] std::expected<asio::ip::udp::endpoint, Http3QuicSocketAddressError>
-toHttp3UdpEndpoint(const Http3QuicDatagramAddress& address) noexcept;
+[[nodiscard]] std::expected<asio::ip::udp::endpoint, http3_quic_socket_address_error>
+to_udp_endpoint(const http3_quic_datagram_address& address) noexcept;
 
 }  // namespace ruvia::detail

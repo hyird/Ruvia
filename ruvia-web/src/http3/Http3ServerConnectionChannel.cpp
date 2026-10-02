@@ -5,11 +5,14 @@
 #include <limits>
 #include <stdexcept>
 
+#include "ruvia/http/Http3VarInt.h"
+
 namespace ruvia::detail {
 
 Http3ServerConnectionChannel::Http3ServerConnectionChannel(
-    Notification networkWake, Notification workerWake)
-    : networkWake_(networkWake),
+    Notification networkWake, Notification workerWake, std::pmr::memory_resource* datagramResource)
+    : datagrams_(datagramResource ? makePmrObject<DatagramLanes>(datagramResource) : std::unique_ptr<DatagramLanes, PmrObjectDeleter<DatagramLanes>>{}),
+      networkWake_(networkWake),
       workerWake_(workerWake),
       networkOwner_(std::this_thread::get_id()) {
     if (networkWake_.context == nullptr || networkWake_.notify == nullptr ||
@@ -125,7 +128,7 @@ Http3ServerConnectionChannel::commitAccepted(Identity identity) noexcept {
 
 Http3ServerConnectionChannel::Status
 Http3ServerConnectionChannel::commitAccepted(
-    Identity identity, ConnectionMetadataView metadata) noexcept {
+    Identity identity, ConnectionMetadataView metadata, Http3Settings settings, std::size_t maxQuicDatagramPayloadBytes) noexcept {
     if (!onNetworkOwner()) {
         return Status::kWrongOwner;
     }
@@ -144,7 +147,7 @@ Http3ServerConnectionChannel::commitAccepted(
         std::terminate();
     }
     beginNotification();
-    bind_ = {.identity = identity, .metadata = metadata};
+    bind_ = {.identity = identity, .metadata = metadata, .settings = settings, .maxQuicDatagramPayloadBytes = maxQuicDatagramPayloadBytes};
     bindPublished_.store(true, std::memory_order_release);
     notifyWorkerBorrowed();
     return Status::kPublished;
@@ -360,11 +363,14 @@ Http3ServerConnectionChannel::publishIntent(Identity identity,
     // a valid intent in this short publication window.
     const bool attachAckPending = lifecycle == Lifecycle::kBinding &&
                                   attachSucceeded_.load(std::memory_order_acquire);
-    if ((!isAttached() && !attachAckPending) || closingGeneration_) {
+    if (!isAttached() && !attachAckPending) {
         return Status::kWrongState;
     }
 
     if (intent.token.kind == Connection::TransportIntentKind::kConnectionClose) {
+        if (closingGeneration_) {
+            return Status::kWrongState;
+        }
         beginNotification();
         closingGeneration_ = true;
         closeIntent_ = {.identity = identity, .intent = intent};
@@ -372,7 +378,11 @@ Http3ServerConnectionChannel::publishIntent(Identity identity,
         notifyNetworkBorrowed();
         return Status::kPublished;
     }
-    if (intent.token.kind != Connection::TransportIntentKind::kStreamReset) {
+    if ((intent.token.kind != Connection::TransportIntentKind::kStreamReset && intent.token.kind != Connection::TransportIntentKind::kOpenPushStream)) {
+        return Status::kWrongState;
+    }
+    if (intent.token.kind == Connection::TransportIntentKind::kOpenPushStream &&
+        (!intent.token.id.pushId || (intent.token.id.streamId & 3) != 0 || intent.token.sequence == 0)) {
         return Status::kWrongState;
     }
     if (hasLastResetSequence_ && intent.token.sequence <= lastResetSequence_) {
@@ -451,7 +461,7 @@ Http3ServerConnectionChannel::receiveIntent(TransportIntent& intent) noexcept {
 
 Http3ServerConnectionChannel::Status
 Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
-    const TransportIntentToken& token, IntentSettlement settlement) noexcept {
+    const TransportIntentToken& token, IntentSettlement settlement, std::optional<Connection::PushStreamOpenResult> pushStream) noexcept {
     if (!onNetworkOwner()) {
         return Status::kWrongOwner;
     }
@@ -470,6 +480,15 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         return Status::kWrongState;
     }
 
+    if ((token.kind == Connection::TransportIntentKind::kOpenPushStream) != pushStream.has_value() ||
+        (token.kind == Connection::TransportIntentKind::kOpenPushStream && !token.id.pushId)) {
+        return Status::kWrongState;
+    }
+    if (pushStream && pushStream->status == Connection::PushStreamOpenResult::Status::kOpened &&
+        ((pushStream->streamId & 3) != 3 || pushStream->streamId > kHttp3VarIntMax ||
+            settlement == IntentSettlement::kTransportRetiredSuperseded)) {
+        return Status::kWrongState;
+    }
     if (token.kind == Connection::TransportIntentKind::kConnectionClose) {
         if (!closeIntentPublished_.load(std::memory_order_acquire) || !closeIntentReceived_ ||
             closeIntent_.identity != identity || closeIntent_.intent.token != token ||
@@ -482,7 +501,7 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         notifyWorkerBorrowed();
         return Status::kPublished;
     }
-    if (token.kind != Connection::TransportIntentKind::kStreamReset) {
+    if ((token.kind != Connection::TransportIntentKind::kStreamReset && token.kind != Connection::TransportIntentKind::kOpenPushStream)) {
         return Status::kStale;
     }
     auto pending = std::find_if(pendingIntents_.begin(), pendingIntents_.end(),
@@ -498,7 +517,8 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
     beginNotification();
     const TransportIntentAck acknowledgement{.identity = identity,
         .token = token,
-        .settlement = settlement};
+        .settlement = settlement,
+        .pushStream = pushStream};
     if (!networkToWorkerControl_.tryPublish(acknowledgement)) {
         std::terminate();
     }
@@ -759,6 +779,7 @@ Http3ServerConnectionChannel::publishWorkerFinalized(Identity identity) noexcept
         return Status::kWrongState;
     }
     beginNotification();
+    discardDatagrams(true);
     workerFinalizedIdentity_ = identity;
     workerFinalizedPublished_.store(true, std::memory_order_release);
     notifyNetworkBorrowed();
@@ -779,6 +800,7 @@ Http3ServerConnectionChannel::publishNetworkFinalized(Identity identity) noexcep
         return Status::kWrongState;
     }
     beginNotification();
+    discardDatagrams(false);
     networkFinalizedIdentity_ = identity;
     networkFinalizedPublished_.store(true, std::memory_order_release);
     notifyWorkerBorrowed();
@@ -959,7 +981,8 @@ bool Http3ServerConnectionChannel::onWorkerOwner() const noexcept {
 }
 
 bool Http3ServerConnectionChannel::allControlEmpty() const noexcept {
-    return workerToNetworkControl_.empty() && networkToWorkerControl_.empty() &&
+    return (!datagrams_ || (datagrams_->requests.empty() && datagrams_->responses.empty())) &&
+           workerToNetworkControl_.empty() && networkToWorkerControl_.empty() &&
            pendingIntentsEmpty() && outstandingIntentsEmpty() &&
            !closeIntentPublished_.load(std::memory_order_acquire) &&
            !closeIntentAckPublished_.load(std::memory_order_acquire) &&
@@ -1060,6 +1083,79 @@ void Http3ServerConnectionChannel::notifyNetworkBorrowed() noexcept {
 void Http3ServerConnectionChannel::notifyWorkerBorrowed() noexcept {
     workerWake_.notify(workerWake_.context);
     endNotification();
+}
+
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::publishDatagram(
+    bool request, Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept {
+    if (request ? !onNetworkOwner() : !onWorkerOwner()) {
+        return Status::kWrongOwner;
+    }
+    if (!datagrams_) {
+        return Status::kUnavailable;
+    }
+    if (!matches(identity)) {
+        return Status::kStale;
+    }
+    if (!isAttached() || transportRetired(identity) ||
+        networkPublicationsClosed_.load(std::memory_order_acquire) ||
+        workerPublicationsClosed_.load(std::memory_order_acquire)) {
+        return Status::kWrongState;
+    }
+    if (!isHttp3RequestStreamId(streamId) || bytes.size() > kMaxDatagramBytes) {
+        return Status::kUnavailable;
+    }
+    Datagram message{.identity = identity, .streamId = streamId, .size = bytes.size()};
+    std::copy(bytes.begin(), bytes.end(), message.bytes.begin());
+    auto& lane = request ? datagrams_->requests : datagrams_->responses;
+    if (!lane.tryPublish(message)) {
+        return Status::kFull;
+    }
+    beginNotification();
+    if (request) {
+        notifyWorkerBorrowed();
+    } else {
+        notifyNetworkBorrowed();
+    }
+    return Status::kPublished;
+}
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::receiveDatagram(
+    bool request, Datagram& message) noexcept {
+    if (request ? !onWorkerOwner() : !onNetworkOwner()) {
+        return Status::kWrongOwner;
+    }
+    if (!datagrams_) {
+        return Status::kEmpty;
+    }
+    auto& lane = request ? datagrams_->requests : datagrams_->responses;
+    if (!lane.tryRead(message)) {
+        return Status::kEmpty;
+    }
+    lane.releaseRead();
+    return matches(message.identity) ? Status::kReceived : Status::kStale;
+}
+void Http3ServerConnectionChannel::discardDatagrams(bool request) noexcept {
+    if (!datagrams_) {
+        return;
+    }
+    auto& lane = request ? datagrams_->requests : datagrams_->responses;
+    Datagram discarded;
+    while (lane.tryRead(discarded)) {
+        lane.releaseRead();
+    }
+}
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::publishRequestDatagram(
+    Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept {
+    return publishDatagram(true, identity, streamId, bytes);
+}
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::publishResponseDatagram(
+    Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept {
+    return publishDatagram(false, identity, streamId, bytes);
+}
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::receiveRequestDatagram(Datagram& datagram) noexcept {
+    return receiveDatagram(true, datagram);
+}
+Http3ServerConnectionChannel::Status Http3ServerConnectionChannel::receiveResponseDatagram(Datagram& datagram) noexcept {
+    return receiveDatagram(false, datagram);
 }
 
 }  // namespace ruvia::detail

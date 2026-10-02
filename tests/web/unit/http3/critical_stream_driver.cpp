@@ -13,7 +13,9 @@
 namespace {
 
 using Driver = ruvia::detail::Http3CriticalStreamDriver;
-using Quic = ruvia::detail::Http3QuicStreamSet;
+using StreamOpen = ruvia::quic_stream_open_result;
+using StreamWrite = ruvia::quic_stream_write_result;
+using OperationStatus = ruvia::quic_operation_status;
 
 struct FakeQuic final {
     std::array<std::string, 3> accepted{};
@@ -24,36 +26,37 @@ struct FakeQuic final {
     bool noCredit{true};
     bool failDecoder{false};
 
-    [[nodiscard]] Quic::OpenStream open(Driver::Kind kind) {
+    [[nodiscard]] StreamOpen open(Driver::Kind kind) {
         ++opens;
         if (kind == Driver::Kind::kQpackEncoder && noCredit) {
             noCredit = false;
-            return {.error = Quic::Error::kStreamLimitRetry};
+            return {.status = OperationStatus::would_block};
         }
-        return {.id = 2 + 4 * static_cast<std::uint64_t>(kind)};
+        return {.status = OperationStatus::accepted,
+            .stream_id = 2 + 4 * static_cast<std::uint64_t>(kind)};
     }
 
-    [[nodiscard]] Quic::StreamWrite write(std::uint64_t id, std::span<const char> bytes) {
+    [[nodiscard]] StreamWrite write(std::uint64_t id, std::span<const char> bytes) {
         const auto index = static_cast<std::size_t>((id - 2) / 4);
         if (index >= accepted.size()) {
-            return {.status = Quic::StreamWrite::Status::kFatal};
+            return {.status = OperationStatus::closing};
         }
         ++writes[index];
         if (index == 0 && writes[index] == 1) {
             retryAddress[index] = bytes.data();
             retrySize[index] = bytes.size();
-            return {.status = Quic::StreamWrite::Status::kWouldBlock};
+            return {.status = OperationStatus::would_block};
         }
         if (index == 0 && writes[index] == 2 &&
             (bytes.data() != retryAddress[index] || bytes.size() != retrySize[index])) {
-            return {.status = Quic::StreamWrite::Status::kRetryMismatch};
+            return {.status = OperationStatus::closing};
         }
         if (index == 2 && failDecoder) {
-            return {.status = Quic::StreamWrite::Status::kClosed};
+            return {.status = OperationStatus::closing};
         }
         const auto count = index == 0 && writes[index] == 2 ? std::size_t{1} : bytes.size();
         accepted[index].append(bytes.data(), count);
-        return {.status = Quic::StreamWrite::Status::kAccepted, .bytes = count};
+        return {.status = OperationStatus::accepted, .accepted = count};
     }
 };
 
@@ -71,11 +74,11 @@ RUVIA_TEST(http3CriticalStreamDriverRetriesCreditAndWantWithoutConcludingStreams
     bool wroteBeforeCredit = false;
     RUVIA_CHECK(driver.drive(
                     [](Driver::Kind) {
-                        return Quic::OpenStream{.error = Quic::Error::kStreamLimitRetry};
+                        return StreamOpen{.status = OperationStatus::would_block};
                     },
                     [&](std::uint64_t, std::span<const char>) {
                         wroteBeforeCredit = true;
-                        return Quic::StreamWrite{.status = Quic::StreamWrite::Status::kFatal};
+                        return StreamWrite{.status = OperationStatus::closing};
                     }) == Driver::Result::kBlocked);
     RUVIA_CHECK(!wroteBeforeCredit);
     auto open = [&](Driver::Kind kind) { return quic.open(kind); };
