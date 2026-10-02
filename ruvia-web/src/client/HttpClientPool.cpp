@@ -295,7 +295,7 @@ std::uint16_t HttpClientPool::port() const noexcept {
 
 Task<std::size_t> HttpClientPool::acquire(const ruvia::OperationTimeout& timeout, StopToken stopToken) {
     auto result = co_await scheduler_.acquire(
-        timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken), worker_);
+        timeout.constrainedBy(config_.acquireTimeout).remaining(), std::move(stopToken));
     switch (result.status()) {
         case ruvia::PoolWaiterResult::Status::kAcquired:
             co_return result.index();
@@ -518,7 +518,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     StopToken stopToken) {
     auto& runtime = *connection.http2Runtime;
     auto acquired =
-        co_await runtime.connectScheduler.acquire(acquireTimeout.remaining(), stopToken, worker_);
+        co_await runtime.connectScheduler.acquire(acquireTimeout.remaining(), stopToken);
     switch (acquired.status()) {
         case ruvia::PoolWaiterResult::Status::kAcquired:
             break;
@@ -1002,7 +1002,7 @@ Task<HttpClientTunnelResult> HttpClientPool::openTunnel(HttpClientRequestStorage
     HttpClientResponse response(*this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
-    state->tunnel.emplace(worker_, state->resource, config);
+    state->tunnel.emplace(state->memoryDomain()->worker(), state->resource, config);
     state->tunnel->udp = ownedRequest.tunnelProtocol() == "connect-udp";
     if (state->tunnel->udp) {
         state->tunnel->config.datagrams = true;
@@ -1047,7 +1047,7 @@ Task<HttpClientExchange> HttpClientPool::openRequest(HttpClientRequestStorage re
     HttpClientResponse response(*this);
     auto* state = response.state_;
     state->bufferedLimit = config_.maxResponseBytes;
-    state->upload.emplace(worker_, state->resource, upload);
+    state->upload.emplace(state->memoryDomain()->worker(), state->resource, upload);
     state->upload->contentReleased = upload.expectation == HttpClientRequestExpectation::kNone;
     ownedRequest.bindUpload(*state->upload);
     backgroundTasks_.spawn(executeInto(std::move(ownedRequest), std::move(options), state));
@@ -1207,7 +1207,7 @@ Task<void> HttpClientPool::executeRequestInto(
                     }
                 } h1Operation{*this, runtime, mustBuffer};
                 auto h1Acquired = co_await connection.http2Runtime->http1Scheduler.acquire(
-                    acquireTimeout.remaining(), options.stopToken, worker_);
+                    acquireTimeout.remaining(), options.stopToken);
                 if (h1Operation.buffered) {
                     --requestsBuffered_;
                     ++requestsInFlight_;

@@ -186,8 +186,7 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
     RUVIA_CHECK(std::vector<std::byte>(server_secret.begin(), server_secret.end()) ==
                 hex_bytes("3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b"));
 
-    const auto check_keys = [&](ruvia::testing::TestContext& ruvia_ctx,
-                                std::span<const std::byte> secret, std::string_view expected_key,
+    const auto check_keys = [&](std::span<const std::byte> secret, std::string_view expected_key,
                                 std::string_view expected_iv, std::string_view expected_hp) {
         std::array<std::byte, 16> key{};
         std::array<std::byte, 12> iv{};
@@ -202,9 +201,9 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc9001_initial_key_vectors) {
         RUVIA_CHECK(std::vector<std::byte>(iv.begin(), iv.end()) == hex_bytes(expected_iv));
         RUVIA_CHECK(std::vector<std::byte>(hp_key.begin(), hp_key.end()) == hex_bytes(expected_hp));
     };
-    check_keys(ruvia_ctx, client_secret, "1f369613dd76d5467730efcbe3b1a22d",
+    check_keys(client_secret, "1f369613dd76d5467730efcbe3b1a22d",
         "fa044b2f42a3fd3b46fb255c", "9f50449e04a0e810283a1e9933adedd2");
-    check_keys(ruvia_ctx, server_secret, "cf3a5331653c364c88f0f379b6067e37",
+    check_keys(server_secret, "cf3a5331653c364c88f0f379b6067e37",
         "0ac1493ca1905853b0bba03e", "c206b8d9b9f0f37644430b490eeaa314");
 
     auto header_key = crypto.create_header_protection_key(crypto.context,

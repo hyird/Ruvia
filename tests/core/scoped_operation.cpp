@@ -330,9 +330,8 @@ ruvia::Task<void> runReentrantColdDrop(const ruvia::WorkerHandle& worker,
     int& expiredCount, ReentrantRetirementStats& stats, bool closeScope = false) {
     ruvia::TaskScope children(worker);
     {
-        ReentrantFrameInput input(&resource, children, parentScope, resource, expiredCount, stats);
         auto operation = ruvia::detail::makeScopedOperation(
-            parentScope, coldWithReentrantInput(std::move(input)));
+            parentScope, coldWithReentrantInput(ReentrantFrameInput(&resource, children, parentScope, resource, expiredCount, stats)));
         if (closeScope) {
             parentScope.close();
         }
@@ -393,9 +392,10 @@ RUVIA_TEST(scoped_operation_close_and_join_releases_frame_before_expiring_capabi
     static_cast<void>(capability);
     auto startedPromise = std::promise<void>();
     auto started = startedPromise.get_future();
-    std::pmr::string payload(1024, 'p', &parameterResource);
+    // Only the coroutine frame owns payload storage during the observation;
+    // a moved-from local string can retain a debug iterator proxy.
     auto operation = ruvia::detail::makeScopedOperation(
-        scope, waitWithPayload(std::move(payload), signal, startedPromise, FrameLease(leaseActive)));
+        scope, waitWithPayload(std::pmr::string(1024, 'p', &parameterResource), signal, startedPromise, FrameLease(leaseActive)));
     auto operationRoot = loop.start(awaitScopedOperation(operation));
     loops.start();
     started.get();
@@ -429,9 +429,8 @@ RUVIA_TEST(scoped_operation_exception_releases_frame_before_expiring_capabilitie
     static_cast<void>(capability);
     std::promise<void> startedPromise;
     auto started = startedPromise.get_future();
-    std::pmr::string payload(1024, 'x', &resource);
     auto operation = ruvia::detail::makeScopedOperation(
-        scope, waitThenThrow(std::move(payload), signal, startedPromise));
+        scope, waitThenThrow(std::pmr::string(1024, 'x', &resource), signal, startedPromise));
     auto operationRoot = loop.start(awaitScopedOperation(operation));
     loops.start();
     started.get();
@@ -462,9 +461,8 @@ RUVIA_TEST(scoped_operation_cooperative_cancellation_releases_frame_before_expir
     std::promise<void> startedPromise;
     auto started = startedPromise.get_future();
     std::atomic_bool stopRequested{false};
-    std::pmr::string payload(1024, 'x', &resource);
     auto operation = ruvia::detail::makeScopedOperation(scope,
-        waitThenObserveCancellation(std::move(payload), signal, startedPromise, stopRequested));
+        waitThenObserveCancellation(std::pmr::string(1024, 'x', &resource), signal, startedPromise, stopRequested));
     auto operationRoot = loop.start(awaitScopedBool(operation));
     loops.start();
     started.get();
@@ -491,14 +489,17 @@ RUVIA_TEST(scoped_operation_result_survives_join_after_frame_release) {
     int expiredCount = 0;
     CountingResource parameterResource;
     CountingResource resultResource;
+    const auto allocations_per_result = [&] {
+        const std::pmr::string sample(2048, 'r', &resultResource);
+        return resultResource.inUseAllocations;
+    }();
     std::size_t bytesAtExpire = static_cast<std::size_t>(-1);
     TestScopedCapability capability(scope, expiredCount, &parameterResource, &bytesAtExpire);
     static_cast<void>(capability);
     std::promise<void> startedPromise;
     auto started = startedPromise.get_future();
-    std::pmr::string payload(1024, 'p', &parameterResource);
     auto operation = ruvia::detail::makeScopedOperation(scope,
-        waitAndReturn(std::move(payload), resultResource, signal, startedPromise));
+        waitAndReturn(std::pmr::string(1024, 'p', &parameterResource), resultResource, signal, startedPromise));
     auto operationRoot = loop.start(awaitScopedResult(operation));
     loops.start();
     started.get();
@@ -513,7 +514,7 @@ RUVIA_TEST(scoped_operation_result_survives_join_after_frame_release) {
         RUVIA_CHECK_EQ(bytesAtExpire, 0U);
         RUVIA_CHECK_EQ(parameterResource.inUseAllocations, 0U);
         RUVIA_CHECK_EQ(result.bytes.size(), 2048U);
-        RUVIA_CHECK_EQ(resultResource.inUseAllocations, 1U);
+        RUVIA_CHECK_EQ(resultResource.inUseAllocations, allocations_per_result);
         {
             ruvia::detail::ScopedOperationScope repeatedScope;
             auto repeated = ruvia::detail::makeScopedOperation(repeatedScope,
@@ -521,12 +522,12 @@ RUVIA_TEST(scoped_operation_result_survives_join_after_frame_release) {
             auto repeatedRoot = loop.start(awaitScopedResult(repeated));
             auto repeatedResult = repeatedRoot.get();
             RUVIA_CHECK_EQ(parameterResource.inUseAllocations, 0U);
-            RUVIA_CHECK_EQ(resultResource.inUseAllocations, 2U);
+            RUVIA_CHECK_EQ(resultResource.inUseAllocations, 2 * allocations_per_result);
             RUVIA_CHECK_EQ(result.bytes.find_first_not_of('r'), std::pmr::string::npos);
             RUVIA_CHECK_EQ(repeatedResult.bytes.size(), 2048U);
             RUVIA_CHECK_EQ(repeatedResult.bytes.find_first_not_of('s'), std::pmr::string::npos);
         }
-        RUVIA_CHECK_EQ(resultResource.inUseAllocations, 1U);
+        RUVIA_CHECK_EQ(resultResource.inUseAllocations, allocations_per_result);
     }
     RUVIA_CHECK_EQ(resultResource.inUseAllocations, 0U);
     loops.stop();
@@ -758,9 +759,10 @@ RUVIA_TEST(scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     std::unique_ptr<ruvia::ScopedOperation<void>> sibling(
         new auto(ruvia::detail::makeScopedOperation(scope,
             coldWithPayload(std::pmr::string(1024, 'p', &resource)))));
+    const auto sibling_allocations = resource.inUseAllocations;
     auto operation = ruvia::detail::makeScopedOperation(scope,
         coldWithSiblingDrop(SiblingDropInput(resource, sibling)));
-    RUVIA_CHECK_EQ(resource.inUseAllocations, 2U);
+    RUVIA_CHECK_EQ(resource.inUseAllocations, 2 * sibling_allocations);
     ruvia::EventLoopPool loops({.loopCount = 1});
     const auto loop = loops.loop(0);
     auto joined = loop.start(joinAndObserveBytes(scope, resource));

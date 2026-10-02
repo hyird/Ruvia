@@ -20,9 +20,19 @@ public:
     void release(std::size_t bytes) noexcept;
     [[nodiscard]] std::size_t retainedBytes() const noexcept;
 
+    // Only the owning worker accesses receive accounting. Escaped results
+    // independently use the thread-safe retained-result counter above.
+    [[nodiscard]] bool reserve_in_flight(std::size_t bytes) noexcept;
+    void release_in_flight(std::size_t bytes) noexcept;
+    [[nodiscard]] std::size_t in_flight_bytes() const noexcept {
+        return in_flight_bytes_;
+    }
+
 private:
     const std::size_t maxRetainedBytes_;
     std::atomic<std::size_t> retainedBytes_{0};
+    const std::size_t max_in_flight_bytes_;
+    std::size_t in_flight_bytes_{0};
 };
 
 // Move-only reservation carried by an escaped result. It owns the budget domain

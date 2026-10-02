@@ -310,6 +310,14 @@ RUVIA_TEST(http3ClientRequestWriteRejectsLengthAndInvalidFields) {
         RUVIA_CHECK(noData && noData->empty() && allowed->finReady());
     }
 
+    ruvia::detail::HttpClientRequestStorage invalidTarget("GET", "relative", nullptr);
+    const auto rejectedTarget = Cursor::create(std::move(invalidTarget), "https", "example.com", nullptr);
+    RUVIA_CHECK(!rejectedTarget && rejectedTarget.error() == Cursor::Error::kRequestEncoding);
+
+    ruvia::detail::HttpClientRequestStorage invalidConnect("CONNECT", "example.com", nullptr);
+    const auto rejectedConnect = Cursor::create(std::move(invalidConnect), "https", "example.com", nullptr);
+    RUVIA_CHECK(!rejectedConnect && rejectedConnect.error() == Cursor::Error::kRequestEncoding);
+
     ruvia::detail::HttpClientRequestStorage tunnel("CONNECT", "example.com:443", nullptr);
     auto unsupported = Cursor::create(std::move(tunnel), "https", "example.com:443", nullptr);
     RUVIA_CHECK(!unsupported && unsupported.error() == Cursor::Error::kUnsupportedTunnel);

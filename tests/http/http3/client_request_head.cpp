@@ -76,6 +76,32 @@ RUVIA_TEST(http3_client_request_head_encodes_get_post_connect_and_body_is_extern
     }
 }
 
+RUVIA_TEST(http3_client_request_head_validates_bodyless_length_without_emitting_a_length) {
+    const auto bodyless = encodeHttp3ClientRequestHead({.method = "GET",
+        .scheme = "https",
+        .authority = "example.test:443",
+        .path = "/",
+        .bodyLength = 0,
+        .emit_content_length = false});
+    RUVIA_CHECK(bodyless.has_value());
+    if (bodyless) {
+        const auto decoded = decodeHttp3MessageHead(bodyless->fieldSection,
+            Http3MessageHeadKind::kRequest);
+        RUVIA_CHECK(decoded && !decoded->contentLength);
+        RUVIA_CHECK(bodyless->bodyPlan.matches(0));
+    }
+
+    const auto mismatch = encodeHttp3ClientRequestHead({.method = "GET",
+        .scheme = "https",
+        .authority = "example.test:443",
+        .path = "/",
+        .fields = std::array{Http3FieldSectionFieldView{"content-length", "1"}},
+        .bodyLength = 0,
+        .emit_content_length = false});
+    RUVIA_CHECK(!mismatch && mismatch.error().kind ==
+                                 Http3ClientRequestHeadError::kInvalidContentLength);
+}
+
 RUVIA_TEST(http3_client_request_head_trace_forbids_content_and_known_sensitive_fields) {
     for (const auto length : {std::optional<std::uint64_t>{}, std::optional<std::uint64_t>{0}}) {
         const auto trace = encode("TRACE", "/", {}, length);

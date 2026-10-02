@@ -20,6 +20,10 @@
 
 namespace ruvia::detail {
 
+struct DbConfigStorage;
+[[nodiscard]] std::pmr::string db_cache_scope(std::string_view name_space,
+    std::string_view alias, const DbConfigStorage& config, std::pmr::memory_resource* resource);
+
 [[nodiscard]] std::pmr::string encodeDbCacheRows(const DbRows& rows, std::pmr::memory_resource* resource);
 [[nodiscard]] DbRows decodeDbCacheRows(std::string_view bytes, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string dbCacheKey(std::string_view nameSpace, std::string_view id,

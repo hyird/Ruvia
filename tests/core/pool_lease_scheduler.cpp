@@ -5,6 +5,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <utility>
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -164,7 +165,7 @@ ruvia::Task<void> exerciseAcquireCancellation(ruvia::PoolLeaseScheduler& schedul
         source.requestStop();
         (void)scheduler.close();
     });
-    const auto result = co_await scheduler.acquire(std::nullopt, source.token(), worker);
+    const auto result = co_await scheduler.acquire(std::nullopt, source.token());
     // Cancellation is committed before requestStop() returns. A same-stack
     // close must not replace it with kClosed while resumption is deferred.
     success = result.status() == ruvia::PoolWaiterResult::Status::kCancelled;
@@ -212,7 +213,7 @@ ruvia::Task<void> exercisePmrLifecycle(ruvia::PoolLeaseScheduler& scheduler,
 
         ruvia::StopSource source;
         asio::post(ioContext, [&source] { source.requestStop(); });
-        const auto cancelled = co_await scheduler.acquire(std::nullopt, source.token(), worker);
+        const auto cancelled = co_await scheduler.acquire(std::nullopt, source.token());
         if (cancelled.status() != ruvia::PoolWaiterResult::Status::kCancelled ||
             resource.liveBlocks != baselineBlocks) {
             co_return;
@@ -227,7 +228,7 @@ ruvia::Task<void> exercisePmrLifecycle(ruvia::PoolLeaseScheduler& scheduler,
 AcquireProbeTask observeAcquireClosedAfterStaleCancellation(
     ruvia::PoolLeaseScheduler& scheduler, ruvia::StopToken stopToken,
     const ruvia::WorkerHandle& worker, bool& closed) {
-    const auto result = co_await scheduler.acquire(std::nullopt, std::move(stopToken), worker);
+    const auto result = co_await scheduler.acquire(std::nullopt, std::move(stopToken));
     closed = result.status() == ruvia::PoolWaiterResult::Status::kClosed;
 }
 
@@ -235,7 +236,7 @@ bool exerciseCompletedAcquireIgnoresStalePostedCancellation(
     asio::io_context& ioContext, const ruvia::WorkerHandle& worker) {
     bool closed = false;
     {
-        ruvia::PoolLeaseScheduler scheduler(0);
+        ruvia::PoolLeaseScheduler scheduler(0, worker);
         ruvia::StopSource source;
         auto probe =
             observeAcquireClosedAfterStaleCancellation(scheduler, source.token(), worker, closed);
@@ -264,6 +265,49 @@ bool exerciseCompletedAcquireIgnoresStalePostedCancellation(
     return true;
 }
 
+AcquireProbeTask observe_prepared_acquire(
+    ruvia::Task<ruvia::PoolWaiterResult> task, bool& cancelled) {
+    const auto result = co_await std::move(task);
+    cancelled = result.status() == ruvia::PoolWaiterResult::Status::kCancelled;
+}
+
+bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
+    asio::io_context context;
+    const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
+    CountingMemoryResource memory;
+    bool success = true;
+    {
+        std::optional<ruvia::PoolLeaseScheduler> scheduler;
+        std::optional<ruvia::Task<ruvia::PoolWaiterResult>> pending;
+        ruvia::StopSource source;
+        {
+            auto temporary_worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
+            scheduler.emplace(0, temporary_worker, &memory);
+            pending.emplace(scheduler->acquire(std::nullopt, source.token()));
+        }
+        const auto baseline = memory.liveBlocks;
+        bool cancelled = false;
+        auto probe = observe_prepared_acquire(std::move(*pending), cancelled);
+        pending.reset();
+        probe.start();
+        success = success && !probe.done();
+        source.requestStop();
+        dispatcher->runContext();
+        success = success && probe.done() && cancelled && memory.liveBlocks == baseline;
+        // The constructor also accepts a temporary handle directly; unstarted
+        // operations release their reservation before the owning scheduler.
+        {
+            ruvia::PoolLeaseScheduler temporary_scheduler(
+                1, ruvia::detail::WorkerHandleAccess::make(dispatcher), &memory);
+            auto discarded = temporary_scheduler.acquire(std::nullopt, ruvia::StopSource{}.token());
+        }
+        success = success && memory.liveBlocks == baseline;
+    }
+    dispatcher->close();
+    dispatcher->detachContext();
+    return success && memory.liveBlocks == 0 && memory.allocations == memory.deallocations;
+}
+
 }  // namespace
 
 int main() {
@@ -271,10 +315,10 @@ int main() {
     ruvia::PoolLeaseScheduler leaseScheduler(1);
     ruvia::PoolLeaseScheduler timeoutScheduler(0);
     ruvia::PoolLeaseScheduler saturatedTimeoutScheduler(0);
-    ruvia::PoolLeaseScheduler cancellationScheduler(0);
     const auto dispatcher = std::make_shared<ruvia::detail::WorkerDispatcher>(ioContext, 4);
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     ruvia::PoolLeaseScheduler workerTimeoutScheduler(0, worker);
+    ruvia::PoolLeaseScheduler cancellationScheduler(0, worker);
     bool leaseSuccess = false;
     bool timeoutSuccess = false;
     bool workerTimeoutSuccess = false;
@@ -323,7 +367,8 @@ int main() {
 
     dispatcher->close();
     return leaseSuccess && timeoutSuccess && workerTimeoutSuccess && saturatedTimeoutSuccess &&
-                   cancellationSuccess && staleCancellationSuccess && pmrLifecycleSuccess
+                   cancellationSuccess && staleCancellationSuccess && pmrLifecycleSuccess &&
+                   test_scheduler_retains_worker_binding_for_lazy_acquires()
                ? 0
                : 1;
 }

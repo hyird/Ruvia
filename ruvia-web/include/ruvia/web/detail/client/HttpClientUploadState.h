@@ -13,6 +13,7 @@ public:
         : HttpClientOutputQueue(worker, resource),
           config(config),
           trailers(resource) {}
+    HttpClientUploadState(WorkerHandle&&, std::pmr::memory_resource*, HttpClientUploadConfig) = delete;
     HttpClientUploadConfig config;
     std::pmr::vector<HttpHeader> trailers;
     bool contentReleased{};

@@ -38,53 +38,10 @@ struct SessionAccess final {
     }
 };
 
-enum class SessionPersistenceStep : std::uint8_t {
-    kPersistCurrent,
-    kDeleteOld,
-};
-
-struct SessionPersistencePlan final {
-    std::array<SessionPersistenceStep, 2> steps{};
-    std::size_t count{0};
-};
-
-[[nodiscard]] constexpr SessionPersistencePlan sessionPersistencePlan(
-    std::string_view currentId, std::string_view oldIdToDelete) noexcept {
-    SessionPersistencePlan plan;
-    if (!currentId.empty()) {
-        plan.steps[plan.count++] = SessionPersistenceStep::kPersistCurrent;
-    }
-    if (!oldIdToDelete.empty()) {
-        plan.steps[plan.count++] = SessionPersistenceStep::kDeleteOld;
-    }
-    return plan;
-}
-
-enum class SessionCommitStep : std::uint8_t {
-    kPersistCurrent,
-    kDeleteOld,
-    kPublishCurrentCookie,
-};
-
-struct SessionCommitPlan final {
-    std::array<SessionCommitStep, 3> steps{};
-    std::size_t count{0};
-};
-
-[[nodiscard]] constexpr SessionCommitPlan sessionCommitPlan(std::string_view currentId,
-    std::string_view oldIdToDelete, bool publishCurrentCookie) noexcept {
-    SessionCommitPlan plan;
-    if (!currentId.empty()) {
-        plan.steps[plan.count++] = SessionCommitStep::kPersistCurrent;
-    }
-    if (!oldIdToDelete.empty()) {
-        plan.steps[plan.count++] = SessionCommitStep::kDeleteOld;
-    }
-    if (publishCurrentCookie && !currentId.empty()) {
-        plan.steps[plan.count++] = SessionCommitStep::kPublishCurrentCookie;
-    }
-    return plan;
-}
+inline constexpr std::string_view session_rotation_script =
+    "if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end "
+    "if not redis.call('SET', KEYS[2], ARGV[1], 'EX', ARGV[2], 'NX') then return 0 end "
+    "redis.call('DEL', KEYS[1]) return 1";
 
 [[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 128) {

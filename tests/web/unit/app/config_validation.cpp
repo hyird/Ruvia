@@ -726,7 +726,12 @@ RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {
         auto source = ruvia::DbConfig{.driver = ruvia::DbDriver::kPostgreSql};
 #endif
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
-        source.host = std::string(80, 'h');
+#ifdef RUVIA_ENABLE_MARIADB
+        // MariaDB's default verify_identity mode requires an IP-literal host.
+        source.host = "127.0.0.1";
+#else
+        source.host = std::string(40, 'h') + "." + std::string(39, 'h');
+#endif
         source.username = std::string(80, 'u');
         source.password = std::string(80, 'p');
         source.database = std::string(80, 'd');
@@ -750,7 +755,11 @@ RUVIA_TEST(integration_config_copies_public_strings_into_internal_pmr_storage) {
     }
 
 #if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
-    RUVIA_CHECK_EQ(std::string(database->host), std::string(80, 'h'));
+#ifdef RUVIA_ENABLE_MARIADB
+    RUVIA_CHECK_EQ(std::string(database->host), "127.0.0.1");
+#else
+    RUVIA_CHECK_EQ(std::string(database->host), std::string(40, 'h') + "." + std::string(39, 'h'));
+#endif
 #endif
     RUVIA_CHECK_EQ(std::string(redis->host), std::string(80, 'r'));
 }

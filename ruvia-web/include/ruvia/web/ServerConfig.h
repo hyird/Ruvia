@@ -58,6 +58,9 @@ struct ServerConfig final {
     std::chrono::milliseconds connectionScanInterval{std::chrono::seconds(1)};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
+    // Absolute phase deadlines: progress does not renew these limits.
+    std::optional<std::chrono::milliseconds> header_completion_timeout{std::chrono::seconds(30)};
+    std::optional<std::chrono::milliseconds> body_completion_timeout{std::chrono::seconds(120)};
     std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
     // HTTP/3 requires a finite per-worker connection cap.
     std::optional<std::size_t> maxConnectionsPerWorker{1024};
@@ -69,6 +72,10 @@ struct ServerConfig final {
     // Default 1000; not silently clamped.
     std::optional<std::size_t> maxRequestsPerConnection{1000};
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    // Live inbound buffer allocations across HTTP bodies and WebSocket sessions.
+    // Includes capacity and reallocation overlap; the limits cannot be disabled.
+    std::size_t max_inbound_buffer_bytes_per_worker{256 * 1024 * 1024};
+    std::size_t max_inbound_buffer_bytes_per_connection{64 * 1024 * 1024};
     std::optional<std::size_t> maxStreamBodyBytes{};
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     MemoryPoolConfig memoryPool{};
@@ -78,6 +85,9 @@ struct ServerConfig final {
 
 struct TrustedProxyConfig final {
     std::vector<std::string> cidrs{};
+    // Enable only when every trusted proxy sanitizes and appends matching
+    // X-Forwarded-For / X-Forwarded-Proto elements.
+    bool trust_x_forwarded_proto{false};
 };
 
 namespace detail {

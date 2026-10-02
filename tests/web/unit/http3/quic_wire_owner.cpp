@@ -62,7 +62,9 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (++attempts_ == failAt_) {
+        // MSVC debug containers allocate small iterator proxies in noexcept
+        // constructors. Inject failure into payload storage, not those proxies.
+        if (bytes >= 32 && ++attempts_ == failAt_) {
             throw std::bad_alloc();
         }
         ++outstanding_;

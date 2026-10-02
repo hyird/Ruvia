@@ -69,7 +69,6 @@ if(RUVIA_BUILD_CORE)
         core/scoped_operation.cpp
         core/stop_token.cpp
         support/test_main.cpp)
-
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
     ruvia_add_test(ruvia_connection_scanner_lifetime ruvia::core SOURCES
         core/connection_scanner_lifetime.cpp)
@@ -103,6 +102,10 @@ if(RUVIA_BUILD_HTTP)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
         ${_ruvia_http_unit_sources})
+    if(WIN32)
+        target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
+        target_link_libraries(ruvia_http_unit_tests PRIVATE ws2_32)
+    endif()
     target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_http_ngtcp2_core)
 endif()
 
@@ -168,4 +171,7 @@ if(RUVIA_BUILD_WEB)
     list(SORT _ruvia_web_unit_sources)
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
+    if(WIN32)
+        target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
+    endif()
 endif()

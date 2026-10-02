@@ -1,5 +1,6 @@
 #include "ruvia/web/Error.h"
 
+#include <algorithm>
 #include <exception>
 
 #include "ruvia/core/memory/ProcessResource.h"
@@ -35,8 +36,10 @@ RUVIA_MODEL(HttpErrorResponseModel,
         .set<"code">(error.code());
     if (!error.validationIssues().empty()) {
         auto& details = model.ensure<"errors">();
-        details.reserve(error.validationIssues().size());
-        for (const auto& issue : error.validationIssues()) {
+        const auto issues = error.validationIssues().first(
+            std::min(error.validationIssues().size(), max_validation_issues));
+        details.reserve(issues.size());
+        for (const auto& issue : issues) {
             details.emplace_back(ModelOptions{.resource = resource})
                 .set<"field">(issue.field())
                 .set<"code">(issue.code())

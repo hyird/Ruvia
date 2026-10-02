@@ -102,16 +102,6 @@ private:
 
 class Http2RequestBuilder final {
 public:
-    // RFC 8441 WebSocket CONNECT binds to the framework's GET route shape, but this
-    // is route selection only. The HttpRequest built below preserves wire CONNECT.
-    [[nodiscard]] static HttpKnownMethod routeMethod(const Http2StreamState& stream) noexcept {
-        const auto* pending = stream.tunnel().pending();
-        const bool websocketConnect = pending != nullptr &&
-                                      pending->form() == Http2ConnectForm::kExtended &&
-                                      stream.protocolIsWebSocket();
-        return websocketConnect ? HttpKnownMethod::kGet : stream.requestKnownMethod();
-    }
-
     [[nodiscard]] static std::string_view requestTarget(const Http2StreamState& stream) noexcept {
         const auto* pending = stream.tunnel().pending();
         const bool standardConnect =
@@ -158,9 +148,9 @@ public:
             targetParts = RequestTargetParts{};
         } else {
             RequestTargetView targetView;
-            // Extended CONNECT retains normal :scheme/:path target components. GET
-            // is used only to select the origin-form target grammar; it does not
-            // overwrite the wire method stored on HttpRequest.
+            // Extended CONNECT retains normal :scheme/:path target components.
+            // Parse its target using the origin-form grammar without changing the
+            // wire method stored on HttpRequest.
             const auto targetMethod =
                 extendedConnect ? HttpKnownMethod::kGet : stream.requestKnownMethod();
             if (!parseRequestTarget(targetMethod, target, targetView)) {

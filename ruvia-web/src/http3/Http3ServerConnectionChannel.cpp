@@ -5,7 +5,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/Http3VarInt.h"
+#include "ruvia/http/Http3PeerStreams.h"
 
 namespace ruvia::detail {
 
@@ -382,7 +382,9 @@ Http3ServerConnectionChannel::publishIntent(Identity identity,
         return Status::kWrongState;
     }
     if (intent.token.kind == Connection::TransportIntentKind::kOpenPushStream &&
-        (!intent.token.id.pushId || (intent.token.id.streamId & 3) != 0 || intent.token.sequence == 0)) {
+        (!intent.token.id.pushId ||
+            http3StreamIdType(intent.token.id.streamId) != Http3StreamIdType::kClientBidirectional ||
+            intent.token.sequence == 0)) {
         return Status::kWrongState;
     }
     if (hasLastResetSequence_ && intent.token.sequence <= lastResetSequence_) {
@@ -485,7 +487,7 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         return Status::kWrongState;
     }
     if (pushStream && pushStream->status == Connection::PushStreamOpenResult::Status::kOpened &&
-        ((pushStream->streamId & 3) != 3 || pushStream->streamId > kHttp3VarIntMax ||
+        (http3StreamIdType(pushStream->streamId) != Http3StreamIdType::kServerUnidirectional ||
             settlement == IntentSettlement::kTransportRetiredSuperseded)) {
         return Status::kWrongState;
     }

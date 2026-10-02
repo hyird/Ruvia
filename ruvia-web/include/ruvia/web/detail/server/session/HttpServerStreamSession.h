@@ -55,6 +55,10 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
     // each with its own forwarding headers. Falls back to the peer until the
     // first request line is parsed.
     auto clientAddress = remoteAddress;
+    inbound_buffer_resource connection_buffers(
+        options_.inbound_buffer_pool != nullptr ? options_.inbound_buffer_pool : memory_.resource(),
+        options_.max_inbound_buffer_bytes_per_connection);
+    baseRouteServices = baseRouteServices.with_inbound_buffer_pool(connection_buffers);
     Http1RequestSequence requestSequence(options_.maxRequestsPerConnection);
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
@@ -330,6 +334,7 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
                         .options = options_,
                         .response = response,
                         .requestSequence = requestSequence,
+                        .inbound_buffer_pool = &connection_buffers,
                     };
                 };
 

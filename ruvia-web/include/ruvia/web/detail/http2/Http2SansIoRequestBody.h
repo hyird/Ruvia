@@ -17,6 +17,7 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamSignal.h"
 #include "ruvia/web/detail/router/RouteModes.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 // Where a dispatched HTTP/2 request body lives on the Web side. The protocol
 // core emits ordered DATA events without knowing whether the route buffers or
@@ -75,7 +76,11 @@ public:
         if (queuedBytes_ > backlogLimit || data.size() > backlogLimit - queuedBytes_) {
             return false;
         }
-        enqueue(data, std::move(credit));
+        try {
+            enqueue(data, std::move(credit));
+        } catch (const inbound_buffer_limit_error&) {
+            return false;
+        }
         return true;
     }
 
@@ -218,10 +223,14 @@ public:
                 httpRequestBodyAdditionFailure(receivedBytes_, data.size(), totalLimit)) {
             return Http2RequestBodyStoreResult::makeProtocolFailure(*failure);
         }
-        receivedBytes_ += data.size();
-        if (!data.empty()) {
-            bytes_.append(data.data(), data.size());
+        try {
+            if (!data.empty()) {
+                bytes_.append(data.data(), data.size());
+            }
+        } catch (const inbound_buffer_limit_error&) {
+            return Http2RequestBodyStoreResult::makeBacklogOverflow();
         }
+        receivedBytes_ += data.size();
         return Http2RequestBodyStoreResult::makeStored();
     }
 
@@ -281,10 +290,14 @@ private:
             data.size() > backlogLimit - queue_.queuedBytes()) {
             return Http2RequestBodyStoreResult::makeBacklogOverflow();
         }
-        if (credit != nullptr) {
-            queue_.enqueue(data, std::move(*credit));
-        } else {
-            queue_.enqueue(data);
+        try {
+            if (credit != nullptr) {
+                queue_.enqueue(data, std::move(*credit));
+            } else {
+                queue_.enqueue(data);
+            }
+        } catch (const inbound_buffer_limit_error&) {
+            return Http2RequestBodyStoreResult::makeBacklogOverflow();
         }
         receivedBytes_ += data.size();
         return Http2RequestBodyStoreResult::makeStored();

@@ -371,7 +371,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                     }
                     decodeHttpClientResponseContentEncoding(
                         *pending->response->state_, contentSemanticsPresent,
-                        config_.maxResponseBytes, pending->response->state_->resource);
+                        config_.maxResponseBytes);
                     if (pending->timeout->expired()) {
                         throw HttpClientError(HttpClientError::Code::kTimeout,
                             "HTTP/2 response body decoding timed out");

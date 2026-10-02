@@ -46,7 +46,7 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& 
       aliasIndex_(resource_) {
     aliasIndex_.build({kDefaultCapabilityAlias});
     entries_.reserve(1);
-    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_));
+    add(ioContext, worker, DbConfigStorage(defaultConfig, resource_), kDefaultCapabilityAlias);
 }
 
 detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
@@ -59,17 +59,18 @@ detail::DbRegistry::DbRegistry(asio::io_context& ioContext, const WorkerHandle& 
     aliasIndex_.build(databases);
     entries_.reserve(databases.size());
     for (const auto& definition : databases) {
-        add(ioContext, worker, DbConfigStorage(definition.config, resource_));
+        add(ioContext, worker, DbConfigStorage(definition.config, resource_), definition.alias);
     }
 }
 
 detail::DbRegistry::~DbRegistry() = default;
 
 void detail::DbRegistry::add(
-    asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config) {
+    asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::string_view alias) {
     std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;
     if (config.cache) {
-        cache = makePmrObject<DbQueryCacheState>(resource_, ioContext, worker, *config.cache, resource_);
+        const auto identity = db_cache_scope(config.cache->nameSpace, alias, config, resource_);
+        cache = makePmrObject<DbQueryCacheState>(resource_, ioContext, worker, *config.cache, identity, resource_);
     }
     config.cache.reset();
     PoolOwner owner;

@@ -21,6 +21,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketConnection.h"
+#include "ruvia/http/WebSocketServerProtocol.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 
@@ -854,4 +856,49 @@ RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
     client.get();
     RUVIA_CHECK(serverEnded);
     RUVIA_CHECK_EQ(closeCode, static_cast<std::uint16_t>(1002));
+}
+
+RUVIA_TEST(websocket_fragment_storage_shares_budget_and_releases_completed_messages) {
+    ruvia::detail::inbound_buffer_resource worker(std::pmr::new_delete_resource(), 35000);
+    std::optional<std::pmr::string> first_input(std::in_place, &worker);
+    std::optional<std::pmr::string> second_input(std::in_place, &worker);
+    std::optional<ruvia::WebSocketServerProtocol> first(std::in_place, *first_input);
+    std::optional<ruvia::WebSocketServerProtocol> second(std::in_place, *second_input);
+    const auto baseline = worker.used();
+    const auto fragment = [](unsigned char opcode, std::size_t bytes) {
+        std::string wire;
+        wire.push_back(static_cast<char>(opcode));
+        wire.push_back(static_cast<char>(0xfe));
+        wire.push_back(static_cast<char>(bytes >> 8));
+        wire.push_back(static_cast<char>(bytes));
+        wire.append(4, '\0');
+        wire.append(bytes, 'x');
+        return wire;
+    };
+    *first_input = fragment(0x02, 8000);
+    RUVIA_CHECK(!first->poll());
+    RUVIA_CHECK(worker.used() >= baseline + 8000);
+    *second_input = fragment(0x02, 8000);
+    RUVIA_CHECK(!second->poll());
+    RUVIA_CHECK(worker.used() >= baseline + 16000);
+    bool rejected = false;
+    try {
+        *first_input = fragment(0x80, 8000);
+        (void)first->poll();
+    } catch (const ruvia::detail::inbound_buffer_limit_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    first.reset();
+    first_input.reset();
+    *second_input = std::string("\x80\x80\x00\x00\x00\x00", 6);
+    const auto event = second->poll();
+    RUVIA_CHECK(event && event->message());
+    RUVIA_CHECK_EQ(event->message()->payload(), std::string(8000, 'x'));
+    const auto retained = worker.used();
+    RUVIA_CHECK(!second->poll());
+    RUVIA_CHECK(worker.used() + 8000 <= retained);
+    second.reset();
+    second_input.reset();
+    RUVIA_CHECK_EQ(worker.used(), std::size_t{0});
 }

@@ -31,6 +31,7 @@
 #include "ruvia/web/detail/server/HttpServerWorkerCompletion.h"
 #include "ruvia/web/detail/server/HttpServerWorkerState.h"
 #include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 #include "ruvia/web/detail/server/session/HttpConnectionState.h"
 
 namespace ruvia::detail {
@@ -150,6 +151,7 @@ private:
     StopToken stopToken_{stopSource_.token()};
     const RouteTable& routes_;
     WorkerMemory memory_;
+    inbound_buffer_resource inbound_buffers_;
     std::pmr::vector<ListenerPtr> listeners_;
     std::pmr::vector<AcceptorPtr> acceptors_;
     TaskScope backgroundTasks_;

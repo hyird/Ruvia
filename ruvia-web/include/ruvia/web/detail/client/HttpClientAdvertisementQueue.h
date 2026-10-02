@@ -19,9 +19,13 @@ class HttpClientAdvertisementQueue final {
 public:
     HttpClientAdvertisementQueue(const WorkerHandle& worker, HttpClientAdvertisementConfig config,
         std::pmr::memory_resource* resource);
+    HttpClientAdvertisementQueue(WorkerHandle&&, HttpClientAdvertisementConfig,
+        std::pmr::memory_resource*) = delete;
     // An explicit accounting upstream must outlive every returned observation.
     HttpClientAdvertisementQueue(const WorkerHandle& worker, HttpClientAdvertisementConfig config,
         std::pmr::memory_resource* resource, std::pmr::memory_resource& memoryUpstream);
+    HttpClientAdvertisementQueue(WorkerHandle&&, HttpClientAdvertisementConfig,
+        std::pmr::memory_resource*, std::pmr::memory_resource&) = delete;
     ~HttpClientAdvertisementQueue();
     HttpClientAdvertisementQueue(const HttpClientAdvertisementQueue&) = delete;
     HttpClientAdvertisementQueue& operator=(const HttpClientAdvertisementQueue&) = delete;

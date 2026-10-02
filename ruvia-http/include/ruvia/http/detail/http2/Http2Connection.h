@@ -317,8 +317,8 @@ public:
     // Read the peer's receive half-state without exposing stream storage.
     [[nodiscard]] Http2StreamReceiveStatus streamReceiveStatus(
         std::uint32_t streamId) const noexcept;
-    // Borrowed server request route snapshot; never exposes stream storage.
-    [[nodiscard]] std::optional<Http2ServerRequestRouteView> serverRequestRoute(
+    // Borrowed server request metadata snapshot; never exposes stream storage.
+    [[nodiscard]] std::optional<http2_server_request_view> server_request_view(
         std::uint32_t streamId) const noexcept;
 
     // --- outbound --------------------------------------------------------------

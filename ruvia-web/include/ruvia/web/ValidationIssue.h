@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -9,12 +11,25 @@
 
 namespace ruvia {
 
+inline constexpr std::size_t max_validation_issues = 64;
+inline constexpr std::size_t max_validation_text_bytes = 1024;
+
 class ValidationError;
 class Validator;
 
 namespace detail {
 struct ValidationIssueAccess;
+
+[[nodiscard]] inline std::string_view bounded_validation_text(std::string_view value) noexcept {
+    auto count = std::min(value.size(), max_validation_text_bytes);
+    // Keep a UTF-8 prefix complete when the last code point crosses the bound.
+    while (count < value.size() && count > 0 &&
+           (static_cast<unsigned char>(value[count]) & 0xc0U) == 0x80U) {
+        --count;
+    }
+    return value.substr(0, count);
 }
+}  // namespace detail
 
 struct ValidationIssueOptions final {
     BorrowedText field{};
@@ -58,9 +73,9 @@ private:
     ValidationIssue(detail::ResolvedPmrResourceTag, std::string_view fieldName,
         std::string_view codeValue, std::string_view messageValue,
         std::pmr::memory_resource* resource)
-        : field_(fieldName, resource),
-          code_(codeValue, resource),
-          message_(messageValue, resource) {}
+        : field_(detail::bounded_validation_text(fieldName), resource),
+          code_(detail::bounded_validation_text(codeValue), resource),
+          message_(detail::bounded_validation_text(messageValue), resource) {}
 
     std::pmr::string field_;
     std::pmr::string code_;

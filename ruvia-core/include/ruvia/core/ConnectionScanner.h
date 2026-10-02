@@ -108,6 +108,7 @@ public:
         Entry* next_{nullptr};
         const std::int64_t* nowMs_{nullptr};
         std::int64_t lastActiveMs_{0};
+        std::int64_t phase_started_ms_{0};
         Phase phase_{Phase::kIdle};
         PeriodicCheckRegistration* periodicChecks_{nullptr};
         PeriodicCheckRegistration* periodicScanNext_{nullptr};

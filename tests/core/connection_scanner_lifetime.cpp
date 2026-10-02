@@ -305,6 +305,50 @@ int main() {
         ioContext.run_for(std::chrono::milliseconds(5));
     }
 
+    // I/O progress renews inactivity, but cannot renew an absolute phase limit.
+    ioContext.restart();
+    {
+        using Scanner = ruvia::ConnectionScanner;
+        Scanner scanner(worker, {.scanInterval = std::chrono::milliseconds(1),
+                                    .initialReadTimeout = std::chrono::seconds(1),
+                                    .payloadReadTimeout = std::chrono::seconds(1),
+                                    .initial_read_completion_timeout = std::chrono::milliseconds(5),
+                                    .payload_read_completion_timeout = std::chrono::milliseconds(5)});
+        struct Progress final {
+            Scanner::Entry* entry;
+            Scanner::Phase phase;
+            static void tick(void* raw, std::int64_t) noexcept {
+                auto& self = *static_cast<Progress*>(raw);
+                self.entry->touch();
+                self.entry->setPhase(self.phase);
+            }
+        };
+        std::array<asio::ip::tcp::socket, 2> sockets{
+            asio::ip::tcp::socket(ioContext), asio::ip::tcp::socket(ioContext)};
+        std::array<Scanner::Entry, 2> entries;
+        std::array<std::optional<Scanner::Guard>, 2> guards;
+        std::array<Scanner::PeriodicCheckRegistration, 2> registrations;
+        std::array<Progress, 2> progress{{{&entries[0], Scanner::Phase::kReadingInitial},
+            {&entries[1], Scanner::Phase::kReadingPayload}}};
+        for (std::size_t i = 0; i < sockets.size(); ++i) {
+            sockets[i].open(asio::ip::tcp::v4());
+            guards[i].emplace(&scanner, entries[i], sockets[i]);
+            entries[i].setPhase(progress[i].phase);
+            entries[i].registerPeriodicCheck(registrations[i], &progress[i], &Progress::tick);
+        }
+        if (dispatcher->post([&scanner] { scanner.start(); }) != ruvia::PostStatus::kAccepted) {
+            return 18;
+        }
+        ioContext.run_for(std::chrono::milliseconds(50));
+        if (sockets[0].is_open() || sockets[1].is_open()) {
+            return 19;
+        }
+        if (dispatcher->post([&scanner] { scanner.stop(); }) != ruvia::PostStatus::kAccepted) {
+            return 20;
+        }
+        ioContext.run_for(std::chrono::milliseconds(5));
+    }
+
     // Entry teardown invalidates registrations that happen to outlive it;
     // their own RAII reset must then be harmless.
     ruvia::ConnectionScanner::PeriodicCheckRegistration registration;

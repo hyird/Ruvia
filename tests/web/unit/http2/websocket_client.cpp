@@ -73,8 +73,9 @@ void exerciseClient(ruvia::testing::TestContext& ruvia_ctx, bool resetPeer) {
                 RUVIA_CHECK(fed != ruvia::Http2FeedResult::kProtocolFailure);
                 while (auto event = connection.nextEvent()) {
                     if (auto* request = event->requestHead()) {
-                        const auto route = connection.serverRequestRoute(request->streamId());
-                        sawExtendedConnect = route && route->webSocketConnect;
+                        const auto requestView = connection.server_request_view(request->streamId());
+                        sawExtendedConnect = requestView && requestView->method == "CONNECT" &&
+                                             requestView->protocol == "websocket";
                         const auto validation = ruvia::validateHttp2WebSocketHandshake(connection, request->streamId(), request->request());
                         const auto submitted = connection.submitWebSocketHandshake(request->streamId(), request->request(), validation);
                         if (!submitted.submitted()) {

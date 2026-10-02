@@ -655,6 +655,8 @@ bool Http3WorkerServer::constructConnection(
                 .maxBufferedBytesInFlight = kWorkerBodyBudgetBytes,
                 .connection = {.maxActiveStreams = maxTrackedStreams, .qpackMaxTableCapacity = static_cast<std::size_t>(bind.settings.qpackMaxTableCapacity), .qpackBlockedStreams = static_cast<std::size_t>(bind.settings.qpackBlockedStreams), .enableConnectProtocol = bind.settings.enableConnectProtocol, .enableDatagrams = bind.settings.h3Datagram},
                 .maxQuicDatagramPayloadBytes = bind.maxQuicDatagramPayloadBytes,
+                .inbound_buffer_pool = options_.inbound_buffer_pool,
+                .max_inbound_buffer_bytes = options_.max_inbound_buffer_bytes_per_connection,
             },
             .maxTrackedStreams = maxTrackedStreams,
             .connectionScanner = &connectionScanner_,

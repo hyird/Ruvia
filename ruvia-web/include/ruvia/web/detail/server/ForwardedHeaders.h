@@ -24,7 +24,7 @@
 //
 // A client can prepend hops to these lists. The trusted peer is the hop that
 // delivered the request, so the client is the last untrusted address. Scheme is
-// the proto on that hop (or a later trusted hop), not a proto from an earlier
+// the proto on that hop, not a proto from an earlier
 // prepended element -- taking the last proto in the whole list would let the
 // caller claim TLS whenever the real hop omitted proto.
 
@@ -90,31 +90,6 @@ inline void parseForwardedElement(std::string_view element, ForwardedClient& hop
         });
 }
 
-inline void accumulateForwardedForAddresses(std::string_view value, const TrustedProxySet& trusted,
-    std::string_view& leftmost, std::string_view& client) noexcept {
-    visitCommaSeparated(value, [&](std::string_view element) {
-        const auto address = forwardedNodeAddress(element);
-        if (address.empty()) {
-            return;
-        }
-        if (leftmost.empty()) {
-            leftmost = address;
-        }
-        if (!trusted.trusts(address)) {
-            client = address;
-        }
-    });
-}
-
-inline void accumulateForwardedScheme(std::string_view value, std::string_view& scheme) noexcept {
-    visitCommaSeparated(value, [&](std::string_view element) {
-        const auto token = forwardedHttpSchemeToken(element);
-        if (!token.empty()) {
-            scheme = token;
-        }
-    });
-}
-
 inline void accumulateForwardedChain(std::string_view value, const TrustedProxySet& trusted,
     ForwardedClient& leftmost, ForwardedClient& client) noexcept {
     visitCommaSeparated(value, [&](std::string_view element) {
@@ -131,8 +106,6 @@ inline void accumulateForwardedChain(std::string_view value, const TrustedProxyS
             // A new client hop discards proto claimed by a prepended hop.
             client.address = hop.address;
             client.scheme = hop.scheme;
-        } else if (!client.address.empty() && !hop.scheme.empty()) {
-            client.scheme = hop.scheme;
         }
     });
 }
@@ -143,27 +116,50 @@ inline void accumulateForwardedChain(std::string_view value, const TrustedProxyS
     const HttpRequest& request, const TrustedProxySet& trusted) noexcept {
     ForwardedClient forwardedLeftmost;
     ForwardedClient forwardedClient;
-    std::string_view xForLeftmost{};
-    std::string_view xForClient{};
-    std::string_view xProto{};
-
+    std::string_view x_address{};
+    std::size_t address_count = 0;
+    std::size_t client_index = 0;
+    bool has_x_for = false;
     const auto headers = request.headers();
     for (const auto& header : headers) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Forwarded")) {
             accumulateForwardedChain(
                 header.value(), trusted, forwardedLeftmost, forwardedClient);
         } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-For")) {
-            accumulateForwardedForAddresses(header.value(), trusted, xForLeftmost, xForClient);
-        } else if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
-            accumulateForwardedScheme(header.value(), xProto);
+            has_x_for = true;
+            visitCommaSeparated(header.value(), [&](std::string_view element) {
+                const auto address = forwardedNodeAddress(element);
+                if (address_count == 0 || !trusted.trusts(address)) {
+                    x_address = address;
+                    client_index = address_count;
+                }
+                ++address_count;
+            });
         }
     }
-
-    const auto forwarded = forwardedClient.address.empty() ? forwardedLeftmost : forwardedClient;
-    const auto xAddress = xForClient.empty() ? xForLeftmost : xForClient;
-    ForwardedClient result;
-    result.address = !xAddress.empty() ? xAddress : forwarded.address;
-    result.scheme = !xProto.empty() ? xProto : forwarded.scheme;
+    if (!has_x_for) {
+        return forwardedClient.address.empty() ? forwardedLeftmost : forwardedClient;
+    }
+    // Never combine an XFF address with proto from an unrelated Forwarded
+    // chain. XFP is usable only under an explicit sanitizing-proxy contract.
+    ForwardedClient result{x_address, {}};
+    if (!trusted.trusts_x_forwarded_proto()) {
+        return result;
+    }
+    std::size_t proto_count = 0;
+    for (const auto& header : headers) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "X-Forwarded-Proto")) {
+            visitCommaSeparated(header.value(), [&](std::string_view element) {
+                if (proto_count == client_index) {
+                    result.scheme = forwardedHttpSchemeToken(element);
+                }
+                ++proto_count;
+            });
+        }
+    }
+    if (address_count != proto_count) {
+        result.scheme = {};
+    }
     return result;
 }
 

@@ -7,6 +7,7 @@
 
 #include <openssl/sha.h>
 
+#include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -167,8 +168,21 @@ DbRows decodeDbCacheRows(std::string_view bytes, std::pmr::memory_resource* reso
     }
     return result;
 }
+std::pmr::string db_cache_scope(std::string_view name_space, std::string_view alias,
+    const DbConfigStorage& config, std::pmr::memory_resource* resource) {
+    std::pmr::string identity(resource);
+    text(identity, name_space);
+    text(identity, alias);
+    number(identity, static_cast<std::uint64_t>(config.driver));
+    text(identity, config.host);
+    number(identity, config.port);
+    text(identity, config.database);
+    text(identity, config.username);
+    text(identity, config.tls.server_name);
+    return digest(identity, resource);
+}
 std::pmr::string dbCachePrefix(std::string_view nameSpace, std::pmr::memory_resource* resource) {
-    std::pmr::string result("ruvia:qc:v1:", resource);
+    std::pmr::string result("ruvia:qc:v2:", resource);
     result.append(digest(nameSpace, resource)).push_back(':');
     return result;
 }

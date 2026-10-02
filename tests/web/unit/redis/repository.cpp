@@ -715,6 +715,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
     ruvia::test::TrackingResource inputResource;
     ruvia::RedisConfig config;
     config.host = "127.0.0.1";
+    config.tls.mode = ruvia::client_tls_mode::disabled;
     config.port = server.port();
     config.poolSizePerWorker = 1;
     const auto definition = redisDefinition("default", config);
@@ -912,6 +913,7 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
     ruvia::test::CountingMemoryResource operationResource;
     ruvia::RedisConfig config;
     config.host = "127.0.0.1";
+    config.tls.mode = ruvia::client_tls_mode::disabled;
     config.port = server.port();
     config.poolSizePerWorker = 1;
     config.commandTimeout = std::nullopt;

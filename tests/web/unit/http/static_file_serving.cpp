@@ -37,6 +37,7 @@
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
+#include "ruvia/web/SecurityHeaders.h"
 #include "ruvia/web/StaticFiles.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
@@ -44,6 +45,7 @@
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
 #include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/file/HttpFileOpen.h"
 
 #include "context_services_fixture.h"
@@ -2048,5 +2050,37 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         RUVIA_CHECK_EQ(serveRoot(root), ruvia::http_status::kOk);
     }
 
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(document_root_responses_run_global_unmatched_security_middleware) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_static_security_headers";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    std::ofstream(dir / "index.html") << "<html>safe</html>";
+    ruvia::StaticRoot root(dir);
+    ruvia::detail::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    const std::array middleware{ruvia::detail::makeMiddlewareDescriptor<ruvia::SecurityHeadersMiddleware>()};
+    impl.setGlobalMiddlewares(middleware);
+    impl.finalize();
+    for (const auto method : {"GET", "HEAD"}) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        StaticFileTestRequest request(memory.resource());
+        request.setMethod(method);
+        request.setPath("/index.html");
+        auto& routes = impl.routeTable();
+        const auto resolution = routes.resolve(request);
+        asio::io_context io;
+        auto response = runStaticCompressionTask(io, routes.dispatchBufferedResponse(
+                                                         request, resolution, memory, ruvia::detail::DocumentRootBinding::configured(root),
+                                                         ruvia::test::testContextServices().withTlsTransport("203.0.113.9")));
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
+        RUVIA_CHECK(response.header("X-Content-Type-Options") == "nosniff");
+        RUVIA_CHECK(response.header("X-Frame-Options").has_value());
+        RUVIA_CHECK(response.header("Strict-Transport-Security").has_value());
+    }
     fs::remove_all(dir);
 }

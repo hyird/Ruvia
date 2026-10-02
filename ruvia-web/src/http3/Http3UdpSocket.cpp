@@ -237,6 +237,16 @@ public:
             }
 #ifdef _WIN32
             loadMessageExtensions();
+            // This socket serves independent QUIC peers. A closed peer's ICMP
+            // port-unreachable must not fail the shared receive operation.
+            BOOL report_port_unreachable = FALSE;
+            DWORD returned_bytes = 0;
+            if (::WSAIoctl(socket_.native_handle(), SIO_UDP_CONNRESET,
+                    &report_port_unreachable, sizeof(report_port_unreachable),
+                    nullptr, 0, &returned_bytes, nullptr, nullptr) == SOCKET_ERROR) {
+                throw std::system_error(WSAGetLastError(), std::system_category(),
+                    "configure HTTP/3 server network UDP peer errors");
+            }
 #endif
             socket_.bind(bindEndpoint_, error);
             if (error) {

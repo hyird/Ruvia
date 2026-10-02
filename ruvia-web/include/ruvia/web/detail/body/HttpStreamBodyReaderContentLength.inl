@@ -23,30 +23,12 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
 
     co_await ensureContinue();
 
-    ::ruvia::resizePmrStringForOverwrite(body, contentLength);
-    if (initialBodyBytes > 0) {
-        std::memcpy(body.data(), initialBodyAndPipeline_.data(), initialBodyBytes);
+    // Only bytes actually received grow the owning buffer. In particular, a
+    // header-only peer cannot allocate its declared Content-Length up front.
+    while (auto chunk = co_await readKnownLength(contentLength)) {
+        body.append(::ruvia::asChars(*chunk));
     }
 
-    std::size_t offset = initialBodyBytes;
-    while (offset < contentLength) {
-        scannerEntry_.setPhase(ruvia::ConnectionScanner::Phase::kReadingPayload);
-        auto readCompletion =
-            co_await ruvia::asyncAsio<std::size_t>([this, &body, offset](auto handler) mutable {
-                stream_.async_read_some(
-                    asio::buffer(body.data() + offset, body.size() - offset), std::move(handler));
-            });
-        const auto ec = readCompletion.errorCode();
-        const auto bytesRead = readCompletion.result();
-        if (ec || bytesRead == 0) {
-            throwIncompleteRequestBody();
-        }
-        offset += bytesRead;
-        scannerEntry_.touch();
-    }
-
-    deliveredBytes_ = contentLength;
-    markFinished();
     co_return std::string_view(body);
 }
 

@@ -62,12 +62,21 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
         config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
     ruvia::ensurePositiveSize(config.httpClientResultBudget.maxRetainedBytes,
         "HTTP client retained result byte budget must be greater than zero");
+    ruvia::ensurePositiveSize(config.httpClientResultBudget.max_in_flight_bytes,
+        "HTTP client in-flight response budget must be greater than zero");
     ruvia::ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
         "memory pool config values must be greater than zero");
     if (hasHttp3Listener(state)) {
         validateHttp3ServerLimits(config.maxConnectionsPerWorker,
             config.workerMailboxCapacity, config.maxRequestsPerConnection, config.workerCount);
     }
+
+    ruvia::ensurePositiveSize(config.max_inbound_buffer_bytes_per_worker,
+        "worker inbound buffer budget must be greater than zero");
+    ruvia::ensurePositiveSize(config.max_inbound_buffer_bytes_per_connection,
+        "connection inbound buffer budget must be greater than zero");
+    ruvia::ensurePositiveOptionalDurations("completion deadlines must be greater than zero",
+        config.header_completion_timeout, config.body_completion_timeout);
 
     state.workerCount = config.workerCount;
     state.processSignalHandlers = config.processSignalHandlers;
@@ -80,6 +89,10 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
     state.options.maxConnections = config.maxConnectionsPerWorker;
     state.options.maxRequestsPerConnection = config.maxRequestsPerConnection;
     state.options.maxBufferedBodyBytes = config.maxBufferedBodyBytes;
+    state.options.max_inbound_buffer_bytes_per_worker = config.max_inbound_buffer_bytes_per_worker;
+    state.options.max_inbound_buffer_bytes_per_connection = config.max_inbound_buffer_bytes_per_connection;
+    state.options.header_completion_timeout = config.header_completion_timeout;
+    state.options.body_completion_timeout = config.body_completion_timeout;
     state.options.maxStreamBodyBytes = config.maxStreamBodyBytes;
     state.options.maxWebSocketMessageBytes = config.maxWebSocketMessageBytes;
     state.options.memoryConfig = config.memoryPool;
@@ -238,6 +251,7 @@ App& App::trustedProxies(TrustedProxyConfig config) {
         "cannot change trusted proxies while app is running",
         [config = std::move(config)](detail::AppState& state) {
             detail::TrustedProxySet parsed(detail::appResource());
+            parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto);
             for (const auto& cidr : config.cidrs) {
                 const auto block = detail::parseTrustedProxyBlock(cidr);
                 if (!block) {

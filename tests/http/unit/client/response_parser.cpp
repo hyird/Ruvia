@@ -197,3 +197,21 @@ RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK(result.failure()->error() == Http1ClientResponseParseError::kHeaderTooLarge);
 }
+
+RUVIA_TEST(http_client_response_parser_accepts_incremental_prefixes_and_resets_after_interim) {
+    std::array<char, 2048> output{};
+    auto prepared = ruvia::Http1ClientRequestWriter().prepare(
+        ruvia::HttpOriginView::https({.host = "example.test"}), {}, output);
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    Http1ClientResponseParser parser(prepared.prepared()->exchangeState());
+    for (const std::string_view wire : {"HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n",
+             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"}) {
+        for (std::size_t size = 0; size < wire.size(); ++size) {
+            auto progress = parser.parse(wire.substr(0, size));
+            RUVIA_CHECK(progress.needMore() != nullptr);
+        }
+        auto result = parser.parse(wire);
+        RUVIA_CHECK(result.parsed() != nullptr);
+        RUVIA_CHECK_EQ(result.parsed()->consumedBytes(), wire.size());
+    }
+}

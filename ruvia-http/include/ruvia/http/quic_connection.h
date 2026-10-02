@@ -65,6 +65,8 @@ public:
     std::size_t max_datagram_payload_size() const noexcept;
     quic_datagram_write_status write_datagram(std::span<const std::byte> payload);
     quic_datagram_result read_datagram(std::span<std::byte> output) noexcept;
+    // A failed connection can only be closed or retired. Closing permits the
+    // owner to send CONNECTION_CLOSE after catching an operation failure.
     quic_operation_status close(quic_close_reason_view reason);
 
 private:

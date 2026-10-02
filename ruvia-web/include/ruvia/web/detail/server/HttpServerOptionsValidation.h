@@ -82,6 +82,12 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
                 "compression maximum size must not be smaller than the synchronous size");
         }
     }
+    ruvia::ensurePositiveSize(options.max_inbound_buffer_bytes_per_worker,
+        "worker inbound buffer budget must be greater than zero");
+    ruvia::ensurePositiveSize(options.max_inbound_buffer_bytes_per_connection,
+        "connection inbound buffer budget must be greater than zero");
+    ruvia::ensurePositiveOptionalDurations("completion deadlines must be greater than zero",
+        options.header_completion_timeout, options.body_completion_timeout);
     validateDocumentRootRuntimeConfig(options);
 }
 

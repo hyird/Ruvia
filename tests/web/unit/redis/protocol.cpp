@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
@@ -651,4 +652,27 @@ RUVIA_TEST(redis_xreadgroup_parser_owns_nested_stream_entries) {
     RUVIA_CHECK_EQ(
         parsed->streams()[0].entries()[0].fields()[0].value(), std::string_view("created"));
     RUVIA_CHECK(!parseRedisXReadGroupReply(toNilValue(), resource).has_value());
+}
+
+RUVIA_TEST(redis_tls_configuration_requires_complete_credentials_and_owns_them) {
+    using namespace ruvia;
+    RedisConfig config;
+    RUVIA_CHECK(config.tls.mode == client_tls_mode::verify_identity);
+    config.tls.certificate_file = "client.pem";
+    RUVIA_CHECK(testing::throwsOn([&] { detail::validateRedisConfig(config); }));
+    config.tls.private_key_file = "client.key";
+    config.tls.ca_file = "ca.pem";
+    config.tls.server_name = "redis.example.test";
+    RUVIA_CHECK(!testing::throwsOn([&] { detail::validateRedisConfig(config); }));
+    std::pmr::unsynchronized_pool_resource resource;
+    detail::RedisConfigStorage storage(config, &resource);
+    config.tls.server_name.assign("changed.test");
+    config.tls.ca_file.clear();
+    RUVIA_CHECK_EQ(std::string_view(storage.tls.server_name), std::string_view("redis.example.test"));
+    RUVIA_CHECK_EQ(std::string_view(storage.tls.ca_file), std::string_view("ca.pem"));
+    RUVIA_CHECK(storage.tls.ca_file.get_allocator().resource() == &resource);
+    config.tls.mode = client_tls_mode::disabled;
+    RUVIA_CHECK(testing::throwsOn([&] { detail::validateRedisConfig(config); }));
+    config.tls = {.mode = client_tls_mode::disabled};
+    RUVIA_CHECK(!testing::throwsOn([&] { detail::validateRedisConfig(config); }));
 }

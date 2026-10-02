@@ -851,7 +851,9 @@ bool Http3ServerConnection::ackTransportIntent(
         return true;
     }
     if (token.kind == TransportIntentKind::kOpenPushStream) {
-        if (!opened || !token.id.pushId || (opened->status == PushStreamOpenResult::Status::kOpened && ((opened->streamId & 3) != 3 || opened->streamId > kHttp3VarIntMax))) {
+        if (!opened || !token.id.pushId ||
+            (opened->status == PushStreamOpenResult::Status::kOpened &&
+                http3StreamIdType(opened->streamId) != Http3StreamIdType::kServerUnidirectional)) {
             return false;
         }
         for (auto* pending = pendingPushHead_; pending != nullptr; pending = pending->next) {

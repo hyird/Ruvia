@@ -336,6 +336,7 @@ void check_native_result(detail::quic_connection_state& state, int result,
         return;
     }
     if (result == NGTCP2_ERR_DRAINING) {
+        state.close_error_code_ = ngtcp2_conn_get_ccerr2(state.connection_)->error_code;
         state.state_ = quic_connection_state::draining;
         return;
     }
@@ -663,11 +664,11 @@ quic_operation_status quic_connection::update_key(quic_timestamp now) {
 }
 
 quic_operation_status quic_connection::close(quic_close_reason_view reason) {
-    impl_->rethrow_failure();
     if (impl_->state_ == quic_connection_state::retired || impl_->state_ == quic_connection_state::draining) {
         return quic_operation_status::retired;
     }
     impl_->latch_close_reason(reason);
+    impl_->latched_failure_ = nullptr;
     impl_->state_ = quic_connection_state::closing;
     return quic_operation_status::accepted;
 }

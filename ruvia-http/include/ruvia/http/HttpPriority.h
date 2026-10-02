@@ -6,9 +6,9 @@
 #include <span>
 #include <string_view>
 
-namespace ruvia {
+#include "ruvia/http/HttpHeader.h"
 
-class HttpHeaderView;
+namespace ruvia {
 
 struct HttpPriority final {
     std::uint8_t urgency{3};

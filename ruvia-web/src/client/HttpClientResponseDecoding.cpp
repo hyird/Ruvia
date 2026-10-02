@@ -30,8 +30,8 @@ void configureHttpClientResponseDecoding(HttpClientResponseState& state) {
 }
 
 void decodeHttpClientResponseContentEncoding(HttpClientResponseState& state,
-    bool contentSemanticsPresent, std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource) {
+    bool contentSemanticsPresent, std::size_t maxDecodedBytes) {
+    auto* const resource = state.resource;
     if (!contentSemanticsPresent || !state.bodyDecodeRequired) {
         return;
     }

@@ -69,7 +69,7 @@ RUVIA_TEST(http_udp_tunnel_negotiates_http1_upgrade_and_http2_extended_connect_a
         server.start();
         std::exception_ptr failure;
         auto run = [&]() -> ruvia::Task<void> {
-            const auto& worker = attachment.loop().handle();
+            const auto worker = attachment.loop().handle();
             asio::ip::tcp::acceptor source(io, {asio::ip::address_v4::loopback(), 0});
             ruvia::TaskScope forwarding(worker);
             forwarding.spawn(forwardConnections(source, server));

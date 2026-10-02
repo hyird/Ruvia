@@ -185,6 +185,28 @@ for that response. HTTP/3 does not alter the HTTPS TCP ALPN policy.
 
 Each business worker separately owns TLS, its router, and its capabilities,
 including DB, Redis, outbound HTTP client, and user-state set.
+
+`ServerConfig::max_inbound_buffer_bytes_per_worker` (256 MiB) and
+`max_inbound_buffer_bytes_per_connection` (64 MiB) bound live inbound body and
+WebSocket allocations across requests and streams. Container capacity,
+reallocation overlap and decompression output count toward these positive limits;
+PMR pool caches and TLS/QUIC transport storage are separate. Buffered HTTP/1
+bodies grow with received payload instead of allocating the declared length.
+Capacity exhaustion rejects the affected request or terminates its stream/session.
+
+HTTP/1 also has absolute `header_completion_timeout` (30 seconds) and
+`body_completion_timeout` (120 seconds). Successful reads renew inactivity
+timeouts but do not extend these completion deadlines; `std::nullopt` explicitly
+disables an absolute deadline.
+
+`App::trustedProxies({.cidrs = {...}})` enables client address resolution only
+for configured peers. `X-Forwarded-Proto` is ignored unless
+`trust_x_forwarded_proto = true`: enable it only when the trusted proxies remove
+untrusted forwarding fields and maintain matching XFF/XFP chains. Both chains
+must have the same number of elements; scheme comes from the selected client
+hop. Mismatches keep the transport scheme, and XFF is never combined with
+scheme from an unrelated `Forwarded` chain. Proxies that supply RFC 7239
+`Forwarded` must likewise sanitize incoming fields.
 Policies that exist both app-wide and per route use one name and one rule: the
 narrower scope may only **tighten**. `ServerConfig::maxBufferedBodyBytes` and
 `rateLimit()` are
@@ -457,8 +479,13 @@ one budget domain per business worker, shared by all registered aliases; worker
 domains are independent. When a budget is full, `readAll()` throws
 `kResultBudgetExceeded` and leaves the response body available for retry after
 retained results are released. HTTP/1, HTTP/2, and HTTP/3 responses use the same
-worker budget. Connection budgets, peak memory while copying, PMR pool caches,
-and OpenSSL/TLS/QUIC buffers are separate and not included. Both the client
+worker budget. `HttpClientResultBudgetConfig::max_in_flight_bytes` separately
+bounds live response allocations before delivery (64 MiB by default), including
+compressed input, decompression output, metadata and buffer growth. App aliases
+share that receive budget per worker. Receive exhaustion fails the operation
+with `kResultBudgetExceeded`; release retained responses before starting more.
+Both limits apply during the copy into an escaped result. PMR pool caches and
+OpenSSL/TLS/QUIC transport storage are excluded. Both the client
 body reader and request `BodyReader` offer `text()` for an explicit character
 view of the next chunk, without charset conversion or UTF-8 validation (encoded
 characters may straddle chunks). Reads share one operation lane; borrowed chunks
@@ -1128,6 +1155,22 @@ auto config = ruvia::DbConfig{
 ruvia::app().database({.config = std::move(config)});
 ```
 
+`DbConfig::tls` and `RedisConfig::tls` use `ruvia::client_tls_config`.
+The default `client_tls_mode::verify_identity` requires TLS and authenticates the
+server certificate. Set `ca_file` for a private CA, and configure
+`certificate_file` with `private_key_file` together for mutual TLS. Empty CA
+configuration uses the driver's trust-store defaults. Redis and PostgreSQL
+support `server_name` when the certificate identity differs from the connection
+host. Redis completes verification before sending AUTH or any command;
+PostgreSQL uses `verify-full` without plaintext fallback.
+
+MariaDB authenticated TLS currently requires a numeric `host` and a certificate
+valid for that IP address; DNS hosts and `server_name` overrides are rejected at
+configuration time. This keeps the connector's identity check compatible with
+nonblocking address resolution. For a deliberately plaintext local service,
+explicitly set `.tls = {.mode = ruvia::client_tls_mode::disabled}`. TLS failures
+never silently downgrade to plaintext.
+
 The selected driver must be enabled at build time. PostgreSQL parameters use
 `$1`, `$2`, and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
 identifier or a comment is data, not a placeholder. For generated PostgreSQL
@@ -1642,6 +1685,8 @@ that transaction is moved or destroyed.
 Enable `RUVIA_ENABLE_REDIS` together with either database driver. Set
 `DbConfig::cache` to configure a worker-local Redis cache for that database;
 App registrations and standalone `DbClient` use the same implementation.
+Cache keys isolate the registration alias, driver, endpoint, database and login
+identity even when registrations share the same configured cache namespace.
 
 ```cpp
 using namespace std::chrono_literals;
@@ -2359,10 +2404,22 @@ URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
 streaming `multipartReader()` expose flat protocol parts, preserving repeated
 names and file metadata without interpreting dotted names or array suffixes.
+`MultipartParseOptions` defaults to `max_parts = 1024` and
+`max_metadata_bytes = 1024 * 1024` (total part-header bytes). Exceeding either
+limit rejects the body with 413; streaming parsing preserves scan progress
+across input chunks.
 `multipartReader()` uses the worker pool for transient parsing state and releases
 it on completion, failure, or body-reader teardown. Part views expire on the next
 read, parent body-reader teardown, or reader destruction; copy values that must
 survive subsequent reads.
+
+`ModelParseOptions` bounds each typed JSON document to 65,536 total array
+members and a conservative 16 MiB representation budget by default, including
+nested and boxed arrays. `max_array_elements` and `max_representation_bytes`
+can explicitly customize standalone parsing; HTTP model binding uses the finite
+defaults. Parsing rejects over-budget input before growing its representation.
+Validation collects at most 64 issues and caps each diagnostic field/message at
+1024 bytes; nested validation stops when the issue limit is reached.
 
 Models declare field rules on `RUVIA_REQUIRED_FIELD` / `RUVIA_OPTIONAL_FIELD`.
 `RUVIA_REGEX` does not accept general `std::regex`: for safe request validation it
@@ -2465,7 +2522,8 @@ because obsolete browser filters can create security issues; `kOmit` omits that
 header, while Content Security Policy remains the modern content control. The
 default `SecurityHeaderConflictPolicy::kPreserveExisting` leaves handler-supplied
 headers in place; use `kReplaceExisting` when security defaults should override
-them.
+them. Global security middleware also covers successful document-root GET/HEAD
+responses.
 
 With Redis enabled, `SessionMiddleware` binds one typed request capability.
 Use `auto session = c.session()` followed by `data()`, `set()`, `clear()`, or
@@ -2477,6 +2535,12 @@ WebSocket handshake. Once submission begins, `set()`, `clear()`, and `regenerate
 throw `std::logic_error`; `data()` remains readable for the request or WebSocket
 session lifetime. Modify WebSocket sessions in middleware before `next()`.
 Storage failure prevents publication of a new session cookie.
+Call `regenerate()` after successful login or any privilege change, before
+publishing the response; `set()` alone updates data under the current identity.
+Logout deletes the old ID. Updates and rotation atomically require that a loaded
+ID still exists, so a concurrent request cannot recreate an ID already revoked
+by logout or rotation. A stale writer receives 409 and publishes no session
+cookie; do not retry its old authenticated state under a new ID.
 
 ### Strict integer conversion
 
@@ -2577,6 +2641,14 @@ on callback return.
 or chunked framing. `Http1RequestContentWriter` plans borrowed payload segments,
 validates request trailers, enforces the declared length, and gates upload on
 `100 Continue` or the driver's timeout. A final response aborts unfinished upload.
+
+The sans-I/O `WebSocketConnection` and `WebSocketServerProtocol` default to a
+16 MiB message limit, including assembled and decompressed messages.
+`WebSocketConnectionOptions::max_buffered_input_bytes` also limits the owned
+input queue (16 MiB + 14 bytes by default). A `backpressured` feed result consumes
+no input; drain events before retrying, and split input chunks larger than this
+queue limit. An explicit unlimited message policy does not disable the input
+queue bound.
 
 `WebSocketConnectionOptions::role` selects server (default) or client masking
 and inbound validation. Client connections require `maskKeyGenerator` and an

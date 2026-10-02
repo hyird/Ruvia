@@ -1,7 +1,12 @@
 #include "ruvia/http/detail/http3/quic_crypto_bridge.h"
 
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -23,7 +28,7 @@ public:
     explicit faulting_resource(std::pmr::memory_resource* upstream)
         : upstream_(upstream) {}
 
-    void fail_after_allocations(std::size_t successful_allocations) noexcept {
+    void fail_after_slot_allocations(std::size_t successful_allocations) noexcept {
         allocations_until_failure_ = successful_allocations + 1;
     }
 
@@ -36,7 +41,12 @@ public:
 
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (allocations_until_failure_ != 0 && --allocations_until_failure_ == 0) {
+        // Key moves may allocate debug iterator proxies in noexcept STL code.
+        // Count only the native slots whose partial construction is under test.
+        const bool key_slot =
+            (bytes == sizeof(ruvia::detail::quic_aead_key_slot) && alignment == alignof(ruvia::detail::quic_aead_key_slot)) ||
+            (bytes == sizeof(ruvia::detail::quic_header_key_slot) && alignment == alignof(ruvia::detail::quic_header_key_slot));
+        if (key_slot && allocations_until_failure_ != 0 && --allocations_until_failure_ == 0) {
             throw std::bad_alloc();
         }
         ++allocations_;
@@ -186,7 +196,7 @@ ruvia::quic_header_protection_key client_header(void* opaque,
     ++context.header_factory_calls;
     if (context.fail_slot_allocation_after != 0 && context.slot_resource &&
         context.header_factory_calls == 2) {
-        context.slot_resource->fail_after_allocations(context.fail_slot_allocation_after);
+        context.slot_resource->fail_after_slot_allocations(context.fail_slot_allocation_after);
         context.fail_slot_allocation_after = 0;
     }
     return context.empty_header ? ruvia::quic_header_protection_key{} : make_header_key(context);

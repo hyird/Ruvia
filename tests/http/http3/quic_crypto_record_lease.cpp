@@ -1,6 +1,5 @@
 #include <cstdlib>
 #include <exception>
-#include <limits>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -22,16 +21,13 @@ class counting_resource final : public std::pmr::memory_resource {
 public:
     std::size_t live_bytes{};
     std::size_t live_blocks{};
-    std::size_t allocations_before_failure{std::numeric_limits<std::size_t>::max()};
+    std::optional<std::size_t> failing_allocation_size{};
 
 private:
     void* do_allocate(std::size_t size, std::size_t alignment) override {
-        if (allocations_before_failure == 0) {
-            allocations_before_failure = std::numeric_limits<std::size_t>::max();
+        if (failing_allocation_size == size) {
+            failing_allocation_size.reset();
             throw std::bad_alloc();
-        }
-        if (allocations_before_failure != std::numeric_limits<std::size_t>::max()) {
-            --allocations_before_failure;
         }
         void* const memory = std::pmr::new_delete_resource()->allocate(size, alignment);
         live_bytes += size;
@@ -188,7 +184,9 @@ void test_budget_and_transactional_allocation_failure(ruvia::testing::TestContex
         lease.consume(8);
 
         const auto blocks_before = resource.live_blocks;
-        resource.allocations_before_failure = 1;
+        // Fail the one-byte record payload after node construction, without
+        // depending on the STL's debug metadata allocation sequence.
+        resource.failing_allocation_size = 1;
         bool allocation_failed{};
         try {
             state.append_crypto(ruvia::quic_encryption_level::application, bytes("x", 1));

@@ -60,7 +60,7 @@ public:
     }
 
     ruvia::DbConfig config() const {
-        return {.driver = ruvia::DbDriver::kPostgreSql, .host = "127.0.0.1", .port = port_, .username = "test", .database = "test", .connectTimeout = std::chrono::seconds(5)};
+        return {.driver = ruvia::DbDriver::kPostgreSql, .host = "127.0.0.1", .port = port_, .username = "test", .tls = {.mode = ruvia::client_tls_mode::disabled}, .database = "test", .connectTimeout = std::chrono::seconds(5)};
     }
 
     void waitForStartup() {

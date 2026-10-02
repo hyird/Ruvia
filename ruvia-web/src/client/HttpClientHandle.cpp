@@ -102,13 +102,13 @@ std::span<const HttpClientInformationalResponse> HttpClientResponse::information
     return state_->informational;
 }
 
-void detail::HttpClientResponseState::retainInformational(HttpStatusCode status, std::span<const HttpHeaderView> fields) {
+void detail::HttpClientResponseState::retainInformational(HttpStatusCode status_code, std::span<const HttpHeaderView> fields) {
     // Retained progress metadata has a separate fixed aggregate bound. It must
     // never grow with the duration of an upstream response stream.
     if (informational.size() >= 8) {
         throw HttpClientError(HttpClientError::Code::kProtocolError, "too many informational response heads");
     }
-    HttpClientInformationalResponse head(status, resource);
+    HttpClientInformationalResponse head(status_code, resource);
     head.headers_.reserve(fields.size());
     std::size_t bytes = informationalFieldBytes;
     for (const auto& field : fields) {

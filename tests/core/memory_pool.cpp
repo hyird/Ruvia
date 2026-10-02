@@ -194,23 +194,94 @@ RUVIA_TEST(worker_memory_default_owner_ignores_global_default_resource) {
     RUVIA_CHECK(std::pmr::get_default_resource() == previous);
 }
 
-RUVIA_TEST(worker_memory_construction_and_pool_growth_failures_return_bound_storage) {
-    for (const std::size_t failure : std::array{std::size_t{1}, std::size_t{2}}) {
-        CountingResource upstream;
-        upstream.failAt = failure;
-        bool failed = false;
-        try {
-            ruvia::WorkerMemory worker(upstream);
-            auto* bytes = worker.resource()->allocate(65536);
-            worker.resource()->deallocate(bytes, 65536);
-        } catch (const std::bad_alloc&) {
-            failed = true;
+RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {
+    constexpr std::size_t allocation_bytes = 1024;
+    constexpr std::size_t max_growth_attempts = 4096;
+    CountingResource upstream;
+    {
+        ruvia::WorkerMemory worker(upstream);
+        auto* const resource = worker.resource();
+        auto* const retained = static_cast<std::byte*>(resource->allocate(allocation_bytes));
+        std::fill_n(retained, allocation_bytes, std::byte{0x5a});
+        std::vector<std::byte*> transient_blocks;
+        transient_blocks.reserve(max_growth_attempts);
+
+        bool warmed_pool_growth = false;
+        for (std::size_t attempt = 0; attempt < max_growth_attempts; ++attempt) {
+            const auto upstream_attempts = upstream.attempts;
+            transient_blocks.push_back(
+                static_cast<std::byte*>(resource->allocate(allocation_bytes)));
+            if (upstream.attempts > upstream_attempts) {
+                warmed_pool_growth = true;
+                break;
+            }
         }
-        RUVIA_CHECK(failed);
-        RUVIA_CHECK_EQ(upstream.liveBytes, std::size_t{0});
-        RUVIA_CHECK_EQ(upstream.allocations, upstream.returns);
+        for (auto* block : transient_blocks) {
+            resource->deallocate(block, allocation_bytes);
+        }
+        transient_blocks.clear();
+        RUVIA_CHECK(warmed_pool_growth);
+
+        const auto baseline_allocations = upstream.allocations;
+        const auto baseline_returns = upstream.returns;
+        const auto baseline_live = upstream.live;
+        const auto baseline_live_bytes = upstream.liveBytes;
+        upstream.failAt = upstream.attempts + 1;
+        bool growth_failed = false;
+        for (std::size_t attempt = 0; attempt < max_growth_attempts; ++attempt) {
+            try {
+                transient_blocks.push_back(
+                    static_cast<std::byte*>(resource->allocate(allocation_bytes)));
+            } catch (const std::bad_alloc&) {
+                growth_failed = true;
+                break;
+            }
+        }
+        upstream.failAt.reset();
+        for (auto* block : transient_blocks) {
+            resource->deallocate(block, allocation_bytes);
+        }
+        transient_blocks.clear();
+
+        RUVIA_CHECK(growth_failed);
+        RUVIA_CHECK(retained[0] == std::byte{0x5a} &&
+                    retained[allocation_bytes - 1] == std::byte{0x5a});
+        RUVIA_CHECK_EQ(upstream.allocations, baseline_allocations);
+        RUVIA_CHECK_EQ(upstream.returns, baseline_returns);
+        RUVIA_CHECK_EQ(upstream.live, baseline_live);
+        RUVIA_CHECK_EQ(upstream.liveBytes, baseline_live_bytes);
         RUVIA_CHECK(upstream.matchedReturns);
+
+        const auto attempts_before_retry = upstream.attempts;
+        std::byte* grown_block = nullptr;
+        for (std::size_t attempt = 0; attempt < max_growth_attempts; ++attempt) {
+            const auto upstream_attempts = upstream.attempts;
+            auto* const block = static_cast<std::byte*>(resource->allocate(allocation_bytes));
+            transient_blocks.push_back(block);
+            if (upstream.attempts > upstream_attempts) {
+                grown_block = block;
+                break;
+            }
+        }
+        RUVIA_CHECK(grown_block != nullptr);
+        RUVIA_CHECK(upstream.attempts > attempts_before_retry);
+        RUVIA_CHECK(upstream.allocations > baseline_allocations);
+        if (grown_block != nullptr) {
+            std::fill_n(grown_block, allocation_bytes, std::byte{0xa5});
+            RUVIA_CHECK(grown_block[0] == std::byte{0xa5} &&
+                        grown_block[allocation_bytes - 1] == std::byte{0xa5});
+        }
+        RUVIA_CHECK(retained[0] == std::byte{0x5a} &&
+                    retained[allocation_bytes - 1] == std::byte{0x5a});
+        for (auto* block : transient_blocks) {
+            resource->deallocate(block, allocation_bytes);
+        }
+        resource->deallocate(retained, allocation_bytes);
     }
+    RUVIA_CHECK_EQ(upstream.liveBytes, std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.live, std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocations, upstream.returns);
+    RUVIA_CHECK(upstream.matchedReturns);
 }
 
 RUVIA_TEST(request_memory_fork_survives_parent_and_keeps_its_own_allocations) {

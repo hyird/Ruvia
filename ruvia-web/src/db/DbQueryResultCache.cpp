@@ -88,12 +88,12 @@ Task<void> clearKeys(RedisHandle redis, std::pmr::string pattern, OperationOptio
 }  // namespace
 #endif
 DbQueryCacheState::DbQueryCacheState(asio::io_context& io, const WorkerHandle& worker,
-    const DbCacheConfigStorage& config, std::pmr::memory_resource* resource)
+    const DbCacheConfigStorage& config, std::string_view identity, std::pmr::memory_resource* resource)
     : resource_(resource),
       duration_(config.duration),
       alwaysEnabled_(config.alwaysEnabled),
       ignoreErrors_(config.ignoreErrors),
-      nameSpace_(config.nameSpace, resource) {
+      nameSpace_(identity, resource) {
 #ifdef RUVIA_ENABLE_REDIS
     const std::array definitions{RedisDefinition{std::pmr::string(kDefaultCapabilityAlias, resource), RedisConfigStorage(config.options, resource)}};
     redis_ = makePmrObject<RedisRegistry>(resource, io, resource, std::span<const RedisDefinition>(definitions), worker);

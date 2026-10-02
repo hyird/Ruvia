@@ -16,6 +16,7 @@
 #include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 namespace ruvia {
 class WorkerMemory;
@@ -36,6 +37,8 @@ struct Http3SansIoSessionLimits final {
     std::size_t maxTunnelBufferedBytes{64 * 1024};
     Http3ConnectionConfig connection{.enableConnectProtocol = true};
     std::size_t maxQuicDatagramPayloadBytes{};
+    std::pmr::memory_resource* inbound_buffer_pool{};
+    std::size_t max_inbound_buffer_bytes{64 * 1024 * 1024};
 };
 
 // Worker-affine receive-side slice of an HTTP/3 Web session. It synchronously
@@ -186,6 +189,9 @@ public:
     }
     [[nodiscard]] std::size_t activeStreamCount() const noexcept;
     [[nodiscard]] bool terminated() const noexcept;
+    [[nodiscard]] std::pmr::memory_resource* inbound_buffer_pool() noexcept {
+        return &inbound_buffers_;
+    }
     // Release only after validated FIN (including a rejected request), or
     // report transport RESET via feed() to retire an incomplete receive side.
     // Never silently drop the body budget for a still-delivering or leased
@@ -213,6 +219,7 @@ private:
     const RouteTable& routes_;
     WorkerMemory& worker_;
     const Http3SansIoSessionLimits limits_;
+    inbound_buffer_resource inbound_buffers_;
     Http3ServerBodyBudget* bodyBudget_{nullptr};
     std::size_t bufferedBytesInFlight_{0};
     std::size_t tunnelBytesInFlight_{0};

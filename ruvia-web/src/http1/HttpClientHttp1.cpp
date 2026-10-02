@@ -312,7 +312,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
         }
         decodeHttpClientResponseContentEncoding(
-            *response.state_, contentSemanticsPresent, config_.maxResponseBytes, responseResource);
+            *response.state_, contentSemanticsPresent, config_.maxResponseBytes);
         if (timeout.expired()) {
             throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
         }

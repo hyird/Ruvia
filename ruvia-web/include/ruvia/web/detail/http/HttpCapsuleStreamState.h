@@ -45,11 +45,11 @@ public:
           input(resource),
           payload(resource) {}
     void require(bool output) const {
+        if (closed || (client && (!client->response_.state_ || client->response_.state_->pool == nullptr))) {
+            throw std::logic_error("capsule stream is closed");
+        }
         if (!worker.isCurrent()) {
             throw std::logic_error("capsule stream requires its owner worker");
-        }
-        if (closed) {
-            throw std::logic_error("capsule stream is closed");
         }
         if ((output ? outputScope : readScope).hasPendingOperations()) {
             throw std::logic_error("capsule stream operation is already active");
@@ -73,16 +73,21 @@ public:
         allocator->deallocate(this, sizeof(HttpCapsuleStreamState), alignof(HttpCapsuleStreamState));
     }
     void abort() noexcept {
+        if (closed) {
+            return;
+        }
+        if (client && (!client->response_.state_ || client->response_.state_->pool == nullptr)) {
+            closed = true;
+            return;
+        }
         if (!worker.isCurrent()) {
             std::terminate();
         }
-        if (!closed) {
-            closed = true;
-            if (server) {
-                server->abort();
-            } else {
-                client->abort();
-            }
+        closed = true;
+        if (server) {
+            server->abort();
+        } else if (client) {
+            client->abort();
         }
     }
     void close() noexcept {

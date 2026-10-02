@@ -53,16 +53,14 @@ private:
 };
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
-// The worker handle, when supplied, is borrowed and must outlive this owner.
+// A supplied worker endpoint is retained once by the scheduler. Lazy acquires
+// borrow only their scheduler, which must outlive them.
 class PoolLeaseScheduler final {
 public:
     explicit PoolLeaseScheduler(std::size_t poolSize,
         std::pmr::memory_resource* resource = nullptr);
     PoolLeaseScheduler(std::size_t poolSize, const WorkerHandle& worker,
         std::pmr::memory_resource* resource = nullptr);
-    PoolLeaseScheduler(std::size_t, WorkerHandle&&, std::pmr::memory_resource* = nullptr) = delete;
-    PoolLeaseScheduler(std::size_t, const WorkerHandle&&,
-        std::pmr::memory_resource* = nullptr) = delete;
 
     PoolLeaseScheduler(const PoolLeaseScheduler&) = delete;
     PoolLeaseScheduler& operator=(const PoolLeaseScheduler&) = delete;
@@ -73,9 +71,7 @@ public:
     [[nodiscard]] Task<PoolWaiterResult> acquire(
         std::optional<std::chrono::milliseconds> timeout);
     [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout,
-        StopToken stopToken, const WorkerHandle& worker);
-    Task<PoolWaiterResult> acquire(
-        std::optional<std::chrono::milliseconds>, StopToken, WorkerHandle&&) = delete;
+        StopToken stopToken);
 
     [[nodiscard]] PoolLeaseReleaseStatus release(std::size_t slot) noexcept;
     [[nodiscard]] bool close() noexcept;

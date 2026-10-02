@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -86,6 +87,17 @@ public:
         return services;
     }
     ContextServices withEnv(Env&&) const = delete;
+
+    [[nodiscard]] std::pmr::memory_resource* inbound_buffer_pool() const noexcept {
+        return inbound_buffer_pool_;
+    }
+
+    [[nodiscard]] ContextServices with_inbound_buffer_pool(std::pmr::memory_resource& resource) const noexcept {
+        auto services = *this;
+        services.inbound_buffer_pool_ = &resource;
+        return services;
+    }
+    ContextServices with_inbound_buffer_pool(std::pmr::memory_resource&&) const = delete;
 
     [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
         return maxDecodedBodyBytes_;
@@ -347,6 +359,7 @@ private:
     RateLimiter* rateLimiter_{nullptr};
     const Env* env_{nullptr};
     std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
+    std::pmr::memory_resource* inbound_buffer_pool_{};
     // Request/session services borrow the address-stable server-owned worker
     // handle and its stop token. Every derived value stays in that dispatch.
     std::reference_wrapper<const WorkerHandle> worker_;

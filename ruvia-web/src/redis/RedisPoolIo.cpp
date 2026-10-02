@@ -10,7 +10,9 @@
 
 #include <asio/connect.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/host_name_verification.hpp>
 #include <asio/write.hpp>
+#include <openssl/ssl.h>
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/TcpSocketOptions.h"
@@ -169,8 +171,11 @@ Task<void> RedisPool::asyncSocketWrite(
         throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
     }
     const auto writeCompletion = co_await ruvia::asyncAsio([&connection](auto handler) mutable {
-        asio::async_write(
-            connection.socket, asio::buffer(connection.writeBuffer), std::move(handler));
+        if (connection.tls_stream) {
+            asio::async_write(*connection.tls_stream, asio::buffer(connection.writeBuffer), std::move(handler));
+        } else {
+            asio::async_write(connection.socket, asio::buffer(connection.writeBuffer), std::move(handler));
+        }
     });
     throwIfAborted(connection);
     const auto ec = writeCompletion.errorCode();
@@ -188,8 +193,11 @@ Task<AsioCompletion<std::size_t>> RedisPool::asyncSocketReadSome(
         co_return AsioCompletion<std::size_t>::completed(asio::error::timed_out, 0);
     }
     auto result = co_await ruvia::asyncAsio<std::size_t>([&connection, buffer](auto handler) mutable {
-        connection.socket.async_read_some(
-            asio::buffer(buffer.data(), buffer.size()), std::move(handler));
+        if (connection.tls_stream) {
+            connection.tls_stream->async_read_some(asio::buffer(buffer.data(), buffer.size()), std::move(handler));
+        } else {
+            connection.socket.async_read_some(asio::buffer(buffer.data(), buffer.size()), std::move(handler));
+        }
     });
     throwIfAborted(connection);
     if (clearDeadline(connection) || timeout.expired()) {
@@ -313,6 +321,30 @@ Task<void> RedisPool::connect(Connection& connection, const ruvia::OperationTime
         throw RedisError(RedisError::Code::kConnectFailed, connectEc.message());
     }
     configureSocket(connection);
+    connection.tls_stream.reset();
+    if (tls_context_) {
+        connection.tls_stream = makePmrObject<Connection::tls_stream_type>(resource_, connection.socket, *tls_context_);
+        const auto& name = config_.tls.server_name.empty() ? config_.host : config_.tls.server_name;
+        connection.tls_stream->set_verify_callback(asio::ssl::host_name_verification(std::string(name)));
+        std::error_code address_error;
+        (void)asio::ip::make_address(name, address_error);
+        if (address_error && SSL_set_tlsext_host_name(connection.tls_stream->native_handle(), name.c_str()) != 1) {
+            throw RedisError(RedisError::Code::kConnectFailed, "configuring Redis TLS server name failed");
+        }
+        if (!armDeadline(connection, deadline, Connection::DeadlineKind::kSocket)) {
+            throw RedisError(RedisError::Code::kTimeout, "redis TLS handshake timed out");
+        }
+        const auto handshake = co_await ruvia::asyncAsio([&connection](auto handler) {
+            connection.tls_stream->async_handshake(asio::ssl::stream_base::client, std::move(handler));
+        });
+        throwIfAborted(connection);
+        if (clearDeadline(connection) || deadline.expired()) {
+            throw RedisError(RedisError::Code::kTimeout, "redis TLS handshake timed out");
+        }
+        if (handshake.errorCode()) {
+            throw RedisError(RedisError::Code::kConnectFailed, "redis TLS handshake failed: " + handshake.errorCode().message());
+        }
+    }
     ensureReader(connection);
     connection.connected = true;
     connection.replyBytes = 0;

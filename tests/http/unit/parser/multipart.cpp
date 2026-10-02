@@ -743,3 +743,82 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
     bodyDelimiter.append("\r\n");
     checkFailure(bodyDelimiter, "multipart delimiter line exceeds limit");
 }
+
+RUVIA_TEST(multipart_part_and_metadata_limits_are_cumulative) {
+    constexpr std::string_view header = "Content-Disposition: form-data; name=\"field\"\r\n\r\n";
+    std::string body;
+    for (std::size_t index = 0; index < 3; ++index) {
+        body += "--abc\r\n";
+        body += header;
+        body += "value\r\n";
+    }
+    body += "--abc--\r\n";
+
+    const auto accepted = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("abc"),
+                                                              .max_parts = 3,
+                                                              .max_metadata_bytes = 3 * header.size()});
+    RUVIA_CHECK(accepted.body() != nullptr);
+    const auto too_many = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("abc"), .max_parts = 2});
+    RUVIA_CHECK(too_many.failure() != nullptr);
+    if (too_many.failure() != nullptr) {
+        RUVIA_CHECK_EQ(too_many.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
+    }
+    const auto too_large = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("abc"), .max_metadata_bytes = 3 * header.size() - 1});
+    RUVIA_CHECK(too_large.failure() != nullptr);
+    if (too_large.failure() != nullptr) {
+        RUVIA_CHECK_EQ(too_large.failure()->protocolError().status(), ruvia::http_status::kContentTooLarge);
+    }
+
+    ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("abc"), .max_parts = 2});
+    parser.feed(body);
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto result = parser.poll();
+        if (index < 2) {
+            RUVIA_CHECK(result.part() != nullptr);
+        } else {
+            RUVIA_CHECK(result.failure() != nullptr);
+        }
+    }
+}
+
+RUVIA_TEST(multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters) {
+    std::string body(16 * 1024, 'p');
+    body += "\r\n--abc";
+    body.append(16 * 1024, ' ');
+    body += "\r\nContent-Disposition: form-data; name=\"field\"\r\nX-Long: ";
+    body.append(16 * 1024, 'h');
+    body += "\r\n\r\nvalue\r\n--abc";
+    body.append(16 * 1024, ' ');
+    body += "x\r\n--abc--";
+    body.append(16 * 1024, '\t');
+    body += "\r\n";
+
+    const auto expected = ruvia::parseMultipartBody(body, {.boundary = ruvia::MultipartBoundary("abc")});
+    RUVIA_CHECK(expected.body() != nullptr);
+    ruvia::MultipartParser parser({.boundary = ruvia::MultipartBoundary("abc")});
+    std::string received;
+    std::size_t ended = 0;
+    bool done = false;
+    for (std::size_t offset = 0; offset < body.size(); ++offset) {
+        parser.feed(std::string_view(body).substr(offset, 1));
+        for (;;) {
+            const auto result = parser.poll();
+            RUVIA_CHECK(result.failure() == nullptr);
+            if (const auto* part = result.part()) {
+                received += part->body();
+                if (part->phase() == ruvia::MultipartChunkPhase::kComplete ||
+                    part->phase() == ruvia::MultipartChunkPhase::kLast) {
+                    ++ended;
+                }
+            } else {
+                done = result.done() != nullptr;
+                break;
+            }
+        }
+    }
+    RUVIA_CHECK(done);
+    RUVIA_CHECK_EQ(ended, std::size_t{1});
+    if (expected.body() != nullptr) {
+        RUVIA_CHECK_EQ(std::string_view(received), expected.body()->parts()[0].body());
+    }
+}

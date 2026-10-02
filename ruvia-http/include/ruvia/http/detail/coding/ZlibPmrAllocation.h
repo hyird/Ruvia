@@ -14,6 +14,7 @@ namespace ruvia::detail {
 // requests, overflow, or allocation failure, which is how zlib expects refusal.
 [[nodiscard]] voidpf zlibPmrAllocate(
     std::pmr::memory_resource* resource, uInt items, uInt size) noexcept;
+[[nodiscard]] voidpf zlib_pmr_allocate_with_exception(void* context, uInt items, uInt size) noexcept;
 
 // Return a block obtained from zlibPmrAllocate to the resource it came from.
 void zlibPmrFree(voidpf address) noexcept;

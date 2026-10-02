@@ -459,6 +459,8 @@ public:
 
     [[nodiscard]] Http1ClientRequestContentCompletionStatus completeRequestContent() noexcept;
 
+    // After needMore, append to the same logical prefix; after a parsed head,
+    // remove consumedBytes before supplying the following response.
     [[nodiscard]] Http1ClientResponseParseResult parse(std::string_view buffer);
 
 private:
@@ -486,6 +488,7 @@ private:
     Phase phase_{Phase::kAwaitResponse};
     detail::Http1ClientRequestContentPhase requestContentPhase_;
     std::uint8_t informationalResponseCount_{0};
+    std::size_t header_scan_offset_{0};
 };
 
 inline Http1ClientResponseParser::Http1ClientResponseParser(

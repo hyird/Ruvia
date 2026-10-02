@@ -13,13 +13,17 @@
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
 #include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
+#include "ruvia/web/detail/client/HttpClientTunnelState.h"
+#include "ruvia/web/detail/client/HttpClientUploadState.h"
 
 #include "test_harness.h"
 #include "test_io_context.h"
@@ -130,7 +134,151 @@ ruvia::Task<void> awaitFailedResponse(ruvia::detail::HttpClientResponseState& st
     }
 }
 
+ruvia::Task<void> await_signal(ruvia::Task<void> wait, bool& woke) {
+    co_await std::move(wait);
+    woke = true;
+}
+
+void count_queue_wake(void* target) noexcept {
+    ++*static_cast<std::size_t*>(target);
+}
+
 }  // namespace
+
+RUVIA_TEST(client_response_memory_output_queues_stop_once_and_retire_transport_wakes) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    AllocationCounter upstream;
+
+    runOperation(worker, io, [&]() -> ruvia::Task<void> {
+        auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+            ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 1024 * 1024});
+        ruvia::detail::HttpClientPool pool(io, worker.handle,
+            ruvia::detail::HttpClientConfigStorage(ruvia::HttpClientConfig{.host = "unused.test"},
+                std::pmr::get_default_resource()),
+            ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 1024 * 1024},
+            std::pmr::get_default_resource());
+        auto domain = ruvia::detail::HttpClientResponseMemoryDomain::create(
+            worker.handle, budget, upstream);
+        auto* const state = domain->createState(pool);
+        state->tunnel.emplace(domain->worker(), state->resource, ruvia::HttpClientTunnelConfig{});
+        state->upload.emplace(domain->worker(), state->resource, ruvia::HttpClientUploadConfig{});
+
+        std::size_t tunnel_wake_count{};
+        std::size_t upload_wake_count{};
+        state->tunnel->wakeTarget = &tunnel_wake_count;
+        state->tunnel->wake = count_queue_wake;
+        state->upload->wakeTarget = &upload_wake_count;
+        state->upload->wake = count_queue_wake;
+        const std::string tunnel_payload(512, 't');
+        const std::string upload_payload(512, 'u');
+        state->tunnel->chunk.assign(tunnel_payload);
+        state->tunnel->chunkReady = true;
+        state->upload->chunk.assign(upload_payload);
+        state->upload->chunkReady = true;
+        const auto live_allocations = upstream.liveAllocations();
+        const auto live_bytes = upstream.liveBytes();
+        RUVIA_CHECK(live_allocations > 0);
+        RUVIA_CHECK(live_bytes > 0);
+
+        bool tunnel_data_woke = false;
+        bool tunnel_space_woke = false;
+        bool upload_data_woke = false;
+        bool upload_space_woke = false;
+        ruvia::TaskScope waiters(worker.handle);
+        waiters.spawn(await_signal(state->tunnel->data.wait(), tunnel_data_woke));
+        waiters.spawn(await_signal(state->tunnel->space.wait(), tunnel_space_woke));
+        waiters.spawn(await_signal(state->upload->data.wait(), upload_data_woke));
+        waiters.spawn(await_signal(state->upload->space.wait(), upload_space_woke));
+
+        state->tunnel->stop();
+        state->upload->stop();
+        co_await waiters.join();
+        RUVIA_CHECK(tunnel_data_woke);
+        RUVIA_CHECK(tunnel_space_woke);
+        RUVIA_CHECK(upload_data_woke);
+        RUVIA_CHECK(upload_space_woke);
+        RUVIA_CHECK_EQ(tunnel_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(upload_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), live_allocations);
+        RUVIA_CHECK_EQ(upstream.liveBytes(), live_bytes);
+
+        // Repeated stop is a no-op for external wake registrations, and the
+        // queued span remains alive until its consumer explicitly releases it.
+        state->tunnel->stop();
+        state->upload->stop();
+        RUVIA_CHECK_EQ(tunnel_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(upload_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(std::string_view(state->tunnel->chunk), tunnel_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->upload->chunk), upload_payload);
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), live_allocations);
+        RUVIA_CHECK_EQ(upstream.liveBytes(), live_bytes);
+
+        domain->detachTransportBindings(pool);
+        RUVIA_CHECK(state->tunnel->wake == nullptr);
+        RUVIA_CHECK(state->tunnel->wakeTarget == nullptr);
+        RUVIA_CHECK(state->upload->wake == nullptr);
+        RUVIA_CHECK(state->upload->wakeTarget == nullptr);
+        RUVIA_CHECK_EQ(tunnel_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(upload_wake_count, std::size_t{1});
+        RUVIA_CHECK_EQ(std::string_view(state->tunnel->chunk), tunnel_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->upload->chunk), upload_payload);
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), live_allocations);
+        RUVIA_CHECK_EQ(upstream.liveBytes(), live_bytes);
+
+        state->releaseReference();
+        domain.reset();
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.liveBytes(), std::size_t{0});
+        pool.closeNow();
+        co_await pool.join();
+    });
+}
+
+RUVIA_TEST(client_response_memory_result_releases_after_client_worker_owner_dies) {
+    auto& io = ruvia::test::newTestIoContext();
+    AllocationCounter upstream;
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 1024});
+    std::optional<ruvia::HttpClientResponseBytes> held;
+    const std::string body(512, 'r');
+
+    {
+        TestWorker worker(io);
+        runOperation(worker, io, [&]() -> ruvia::Task<void> {
+            ruvia::detail::HttpClientPool pool(io, worker.handle,
+                ruvia::detail::HttpClientConfigStorage(ruvia::HttpClientConfig{.host = "unused.test"},
+                    std::pmr::get_default_resource()),
+                ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 1024},
+                std::pmr::get_default_resource());
+            auto domain = ruvia::detail::HttpClientResponseMemoryDomain::create(
+                worker.handle, budget, upstream);
+            auto* const state = domain->createState(pool);
+            state->buffered.assign(body);
+            state->complete = true;
+
+            held.emplace(co_await ruvia::detail::makeScopedOperation(
+                state->bodyOperationScope, state->readAll(body.size())));
+            RUVIA_CHECK_EQ(held->size(), body.size());
+            RUVIA_CHECK_EQ(budget->retainedBytes(), body.size());
+
+            domain->detachTransportBindings(pool);
+            state->releaseReference();
+            domain.reset();
+            pool.closeNow();
+            co_await pool.join();
+        });
+    }
+
+    RUVIA_CHECK(held.has_value());
+    RUVIA_CHECK_EQ(held->bytes().size(), body.size());
+    RUVIA_CHECK_EQ(held->bytes().front(), std::byte{'r'});
+    RUVIA_CHECK_EQ(budget->retainedBytes(), body.size());
+    held.reset();
+    RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.liveBytes(), std::size_t{0});
+}
 
 RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_last) {
     auto& io = ruvia::test::newTestIoContext();
@@ -364,4 +512,74 @@ RUVIA_TEST(client_response_memory_domain_joins_error_waiters_before_releasing_st
         pool.closeNow();
         co_await pool.join();
     });
+}
+
+RUVIA_TEST(client_response_memory_budget_is_shared_and_charged_before_buffer_growth) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    AllocationCounter upstream;
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.max_in_flight_bytes = 2048});
+    {
+        auto first = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget, upstream);
+        auto second = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget, upstream);
+        for (int iteration = 0; iteration < 16; ++iteration) {
+            {
+                std::pmr::string held(first->resource());
+                held.assign(1024, 'a');
+                const auto held_charge = budget->in_flight_bytes();
+                RUVIA_CHECK(held_charge >= 1025U);
+                {
+                    std::pmr::string rejected(second->resource());
+                    // Debug standard libraries may allocate per-container
+                    // metadata from the PMR resource, independently of string
+                    // capacity. Preserve that live baseline when testing the
+                    // failed growth's transactional budget behavior.
+                    const auto pre_growth_charge = budget->in_flight_bytes();
+                    RUVIA_CHECK(pre_growth_charge >= held_charge);
+                    bool limited = false;
+                    try {
+                        rejected.assign(1024, 'b');
+                    } catch (const ruvia::HttpClientError& error) {
+                        limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+                    }
+                    RUVIA_CHECK(limited);
+                    RUVIA_CHECK_EQ(budget->in_flight_bytes(), pre_growth_charge);
+                    RUVIA_CHECK_EQ(held.size(), 1024U);
+                }
+                RUVIA_CHECK_EQ(budget->in_flight_bytes(), held_charge);
+            }
+            RUVIA_CHECK_EQ(budget->in_flight_bytes(), 0U);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.liveBytes(), 0U);
+}
+
+RUVIA_TEST(client_response_decoder_allocations_share_the_receive_budget) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
+        ruvia::HttpClientResultBudgetConfig{.max_in_flight_bytes = 128 * 1024});
+    auto domain = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget);
+    const std::string plain(256 * 1024, 'a');
+    auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, plain, {.maxEncodedBytes = 4096});
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    runOperation(worker, io, [&]() -> ruvia::Task<void> {
+        ruvia::detail::HttpClientResponseState state(worker.handle, domain->resource());
+        state.responseBodyPlan = ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
+        state.headers.push_back(ruvia::HttpHeader::copyOf("Content-Encoding", "gzip", state.resource));
+        state.pending.assign(encoded.encoded()->bytes());
+        ruvia::detail::configureHttpClientResponseDecoding(state);
+        bool limited = false;
+        try {
+            ruvia::detail::decodeHttpClientResponseContentEncoding(state, true, plain.size());
+        } catch (const ruvia::HttpClientError& error) {
+            limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+        }
+        RUVIA_CHECK(limited);
+        RUVIA_CHECK(state.pending.empty());
+        RUVIA_CHECK(state.buffered.empty());
+        co_return;
+    });
+    RUVIA_CHECK_EQ(budget->in_flight_bytes(), 0U);
 }

@@ -119,7 +119,7 @@ Http3BufferedRequestDispatch::Http3BufferedRequestDispatch(
     : session_(session),
       routes_(routes),
       worker_(worker),
-      services_(std::move(services)),
+      services_(services.with_inbound_buffer_pool(*session.inbound_buffer_pool())),
       options_(options),
       outbound_(outbound),
       messageId_(messageId),
@@ -705,7 +705,7 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
         webSocketConnection.emplace(Http3WebSocketTransport{*this}, services_.worker(),
             scannerEntry_, endpoint.lifecycle(),
             ProtocolByteLimit::limited(options_.maxWebSocketMessageBytes),
-            context.pool(), std::string_view{}, handshake->compression(),
+            session_.inbound_buffer_pool(), std::string_view{}, handshake->compression(),
             endpoint.deflate().compressionLevel);
         co_await invokeWebSocketHandler(*webSocketConnection, scannerEntry_,
             endpoint.handler(), context);

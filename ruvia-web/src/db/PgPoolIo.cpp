@@ -34,18 +34,24 @@ Task<void> PostgreSqlPool::connectUnlocked(
     const ruvia::OperationTimeout deadline = operationTimeout.constrainedBy(config_.connectTimeout);
     try {
         auto addresses = co_await resolveHost(slot, deadline);
-        auto resolvedHosts = makePostgreSqlResolvedHostList(config_.host, addresses, resource_);
+        auto resolvedHosts = makePostgreSqlResolvedHostList(config_.tls.server_name.empty() ? config_.host : config_.tls.server_name, addresses, resource_);
         const auto port = formatDbPort(config_.port, "PostgreSQL");
         // Pin the client encoding to UTF-8. Ruvia's strings are UTF-8 throughout,
         // and query parameters are sent in text format; without this the connection
         // inherits the server/database default encoding, so non-ASCII parameters and
         // result text would be misinterpreted on a non-UTF-8 database (e.g. LATIN1,
         // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
-        const std::array<const char*, 8> keywords{
-            "host", "hostaddr", "port", "user", "password", "dbname", "client_encoding", nullptr};
-        const std::array<const char*, 8> values{resolvedHosts.hosts.c_str(),
+        const bool use_tls = config_.tls.mode == client_tls_mode::verify_identity;
+        const std::array<const char*, 14> keywords{
+            "host", "hostaddr", "port", "user", "password", "dbname", "client_encoding",
+            "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version", nullptr};
+        const std::array<const char*, 14> values{resolvedHosts.hosts.c_str(),
             resolvedHosts.addresses.c_str(), port.data(), config_.username.c_str(),
-            config_.password.c_str(), config_.database.c_str(), "UTF8", nullptr};
+            config_.password.c_str(), config_.database.c_str(), "UTF8",
+            use_tls ? "verify-full" : "disable",
+            use_tls ? (config_.tls.ca_file.empty() ? "system" : config_.tls.ca_file.c_str()) : "",
+            config_.tls.certificate_file.c_str(), config_.tls.private_key_file.c_str(),
+            "disable", "TLSv1.2", nullptr};
         slot.connection = PQconnectStartParams(keywords.data(), values.data(), 0);
         if (slot.connection == nullptr) {
             throw DbError(DbError::Code::kConnectFailed, DbDriver::kPostgreSql,
@@ -69,6 +75,9 @@ Task<void> PostgreSqlPool::connectUnlocked(
         }
         if (status != PGRES_POLLING_OK || PQstatus(slot.connection) != CONNECTION_OK) {
             throw postgreSqlError(*slot.connection, "PQconnectPoll", DbError::Code::kConnectFailed);
+        }
+        if (use_tls && PQsslInUse(slot.connection) != 1) {
+            throw DbError(DbError::Code::kConnectFailed, DbDriver::kPostgreSql, "PostgreSQL refused required TLS");
         }
         if (PQsetnonblocking(slot.connection, 1) != 0) {
             throw postgreSqlError(

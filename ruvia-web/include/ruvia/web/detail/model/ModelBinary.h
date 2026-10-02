@@ -108,30 +108,4 @@ inline void appendModelBinary(std::pmr::string& output, const Bytes& value) {
     return result;
 }
 
-[[nodiscard]] inline std::optional<Bytes> parseModelBinaryValue(
-    std::string_view& input, std::pmr::memory_resource* resource) {
-    auto remaining = input;
-    const auto token = parseJsonString(remaining);
-    if (!token.has_value()) {
-        return std::nullopt;
-    }
-
-    auto* const outputResource = pmrResourceOrDefault(resource);
-    std::optional<Bytes> result;
-    if (token->encoding() == JsonStringEncoding::kLiteral) {
-        result = decodeModelBinary(token->raw(), outputResource);
-    } else {
-        const auto decoded = decodeJsonString(token->raw(), outputResource);
-        if (!decoded.has_value()) {
-            return std::nullopt;
-        }
-        result = decodeModelBinary(*decoded, outputResource);
-    }
-    if (!result.has_value()) {
-        return std::nullopt;
-    }
-    input = remaining;
-    return result;
-}
-
 }  // namespace ruvia::detail

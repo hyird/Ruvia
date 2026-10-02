@@ -18,7 +18,7 @@ namespace ruvia {
 class PoolLeaseScheduler::Impl final {
 public:
     Impl(std::size_t poolSize, const WorkerHandle* worker, std::pmr::memory_resource* resource)
-        : worker_(worker),
+        : worker_(worker != nullptr ? *worker : WorkerHandle{}),
           freeSlots_(detail::pmrResourceOrDefault(resource)),
           busy_(detail::pmrResourceOrDefault(resource)),
           waiterState_(std::allocate_shared<WaiterState>(
@@ -120,7 +120,7 @@ public:
         } guard{waiterState->queue, waiter};
 
         detail::WorkerTimerRegistration deadlineTimer;
-        if (timeout.has_value() && worker != nullptr) {
+        if (timeout.has_value() && worker != nullptr && worker->valid()) {
             detail::WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline,
                 [waiterState, waiterId](detail::WorkerTimerOutcome outcome) noexcept {
                     if (outcome == detail::WorkerTimerOutcome::kExpired) {
@@ -179,7 +179,7 @@ public:
         waiterState_->queue.expireDeadlines(now);
     }
 
-    const WorkerHandle* worker_;
+    WorkerHandle worker_;
     std::pmr::vector<std::size_t> freeSlots_;
     std::pmr::vector<std::uint8_t> busy_;
     std::shared_ptr<WaiterState> waiterState_;
@@ -204,14 +204,13 @@ PoolLeaseScheduler::~PoolLeaseScheduler() = default;
 
 Task<PoolWaiterResult> PoolLeaseScheduler::acquire(
     std::optional<std::chrono::milliseconds> timeout) {
-    return Impl::acquireReserved(Impl::AcquireReservation(*impl_), timeout, {}, impl_->worker_);
+    return Impl::acquireReserved(Impl::AcquireReservation(*impl_), timeout, {}, &impl_->worker_);
 }
 
 Task<PoolWaiterResult> PoolLeaseScheduler::acquire(
-    std::optional<std::chrono::milliseconds> timeout, StopToken stopToken,
-    const WorkerHandle& worker) {
+    std::optional<std::chrono::milliseconds> timeout, StopToken stopToken) {
     return Impl::acquireReserved(
-        Impl::AcquireReservation(*impl_), timeout, std::move(stopToken), &worker);
+        Impl::AcquireReservation(*impl_), timeout, std::move(stopToken), &impl_->worker_);
 }
 
 PoolLeaseReleaseStatus PoolLeaseScheduler::release(std::size_t slot) noexcept {

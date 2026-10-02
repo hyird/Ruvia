@@ -468,6 +468,7 @@ RUVIA_TEST(redis_active_command_reports_pool_closing_instead_of_io_error) {
     RedisTestWorker worker(ioContext);
     auto config = ruvia::RedisConfig{};
     config.host = "127.0.0.1";
+    config.tls.mode = ruvia::client_tls_mode::disabled;
     config.port = server.port();
     config.commandTimeout = std::nullopt;
     auto* const resource = std::pmr::get_default_resource();

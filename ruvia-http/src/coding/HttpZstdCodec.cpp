@@ -24,9 +24,11 @@ inline constexpr int kHttpZstdWindowLogMax = 23;  // RFC 9659: 8 MiB
 HttpContentDecodeResult decodeZstdContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto* stream = ZSTD_createDStream_advanced(
-        ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
+        ZSTD_customMem{&pmr_codec_allocate_with_exception, &pmrCodecFree, &allocation_context});
     if (stream == nullptr) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
     struct Guard final {
@@ -35,13 +37,16 @@ HttpContentDecodeResult decodeZstdContent(
             ZSTD_freeDStream(stream);
         }
     } guard{stream};
+    allocation_context.rethrow_allocation_failure();
     const auto initialized = ZSTD_initDStream(stream);
     if (ZSTD_isError(initialized) != 0) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
     const auto windowLimit =
         ZSTD_DCtx_setParameter(stream, ZSTD_d_windowLogMax, kHttpZstdWindowLogMax);
     if (ZSTD_isError(windowLimit) != 0) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
 
@@ -52,6 +57,7 @@ HttpContentDecodeResult decodeZstdContent(
         ZSTD_outBuffer out{buffer, sizeof(buffer), 0};
         const auto result = ZSTD_decompressStream(stream, &out, &in);
         if (ZSTD_isError(result) != 0) {
+            allocation_context.rethrow_allocation_failure();
             return HttpContentDecodeResultAccess::failure(ZSTD_getErrorCode(result) == ZSTD_error_memory_allocation
                                                               ? HttpContentDecodeError::kDecoderFailure
                                                               : HttpContentDecodeError::kInvalidContent);
@@ -73,9 +79,11 @@ HttpContentDecodeResult decodeZstdContent(
 HttpContentEncodeResult encodeZstdContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto* context = ZSTD_createCCtx_advanced(
-        ZSTD_customMem{&pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource()});
+        ZSTD_customMem{&pmr_codec_allocate_with_exception, &pmrCodecFree, &allocation_context});
     if (context == nullptr) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
     }
     struct Guard final {
@@ -84,10 +92,16 @@ HttpContentEncodeResult encodeZstdContent(
             ZSTD_freeCCtx(context);
         }
     } guard{context};
-    if (ZSTD_isError(
-            ZSTD_CCtx_setParameter(context, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 ||
-        ZSTD_isError(ZSTD_CCtx_setParameter(context, ZSTD_c_windowLog, kHttpZstdWindowLogMax)) !=
-            0) {
+    allocation_context.rethrow_allocation_failure();
+    const auto compressionLevel =
+        ZSTD_CCtx_setParameter(context, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT);
+    if (ZSTD_isError(compressionLevel) != 0) {
+        allocation_context.rethrow_allocation_failure();
+        return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
+    }
+    const auto windowLog = ZSTD_CCtx_setParameter(context, ZSTD_c_windowLog, kHttpZstdWindowLogMax);
+    if (ZSTD_isError(windowLog) != 0) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
     }
     ZSTD_inBuffer in{input.data(), input.size(), 0};
@@ -97,6 +111,7 @@ HttpContentEncodeResult encodeZstdContent(
             ZSTD_outBuffer out{&probe, 1, 0};
             const auto result = ZSTD_compressStream2(context, &out, &in, ZSTD_e_end);
             if (ZSTD_isError(result) != 0) {
+                allocation_context.rethrow_allocation_failure();
                 return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
             }
             if (result == 0 && out.pos == 0 && in.pos == in.size) {
@@ -115,6 +130,7 @@ HttpContentEncodeResult encodeZstdContent(
             return offset + out.pos;
         });
         if (ZSTD_isError(result) != 0) {
+            allocation_context.rethrow_allocation_failure();
             return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
         }
         if (result == 0 && in.pos == in.size) {

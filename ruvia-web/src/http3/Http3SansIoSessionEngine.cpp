@@ -11,6 +11,8 @@
 #include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/router/RouteEndpoint.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/request/RequestBodyLimit.h"
@@ -18,11 +20,11 @@
 namespace ruvia::detail {
 
 struct Http3SansIoSessionEngine::Stream final {
-    Stream(WorkerMemory& worker, std::uint64_t streamId)
+    Stream(WorkerMemory& worker, std::uint64_t streamId, std::pmr::memory_resource* inbound_pool)
         : id(streamId),
           memory(worker),
           trailers(memory.resource()),
-          tunnelInput(worker.resource()) {}
+          tunnelInput(inbound_pool) {}
 
     const std::uint64_t id;
     std::optional<std::uint64_t> pushId{};
@@ -67,6 +69,8 @@ Http3SansIoSessionEngine::Http3SansIoSessionEngine(const RouteTable& routes,
     : routes_(routes),
       worker_(worker),
       limits_(limits),
+      inbound_buffers_(limits.inbound_buffer_pool != nullptr ? limits.inbound_buffer_pool : worker.resource(),
+          limits.max_inbound_buffer_bytes),
       connection_(Http3PeerRole::kServer, worker.resource(), limits.connection),
       controlOutput_(worker.resource()),
       streams_(worker.resource()) {
@@ -140,16 +144,21 @@ std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3SansIoSessi
     std::pmr::polymorphic_allocator<Stream> allocator(worker_.resource());
     auto* rawStream = allocator.allocate(1);
     try {
-        allocator.construct(rawStream, worker_, streamId);
+        allocator.construct(rawStream, worker_, streamId, &inbound_buffers_);
     } catch (...) {
         allocator.deallocate(rawStream, 1);
         throw;
     }
     StreamPtr stream(rawStream, StreamDeleter{worker_.resource()});
     stream->pushId = pushId;
-    stream->request.emplace(*head, stream->memory.resource(), stream->memory.upstreamResource());
+    stream->request.emplace(*head, stream->memory.resource(), &inbound_buffers_);
     stream->request->finishBody();
-    stream->resolution = routes_.resolve(stream->request->routeMethod(), stream->request->request().path());
+    const auto& request = stream->request->request();
+    const bool webSocketConnect = request.knownMethod() == HttpKnownMethod::kConnect &&
+                                  httpAsciiEqualsIgnoreCase(stream->request->extendedConnectProtocol(), "websocket");
+    stream->resolution = request.knownMethod() == HttpKnownMethod::kUnknown
+                             ? routes_.resolveExtensionMethod(request.method(), request.path())
+                             : routes_.resolve(webSocketConnect ? HttpKnownMethod::kGet : request.knownMethod(), request.path());
     stream->state = StreamState::kReady;
     stream->receiveEnded = true;
     auto [inserted, fresh] = streams_.emplace(streamId, std::move(stream));
@@ -309,20 +318,26 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
         std::pmr::polymorphic_allocator<Stream> allocator(worker_.resource());
         auto* rawStream = allocator.allocate(1);
         try {
-            allocator.construct(rawStream, worker_, event.streamId);
+            allocator.construct(rawStream, worker_, event.streamId, &inbound_buffers_);
         } catch (...) {
             allocator.deallocate(rawStream, 1);
             throw;
         }
         StreamPtr stream(rawStream, StreamDeleter{worker_.resource()});
         stream->request.emplace(*event.head, stream->memory.resource(),
-            stream->memory.upstreamResource());
+            &inbound_buffers_);
         const auto& request = stream->request->request();
         stream->connectRequest = request.knownMethod() == HttpKnownMethod::kConnect;
-        stream->resolution = stream->connectRequest && stream->request->routeMethod() != HttpKnownMethod::kGet
-                                 ? routes_.resolveConnect(stream->request->extendedConnectProtocol(),
-                                       stream->request->extendedConnectProtocol().empty() ? request.authority() : request.path())
-                                 : routes_.resolve(stream->request->routeMethod(), request.path());
+        const bool webSocketConnect = stream->connectRequest &&
+                                      httpAsciiEqualsIgnoreCase(stream->request->extendedConnectProtocol(), "websocket");
+        if (stream->connectRequest && !webSocketConnect) {
+            stream->resolution = routes_.resolveConnect(stream->request->extendedConnectProtocol(),
+                stream->request->extendedConnectProtocol().empty() ? request.authority() : request.path());
+        } else if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+            stream->resolution = routes_.resolveExtensionMethod(request.method(), request.path());
+        } else {
+            stream->resolution = routes_.resolve(webSocketConnect ? HttpKnownMethod::kGet : request.knownMethod(), request.path());
+        }
         stream->bodyLimit = requestBodyByteLimit(RequestBodyMode::kBuffered,
             std::nullopt, limits_.maxBufferedBodyBytes)
                                 .readCeiling();
@@ -403,6 +418,12 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
                         stream.tunnelInputReadOffset = 0;
                     }
                     stream.tunnelInput.append(event.body.data(), event.body.size());
+                } catch (const inbound_buffer_limit_error&) {
+                    if (bodyBudget_ != nullptr) {
+                        bodyBudget_->release(event.body.size());
+                    }
+                    stream.bodyFailure = Rejection::kWorkerBodyBudgetExhausted;
+                    return;
                 } catch (...) {
                     if (bodyBudget_ != nullptr) {
                         bodyBudget_->release(event.body.size());
@@ -434,6 +455,12 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
             try {
                 stream.request->appendBody(std::span<const std::byte>(
                     reinterpret_cast<const std::byte*>(event.body.data()), event.body.size()));
+            } catch (const inbound_buffer_limit_error&) {
+                if (bodyBudget_ != nullptr) {
+                    bodyBudget_->release(event.body.size());
+                }
+                rejectBody(stream, Rejection::kWorkerBodyBudgetExhausted);
+                return;
             } catch (...) {
                 if (bodyBudget_ != nullptr) {
                     bodyBudget_->release(event.body.size());
@@ -588,7 +615,7 @@ Http3SansIoSessionEngine::TunnelReadResult Http3SansIoSessionEngine::readTunnelD
             bodyBudget_->release(count);
         }
         if (stream.tunnelInputReadOffset == stream.tunnelInput.size()) {
-            stream.tunnelInput.clear();
+            std::pmr::string(stream.tunnelInput.get_allocator()).swap(stream.tunnelInput);
             stream.tunnelInputReadOffset = 0;
         }
     }

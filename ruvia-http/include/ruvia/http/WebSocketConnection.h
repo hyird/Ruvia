@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
@@ -14,18 +15,22 @@
 namespace ruvia {
 
 enum class WebSocketFeedStatus : std::uint8_t { kAccepted,
-    kInactive };
+    kInactive,
+    backpressured };
 
 struct WebSocketConnectionOptions final {
     // The resource must outlive the connection, including its address-stable
     // implementation and all protocol buffers. nullptr uses the default PMR.
     std::pmr::memory_resource* resource{nullptr};
-    ProtocolByteLimit messageLimit{ProtocolByteLimit::unlimited()};
+    ProtocolByteLimit messageLimit{ProtocolByteLimit::limited(kDefaultMaxWebSocketMessageBytes)};
     WebSocketCompression compression{(WebSocketCompression{})};
     WebSocketConnectionRole role{WebSocketConnectionRole::kServer};
     WebSocketMaskKeyGenerator maskKeyGenerator{nullptr};
     void* maskKeyContext{nullptr};
     int compressionLevel{6};
+    // Independent bound for feed() bytes awaiting nextEvent(). A rejected feed
+    // consumes nothing; drain events or provide smaller chunks before retrying.
+    std::size_t max_buffered_input_bytes{kDefaultMaxWebSocketMessageBytes + 14};
 };
 
 // Sans-I/O RFC 6455 driver for an already upgraded connection. The role fixes

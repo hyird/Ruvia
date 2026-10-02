@@ -32,6 +32,9 @@ public:
         space.notify();
     }
     void stop() noexcept {
+        if (stopped) {
+            return;
+        }
         stopped = true;
         data.notify();
         space.notify();

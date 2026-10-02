@@ -78,6 +78,9 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
                         .withSubrequest(connInfo_, dispatchDepth_ + 1)
                         .withRoutes(*routes_)
                         .withRequestDeadline(deadline);
+    if (inbound_buffer_pool_ != nullptr) {
+        services = services.with_inbound_buffer_pool(*inbound_buffer_pool_);
+    }
     if (env_) {
         services = services.withEnv(*env_);
     }

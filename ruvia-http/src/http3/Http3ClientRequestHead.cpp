@@ -262,7 +262,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     if (view.bodyLength && lengthSeen && contentLength != *view.bodyLength) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
     }
-    const bool emitLength = view.bodyLength && !lengthSeen;
+    const bool emitLength = view.emit_content_length && view.bodyLength && !lengthSeen;
     std::array<char, 20> lengthBytes{};
     std::size_t lengthSize = 0;
     if (emitLength) {

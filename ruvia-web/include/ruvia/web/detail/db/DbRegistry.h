@@ -375,7 +375,7 @@ public:
 #endif
 
 private:
-    void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config);
+    void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config, std::string_view alias);
 
     std::pmr::memory_resource* resource_;
     struct Entry final {

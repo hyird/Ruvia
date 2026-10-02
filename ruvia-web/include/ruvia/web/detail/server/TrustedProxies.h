@@ -56,6 +56,13 @@ public:
         blocks_.push_back(block);
     }
 
+    void trust_x_forwarded_proto(bool enabled) noexcept {
+        trust_x_forwarded_proto_ = enabled;
+    }
+    [[nodiscard]] bool trusts_x_forwarded_proto() const noexcept {
+        return trust_x_forwarded_proto_;
+    }
+
     [[nodiscard]] bool empty() const noexcept {
         return blocks_.empty();
     }
@@ -67,6 +74,7 @@ private:
         : blocks_(resource) {}
 
     std::pmr::vector<TrustedProxyBlock> blocks_;
+    bool trust_x_forwarded_proto_{false};
 };
 
 }  // namespace ruvia::detail

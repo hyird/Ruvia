@@ -1,5 +1,7 @@
 #include "ruvia/http/WebSocketConnection.h"
 
+#include <stdexcept>
+
 #include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
@@ -9,10 +11,12 @@ public:
     Impl(std::pmr::memory_resource* memory, WebSocketConnectionOptions options)
         : resource(memory),
           input(memory),
+          max_buffered_input_bytes(options.max_buffered_input_bytes),
           connection(input, options.messageLimit, options.compression,
               options.role, options.maskKeyGenerator, options.maskKeyContext, options.compressionLevel) {}
     std::pmr::memory_resource* resource;
     std::pmr::string input;
+    const std::size_t max_buffered_input_bytes;
     detail::WsConnection connection;
 };
 
@@ -24,6 +28,9 @@ void WebSocketConnection::ImplDeleter::operator()(Impl* value) const noexcept {
 }
 
 WebSocketConnection::WebSocketConnection(WebSocketConnectionOptions options) {
+    if (options.max_buffered_input_bytes == 0) {
+        throw std::invalid_argument("WebSocket input buffer limit must be greater than zero");
+    }
     auto* resource = detail::httpPmrResourceOrDefault(options.resource);
     impl_.reset(detail::constructHttpPmrObject<Impl>(resource, resource, options));
 }
@@ -35,6 +42,9 @@ WebSocketConnection& WebSocketConnection::operator=(WebSocketConnection&&) noexc
 WebSocketFeedStatus WebSocketConnection::feed(std::string_view input) {
     if (impl_->connection.livenessMode() == WebSocketLivenessMode::kInactive) {
         return WebSocketFeedStatus::kInactive;
+    }
+    if (input.size() > impl_->max_buffered_input_bytes - impl_->input.size()) {
+        return WebSocketFeedStatus::backpressured;
     }
     impl_->input.append(input);
     return WebSocketFeedStatus::kAccepted;

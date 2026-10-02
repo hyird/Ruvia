@@ -62,6 +62,7 @@ Task<void> detail::SessionAccess::commit(Context& context) {
 #ifdef RUVIA_ENABLE_REDIS
 
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <memory_resource>
 
@@ -183,34 +184,40 @@ Task<void> SessionMiddleware::commit(Context& c) const {
         detail::appendSessionCookieHeader(*staged, c.pool(), config_.cookieName, existingId, secure);
     }
 
-    // Do not publish a newly minted id until its blob has been persisted, and do
-    // not destroy a recognized session until its replacement exists. An RNG,
-    // Redis SET, or Redis DEL failure leaves the client's previous cookie
-    // untouched instead of returning a Set-Cookie for a missing session.
-    const auto commitPlan = detail::sessionCommitPlan(existingId, oldIdToDelete, mintNewId);
-    for (std::size_t i = 0; i < commitPlan.count; ++i) {
-        switch (commitPlan.steps[i]) {
-            case detail::SessionCommitStep::kPersistCurrent: {
-                std::pmr::string key(c.pool());
-                key.append(config_.keyPrefix);
-                key.append(existingId.data(), existingId.size());
-                ruvia::RedisSetOptions options;
-                options.expiration = ruvia::RedisSetExpiration::expiresAfter(config_.ttl);
-                (void)(co_await c.redis(config_.redisAlias).set(key, data, std::move(options)));
-                break;
-            }
-            case detail::SessionCommitStep::kDeleteOld: {
-                std::pmr::string oldKey(c.pool());
-                oldKey.append(config_.keyPrefix);
-                oldKey.append(oldIdToDelete.data(), oldIdToDelete.size());
-                (void)(co_await c.redis(config_.redisAlias).del(oldKey));
-                break;
-            }
-            case detail::SessionCommitStep::kPublishCurrentCookie: {
-                response.commitHeadersFrom(std::move(*staged));
-                break;
-            }
+    std::pmr::string key(c.pool());
+    key.append(config_.keyPrefix).append(existingId);
+    bool applied = false;
+    if (!oldIdToDelete.empty()) {
+        std::pmr::string old_key(c.pool());
+        old_key.append(config_.keyPrefix).append(oldIdToDelete);
+        std::array<char, 32> ttl_buffer{};
+        const auto [ttl_end, ttl_error] = std::to_chars(ttl_buffer.data(), ttl_buffer.data() + ttl_buffer.size(), config_.ttl.count());
+        if (ttl_error != std::errc{}) {
+            throw std::logic_error("session TTL serialization failed");
         }
+        const std::array<std::string_view, 2> keys{old_key, key};
+        const std::array<std::string_view, 2> args{data, std::string_view(ttl_buffer.data(), ttl_end)};
+        // Redis executes the entire transition atomically. A stale request may
+        // neither recreate a revoked identifier nor mint a successor from it.
+        const auto result = co_await c.redis(config_.redisAlias).eval(detail::session_rotation_script, keys, args);
+        if (result.kind() == RedisValue::Kind::kError) {
+            throw RedisError(RedisError::Code::kCommandError, result.error());
+        }
+        applied = result.integer() == 1;
+    } else {
+        RedisSetOptions options;
+        options.condition = mintNewId ? RedisSetCondition::kIfAbsent : RedisSetCondition::kIfPresent;
+        options.expiration = RedisSetExpiration::expiresAfter(config_.ttl);
+        const auto result = co_await c.redis(config_.redisAlias).set(key, data, std::move(options));
+        applied = result.applied();
+    }
+    if (!applied) {
+        throw HttpError({.status = http_status::kConflict,
+            .code = "session_conflict",
+            .message = "session expired or was revoked; retry with a new session"});
+    }
+    if (staged) {
+        response.commitHeadersFrom(std::move(*staged));
     }
 }
 

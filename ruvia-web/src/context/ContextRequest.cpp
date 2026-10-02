@@ -378,7 +378,7 @@ Task<std::string_view> Context::requestBody() const {
         co_return raw;
     }
     auto decodeResult = decodeHttpRequestContent(
-        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = arena()});
+        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = inbound_buffer_pool_ != nullptr ? inbound_buffer_pool_ : pool()});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {

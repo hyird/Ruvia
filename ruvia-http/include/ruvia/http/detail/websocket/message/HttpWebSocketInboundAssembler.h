@@ -175,6 +175,15 @@ public:
     explicit WebSocketInboundAssembler(std::pmr::memory_resource* resource)
         : message_(resource) {}
 
+    // A delivered view expires at the next poll, while a fragmented message
+    // remains pinned until its final continuation or connection teardown.
+    void release_completed() noexcept {
+        if (std::holds_alternative<WebSocketInboundIdle>(state_)) {
+            std::pmr::string empty(message_.get_allocator());
+            message_.swap(empty);
+        }
+    }
+
     [[nodiscard]] WebSocketInboundResult accept(
         const WebSocketFrameView& frame, ProtocolByteLimit messageLimit) {
         if (isWebSocketControlFrameKind(frame.kind())) {

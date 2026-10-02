@@ -65,6 +65,9 @@ void ConnectionScanner::Entry::setPhase(Phase nextPhase) noexcept {
         return;
     }
     lastActiveMs_ = *nowMs_;
+    if (phase_ != nextPhase) {
+        phase_started_ms_ = *nowMs_;
+    }
     phase_ = nextPhase;
 }
 std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
@@ -158,6 +161,8 @@ ConnectionScanner::Impl::Impl(
     validateScannerTimeout(options_.initialReadTimeout);
     validateScannerTimeout(options_.payloadReadTimeout);
     validateScannerTimeout(options_.writeTimeout);
+    validateScannerTimeout(options_.initial_read_completion_timeout);
+    validateScannerTimeout(options_.payload_read_completion_timeout);
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
 }
 ConnectionScanner::Impl::~Impl() noexcept {
@@ -258,6 +263,7 @@ void ConnectionScanner::Impl::registerEntry(Entry& entry, asio::ip::tcp::socket*
     entry.scanner_ = owner_;
     entry.nowMs_ = &cachedNowMs_;
     entry.touch();
+    entry.phase_started_ms_ = cachedNowMs_;
     entry.phase_ = Phase::kIdle;
     entry.next_ = sentinel_.next_;
     entry.prev_ = &sentinel_;
@@ -330,6 +336,8 @@ void ConnectionScanner::Impl::detachWorkerMaintenance() noexcept {
 bool ConnectionScanner::Impl::hasScanningWork() const noexcept {
     return options_.idleTimeout.has_value() || options_.initialReadTimeout.has_value() ||
            options_.payloadReadTimeout.has_value() || options_.writeTimeout.has_value() ||
+           options_.initial_read_completion_timeout.has_value() ||
+           options_.payload_read_completion_timeout.has_value() ||
            workerMaintenance_ != nullptr || periodicCheckCount_ != 0;
 }
 void ConnectionScanner::Impl::schedule() {
@@ -377,9 +385,11 @@ bool ConnectionScanner::Impl::isTimedOut(const Entry& entry, std::int64_t now) c
     const auto inactiveMs = now - entry.lastActiveMs_;
     switch (entry.phase_) {
         case Phase::kReadingInitial:
-            return timeoutExpired(options_.initialReadTimeout, inactiveMs);
+            return timeoutExpired(options_.initialReadTimeout, inactiveMs) ||
+                   timeoutExpired(options_.initial_read_completion_timeout, now - entry.phase_started_ms_);
         case Phase::kReadingPayload:
-            return timeoutExpired(options_.payloadReadTimeout, inactiveMs);
+            return timeoutExpired(options_.payloadReadTimeout, inactiveMs) ||
+                   timeoutExpired(options_.payload_read_completion_timeout, now - entry.phase_started_ms_);
         case Phase::kWriting:
             return timeoutExpired(options_.writeTimeout, inactiveMs);
         case Phase::kLongLived:

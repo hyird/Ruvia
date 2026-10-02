@@ -332,7 +332,7 @@ RUVIA_TEST(csrf_reseed_cookie_sets_secure_behind_tls_terminating_proxy) {
         ruvia::test::testContextServices()
             .withPlainTransport("10.0.0.5")
             .withTrustedProxies(trusted),
-        HttpHeaderView{"X-Forwarded-Proto", "https"});
+        HttpHeaderView{"Forwarded", "for=203.0.113.9;proto=https"});
     RUVIA_CHECK(issued.nextInvoked);
     RUVIA_CHECK(issued.reseeded);
     RUVIA_CHECK(setCookieHasSecure(issued.setCookie));
