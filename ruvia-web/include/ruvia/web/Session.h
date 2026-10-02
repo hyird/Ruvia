@@ -29,6 +29,10 @@ public:
     std::string_view data() const&& = delete;
     void set(std::string_view data);
     void clear();
+    // Required on authentication and every privilege change, before publishing
+    // the response. set() changes the blob but intentionally keeps its identity.
+    // Concurrent updates cannot recreate an identifier revoked by clear() or
+    // regenerate(); an expired/revoked update fails with HTTP 409.
     void regenerate();
 
 private:

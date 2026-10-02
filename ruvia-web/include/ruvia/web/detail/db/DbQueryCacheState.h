@@ -21,7 +21,7 @@ class RedisRegistry;
 class DbQueryCacheState final {
 public:
     DbQueryCacheState(asio::io_context& io, const WorkerHandle& worker,
-        const DbCacheConfigStorage& config, std::pmr::memory_resource* resource);
+        const DbCacheConfigStorage& config, std::string_view identity, std::pmr::memory_resource* resource);
     ~DbQueryCacheState();
     Task<void> connect();
     void closeNow() noexcept;

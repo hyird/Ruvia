@@ -17,8 +17,8 @@ HttpClientRequestStorage::HttpClientRequestStorage(
       target_(target, method_.get_allocator().resource()),
       headers_(std::initializer_list<Header>{}, method_.get_allocator().resource()),
       body_(std::string_view{}, method_.get_allocator().resource()),
-      tunnelAuthority_(resource),
-      tunnelProtocol_(resource) {}
+      tunnelAuthority_(method_.get_allocator().resource()),
+      tunnelProtocol_(method_.get_allocator().resource()) {}
 
 HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& other) noexcept
     : method_(std::move(other.method_)),

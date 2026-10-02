@@ -887,7 +887,7 @@ Http2StreamReceiveStatus Http2Connection::streamReceiveStatus(
     std::uint32_t streamId) const noexcept {
     return impl_->connection.streamReceiveStatus(streamId);
 }
-std::optional<Http2ServerRequestRouteView> detail::Http2Connection::serverRequestRoute(
+std::optional<http2_server_request_view> detail::Http2Connection::server_request_view(
     std::uint32_t streamId) const noexcept {
     if (role_ != Http2Role::kServer) {
         return std::nullopt;
@@ -896,22 +896,16 @@ std::optional<Http2ServerRequestRouteView> detail::Http2Connection::serverReques
     if (streamState == nullptr || streamState->requestMethod().empty()) {
         return std::nullopt;
     }
-    const auto* pending = streamState->tunnel().pending();
-    const bool webSocketConnect = pending != nullptr &&
-                                  pending->form() == detail::Http2ConnectForm::kExtended &&
-                                  streamState->protocolIsWebSocket();
-    return Http2ServerRequestRouteView{
-        .method = detail::Http2RequestBuilder::routeMethod(*streamState),
-        .requestMethod = streamState->requestMethod(),
-        .path = detail::Http2RequestBuilder::requestPath(*streamState),
-        .webSocketConnect = webSocketConnect,
+    return http2_server_request_view{
+        .method = streamState->requestMethod(),
+        .path = streamState->requestPath(),
         .authority = streamState->requestAuthority(),
         .protocol = streamState->requestProtocol(),
     };
 }
-std::optional<Http2ServerRequestRouteView> Http2Connection::serverRequestRoute(
+std::optional<http2_server_request_view> Http2Connection::server_request_view(
     std::uint32_t streamId) const noexcept {
-    return impl_->connection.serverRequestRoute(streamId);
+    return impl_->connection.server_request_view(streamId);
 }
 std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() & noexcept {
     return impl_->connection.takeDrainedDataStreams();

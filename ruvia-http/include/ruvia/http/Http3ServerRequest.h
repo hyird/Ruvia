@@ -8,7 +8,6 @@
 
 #include "ruvia/http/Attributes.h"
 #include "ruvia/http/Http3MessageHead.h"
-#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpExpectations.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
@@ -38,15 +37,6 @@ public:
         return head_.protocol;
     }
     std::string_view extendedConnectProtocol() const&& = delete;
-
-    // Extended CONNECT for websocket uses GET's route key while the exposed
-    // HttpRequest retains its wire CONNECT method.
-    [[nodiscard]] HttpKnownMethod routeMethod() const noexcept {
-        return request_.knownMethod() == HttpKnownMethod::kConnect &&
-                       httpAsciiEqualsIgnoreCase(extendedConnectProtocol(), "websocket")
-                   ? HttpKnownMethod::kGet
-                   : request_.knownMethod();
-    }
 
     [[nodiscard]] HttpServerExpectationPlan expectationPlan(HttpUnsupportedExpectationPolicy policy) const noexcept {
         const bool contentRemaining = !bodyComplete_ && !bodyAborted_ && request_.knownMethod() != HttpKnownMethod::kConnect &&

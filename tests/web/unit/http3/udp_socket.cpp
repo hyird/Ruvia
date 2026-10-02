@@ -326,6 +326,26 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
         return;
     }
 
+    // Late replies to a departed peer must leave the shared receive side usable.
+    client1.close();
+    Exchange closed_peer;
+    const bool late_send = server.asyncSend(
+        Socket::SendView{source, first.receivedPeer, firstRequest}, &closed_peer, onSend);
+    RUVIA_CHECK(late_send);
+    io.restart();
+    io.run_for(50ms);
+    RUVIA_CHECK_EQ(closed_peer.sendCalls, 1);
+    RUVIA_CHECK(!closed_peer.sendError);
+    if (!late_send || closed_peer.sendCalls != 1 || closed_peer.sendError) {
+        server.requestStop();
+        io.restart();
+        io.run_for(2s);
+        if (!server.done()) {
+            fixtureLifetimeViolation("closed peer send");
+        }
+        return;
+    }
+
     auto second = runExchange(io, server, client2, Udp::endpoint(loopback2, server.boundPort()),
         source, secondRequest);
     RUVIA_CHECK(second.requestSent);

@@ -21,6 +21,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 #include "test_harness.h"
 #include "test_io_context.h"
@@ -386,4 +387,62 @@ RUVIA_TEST(http1_body_reader_retains_terminal_fields_before_compacting_pipeline)
     auto future = asio::co_spawn(io, ruvia::asAwaitable(run()), asio::use_future);
     io.run();
     future.get();
+}
+
+RUVIA_TEST(http1_buffered_content_length_allocates_only_received_progress) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    ruvia::detail::inbound_buffer_resource budget(std::pmr::new_delete_resource(), 64 * 1024);
+    EofBodyStream stream{&io};
+    ruvia::ConnectionScanner::Entry scanner;
+    const auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 16777216\r\n\r\n");
+    bool incomplete = false;
+    {
+        ruvia::detail::StreamBodyReader<EofBodyStream> reader(stream,
+            std::pmr::polymorphic_allocator<char>(&budget), {}, plan,
+            ruvia::ProtocolByteLimit::limited(16 * 1024 * 1024), scanner);
+        std::pmr::string body(&budget);
+        const auto empty_body_baseline = budget.used();
+        {
+            auto unstarted = reader.readAll(body);
+        }
+        RUVIA_CHECK_EQ(budget.used(), empty_body_baseline);
+        auto result = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+            try {
+                (void)co_await ruvia::asAwaitable(reader.readAll(body));
+            } catch (const ruvia::HttpProtocolError&) {
+                incomplete = true;
+            } }, asio::use_future);
+        io.run();
+        result.get();
+        RUVIA_CHECK(incomplete);
+        RUVIA_CHECK(body.empty());
+        RUVIA_CHECK(budget.used() <= empty_body_baseline + 64 * 1024);
+    }
+    RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
+}
+
+RUVIA_TEST(http1_buffered_content_length_preserves_pipeline_and_releases_storage) {
+    asio::io_context& io = ruvia::test::newTestIoContext();
+    ruvia::detail::inbound_buffer_resource budget(std::pmr::new_delete_resource(), 64 * 1024);
+    const std::string payload(4096, 'b');
+    SegmentedBodyStream stream{&io, {payload.substr(1024, 1024), payload.substr(2048) + "GET /next HTTP/1.1\r\n\r\n"}};
+    ruvia::ConnectionScanner::Entry scanner;
+    const auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 4096\r\n\r\n");
+    {
+        ruvia::detail::StreamBodyReader<SegmentedBodyStream> reader(stream,
+            std::pmr::polymorphic_allocator<char>(&budget), std::string_view(payload).substr(0, 1024), plan,
+            ruvia::ProtocolByteLimit::limited(4096), scanner);
+        std::pmr::string body(&budget);
+        auto result = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+            RUVIA_CHECK_EQ(co_await ruvia::asAwaitable(reader.readAll(body)), payload);
+            RUVIA_CHECK_EQ(std::string_view(body), payload);
+            std::pmr::string pipeline;
+            reader.takePipeline(pipeline);
+            RUVIA_CHECK_EQ(pipeline, "GET /next HTTP/1.1\r\n\r\n");
+            RUVIA_CHECK_EQ(std::string_view(body), payload); }, asio::use_future);
+        io.run();
+        result.get();
+        RUVIA_CHECK(budget.used() >= payload.size());
+    }
+    RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
 }

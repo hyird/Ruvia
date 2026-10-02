@@ -121,7 +121,9 @@ struct QpackResource final : std::pmr::memory_resource {
     std::size_t liveBytes{0};
     bool fail{false};
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail) {
+        // Keep noexcept debug iterator bookkeeping available while failing
+        // the encoded field data allocation.
+        if (fail && bytes >= 32) {
             throw std::bad_alloc();
         }
         auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);

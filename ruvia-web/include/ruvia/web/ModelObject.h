@@ -25,7 +25,7 @@ namespace ruvia::detail {
 template <typename ViewT>
 [[nodiscard]] std::optional<ViewT> parseJsonViewValue(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
-    bool requireObject);
+    bool requireObject, json_parse_budget& budget);
 
 }
 
@@ -185,7 +185,7 @@ private:
     friend class JsonObject;
     template <typename ViewT>
     friend std::optional<ViewT> detail::parseJsonViewValue(std::string_view&,
-        std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool);
+        std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool, detail::json_parse_budget&);
 
     using Storage = std::variant<std::string_view, std::pmr::string>;
 
@@ -329,7 +329,7 @@ private:
     friend struct detail::ModelValueRebindAccess;
     template <typename ViewT>
     friend std::optional<ViewT> detail::parseJsonViewValue(std::string_view&,
-        std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool);
+        std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool, detail::json_parse_budget&);
 
     using Storage = std::variant<std::string_view, std::pmr::string>;
 
@@ -439,7 +439,7 @@ namespace ruvia::detail {
 template <typename ViewT>
 [[nodiscard]] std::optional<ViewT> parseJsonViewValue(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
-    bool requireObject) {
+    bool requireObject, json_parse_budget& budget) {
     skipJsonWhitespace(input);
     const auto start = input;
     if (!skipJsonValue(input, depth)) {
@@ -456,6 +456,10 @@ template <typename ViewT>
     }
     ViewT value(ModelOptions{.resource = resource});
     if (stringStorage == ModelStringStorage::kOwned) {
+        if (!budget.consume_bytes(token.size()) ||
+            !budget.consume_bytes(token.size() + sizeof(std::pmr::string))) {
+            return std::nullopt;
+        }
         value.assignOwned(token);
     } else {
         value.storage_.template emplace<std::string_view>(token);
@@ -465,14 +469,16 @@ template <typename ViewT>
 
 template <>
 inline std::optional<JsonValue> parseJsonValue<JsonValue>(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
-    return parseJsonViewValue<JsonValue>(input, resource, depth, stringStorage, false);
+    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
+    json_parse_budget& budget) {
+    return parseJsonViewValue<JsonValue>(input, resource, depth, stringStorage, false, budget);
 }
 
 template <>
 inline std::optional<JsonObject> parseJsonValue<JsonObject>(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage) {
-    return parseJsonViewValue<JsonObject>(input, resource, depth, stringStorage, true);
+    std::pmr::memory_resource* resource, std::size_t depth, ModelStringStorage stringStorage,
+    json_parse_budget& budget) {
+    return parseJsonViewValue<JsonObject>(input, resource, depth, stringStorage, true, budget);
 }
 
 template <>

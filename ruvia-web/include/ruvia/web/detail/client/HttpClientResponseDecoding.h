@@ -14,7 +14,6 @@ void configureHttpClientResponseDecoding(HttpClientResponseState& state);
 // Shared by HTTP/1, HTTP/2 and HTTP/3. Uses the parser-computed body plan and
 // keeps decoded output bounded by the response's configured byte limit.
 void decodeHttpClientResponseContentEncoding(HttpClientResponseState& state,
-    bool contentSemanticsPresent, std::size_t maxDecodedBytes,
-    std::pmr::memory_resource* resource);
+    bool contentSemanticsPresent, std::size_t maxDecodedBytes);
 
 }  // namespace ruvia::detail

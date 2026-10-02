@@ -114,12 +114,7 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
             fields.push_back({"expect", "100-continue", false});
         }
         const auto target = preparedRequest->target();
-        if (preparedRequest->method() == "CONNECT" && !preparedRequest->isTunnel()) {
-            return std::unexpected(Error::kUnsupportedTunnel);
-        }
-        if (!preparedRequest->isTunnel() && (target.empty() || (target.front() != '/' && target != "*") || target.find('#') != std::string_view::npos)) {
-            return std::unexpected(Error::kInvalidRequest);
-        }
+        const bool connect = preparedRequest->method() == "CONNECT";
         if (preparedRequest->isTunnel()) {
             ownedAuthority.assign(preparedRequest->tunnelAuthority());
         }
@@ -128,25 +123,15 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
         // content. The caller must have established that its origin supports
         // HEAD content; requests without supplied content remain bodyless.
         const bool sendsBody = HttpClientRequestStorageAccess::hasBody(*preparedRequest);
-        const bool hasDeclaredLength = std::any_of(fields.begin(), fields.end(), [](const auto& field) {
-            constexpr std::string_view name = "content-length";
-            if (field.name.size() != name.size()) {
-                return false;
-            }
-            for (std::size_t i = 0; i < name.size(); ++i) {
-                const auto ch = static_cast<unsigned char>(field.name[i]);
-                if ((ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch) != name[i]) {
-                    return false;
-                }
-            }
-            return true;
-        });
-        // An explicitly declared length on a bodyless request must agree with
-        // the actual zero-byte FIN, without adding Content-Length: 0 to every
-        // GET/HEAD lacking that field.
-        const std::optional<std::uint64_t> bodyLength = upload != nullptr ? upload->config.contentLength : sendsBody       ? std::optional<std::uint64_t>(preparedRequest->body().size())
-                                                                                                       : hasDeclaredLength ? std::optional<std::uint64_t>(0)
-                                                                                                                           : std::nullopt;
+        // HTTP owns framing validation and automatic field generation. A
+        // bodyless request still has a known zero-byte body for validating an
+        // explicit Content-Length, but does not acquire Content-Length: 0.
+        const std::optional<std::uint64_t> bodyLength = connect             ? std::nullopt
+                                                        : upload != nullptr ? upload->config.contentLength
+                                                        : sendsBody         ? std::optional<std::uint64_t>(preparedRequest->body().size())
+                                                                            : std::optional<std::uint64_t>(0);
+        const bool emit_content_length = sendsBody ||
+                                         (upload != nullptr && upload->config.contentLength.has_value());
         // Extended CONNECT cannot be encoded before received SETTINGS authorize
         // it. Keep an unbounded cursor with no provisional wire head; the sole
         // connection driver encodes and validates it before the first write.
@@ -154,10 +139,22 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
             if (preparedRequest->isTunnel() && !preparedRequest->tunnelProtocol().empty()) {
                 return Http3ClientRequestHead(resource);
             }
-            return encodeHttp3ClientRequestHead({preparedRequest->method(), preparedRequest->isTunnel() ? std::string_view{} : std::string_view(ownedScheme), ownedAuthority, target, fields, bodyLength}, limits, resource);
+            return encodeHttp3ClientRequestHead({.method = preparedRequest->method(),
+                                                    .scheme = connect ? std::string_view{} : std::string_view(ownedScheme),
+                                                    .authority = connect && !preparedRequest->isTunnel() ? target : std::string_view(ownedAuthority),
+                                                    .path = connect && !preparedRequest->isTunnel() ? std::string_view{} : target,
+                                                    .fields = fields,
+                                                    .bodyLength = bodyLength,
+                                                    .emit_content_length = emit_content_length},
+                limits, resource);
         }();
         if (!encoded) {
             return std::unexpected(Error::kRequestEncoding);
+        }
+        // Let HTTP validate the CONNECT authority-form first; this client then
+        // reports its independent lack of a plain CONNECT tunnel capability.
+        if (connect && !preparedRequest->isTunnel()) {
+            return std::unexpected(Error::kUnsupportedTunnel);
         }
         if (encoded->fieldSection.size() > std::numeric_limits<std::size_t>::max() - kHttp3FrameHeaderMaxBytes) {
             return std::unexpected(Error::kRequestEncoding);
@@ -209,14 +206,19 @@ bool Http3ClientRequestWrite::prepareConnectionHead(std::uint64_t streamId, Http
     if (request_.upload() != nullptr && request_.upload()->config.expectation == HttpClientRequestExpectation::kContinue) {
         fields.push_back({"expect", "100-continue", false});
     }
-    const auto length = request_.upload() != nullptr ? request_.upload()->config.contentLength : HttpClientRequestStorageAccess::hasBody(request_) ? std::optional<std::uint64_t>{request_.body().size()}
-                                                                                                                                                   : std::nullopt;
+    const bool connect = request_.method() == "CONNECT";
+    const auto length = connect                                             ? std::nullopt
+                        : request_.upload() != nullptr                      ? request_.upload()->config.contentLength
+                        : HttpClientRequestStorageAccess::hasBody(request_) ? std::optional<std::uint64_t>{request_.body().size()}
+                                                                            : std::optional<std::uint64_t>{0};
     const auto encoded = engine.encodeRequestHead(streamId, {.method = request_.method(),
-                                                                .scheme = request_.isTunnel() && request_.tunnelProtocol().empty() ? std::string_view{} : std::string_view(scheme_),
-                                                                .authority = authority_,
-                                                                .path = request_.target(),
+                                                                .scheme = connect && request_.tunnelProtocol().empty() ? std::string_view{} : std::string_view(scheme_),
+                                                                .authority = connect && !request_.isTunnel() ? request_.target() : std::string_view(authority_),
+                                                                .path = connect && !request_.isTunnel() ? std::string_view{} : request_.target(),
                                                                 .fields = fields,
                                                                 .bodyLength = length,
+                                                                .emit_content_length = HttpClientRequestStorageAccess::hasBody(request_) ||
+                                                                                       (request_.upload() != nullptr && request_.upload()->config.contentLength.has_value()),
                                                                 .protocol = request_.tunnelProtocol(),
                                                                 .peerEnableConnectProtocol = engine.peerSettings() && engine.peerSettings()->enableConnectProtocol});
     if (!encoded) {

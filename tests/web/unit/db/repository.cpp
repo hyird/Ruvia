@@ -844,7 +844,7 @@ RUVIA_TEST(db_cache_policy_snapshots_settings_and_bypasses_writes_and_locks) {
     RepositoryRuntime runtime;
     auto* resource = std::pmr::get_default_resource();
     DbCacheConfig config{.alwaysEnabled = true};
-    detail::DbQueryCacheState cache(runtime.context, runtime.worker, detail::DbCacheConfigStorage(config, resource), resource);
+    detail::DbQueryCacheState cache(runtime.context, runtime.worker, detail::DbCacheConfigStorage(config, resource), config.nameSpace, resource);
     DbQuery query;
     query.select(query.column("id")).from("items");
     const auto driver = databaseConfig().driver;

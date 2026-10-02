@@ -63,6 +63,7 @@ public:
     }
     bool failSet{false};
     bool failDelete{false};
+    bool revoked{false};
     ruvia::StopSource* cancelWrite{nullptr};
     std::vector<std::vector<std::string>> commands;
 
@@ -87,7 +88,12 @@ public:
                     cancelWrite->requestStop();
                     continue;
                 }
-                const std::string_view reply = verb == "DEL"
+                const bool rotation = verb == "EVAL";
+                const bool updating = verb == "SET" && commands.back().back() == "XX";
+                const std::string_view reply = rotation
+                                                   ? (failDelete ? "-ERR rotation failed\r\n" : (revoked ? ":0\r\n" : ":1\r\n"))
+                                               : (updating && revoked) ? "$-1\r\n"
+                                               : verb == "DEL"
                                                    ? (failDelete ? "-ERR delete failed\r\n" : ":1\r\n")
                                                    : ((failSet && (verb == "SET" || verb == "SETEX"))
                                                              ? "-ERR storage failed\r\n"
@@ -136,6 +142,7 @@ struct SessionFixture final {
     ruvia::detail::RedisDefinition definition() {
         auto config = ruvia::RedisConfig{};
         config.host = "127.0.0.1";
+        config.tls.mode = ruvia::client_tls_mode::disabled;
         config.port = peer.port();
         config.poolSizePerWorker = 1;
         return {std::pmr::string("default", &operationMemory),
@@ -294,9 +301,9 @@ RUVIA_TEST(session_commit_rotates_and_clears_before_publishing_cookie) {
         auto exercise = [&]() -> ruvia::Task<void> {
             co_await ruvia::detail::SessionAccess::commit(fixture.context);
             const auto& commands = fixture.peer.commands;
-            RUVIA_CHECK_EQ(commands.size(), clear ? std::size_t{1} : std::size_t{2});
-            RUVIA_CHECK_EQ(commands.back().front(), std::string("DEL"));
-            RUVIA_CHECK(commands.back()[1].ends_with("deadbeef"));
+            RUVIA_CHECK_EQ(commands.size(), std::size_t{1});
+            RUVIA_CHECK_EQ(commands.back().front(), std::string(clear ? "DEL" : "EVAL"));
+            RUVIA_CHECK(commands.back()[clear ? 1 : 3].ends_with("deadbeef"));
             const auto head = ruvia::detail::webSocketResponseHeaders(fixture.context);
             RUVIA_CHECK_EQ(head.size(), std::size_t{1});
             RUVIA_CHECK_EQ(head.front().value().contains("Max-Age=0"), clear);
@@ -335,7 +342,36 @@ RUVIA_TEST(session_commit_failure_and_cancellation_never_publish_or_retry) {
                 RUVIA_CHECK(ruvia::detail::webSocketResponseHeaders(fixture.context).empty());
                 RUVIA_CHECK(rejectsMutation(fixture.context.session()));
             }
-            RUVIA_CHECK_EQ(fixture.peer.commands.size(), failure == 1 ? std::size_t{2} : std::size_t{1});
+            RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
+        };
+        fixture.run(exercise());
+    }
+}
+
+RUVIA_TEST(session_commit_rejects_updates_and_rotations_of_revoked_sessions) {
+    for (const bool rotate : {false, true}) {
+        SessionFixture fixture;
+        fixture.bind();
+        ruvia::detail::SessionAccess::observePresentedId(fixture.context, "deadbeef");
+        ruvia::detail::SessionAccess::load(fixture.context, "user=1");
+        fixture.context.session().set("user=2");
+        if (rotate) {
+            fixture.context.session().regenerate();
+        }
+        fixture.peer.revoked = true;
+        auto exercise = [&]() -> ruvia::Task<void> {
+            bool rejected = false;
+            try {
+                co_await ruvia::detail::SessionAccess::commit(fixture.context);
+            } catch (const ruvia::HttpError& error) {
+                rejected = error.info().status() == ruvia::http_status::kConflict;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK(ruvia::detail::webSocketResponseHeaders(fixture.context).empty());
+            RUVIA_CHECK_EQ(fixture.peer.commands.size(), std::size_t{1});
+            if (!rotate) {
+                RUVIA_CHECK_EQ(fixture.peer.commands[0].back(), std::string("XX"));
+            }
         };
         fixture.run(exercise());
     }

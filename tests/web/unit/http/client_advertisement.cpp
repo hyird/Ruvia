@@ -79,9 +79,10 @@ RUVIA_TEST(http_client_advertisements_own_results_bound_queues_and_reclaim_repea
 RUVIA_TEST(http_client_advertisement_budget_counts_results_held_outside_the_queue) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
     auto run = [&]() -> ruvia::Task<void> {
         std::pmr::unsynchronized_pool_resource pool;
-        ruvia::detail::HttpClientAdvertisementQueue queue(attachment.loop().handle(),
+        ruvia::detail::HttpClientAdvertisementQueue queue(worker,
             {.receiveOrigins = true, .receiveAlternativeServices = true, .maxRetainedBytes = 4096}, &pool);
         ruvia::HttpOriginAdvertisement origins(&pool);
         origins.origins.emplace_back(std::string(1000, 'a'));
@@ -106,24 +107,35 @@ RUVIA_TEST(http_client_advertisement_budget_counts_results_held_outside_the_queu
     root.get();
 }
 
-RUVIA_TEST(http_client_advertisements_disabled_queue_allocates_no_storage) {
+RUVIA_TEST(http_client_advertisements_disabled_queue_does_not_allocate_operation_storage) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource memory;
-    ruvia::detail::HttpClientAdvertisementQueue queue(attachment.loop().handle(), {}, &memory, memory);
-    RUVIA_CHECK_EQ(memory.allocationCount(), std::size_t{0});
-    auto run = [&]() -> ruvia::Task<void> {
-        ruvia::HttpOriginAdvertisement origins(&memory);
-        RUVIA_CHECK(!queue.retain(0, ruvia::HttpProtocolVersion::kHttp2, origins));
-        RUVIA_CHECK(!queue.next() && queue.dropped() == 0 && queue.retainedBytes() == 0);
-        queue.retire();
-        RUVIA_CHECK_EQ(memory.allocationCount(), std::size_t{0});
-        attachment.stop();
-        co_return;
-    };
-    auto root = attachment.loop().start(run());
-    attachment.run();
-    root.get();
+    {
+        ruvia::detail::HttpClientAdvertisementQueue queue(worker, {}, &memory, memory);
+        // MSVC Debug STL may account for list proxy/sentinel metadata at
+        // construction. Verify disabled queue operations allocate nothing
+        // beyond that container baseline, then release it on destruction.
+        const auto queue_construction_baseline = memory.liveAllocations();
+        auto run = [&]() -> ruvia::Task<void> {
+            {
+                ruvia::HttpOriginAdvertisement origins(&memory);
+                const auto operation_allocation_baseline = memory.allocationCount();
+                RUVIA_CHECK(!queue.retain(0, ruvia::HttpProtocolVersion::kHttp2, origins));
+                RUVIA_CHECK(!queue.next() && queue.dropped() == 0 && queue.retainedBytes() == 0);
+                queue.retire();
+                RUVIA_CHECK_EQ(memory.allocationCount(), operation_allocation_baseline);
+            }
+            RUVIA_CHECK_EQ(memory.liveAllocations(), queue_construction_baseline);
+            attachment.stop();
+            co_return;
+        };
+        auto root = attachment.loop().start(run());
+        attachment.run();
+        root.get();
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(http_client_origin_observation_requires_authenticated_tls_and_positive_bounds) {

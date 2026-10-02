@@ -46,17 +46,6 @@ struct http3_worker_server_test_access final {
         return server.pump();
     }
 
-    [[nodiscard]] static bool retirement_join_started(
-        const Http3WorkerServer& server, Http3ServerConnectionChannel::Identity identity) noexcept {
-        for (const auto& slot : server.slots_) {
-            if (slot.identity == identity) {
-                return slot.retirementTaskStarted && slot.connection != nullptr &&
-                       slot.connection->joinStarted_ && !slot.connection->joinCompleted_;
-            }
-        }
-        return false;
-    }
-
     [[nodiscard]] static bool transport_retired_consumed(
         const Http3WorkerServer& server, Http3ServerConnectionChannel::Identity identity) noexcept {
         for (const auto& slot : server.slots_) {
@@ -129,7 +118,7 @@ struct routes final {
 };
 
 struct wake final {
-    explicit wake(ruvia::WorkerHandle worker)
+    explicit wake(const ruvia::WorkerHandle& worker)
         : signal_(worker) {}
 
     static void notify(void* raw) noexcept {
@@ -172,7 +161,7 @@ std::string request_wire(std::pmr::memory_resource* resource) {
 ruvia::Task<void> exercise_worker_server_retirement(
     ruvia::WorkerRuntimeContext& runtime, std::pmr::memory_resource& upstream,
     ruvia::testing::TestContext& ruvia_ctx) {
-    const auto worker = runtime.handle();
+    const auto& worker = runtime.handle();
     ruvia::WorkerMemory worker_memory(upstream);
     ruvia::StopSource stop_source;
     const auto stop_token = stop_source.token();
@@ -232,10 +221,13 @@ ruvia::Task<void> exercise_worker_server_retirement(
     const message_id id{active_identity.epoch, active_identity.connectionGeneration, 0};
     const auto bytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(wire.data()), wire.size());
-    RUVIA_CHECK(requests.trySend(id, bytes) == mailbox_type::SendResult::kSent);
-    RUVIA_CHECK(requests.trySendControl(
-                    {control_type::Kind::kStreamFin, id, static_cast<std::uint64_t>(wire.size())}) ==
-                mailbox_type::ControlResult::kSent);
+    const auto dataResult = requests.trySend(id, bytes);
+    RUVIA_CHECK(dataResult == mailbox_type::SendResult::kSent ||
+                dataResult == mailbox_type::SendResult::kSentNotifyPeer);
+    const auto controlResult = requests.trySendControl(
+        {control_type::Kind::kStreamFin, id, static_cast<std::uint64_t>(wire.size())});
+    RUVIA_CHECK(controlResult == mailbox_type::ControlResult::kSent ||
+                controlResult == mailbox_type::ControlResult::kSentNotifyPeer);
     RUVIA_CHECK(server.notification().notify() != ruvia::WorkerNotificationStatus::kClosed);
     co_await handler.started_.wait();
     RUVIA_CHECK_EQ(active_connections.load(std::memory_order_relaxed), std::size_t{2});
@@ -272,26 +264,25 @@ ruvia::Task<void> exercise_worker_server_retirement(
                         channel_type::IntentSettlement::kTransportRetiredSuperseded) ==
                     channel_type::Status::kPublished);
     }
-    channel_type::DrainComplete late_drain_complete;
-    RUVIA_CHECK(drain_channel.receiveDrainComplete(late_drain_complete) ==
-                channel_type::Status::kReceived);
-    RUVIA_CHECK(late_drain_complete.identity == drain_identity);
-
     RUVIA_CHECK(ruvia::detail::http3_worker_server_test_access::pump_once(server));
     RUVIA_CHECK(ruvia::detail::http3_worker_server_test_access::transport_retired_consumed(
         server, active_identity));
     RUVIA_CHECK(ruvia::detail::http3_worker_server_test_access::retirement_task_started(
         server, active_identity));
-    RUVIA_CHECK(ruvia::detail::http3_worker_server_test_access::retirement_join_started(
-        server, active_identity));
     RUVIA_CHECK(!ruvia::detail::http3_worker_server_test_access::join_completed(
         server, active_identity));
-    RUVIA_CHECK_EQ(active_connections.load(std::memory_order_relaxed), std::size_t{2});
+    RUVIA_CHECK_EQ(active_connections.load(std::memory_order_relaxed), std::size_t{1});
 
-    RUVIA_CHECK(active_channel.closeNetworkPublications(active_identity) ==
-                channel_type::Status::kPublished);
-    RUVIA_CHECK(drain_channel.closeNetworkPublications(drain_identity) ==
-                channel_type::Status::kPublished);
+    handler.release_.notify();
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+        const auto identity = i == 0 ? active_identity : drain_identity;
+        auto status = channels[i]->closeNetworkPublications(identity);
+        while (status == channel_type::Status::kWrongState) {
+            co_await network_wake.signal_.wait();
+            status = channels[i]->closeNetworkPublications(identity);
+        }
+        RUVIA_CHECK(status == channel_type::Status::kPublished);
+    }
     channel_type::WorkerFinalized drain_worker_finalized;
     auto finalized_status = drain_channel.receiveWorkerFinalized(drain_worker_finalized);
     while (finalized_status == channel_type::Status::kEmpty) {
@@ -305,7 +296,6 @@ ruvia::Task<void> exercise_worker_server_retirement(
     RUVIA_CHECK(drain_channel.publishNetworkFinalized(drain_identity) ==
                 channel_type::Status::kPublished);
 
-    handler.release_.notify();
     channel_type::WorkerFinalized active_worker_finalized;
     auto active_finalized_status = active_channel.receiveWorkerFinalized(active_worker_finalized);
     while (active_finalized_status == channel_type::Status::kEmpty) {

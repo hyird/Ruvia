@@ -11,6 +11,7 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
+#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 
 // What every HTTP/1 route dispatch needs from the session that owns the
@@ -38,6 +39,7 @@ struct Http1RouteDispatch final {
     const HttpServerOptions& options;
     HttpResponse& response;
     Http1RequestSequence& requestSequence;
+    std::pmr::memory_resource* inbound_buffer_pool{};
 };
 
 }  // namespace ruvia::detail

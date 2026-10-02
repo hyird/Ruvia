@@ -186,7 +186,8 @@ struct NegotiationResource final : std::pmr::memory_resource {
     std::size_t live{0};
     bool fail{false};
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        if (fail) {
+        // Fail request field storage, not noexcept debug iterator bookkeeping.
+        if (fail && bytes >= 32) {
             throw std::bad_alloc();
         }
         auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);

@@ -343,7 +343,7 @@ std::size_t Http3ServerStreamInput::tableCapacity(std::size_t maxTrackedStreams)
 
 Http3ServerStreamInput::StreamState* Http3ServerStreamInput::findOrCreate(
     std::uint64_t streamId, Status& failure) noexcept {
-    if (streamId > kHttp3VarIntMax) {
+    if (!http3StreamIdType(streamId)) {
         failure = Status::kInvalidInput;
         return nullptr;
     }

@@ -1030,7 +1030,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
             RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
             for (unsigned turn = 0; turn != 4; ++turn) {
-                co_await ruvia::asyncAsio([&io](auto done) {
+                (void)co_await ruvia::asyncAsio([&io](auto done) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
@@ -1042,7 +1042,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
                 stop.requestStop();
             }
             for (unsigned turn = 0; turn != 4; ++turn) {
-                co_await ruvia::asyncAsio([&io](auto done) {
+                (void)co_await ruvia::asyncAsio([&io](auto done) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
@@ -1074,7 +1074,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kOk);
         RUVIA_CHECK_EQ(client.stats().inFlightRequests, std::size_t{1});
         for (unsigned turn = 0; turn != 4; ++turn) {
-            co_await ruvia::asyncAsio([&io](auto done) {
+            (void)co_await ruvia::asyncAsio([&io](auto done) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }
@@ -1121,7 +1121,7 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
         // Let the producer decode already-buffered compressed bytes while the
         // consumer's borrowed view remains live; only pending storage may grow.
         for (unsigned turn = 0; turn != 4; ++turn) {
-            co_await ruvia::asyncAsio([&io](auto done) {
+            (void)co_await ruvia::asyncAsio([&io](auto done) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }
@@ -1553,17 +1553,18 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
     ruvia::test::CountingMemoryResource resource;
     LoopbackResponseServer server(io, worker.handle, {"one", "two", "three", "four"});
     auto config = localHttpClientConfig(server.port());
-    const ruvia::detail::HttpClientDefinition definitions[]{
-        {std::pmr::string("default", &resource),
-            ruvia::detail::HttpClientConfigStorage(config, &resource)},
-    };
+    std::optional<ruvia::detail::HttpClientDefinition> definition;
+    definition.emplace(ruvia::detail::HttpClientDefinition{
+        std::pmr::string("default", &resource),
+        ruvia::detail::HttpClientConfigStorage(config, &resource)});
+    const auto definition_baseline = resource.liveAllocations();
     auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
         ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 64});
     std::optional<ruvia::HttpClientResponse> retainedResponse;
     std::optional<ruvia::HttpClientResponseBytes> retainedBody;
     {
-        ruvia::detail::HttpClientRegistry registry(
-            io, worker.handle, &resource, definitions, budget);
+        ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
+            std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1), budget);
         ruvia::detail::ScopedOperationScope scope;
         server.start();
         auto operation = [&]() -> ruvia::Task<void> {
@@ -1634,8 +1635,10 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
         };
         runOperation(worker, io, operation);
     }
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.liveAllocations(), definition_baseline);
     RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
+    definition.reset();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
@@ -1645,13 +1648,14 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
     LoopbackResponseServer server(
         io, worker.handle, {"warm", "unused"}, std::chrono::milliseconds::zero(), true, 1);
     auto config = localHttpClientConfig(server.port());
-    const ruvia::detail::HttpClientDefinition definitions[]{
-        {std::pmr::string("default", &resource),
-            ruvia::detail::HttpClientConfigStorage(config, &resource)},
-    };
+    std::optional<ruvia::detail::HttpClientDefinition> definition;
+    definition.emplace(ruvia::detail::HttpClientDefinition{
+        std::pmr::string("default", &resource),
+        ruvia::detail::HttpClientConfigStorage(config, &resource)});
+    const auto definition_baseline = resource.liveAllocations();
     {
-        ruvia::detail::HttpClientRegistry registry(
-            io, worker.handle, &resource, definitions);
+        ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
+            std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1));
         ruvia::detail::ScopedOperationScope scope;
         ruvia::StopSource preCancelled;
         preCancelled.requestStop();
@@ -1699,6 +1703,8 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
         };
         runOperation(worker, io, operation);
     }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), definition_baseline);
+    definition.reset();
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 
@@ -2289,9 +2295,13 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
             co_await moved.body().write("def");
             std::string trailerValue = "retained";
             const std::array<ruvia::HttpHeaderView, 1> fields{{{"X-End", trailerValue}}};
-            auto ending = known ? moved.body().end() : moved.body().end(fields);
-            trailerValue.assign("changed");
-            co_await std::move(ending);
+            if (known) {
+                co_await moved.body().end();
+            } else {
+                auto ending = moved.body().end(fields);
+                trailerValue.assign("changed");
+                co_await std::move(ending);
+            }
             RUVIA_CHECK(moved.body().complete());
             auto response = co_await moved.response();
             auto bytes = co_await response.body().readAll(16);
@@ -2314,10 +2324,10 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
     auto& io = ruvia::test::newTestIoContext();
     TestWorker worker(io);
     UploadPeer peer(io, worker.handle, UploadPeer::Mode::kEarlyFinal);
-    ruvia::HttpClient client(worker.attachment.loop(), localHttpClientConfig(peer.port()));
+    std::optional<ruvia::HttpClient> client(std::in_place, worker.attachment.loop(), localHttpClientConfig(peer.port()));
     peer.start();
     auto operation = [&]() -> ruvia::Task<void> {
-        auto exchange = co_await client.openRequest({.method = "POST", .target = "/upload"},
+        auto exchange = co_await client->openRequest({.method = "POST", .target = "/upload"},
             {.expectation = ruvia::HttpClientRequestExpectation::kContinue});
         auto response = co_await exchange.response();
         RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
@@ -2331,7 +2341,12 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
         auto bytes = co_await response.body().readAll(16);
         RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "no");
         co_await peer.wait();
-        co_await client.shutdown();
+        co_await client->shutdown();
+        client.reset();
+        // The response domain keeps the exchange's output signals alive after
+        // client destruction, including the stopped, unfinished upload path.
+        RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "no");
     };
     runOperation(worker, io, operation);
 }

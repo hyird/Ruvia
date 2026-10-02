@@ -38,6 +38,9 @@ enum class HttpClientReceivedCookiePolicy : std::uint8_t {
 // independent of per-response limits and worker-owned memory.
 struct HttpClientResultBudgetConfig final {
     std::size_t maxRetainedBytes{std::size_t{64} * 1024 * 1024};
+    // Worker-local live response allocations, including compressed input,
+    // decoder output, metadata and simultaneous buffer growth.
+    std::size_t max_in_flight_bytes{std::size_t{64} * 1024 * 1024};
 };
 
 // Configuration for one HttpClient bound to one EventLoop. App registration

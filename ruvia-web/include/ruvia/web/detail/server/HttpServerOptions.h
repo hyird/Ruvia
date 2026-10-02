@@ -164,6 +164,9 @@ struct HttpServerOptions final {
     HttpClientResultBudgetConfig httpClientResultBudget{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> requestBodyTimeout{std::chrono::seconds(60)};
+    // Absolute phase deadlines: progress does not renew these limits.
+    std::optional<std::chrono::milliseconds> header_completion_timeout{std::chrono::seconds(30)};
+    std::optional<std::chrono::milliseconds> body_completion_timeout{std::chrono::seconds(120)};
     std::optional<std::chrono::milliseconds> writeTimeout{std::chrono::seconds(60)};
     // Per worker. Defaults to a bounded cap so an unconfigured server cannot be
     // driven to FD/memory exhaustion by a connection flood; set std::nullopt to
@@ -174,6 +177,12 @@ struct HttpServerOptions final {
     // Buffered routes materialize body data; the same cap applies again after
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    // Live inbound buffer allocations across HTTP bodies and WebSocket sessions.
+    // Includes capacity and reallocation overlap; the limits cannot be disabled.
+    std::size_t max_inbound_buffer_bytes_per_worker{256 * 1024 * 1024};
+    std::size_t max_inbound_buffer_bytes_per_connection{64 * 1024 * 1024};
+    // Borrowed from the worker runtime, whose shutdown joins every user.
+    std::pmr::memory_resource* inbound_buffer_pool{};
     // Stream routes are explicit; absence disables the stream body limit.
     std::optional<std::size_t> maxStreamBodyBytes{};
     // WebSocket messages are assembled before delivery; this must be greater than 0.

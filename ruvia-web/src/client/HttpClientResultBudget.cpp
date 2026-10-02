@@ -7,10 +7,26 @@
 namespace ruvia::detail {
 
 HttpClientResultBudgetDomain::HttpClientResultBudgetDomain(HttpClientResultBudgetConfig config)
-    : maxRetainedBytes_(config.maxRetainedBytes) {
-    if (maxRetainedBytes_ == 0) {
+    : maxRetainedBytes_(config.maxRetainedBytes),
+      max_in_flight_bytes_(config.max_in_flight_bytes) {
+    if (maxRetainedBytes_ == 0 || max_in_flight_bytes_ == 0) {
         throw std::invalid_argument("HTTP client result byte budget must be greater than zero");
     }
+}
+
+bool HttpClientResultBudgetDomain::reserve_in_flight(std::size_t bytes) noexcept {
+    if (bytes > max_in_flight_bytes_ - in_flight_bytes_) {
+        return false;
+    }
+    in_flight_bytes_ += bytes;
+    return true;
+}
+
+void HttpClientResultBudgetDomain::release_in_flight(std::size_t bytes) noexcept {
+    if (bytes > in_flight_bytes_) {
+        std::terminate();
+    }
+    in_flight_bytes_ -= bytes;
 }
 
 bool HttpClientResultBudgetDomain::tryReserve(std::size_t bytes) noexcept {

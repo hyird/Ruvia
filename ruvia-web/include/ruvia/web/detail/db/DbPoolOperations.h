@@ -140,7 +140,7 @@ template <typename Pool>
 Task<std::size_t> acquireDbSlot(Pool& pool, ruvia::OperationTimeout timeout, StopToken stopToken) {
     const auto acquireTimeout = timeout.constrainedBy(pool.config_.acquireTimeout).remaining();
     const auto result =
-        co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken), pool.worker_);
+        co_await pool.scheduler_.acquire(acquireTimeout, std::move(stopToken));
     switch (result.status()) {
         case PoolWaiterResult::Status::kAcquired:
             co_return result.index();

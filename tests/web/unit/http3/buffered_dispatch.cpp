@@ -2669,8 +2669,8 @@ ruvia::Task<void> exerciseConnectTunnel(Fixture& fixture, const ruvia::WorkerHan
         std::string tunnelPayload = payload;
         if (udp) {
             std::array<char, 16> header;
-            const auto encoded = ruvia::encodeHttpCapsuleHeader(header, 0, payload.size() + 1);
-            tunnelPayload.assign(header.data(), *encoded);
+            const auto capsule_header_size = ruvia::encodeHttpCapsuleHeader(header, 0, payload.size() + 1);
+            tunnelPayload.assign(header.data(), *capsule_header_size);
             tunnelPayload.push_back('\0');
             tunnelPayload.append(payload);
             tunnelPayload.append("\0\1\0", 3);

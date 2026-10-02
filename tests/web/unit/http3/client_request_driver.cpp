@@ -330,7 +330,8 @@ RUVIA_TEST(http3ClientRequestDriverStreamsBoundedChunksAndTrailingHeadersAfterCo
     auto attachment = ruvia::attachEventLoop(io);
     auto run = [&]() -> ruvia::Task<void> {
         std::pmr::unsynchronized_pool_resource pool;
-        ruvia::detail::HttpClientUploadState upload(attachment.loop().handle(), &pool,
+        const auto worker = attachment.loop().handle();
+        ruvia::detail::HttpClientUploadState upload(worker, &pool,
             {.contentLength = 6, .expectation = ruvia::HttpClientRequestExpectation::kContinue});
         ruvia::detail::HttpClientRequestStorage storage("POST", "/upload", &pool);
         storage.bindUpload(upload);
@@ -397,7 +398,8 @@ RUVIA_TEST(http3ClientRequestTrailersHonorPeerFieldLimitAfterCursorMove) {
         const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.maxFieldSectionSize = 512});
         RUVIA_CHECK(prefixes.has_value());
         RUVIA_CHECK(engine.feed(3, prefixes->controlPrefix()).scope == ruvia::Http3ConnectionErrorScope::kNone);
-        ruvia::detail::HttpClientUploadState upload(attachment.loop().handle(), &pool, {});
+        const auto worker = attachment.loop().handle();
+        ruvia::detail::HttpClientUploadState upload(worker, &pool, {});
         upload.contentReleased = true;
         ruvia::detail::HttpClientRequestStorage storage("POST", "/upload", &pool);
         storage.bindUpload(upload);

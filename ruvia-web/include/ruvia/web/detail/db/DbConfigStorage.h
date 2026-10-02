@@ -8,6 +8,7 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/db/DbTypes.h"
+#include "ruvia/web/detail/client/ClientTlsConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
@@ -47,6 +48,7 @@ struct DbConfigStorage final {
     std::uint16_t port{0};
     std::pmr::string username;
     std::pmr::string password;
+    client_tls_config_storage tls;
     std::pmr::string database;
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> readTimeout;
@@ -64,6 +66,7 @@ private:
           port(source.port.value_or(defaultDbPort(source.driver))),
           username(source.username, resource),
           password(source.password, resource),
+          tls(source.tls, resource),
           database(source.database, resource),
           connectTimeout(source.connectTimeout),
           readTimeout(source.readTimeout),
@@ -82,6 +85,7 @@ private:
           port(source.port),
           username(source.username, resource),
           password(source.password, resource),
+          tls(source.tls, resource),
           database(source.database, resource),
           connectTimeout(source.connectTimeout),
           readTimeout(source.readTimeout),

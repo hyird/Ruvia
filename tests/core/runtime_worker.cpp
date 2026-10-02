@@ -3,6 +3,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <future>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -25,8 +27,10 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/StopToken.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
+#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
@@ -41,18 +45,37 @@ public:
     std::size_t allocations{};
     std::size_t deallocations{};
 
+    [[nodiscard]] bool owns(const void* pointer, std::size_t bytes) const noexcept {
+        const auto block_record = live_blocks_.find(const_cast<void*>(pointer));
+        return block_record != live_blocks_.end() && block_record->second >= bytes;
+    }
+
+    [[nodiscard]] std::size_t live_allocations() const noexcept {
+        return live_blocks_.size();
+    }
+
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        auto* const block = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        try {
+            live_blocks_.emplace(block, bytes);
+        } catch (...) {
+            std::pmr::new_delete_resource()->deallocate(block, bytes, alignment);
+            throw;
+        }
         ++allocations;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        return block;
     }
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        live_blocks_.erase(pointer);
         ++deallocations;
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
+
+    std::pmr::unordered_map<void*, std::size_t> live_blocks_{std::pmr::new_delete_resource()};
 };
 
 struct PostPayload final {
@@ -301,6 +324,98 @@ public:
 private:
     MailboxDestructorState* state_;
 };
+
+struct cancellation_observation final {
+    unsigned calls{0};
+    std::uint64_t operation_id{0};
+    bool on_worker{false};
+    bool owner_destroyed{false};
+};
+
+struct cancellation_owner final {
+    const ruvia::WorkerHandle& worker;
+    cancellation_observation& observed;
+
+    ~cancellation_owner() {
+        observed.owner_destroyed = true;
+    }
+
+    void cancelOperationById(std::uint64_t operation_id) noexcept {
+        ++observed.calls;
+        observed.operation_id = operation_id;
+        observed.on_worker = worker.isCurrent();
+    }
+};
+
+bool test_cancellation_reaches_worker_with_saturated_or_closed_mailbox(bool close) {
+    asio::io_context context;
+    ruvia::WorkerRuntimeContext runtime(context, 1);
+    cancellation_observation observed;
+    cancellation_owner owner{runtime.handle(), observed};
+    auto mailbox = ruvia::makeWorkerCancellationMailbox(owner, runtime.handle());
+    ruvia::StopSource source;
+    auto registration = source.token().registerCallback(
+        ruvia::WorkerCancellationPost(mailbox, 7));
+    unsigned normal_calls = 0;
+    const auto accepted = runtime.handle().post([&normal_calls] { ++normal_calls; });
+    if (!accepted.accepted()) {
+        return false;
+    }
+    if (close) {
+        runtime.close();
+    }
+    const auto rejected = runtime.handle().post([] {});
+    if (rejected.status() != (close ? ruvia::PostStatus::kWorkerStopping : ruvia::PostStatus::kQueueFull)) {
+        return false;
+    }
+    source.requestStop();
+    if (observed.calls != 0) {
+        return false;
+    }
+    runtime.run();
+    mailbox->detach(owner);
+    return observed.calls == 1 && observed.operation_id == 7 && observed.on_worker &&
+           normal_calls == 1;
+}
+
+bool test_queued_cancellation_releases_mailbox_after_owner_retirement() {
+    asio::io_context context;
+    ruvia::WorkerRuntimeContext runtime(context, 1);
+    cancellation_observation observed;
+    auto owner = std::make_unique<cancellation_owner>(runtime.handle(), observed);
+    auto mailbox = ruvia::makeWorkerCancellationMailbox(*owner, runtime.handle());
+    std::weak_ptr weak_mailbox(mailbox);
+    ruvia::StopSource source;
+    auto registration = source.token().registerCallback(
+        ruvia::WorkerCancellationPost(mailbox, 9));
+    source.requestStop();
+    registration.reset();
+    mailbox->detach(*owner);
+    owner.reset();
+    mailbox.reset();
+    const bool retained_by_post = !weak_mailbox.expired();
+    runtime.detach();
+    context.run();
+    return retained_by_post && observed.owner_destroyed && observed.calls == 0 &&
+           weak_mailbox.expired();
+}
+
+bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
+    asio::io_context context;
+    ruvia::WorkerRuntimeContext runtime(context, 1);
+    cancellation_observation observed;
+    auto owner = std::make_unique<cancellation_owner>(runtime.handle(), observed);
+    auto mailbox = ruvia::makeWorkerCancellationMailbox(*owner, runtime.handle());
+    ruvia::StopSource source;
+    auto registration = source.token().registerCallback(
+        ruvia::WorkerCancellationPost(mailbox, 11));
+    mailbox->detach(*owner);
+    owner.reset();
+    runtime.detach();
+    source.requestStop();
+    return observed.owner_destroyed && observed.calls == 0 && context.run() == 0 &&
+           mailbox.use_count() == 1;
+}
 
 bool testWorkerRuntimeContextOwnsStableDetachedEndpoint() {
     asio::io_context context;
@@ -581,6 +696,10 @@ bool testEventLoopPostProtectsReentrantHeapCopy() {
         .payloadValid = &payloadValid};
     std::optional<HeapReentrantPostCallable> input;
     input.emplace(state, &resource);
+    const auto callable_storage = resource.allocations - resource.deallocations;
+    if (callable_storage == 0) {
+        return false;
+    }
 
     auto rejected = loop.post(*input);
     if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
@@ -588,11 +707,11 @@ bool testEventLoopPostProtectsReentrantHeapCopy() {
         return false;
     }
     input.reset();
-    if (resource.allocations != resource.deallocations + 1) {
+    if (resource.allocations - resource.deallocations != callable_storage) {
         return false;
     }
     auto retry = std::move(rejected).takeRejected();
-    if (resource.allocations != resource.deallocations + 1) {
+    if (resource.allocations - resource.deallocations != callable_storage) {
         return false;
     }
     ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});
@@ -2128,10 +2247,16 @@ bool testRootTaskResultOwnsPmrStoragePastPoolRetirement() {
     bool retained = false;
     {
         auto result = root.get();
-        retained = result.values.size() == 32 && result.values.front() == 42 &&
-                   resource.allocations == 1 && resource.deallocations == 0;
+        const auto payload_bytes = result.values.capacity() * sizeof(int);
+        const bool payload_retained = resource.owns(result.values.data(), payload_bytes);
+        const bool values_valid = result.values.size() == 32 &&
+                                  std::all_of(result.values.begin(), result.values.end(),
+                                      [](int value) { return value == 42; });
+        retained = values_valid && result.values.get_allocator().resource() == &resource &&
+                   payload_retained && resource.live_allocations() > 0;
     }
-    return retained && resource.allocations == resource.deallocations;
+    return retained && resource.live_allocations() == 0 &&
+           resource.allocations == resource.deallocations;
 }
 
 bool testRootTasksJoinNestedScopesDuringStop() {
@@ -2270,6 +2395,10 @@ int main() {
                        testWorkerSignalRechecksAffinityWhenColdWaitStarts) &&
                    run("dispatch_and_affinity", testDispatchAndAffinity) &&
                    run("bounded_mailbox", testBoundedMailbox) &&
+                   run("cancellation_with_full_mailbox", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_mailbox(false); }) &&
+                   run("cancellation_with_closed_mailbox", [] { return test_cancellation_reaches_worker_with_saturated_or_closed_mailbox(true); }) &&
+                   run("queued_cancellation_after_owner_retirement", test_queued_cancellation_releases_mailbox_after_owner_retirement) &&
+                   run("cancellation_after_endpoint_detach", test_cancellation_after_endpoint_detach_does_not_touch_retired_owner) &&
                    run("external_event_loop_attachment", testExternalEventLoopAttachment) &&
                    run("attachment_run_failure_retires_through_async_cleanup",
                        testAttachmentRunFailureRetiresThroughAsyncCleanup) &&

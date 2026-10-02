@@ -33,9 +33,11 @@ namespace {
 HttpContentDecodeResult decodeBrotliContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto* state = BrotliDecoderCreateInstance(
-        &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
+        &pmr_codec_allocate_with_exception, &pmrCodecFree, &allocation_context);
     if (state == nullptr) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
     struct Guard final {
@@ -44,6 +46,7 @@ HttpContentDecodeResult decodeBrotliContent(
             BrotliDecoderDestroyInstance(state);
         }
     } guard{state};
+    allocation_context.rethrow_allocation_failure();
 
     const auto* nextInput = reinterpret_cast<const std::uint8_t*>(input.data());
     std::size_t availableInput = input.size();
@@ -73,6 +76,7 @@ HttpContentDecodeResult decodeBrotliContent(
             return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kInvalidContent);
         }
         if (result == BROTLI_DECODER_RESULT_ERROR) {
+            allocation_context.rethrow_allocation_failure();
             return HttpContentDecodeResultAccess::failure(brotliAllocationFailure(BrotliDecoderGetErrorCode(state))
                                                               ? HttpContentDecodeError::kDecoderFailure
                                                               : HttpContentDecodeError::kInvalidContent);
@@ -88,9 +92,11 @@ HttpContentDecodeResult decodeBrotliContent(
 HttpContentEncodeResult encodeBrotliContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
+    pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto* state = BrotliEncoderCreateInstance(
-        &pmrCodecAllocate, &pmrCodecFree, output.get_allocator().resource());
+        &pmr_codec_allocate_with_exception, &pmrCodecFree, &allocation_context);
     if (state == nullptr) {
+        allocation_context.rethrow_allocation_failure();
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
     }
     struct Guard final {
@@ -99,7 +105,10 @@ HttpContentEncodeResult encodeBrotliContent(
             BrotliEncoderDestroyInstance(state);
         }
     } guard{state};
-    if (BrotliEncoderSetParameter(state, BROTLI_PARAM_QUALITY, 5) != BROTLI_TRUE) {
+    allocation_context.rethrow_allocation_failure();
+    const auto configured = BrotliEncoderSetParameter(state, BROTLI_PARAM_QUALITY, 5);
+    allocation_context.rethrow_allocation_failure();
+    if (configured != BROTLI_TRUE) {
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
     }
 
@@ -108,8 +117,11 @@ HttpContentEncodeResult encodeBrotliContent(
     for (;;) {
         const auto beforeInput = availableInput;
         std::size_t availableOutput = 0;
-        if (BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH, &availableInput, &nextInput,
-                &availableOutput, nullptr, nullptr) != BROTLI_TRUE) {
+        const auto compressed = BrotliEncoderCompressStream(state, BROTLI_OPERATION_FINISH,
+            &availableInput, &nextInput, &availableOutput, nullptr, nullptr);
+        allocation_context.rethrow_allocation_failure();
+        if (compressed != BROTLI_TRUE) {
+            allocation_context.rethrow_allocation_failure();
             return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
         }
         std::size_t produced = 0;

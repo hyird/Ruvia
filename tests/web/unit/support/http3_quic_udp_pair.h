@@ -208,6 +208,12 @@ private:
                 break;
             }
             if (error) {
+                // A client may close before the server sends its final packets.
+                // Winsock reports that peer's ICMP port-unreachable on receive;
+                // it does not retire the shared server socket.
+                if (error == asio::error::connection_reset) {
+                    continue;
+                }
                 throw std::system_error(error, "receive loopback QUIC server packet");
             }
             const auto local = detail::to_http3_quic_datagram_address(server_endpoint_);

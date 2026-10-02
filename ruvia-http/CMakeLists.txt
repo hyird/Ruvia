@@ -45,6 +45,10 @@ set_target_properties(ruvia-http PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
+if(WIN32)
+    target_compile_definitions(ruvia-http PRIVATE NOMINMAX)
+endif()
+
 ruvia_configure_library(ruvia-http)
 
 target_link_libraries(ruvia-http

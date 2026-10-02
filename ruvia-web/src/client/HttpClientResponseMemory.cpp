@@ -15,12 +15,33 @@
 
 namespace ruvia::detail {
 
+void* HttpClientResponseMemoryDomain::receive_resource::do_allocate(
+    std::size_t bytes, std::size_t alignment) {
+    if (!budget_.reserve_in_flight(bytes)) {
+        throw HttpClientError(HttpClientError::Code::kResultBudgetExceeded,
+            "HTTP client in-flight response memory budget is exhausted");
+    }
+    try {
+        return upstream_.allocate(bytes, alignment);
+    } catch (...) {
+        budget_.release_in_flight(bytes);
+        throw;
+    }
+}
+
+void HttpClientResponseMemoryDomain::receive_resource::do_deallocate(
+    void* allocation, std::size_t bytes, std::size_t alignment) {
+    upstream_.deallocate(allocation, bytes, alignment);
+    budget_.release_in_flight(bytes);
+}
+
 HttpClientResponseMemoryDomain::HttpClientResponseMemoryDomain(const WorkerHandle& worker,
     const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain,
     std::pmr::memory_resource& upstream)
     : memory_(upstream),
       worker_(worker),
-      resultBudgetDomain_(resultBudgetDomain) {
+      resultBudgetDomain_(resultBudgetDomain),
+      receive_resource_(*memory_.resource(), *resultBudgetDomain_) {
     if (!worker_.valid() || !resultBudgetDomain_) {
         throw std::invalid_argument("HTTP client response memory requires worker and result budget");
     }
@@ -45,6 +66,9 @@ HttpClientResponseMemoryDomain::Owner HttpClientResponseMemoryDomain::create(
     const WorkerHandle& worker,
     const std::shared_ptr<HttpClientResultBudgetDomain>& resultBudgetDomain,
     std::pmr::memory_resource& upstream) {
+    if (!resultBudgetDomain) {
+        throw std::invalid_argument("HTTP client response memory requires a result budget");
+    }
     auto* const resource = processResource();
     auto* const storage = resource->allocate(sizeof(HttpClientResponseMemoryDomain),
         alignof(HttpClientResponseMemoryDomain));

@@ -459,7 +459,7 @@ Task<void> WebSocketHttp3Transport::drive() {
                 continue;
             }
             if (progress) {
-                co_await ruvia::asyncAsio([this](auto handler) {
+                (void)co_await ruvia::asyncAsio([this](auto handler) {
                     asio::post(owner_.loop_.executor(), [handler = std::move(handler)]() mutable { handler(std::error_code{}); });
                 });
             } else {

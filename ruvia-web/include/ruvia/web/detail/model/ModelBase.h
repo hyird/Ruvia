@@ -286,8 +286,12 @@ private:
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonBodyDepthPartial(
         std::string_view body, std::pmr::memory_resource* resource, std::size_t depth,
         detail::ModelStringStorage stringStorage) {
+        detail::json_parse_budget budget;
+        if (!budget.consume_bytes(sizeof(DerivedT))) {
+            return std::nullopt;
+        }
         auto input = body;
-        auto model = ruviaParseJsonValue(input, resource, depth, stringStorage);
+        auto model = ruviaParseJsonValue(input, resource, depth, stringStorage, budget);
         detail::skipJsonWhitespace(input);
         if (!model || !input.empty()) {
             return std::nullopt;
@@ -297,13 +301,13 @@ private:
 
     [[nodiscard]] static std::optional<DerivedT> ruviaParseJsonValue(std::string_view& input,
         std::pmr::memory_resource* resource, std::size_t depth,
-        detail::ModelStringStorage stringStorage) {
+        detail::ModelStringStorage stringStorage, detail::json_parse_budget& budget) {
         if (depth > detail::kMaxJsonDepth) {
             return std::nullopt;
         }
         DerivedT model{detail::model::EmptyModelTag{},
             ::ruvia::ModelOptions{.resource = resource}};
-        if (!model.ruviaMaterializeJson(input, depth, stringStorage)) {
+        if (!model.ruviaMaterializeJson(input, depth, stringStorage, budget)) {
             return std::nullopt;
         }
         return model;
@@ -358,11 +362,12 @@ private:
     }
 
     bool ruviaMaterializeJson(
-        std::string_view& input, std::size_t depth, detail::ModelStringStorage stringStorage) {
+        std::string_view& input, std::size_t depth, detail::ModelStringStorage stringStorage,
+        detail::json_parse_budget& budget) {
         auto* const resource = this->resource_;
         const bool valid = detail::consumeJsonObjectFields(detail::ResolvedPmrResourceTag{}, input,
             resource, depth,
-            [this, resource, depth, stringStorage](
+            [this, resource, depth, stringStorage, &budget](
                 std::string_view key, std::string_view& valueInput) -> bool {
                 const auto keyHash = detail::model::modelFieldNameHash(key);
                 bool fieldResult = true;
@@ -386,10 +391,13 @@ private:
                             return true;
                         }
                         if (auto value = detail::parseJsonValue<ValueT>(
-                                valueInput, resource, depth + 1, stringStorage);
+                                valueInput, resource, depth + 1, stringStorage, budget);
                             value) {
                             detail::ModelValueFactory::emplaceParsed(slot, std::move(*value));
                             return true;
+                        }
+                        if (budget.exhausted()) {
+                            return false;
                         }
                         // parseJsonValue only advances when it consumed a complete
                         // JSON token. Wrong-type values still need one structural skip.

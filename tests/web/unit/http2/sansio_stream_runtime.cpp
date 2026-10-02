@@ -1590,3 +1590,53 @@ RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     RUVIA_CHECK(table.remove(33));
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
 }
+
+RUVIA_TEST(http2_buffered_bodies_share_live_worker_and_connection_allocations) {
+    using ruvia::detail::inbound_buffer_resource;
+    inbound_buffer_resource worker(std::pmr::new_delete_resource(), 800);
+    inbound_buffer_resource first_connection(&worker, 700);
+    inbound_buffer_resource second_connection(&worker, 700);
+    std::optional<Http2BufferedRequestBody> first(std::in_place, &first_connection);
+    std::optional<Http2BufferedRequestBody> second(std::in_place, &second_connection);
+    const auto second_empty_bytes = second_connection.used();
+    const std::string payload(512, 'a');
+    const auto accepted = first->store(payload, ProtocolByteLimit::limited(4096));
+    RUVIA_CHECK(accepted.stored() != nullptr);
+    const auto retained = worker.used();
+    RUVIA_CHECK(retained >= payload.size());
+    const auto worker_rejected = second->store(payload, ProtocolByteLimit::limited(4096));
+    RUVIA_CHECK(worker_rejected.backlogOverflow() != nullptr);
+    RUVIA_CHECK_EQ(worker.used(), retained);
+    RUVIA_CHECK_EQ(second->receivedBytes(), std::size_t{0});
+    RUVIA_CHECK_EQ(first->bytes(), payload);
+    const auto connection_rejected = first->store(payload, ProtocolByteLimit::limited(4096));
+    RUVIA_CHECK(connection_rejected.backlogOverflow() != nullptr);
+    RUVIA_CHECK_EQ(first->bytes(), payload);
+    first.reset();
+    RUVIA_CHECK_EQ(first_connection.used(), std::size_t{0});
+    // The second, empty body is still alive and can own a debug iterator proxy.
+    RUVIA_CHECK_EQ(worker.used(), second_empty_bytes);
+    const auto retried = second->store(payload, ProtocolByteLimit::limited(4096));
+    RUVIA_CHECK(retried.stored() != nullptr);
+    second.reset();
+    RUVIA_CHECK_EQ(worker.used(), std::size_t{0});
+}
+
+RUVIA_TEST(http2_inbound_reservation_releases_on_runtime_retirement) {
+    ruvia::detail::inbound_buffer_resource worker(std::pmr::new_delete_resource(), 8192);
+    Http2SansIoTermination termination;
+    {
+        Http2SansIoStreamRuntimeTable streams(std::pmr::new_delete_resource(), termination, &worker);
+        for (unsigned round = 0; round != 8; ++round) {
+            auto& stream = streams.ensureAccepted(round * 2 + 1);
+            RUVIA_CHECK(stream.selectRoute(RouteResolution{}, RequestBodyMode::kBuffered));
+            auto& body = stream.selectedRoute()->body();
+            const auto stored = body.store(std::string(1024, 'x'), ProtocolByteLimit::limited(4096), 4096);
+            RUVIA_CHECK(stored.stored() != nullptr);
+            RUVIA_CHECK(worker.used() >= 1024);
+            RUVIA_CHECK(streams.remove(round * 2 + 1));
+            RUVIA_CHECK_EQ(worker.used(), std::size_t{0});
+        }
+    }
+    RUVIA_CHECK_EQ(worker.used(), std::size_t{0});
+}

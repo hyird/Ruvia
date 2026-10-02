@@ -15,6 +15,7 @@
 #include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/BorrowedText.h"
+#include "ruvia/web/ClientTlsConfig.h"
 
 namespace ruvia {
 
@@ -33,6 +34,7 @@ struct RedisConfig {
     std::uint16_t port{6379};
     std::string username{};
     std::string password{};
+    client_tls_config tls{};
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};

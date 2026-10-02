@@ -51,7 +51,8 @@ struct HttpLazyBufferedBodyRouteState final {
 template <typename Stream>
 inline void prepareHttpLazyBufferedBodyRoute(HttpLazyBufferedBodyRouteState<Stream>& state,
     Http1RouteDispatch<Stream> d, ProtocolByteLimit bodyLimit, std::string_view bodyAndPipeline) {
-    state.emplace(d.stream, d.memory.template allocator<char>(), d.requestMemory.resource(),
+    auto* resource = d.inbound_buffer_pool != nullptr ? d.inbound_buffer_pool : d.memory.resource();
+    state.emplace(d.stream, std::pmr::polymorphic_allocator<char>(resource), resource,
         bodyAndPipeline, d.parsed.bodyPlan, bodyLimit, d.scannerEntry);
 }
 

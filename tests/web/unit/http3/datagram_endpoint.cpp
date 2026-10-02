@@ -279,7 +279,6 @@ RUVIA_TEST(http3NetworkDatagramEndpointRejectsInvalidAddressesAndOversizedSends)
     EndpointDrain drain{io, endpoint};
     endpoint.prepare();
     RUVIA_CHECK(endpoint.start() == Endpoint::pump_result::pending);
-    const auto source = Udp::endpoint(asio::ip::address_v4::loopback(), endpoint.bound_port());
     const auto wrongSource = Udp::endpoint(asio::ip::address_v4({127, 0, 0, 2}), endpoint.bound_port());
     const auto destination = Udp::endpoint(asio::ip::address_v4::loopback(), endpoint.bound_port());
     const std::array<std::byte, 2> packet{std::byte{0xd1}, std::byte{0xd2}};
