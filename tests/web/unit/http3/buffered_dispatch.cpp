@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -16,6 +18,7 @@
 
 #include <asio/system_executor.hpp>
 
+#include "ruvia/core/BlockingPool.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
@@ -28,6 +31,7 @@
 #include "ruvia/http/Http3Settings.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/HttpUdpTunnel.h"
 #include "ruvia/web/detail/CallbackRef.h"
 #include "ruvia/web/detail/http3/Http3BufferedRequestDispatch.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamInput.h"
@@ -56,6 +60,14 @@ using namespace std::chrono_literals;
 
 struct HandlerState final {
     std::string responseBody{"buffered-h3-ok"};
+    std::filesystem::path filePath;
+    bool streamThrowAfterWrite{};
+    bool sendInterim{};
+    bool interimAfterFinalRejected{};
+    bool streamRetainedStable{true};
+    std::size_t uploadBytes{};
+    std::size_t uploadChunks{};
+    bool uploadTrailerObserved{};
     std::size_t handlerCalls{};
     ruvia::WorkerSignal* started{};
     bool requestReadCorrectly{};
@@ -73,11 +85,22 @@ struct HandlerState final {
     bool webSocketSawFin{};
     bool webSocketThrowOnStart{};
     bool webSocketRetainedDataStable{true};
+    std::string tunnelReceived;
+    bool tunnelReadAfterFinish{};
+    bool tunnelReturnEarly{};
+    bool tunnelStable{true};
 };
 
 ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& context) {
     auto& state = *static_cast<HandlerState*>(raw);
     ++state.handlerCalls;
+    if (state.sendInterim) {
+        std::string value(512, 'h');
+        const std::array headers{ruvia::HttpHeaderView("Link", value)};
+        auto operation = context.inform(ruvia::HttpInterimResponseHead(ruvia::http_status::kEarlyHints, headers));
+        value.assign("changed");
+        co_await std::move(operation);
+    }
     const auto path = context.req().path();
     if (path == "/throw") {
         throw std::runtime_error("buffered handler failure");
@@ -94,7 +117,11 @@ ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& cont
     }
     if (path == "/file") {
         ruvia::HttpResponse response({.resource = context.arena()});
-        response.fileBody("virtual-response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
+        if (state.filePath.empty()) {
+            response.fileBody("virtual-response.bin", 5, 0, 5, ruvia::HttpResponseFileIdentity::checked({}));
+        } else {
+            response.fileBody(state.filePath, state.responseBody.size(), 0, state.responseBody.size(), ruvia::HttpResponseFileIdentity::unchecked());
+        }
         co_return response;
     }
     if (path == "/empty-file") {
@@ -110,6 +137,20 @@ ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& cont
                                      context.req().header("x-input") == "present" &&
                                      context.req().cookie("session") == "one" &&
                                      context.req().cookie("other") == "two";
+    }
+    if (path == "/upload") {
+        auto& reader = context.req().bodyReader();
+        while (auto bytes = co_await reader.read()) {
+            state.uploadBytes += bytes->size();
+            ++state.uploadChunks;
+            if (state.started != nullptr) {
+                state.started->notify();
+            }
+            if (std::ranges::any_of(*bytes, [](std::byte byte) { return byte != std::byte{'u'}; })) {
+                throw std::runtime_error("upload chunk corrupted");
+            }
+        }
+        state.uploadTrailerObserved = context.req().trailer("x-checksum") == "final" && context.req().header("x-checksum") == "initial";
     }
     context.header("x-dispatch", "buffered");
     if (!state.largeResponseHeader.empty()) {
@@ -148,6 +189,84 @@ ruvia::Task<void> bufferedWebSocketHandler(void* raw, ruvia::Context& context) {
                                             expectedRetained;
 }
 
+ruvia::Task<void> bufferedTunnelHandler(void* raw, ruvia::Context& context) {
+    auto& state = *static_cast<HandlerState*>(raw);
+    if (state.tunnelReturnEarly) {
+        co_return;
+    }
+    auto& tunnel = context.tunnel();
+    std::optional<std::pmr::string> retained;
+    if (state.tunnelReadAfterFinish) {
+        co_await tunnel.finish();
+    }
+    while (auto chunk = co_await tunnel.read()) {
+        state.tunnelReceived.append(*chunk);
+        if (!retained) {
+            retained.emplace(*chunk, context.pool());
+        }
+        if (!state.tunnelReadAfterFinish) {
+            auto write = tunnel.write(std::string_view(*chunk));
+            chunk->assign("mutated");
+            co_await std::move(write);
+        }
+        state.tunnelStable = state.tunnelStable && retained->find_first_not_of('c') == std::string_view::npos;
+    }
+}
+
+ruvia::Task<void> bufferedUdpTunnelHandler(void* raw, ruvia::Context& context) {
+    auto& state = *static_cast<HandlerState*>(raw);
+    ruvia::HttpUdpTunnel udp(context.tunnel().capsules());
+    if (state.tunnelReadAfterFinish) {
+        co_await udp.finish();
+    }
+    std::optional<ruvia::HttpUdpDatagram> retained;
+    while (auto packet = co_await udp.read()) {
+        const auto bytes = packet->payload();
+        state.tunnelReceived.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        if (!state.tunnelReadAfterFinish) {
+            co_await udp.send(bytes);
+        }
+        if (!retained) {
+            retained = std::move(packet);
+        }
+        state.tunnelStable = state.tunnelStable && std::ranges::all_of(retained->payload(), [](std::byte byte) { return byte == std::byte{'c'}; });
+    }
+    co_await udp.finish();
+}
+
+ruvia::Task<void> responseStreamHandler(void* raw, ruvia::Context& context) {
+    auto& state = *static_cast<HandlerState*>(raw);
+    ++state.handlerCalls;
+    const std::pmr::string retained(2048, 'r', context.pool());
+    if (state.sendInterim) {
+        const std::array headers{ruvia::HttpHeaderView("Link", std::string_view("</style.css>; rel=preload"))};
+        {
+            auto cold = context.inform(ruvia::HttpInterimResponseHead(ruvia::http_status::kEarlyHints, headers));
+        }
+        co_await context.inform(ruvia::HttpInterimResponseHead(ruvia::http_status::kEarlyHints, headers));
+    }
+    context.header("x-dispatch", "stream");
+    for (unsigned i = 0; i < 4; ++i) {
+        {
+            auto cold = context.stream().write("discarded");
+        }
+        co_await context.stream().write(std::string_view(state.responseBody));
+        if (state.sendInterim) {
+            try {
+                auto invalid = context.inform(ruvia::HttpInterimResponseHead(ruvia::http_status::kContinue));
+            } catch (const std::logic_error&) {
+                state.interimAfterFinalRejected = true;
+            }
+        }
+        state.streamRetainedStable = state.streamRetainedStable && retained == std::pmr::string(2048, 'r', context.pool());
+        if (state.streamThrowAfterWrite) {
+            throw std::runtime_error("stream failed after head");
+        }
+    }
+    const std::array trailers{ruvia::HttpHeaderView("x-complete", "yes")};
+    co_await context.stream().end(trailers);
+}
+
 struct Routes final {
     ruvia::detail::Router router;
     ruvia::detail::RouterImpl& implementation{ruvia::detail::RouterImpl::from(router)};
@@ -178,6 +297,10 @@ struct Routes final {
         add(ruvia::HttpKnownMethod::kGet, "/file");
         add(ruvia::HttpKnownMethod::kGet, "/empty-file");
         add(ruvia::HttpKnownMethod::kGet, "/large");
+        implementation.registerRoute(ruvia::HttpKnownMethod::kPost, routing_test::path("/upload"),
+            ruvia::detail::RouteHandler(&handlers, &bufferedHandler), ruvia::detail::RequestBodyMode::kStream, {}, {});
+        implementation.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, routing_test::path("/stream"),
+            ruvia::detail::RouteStreamHandler(&handlers, &responseStreamHandler), {}, {});
         ruvia::WebSocketRouteConfig webSocketConfig;
         webSocketConfig.lifecycle.peerTransportFinTimeout = peerTransportFinTimeout;
         implementation.registerWebSocketRoute(ruvia::HttpKnownMethod::kGet,
@@ -186,6 +309,12 @@ struct Routes final {
             std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
             std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
             std::move(webSocketConfig));
+        implementation.registerTunnelRoute({}, std::pmr::string("backend.test:443"),
+            ruvia::detail::RouteStreamHandler(&handlers, &bufferedTunnelHandler), {}, {}, {.peerTransportFinTimeout = peerTransportFinTimeout});
+        implementation.registerTunnelRoute("test-tunnel", std::pmr::string("/tunnel/:destination"),
+            ruvia::detail::RouteStreamHandler(&handlers, &bufferedTunnelHandler), {}, {}, {.peerTransportFinTimeout = peerTransportFinTimeout});
+        implementation.registerTunnelRoute("connect-udp", std::pmr::string("/udp/:destination"),
+            ruvia::detail::RouteStreamHandler(&handlers, &bufferedUdpTunnelHandler), {}, {}, {.peerTransportFinTimeout = peerTransportFinTimeout});
         implementation.finalize();
     }
 
@@ -516,6 +645,8 @@ void drainMailbox(Mailbox& mailbox, const MessageId& expected, PublishedWire& ou
 
 struct DecodedResponse final {
     std::size_t finalHeads{};
+    std::size_t interimHeads{};
+    std::string earlyLink;
     std::size_t bodyEvents{};
     std::size_t messageEnds{};
     std::uint16_t status{};
@@ -529,6 +660,7 @@ struct DecodedResponse final {
     std::string upgradeHeader;
     std::string websocketAcceptHeader;
     std::string body;
+    std::string completeTrailer;
 };
 
 void onResponse(void* raw, const ruvia::Http3ClientResponseEvent& event) {
@@ -566,9 +698,21 @@ void onResponse(void* raw, const ruvia::Http3ClientResponseEvent& event) {
             ++response.messageEnds;
             break;
         case ruvia::Http3ClientResponseEventKind::kInformationalHead:
+            ++response.interimHeads;
+            for (const auto& header : event.head->headers) {
+                if (header.name == "link") {
+                    response.earlyLink.assign(header.value);
+                }
+            }
+            break;
         case ruvia::Http3ClientResponseEventKind::kTunnelData:
-        case ruvia::Http3ClientResponseEventKind::kTrailerField:
         case ruvia::Http3ClientResponseEventKind::kReset:
+        case ruvia::Http3ClientResponseEventKind::kPushPromise:
+            break;
+        case ruvia::Http3ClientResponseEventKind::kTrailerField:
+            if (event.trailer.name == "x-complete") {
+                response.completeTrailer.assign(event.trailer.value);
+            }
             break;
     }
 }
@@ -748,11 +892,13 @@ ruvia::Task<void> exerciseHeadAndFile(Fixture& fixture,
 
     feedRequest(fixture, 4, "GET", "/file");
     auto file = fixture.makeDispatch(4, fixture.services);
-    RUVIA_CHECK(co_await file.runHandler() == Dispatch::RunStatus::kFilePayloadUnsupported);
+    RUVIA_CHECK(co_await file.runHandler() == Dispatch::RunStatus::kResponseReady);
     RUVIA_CHECK(file.failure() == nullptr);
-    RUVIA_CHECK(fixture.session.request(4) == nullptr);
-    Mailbox::BorrowedBlock unexpected;
-    RUVIA_CHECK(!fixture.outbound.tryReceive(unexpected));
+    PublishedWire unavailableWire;
+    publishAndDrain(file, fixture, 4, unavailableWire, ruvia_ctx);
+    DecodedResponse unavailable;
+    RUVIA_CHECK(decodePublished(unavailableWire, ruvia::HttpKnownMethod::kGet, 4, fixture.worker.resource(), unavailable).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(unavailable.status, std::uint16_t{503});
 
     feedRequest(fixture, 8, "GET", "/empty-file");
     auto emptyFile = fixture.makeDispatch(8, fixture.services);
@@ -2275,4 +2421,395 @@ RUVIA_TEST(http3BufferedDispatchPeerTransportFinDeadlineIsPublicationBoundAndCle
     runPeerTransportFinWaitCase(PeerFinWaitOutcome::kTimeout, true, ruvia_ctx);
     runPeerTransportFinWaitCase(PeerFinWaitOutcome::kPeerFin, false, ruvia_ctx);
     runPeerTransportFinWaitCase(PeerFinWaitOutcome::kCancel, false, ruvia_ctx);
+}
+
+ruvia::Task<void> exerciseAsyncResponse(Fixture& fixture, const ruvia::WorkerHandle& worker,
+    std::uint64_t streamId, std::string_view path, bool cancel, ruvia::testing::TestContext& ruvia_ctx) {
+    feedRequest(fixture, streamId, "GET", path);
+    TunnelCallbacksState callbacks(worker, fixture.scanner);
+    auto dispatch = fixture.makeDispatch(streamId, fixture.services, callbacks.callbacks());
+    {
+        auto cold = dispatch.runHandler();
+    }
+    ruvia::WorkerSignal finished(worker);
+    ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+    Dispatch::RunStatus status{Dispatch::RunStatus::kFailed};
+    bool joined = false;
+    tasks.spawn(runOwner(dispatch, status, joined, finished));
+    PublishedWire wire;
+    const MessageId id{kEpoch, kGeneration, streamId};
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    bool backpressured = false;
+    while (!joined && std::chrono::steady_clock::now() < deadline) {
+        const auto step = dispatch.publishStep();
+        if (step.status == Dispatch::PublishStatus::kBytesPublished) {
+            const auto blocked = dispatch.publishStep();
+            backpressured = backpressured || blocked.status == Dispatch::PublishStatus::kBackpressured;
+            if (cancel) {
+                dispatch.cancel();
+            }
+        }
+        drainMailbox(fixture.outbound, id, wire);
+        co_await ruvia::sleepFor(worker, 1ms);
+    }
+    if (!joined) {
+        dispatch.cancel();
+    }
+    co_await tasks.join();
+    RUVIA_CHECK(joined);
+    RUVIA_CHECK(fixture.routes.handlers.streamRetainedStable);
+    if (cancel || fixture.routes.handlers.streamThrowAfterWrite) {
+        RUVIA_CHECK(status == Dispatch::RunStatus::kCancelled);
+        RUVIA_CHECK(!wire.finalWireBytes.has_value());
+    } else {
+        RUVIA_CHECK(status == Dispatch::RunStatus::kOutputComplete);
+        RUVIA_CHECK(dispatch.complete());
+        DecodedResponse response;
+        RUVIA_CHECK(decodePublished(wire, ruvia::HttpKnownMethod::kGet, streamId, fixture.worker.resource(), response).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+        RUVIA_CHECK_EQ(response.status, std::uint16_t{200});
+        if (fixture.routes.handlers.sendInterim) {
+            RUVIA_CHECK_EQ(response.interimHeads, std::size_t{1});
+            RUVIA_CHECK_EQ(response.finalHeads, std::size_t{1});
+            RUVIA_CHECK_EQ(response.earlyLink, path == "/stream" ? std::string("</style.css>; rel=preload") : std::string(512, 'h'));
+        }
+        if (path == "/stream") {
+            RUVIA_CHECK_EQ(response.body, fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody);
+            RUVIA_CHECK_EQ(response.completeTrailer, "yes");
+        } else {
+            RUVIA_CHECK_EQ(response.body, fixture.routes.handlers.responseBody);
+        }
+        RUVIA_CHECK(backpressured);
+    }
+    RUVIA_CHECK(fixture.session.request(streamId) == nullptr);
+}
+
+ruvia::Task<void> exerciseResponseStorage(Fixture& fixture, const ruvia::WorkerHandle& worker,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    fixture.routes.handlers.responseBody.assign(32768, 's');
+    co_await exerciseAsyncResponse(fixture, worker, 0, "/stream", false, ruvia_ctx);
+    const auto warmed = fixture.upstream.liveAllocations();
+    co_await exerciseAsyncResponse(fixture, worker, 4, "/stream", false, ruvia_ctx);
+    RUVIA_CHECK_EQ(fixture.upstream.liveAllocations(), warmed);
+    co_await exerciseAsyncResponse(fixture, worker, 8, "/stream", true, ruvia_ctx);
+    fixture.routes.handlers.streamThrowAfterWrite = true;
+    co_await exerciseAsyncResponse(fixture, worker, 12, "/stream", false, ruvia_ctx);
+}
+
+RUVIA_TEST(http3ResponseStreamPublishesBoundedDataTrailersAndReclaimsOperations) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        fixture.executor = attachment.loop().executor();
+        runWorkerTask(attachment, exerciseResponseStorage(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+RUVIA_TEST(http3ResponseFileReadsBoundedBlocksOffWorkerAndPublishesFin) {
+    const auto path = std::filesystem::temp_directory_path() / ("ruvia-h3-file-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const std::string content(65539, 'f');
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << content;
+    }
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    ruvia::BlockingPool pool({.threadCount = 1, .queueCapacity = 8});
+    {
+        Fixture fixture(worker, upstream);
+        fixture.executor = attachment.loop().executor();
+        fixture.options.blockingPool = &pool;
+        fixture.routes.handlers.filePath = path;
+        fixture.routes.handlers.responseBody = content;
+        runWorkerTask(attachment, exerciseAsyncResponse(fixture, worker, 0, "/file", false, ruvia_ctx));
+    }
+    pool.stop();
+    pool.join();
+    std::filesystem::remove(path);
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
+
+ruvia::Task<void> exerciseStreamingUpload(Fixture& fixture, const ruvia::WorkerHandle& worker,
+    bool cancel, ruvia::testing::TestContext& ruvia_ctx) {
+    const std::array initialFields{ruvia::Http3FieldSectionFieldView{"x-checksum", "initial"}};
+    const auto head = requestWire(fixture.worker, "POST", "/upload", {}, initialFields);
+    RUVIA_CHECK(fixture.session.feed(0, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(fixture.session.streamingRequest(0));
+    RUVIA_CHECK(fixture.session.streamState(0) == Engine::StreamState::kReady);
+    auto dispatch = fixture.makeDispatch(0, fixture.services);
+    {
+        auto cold = dispatch.runHandler();
+    }
+    ruvia::WorkerSignal received(worker);
+    fixture.routes.handlers.started = &received;
+    ruvia::WorkerSignal finished(worker);
+    ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+    Dispatch::RunStatus status{Dispatch::RunStatus::kFailed};
+    bool joined = false;
+    tasks.spawn(runOwner(dispatch, status, joined, finished));
+    const std::string body(65536, 'u');
+    const auto data = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData), body);
+    const auto retained = fixture.upstream.liveAllocations();
+    for (unsigned n = 0; n < 20 && !joined; ++n) {
+        RUVIA_CHECK(fixture.session.canAcceptInput(0, body.size()));
+        RUVIA_CHECK(fixture.session.feed(0, data).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(!fixture.session.canAcceptInput(0, 1));
+        dispatch.notifyTunnelInput();
+        co_await received.wait();
+        co_await ruvia::sleepFor(worker, 1ms);
+        RUVIA_CHECK(fixture.session.canAcceptInput(0, body.size()));
+    }
+    if (cancel) {
+        dispatch.cancel();
+        (void)fixture.session.cancelRequest(0);
+    } else {
+        const std::array fields{ruvia::Http3FieldSectionFieldView{"x-checksum", "final"}};
+        const auto section = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
+        RUVIA_CHECK(section.has_value());
+        if (section) {
+            const auto trailers = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(section->data(), section->size()));
+            RUVIA_CHECK(fixture.session.feed(0, trailers).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        }
+        RUVIA_CHECK(fixture.session.feed(0, {}, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
+        dispatch.notifyTunnelInput();
+    }
+    co_await finished.wait();
+    co_await tasks.join();
+    if (cancel) {
+        RUVIA_CHECK(status == Dispatch::RunStatus::kCancelled);
+    } else {
+        RUVIA_CHECK(status == Dispatch::RunStatus::kResponseReady);
+        RUVIA_CHECK_EQ(fixture.routes.handlers.uploadBytes, body.size() * 20);
+        RUVIA_CHECK(fixture.routes.handlers.uploadChunks >= 80);
+        RUVIA_CHECK(fixture.routes.handlers.uploadTrailerObserved);
+        PublishedWire wire;
+        publishAndDrain(dispatch, fixture, 0, wire, ruvia_ctx);
+    }
+    RUVIA_CHECK_EQ(fixture.bodyBudget.used(), std::size_t{0});
+    RUVIA_CHECK(fixture.upstream.liveAllocations() <= retained + 16);
+}
+
+RUVIA_TEST(http3StreamingUploadDispatchesBeforeFinBoundsBacklogAndCancelsPendingRead) {
+    for (bool cancel : {false, true}) {
+        auto& io = ruvia::test::newTestIoContext();
+        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+        const auto worker = attachment.loop().handle();
+        ruvia::test::CountingMemoryResource upstream;
+        {
+            Fixture fixture(worker, upstream);
+            fixture.executor = attachment.loop().executor();
+            runWorkerTask(attachment, exerciseStreamingUpload(fixture, worker, cancel, ruvia_ctx));
+        }
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    }
+}
+
+RUVIA_TEST(http3InterimResponsePrecedesBufferedAndStreamFinalAndOwnsFields) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        fixture.routes.handlers.sendInterim = true;
+        fixture.routes.handlers.responseBody.assign(32768, 's');
+        auto exercise = [&]() -> ruvia::Task<void> {
+            co_await exerciseAsyncResponse(fixture, worker, 0, "/large", false, ruvia_ctx);
+            co_await exerciseAsyncResponse(fixture, worker, 4, "/stream", false, ruvia_ctx);
+            RUVIA_CHECK(fixture.routes.handlers.interimAfterFinalRejected);
+        };
+        runWorkerTask(attachment, exercise());
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+}
+
+ruvia::Task<void> exerciseConnectTunnel(Fixture& fixture, const ruvia::WorkerHandle& worker,
+    ruvia::testing::TestContext& ruvia_ctx, bool udp = false) {
+    for (unsigned round = 0; round != 3; ++round) {
+        const std::uint64_t id = round * 4;
+        std::pmr::vector<ruvia::Http3FieldSectionFieldView> fields(fixture.worker.resource());
+        fields.push_back({":method", "CONNECT"});
+        fields.push_back({":authority", "backend.test:443"});
+        if (udp || round != 0) {
+            fields.push_back({":protocol", udp ? "connect-udp" : "test-tunnel"});
+            fields.push_back({":scheme", "https"});
+            fields.push_back({":path", udp ? "/udp/target.test" : "/tunnel/target.test"});
+            if (udp) {
+                fields.push_back({"capsule-protocol", "?1"});
+            }
+        }
+        auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
+        if (!encoded) {
+            throw std::runtime_error("CONNECT fixture field encoding failed");
+        }
+        const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders), std::string_view(encoded->data(), encoded->size()));
+        RUVIA_CHECK(fixture.session.feed(id, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(fixture.session.streamState(id) == Engine::StreamState::kReady);
+        TunnelCallbacksState callbacks(worker, fixture.scanner);
+        auto dispatch = fixture.makeDispatch(id, fixture.services, callbacks.callbacks());
+        fixture.routes.handlers.tunnelReadAfterFinish = round == 2;
+        fixture.routes.handlers.tunnelReceived.clear();
+        ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+        ruvia::WorkerSignal finished(worker);
+        bool joined = false;
+        auto status = Dispatch::RunStatus::kFailed;
+        tasks.spawn(runOwner(dispatch, status, joined, finished));
+        PublishedWire wire;
+        const MessageId messageId{kEpoch, kGeneration, id};
+        bool sent = false;
+        const std::string payload(62007, 'c');
+        std::string tunnelPayload = payload;
+        if (udp) {
+            std::array<char, 16> header;
+            const auto encoded = ruvia::encodeHttpCapsuleHeader(header, 0, payload.size() + 1);
+            tunnelPayload.assign(header.data(), *encoded);
+            tunnelPayload.push_back('\0');
+            tunnelPayload.append(payload);
+            tunnelPayload.append("\0\1\0", 3);
+        }
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (!joined && std::chrono::steady_clock::now() < deadline) {
+            (void)dispatch.publishStep();
+            drainMailbox(fixture.outbound, messageId, wire);
+            if (!sent && !wire.bytes.empty() && (round != 2 || wire.finalWireBytes)) {
+                const auto input = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kData), tunnelPayload);
+                const auto fed = fixture.session.feed(id, input, true);
+                RUVIA_CHECK(fed.scope == ruvia::Http3ConnectionErrorScope::kNone);
+                dispatch.notifyTunnelInput();
+                sent = true;
+            }
+            co_await ruvia::sleepFor(worker, 1ms);
+        }
+        if (!joined) {
+            dispatch.cancel();
+        }
+        co_await tasks.join();
+        if (callbacks.scannerAttached) {
+            fixture.scanner.unregisterEntry(fixture.scannerEntry);
+        }
+        RUVIA_CHECK(joined && sent);
+        RUVIA_CHECK(status == Dispatch::RunStatus::kTunnelComplete);
+        RUVIA_CHECK(!callbacks.aborted);
+        RUVIA_CHECK(fixture.routes.handlers.tunnelReceived == payload);
+        RUVIA_CHECK(fixture.routes.handlers.tunnelStable);
+        RUVIA_CHECK(wire.finalWireBytes && *wire.finalWireBytes == wire.bytes.size());
+        struct Result {
+            std::string body;
+            std::uint16_t status{};
+            bool ended{};
+            bool framingField{};
+            bool capsule{};
+        } result;
+        ruvia::Http3ClientResponse response(id, ruvia::HttpKnownMethod::kConnect, fixture.worker.resource());
+        const auto callback = [](void* raw, const ruvia::Http3ClientResponseEvent& event) {
+            auto& observed = *static_cast<Result*>(raw);
+            if (event.kind == ruvia::Http3ClientResponseEventKind::kFinalHead) {
+                observed.status = event.head->status;
+                for (const auto& field : event.head->headers) {
+                    observed.capsule = observed.capsule || (field.name == "capsule-protocol" && field.value == "?1");
+                    observed.framingField = observed.framingField || field.name == "content-length" || field.name == "transfer-encoding";
+                }
+            }
+            if (event.kind == ruvia::Http3ClientResponseEventKind::kTunnelData) {
+                observed.body.append(event.body.data(), event.body.size());
+            }
+            if (event.kind == ruvia::Http3ClientResponseEventKind::kMessageEnd) {
+                observed.ended = true;
+            }
+        };
+        const auto decoded = response.feed(std::span<const char>(wire.bytes.data(), wire.bytes.size()), true, false, callback, &result);
+        RUVIA_CHECK(decoded.scope == ruvia::Http3ConnectionErrorScope::kNone);
+        RUVIA_CHECK(result.status == 200 && result.ended && !result.framingField);
+        RUVIA_CHECK(!udp || result.capsule);
+        RUVIA_CHECK(result.body == (round == 2 ? std::string{} : tunnelPayload));
+        RUVIA_CHECK(fixture.session.activeStreamCount() == 0);
+    }
+}
+RUVIA_TEST(http3BufferedDispatchConnectStreamsOwnBytesAndReadAfterPublishedSendFin) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto& worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource resource;
+    {
+        Fixture fixture(worker, resource);
+        fixture.executor = attachment.loop().executor();
+        runWorkerTask(attachment, exerciseConnectTunnel(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http3BufferedDispatchConnectDrainTimeoutRetiresOnlyItsStream) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto& worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource resource;
+    {
+        Fixture fixture(worker, resource, 1, 1, 1, 64 * 1024 * 1024, 64 * 1024, 20ms, 1ms);
+        fixture.executor = attachment.loop().executor();
+        fixture.routes.handlers.tunnelReturnEarly = true;
+        auto exercise = [&]() -> ruvia::Task<void> {
+            fixture.scanner.start();
+            const std::array fields{
+                ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
+                ruvia::Http3FieldSectionFieldView{":authority", "backend.test:443"}};
+            const auto encoded = ruvia::encodeHttp3FieldSection(fields, fixture.worker.resource());
+            if (!encoded) {
+                throw std::runtime_error("CONNECT timeout field encoding failed");
+            }
+            const auto request = frame(static_cast<std::uint64_t>(ruvia::Http3FrameType::kHeaders),
+                std::string_view(encoded->data(), encoded->size()));
+            RUVIA_CHECK(fixture.session.feed(0, request).scope == ruvia::Http3ConnectionErrorScope::kNone);
+            TunnelCallbacksState callbacks(worker, fixture.scanner);
+            auto dispatch = fixture.makeDispatch(0, fixture.services, callbacks.callbacks());
+            ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+            ruvia::WorkerSignal finished(worker);
+            bool joined = false;
+            auto status = Dispatch::RunStatus::kFailed;
+            tasks.spawn(runOwner(dispatch, status, joined, finished));
+            PublishedWire wire;
+            const auto deadline = std::chrono::steady_clock::now() + 2s;
+            while (!joined && std::chrono::steady_clock::now() < deadline) {
+                (void)dispatch.publishStep();
+                drainMailbox(fixture.outbound, {kEpoch, kGeneration, 0}, wire);
+                co_await ruvia::sleepFor(worker, 1ms);
+            }
+            if (!joined) {
+                dispatch.cancel();
+            }
+            co_await tasks.join();
+            if (callbacks.scannerAttached) {
+                fixture.scanner.unregisterEntry(fixture.scannerEntry);
+            }
+            fixture.scanner.stop();
+            RUVIA_CHECK(joined && status == Dispatch::RunStatus::kCancelled && callbacks.aborted);
+            RUVIA_CHECK(wire.finalWireBytes.has_value());
+            RUVIA_CHECK(fixture.session.request(0) == nullptr);
+            feedRequest(fixture, 4, "GET", "/large");
+            RUVIA_CHECK(fixture.session.streamState(4) == Engine::StreamState::kReady);
+            RUVIA_CHECK(fixture.session.release(4));
+        };
+        runWorkerTask(attachment, exercise());
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http3BufferedDispatchUdpTunnelNegotiatesCapsulesAndPreservesDatagramBoundariesAndHalfClose) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto& worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource resource;
+    {
+        Fixture fixture(worker, resource);
+        fixture.executor = attachment.loop().executor();
+        runWorkerTask(attachment, exerciseConnectTunnel(fixture, worker, ruvia_ctx, true));
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }

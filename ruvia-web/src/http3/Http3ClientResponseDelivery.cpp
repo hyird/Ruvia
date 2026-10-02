@@ -4,6 +4,7 @@
 #include <exception>
 #include <utility>
 
+#include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpStatus.h"
@@ -152,6 +153,7 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
         return;
     }
     switch (event.kind) {
+        case Http3ConnectionEventKind::kPushStream:
         case Http3ConnectionEventKind::kPushPromise:
         case Http3ConnectionEventKind::kPushCanceled:
         case Http3ConnectionEventKind::kPriorityUpdate:
@@ -181,17 +183,32 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
             }
             state_.status = *status;
             state_.protocolVersion = HttpProtocolVersion::kHttp3;
-            configureHttpClientResponseDecoding(state_);
+            if (state_.tunnel) {
+                state_.tunnel->accepted = responseBodyPlan_->contentSemantics() == HttpResponseContentSemantics::kConnectTunnel;
+                if (state_.tunnel->accepted && state_.tunnel->udp) {
+                    std::pmr::vector<HttpHeaderView> fields(state_.resource);
+                    for (const auto& field : state_.headers) {
+                        fields.emplace_back(field.name(), field.value());
+                    }
+                    if (!validateHttpConnectUdpResponse(state_.protocolVersion, state_.status.value(), fields)) {
+                        requestRetirement(RetirementReason::kProtocolError);
+                        return;
+                    }
+                }
+                if (!state_.tunnel->accepted) {
+                    state_.tunnel->stop();
+                }
+            }
+            if (!state_.tunnel || !state_.tunnel->accepted) {
+                configureHttpClientResponseDecoding(state_);
+            }
             state_.headReady = true;
             state_.headSignal.notify();
             return;
         }
         case Http3ConnectionEventKind::kBody:
         case Http3ConnectionEventKind::kTunnelData:
-            if (responseBodyPlan_ &&
-                (responseBodyPlan_->bodySuppressed() || !responseBodyPlan_->statusAllowsBody() ||
-                    responseBodyPlan_->contentSemantics() !=
-                        HttpResponseContentSemantics::kWithContent)) {
+            if (event.kind == Http3ConnectionEventKind::kTunnelData ? (!state_.tunnel || !state_.tunnel->accepted || !responseBodyPlan_ || responseBodyPlan_->contentSemantics() != HttpResponseContentSemantics::kConnectTunnel) : (responseBodyPlan_ && (responseBodyPlan_->bodySuppressed() || !responseBodyPlan_->statusAllowsBody() || responseBodyPlan_->contentSemantics() != HttpResponseContentSemantics::kWithContent))) {
                 requestRetirement(RetirementReason::kProtocolError);
                 return;
             }
@@ -219,8 +236,18 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
                 responseBodyPlan_ = event.responseBodyPlan;
             }
             return;
-        case Http3ConnectionEventKind::kInformationalHead:
+        case Http3ConnectionEventKind::kInformationalHead: {
+            if (event.head == nullptr) {
+                requestRetirement(RetirementReason::kProtocolError);
+                return;
+            }
+            std::pmr::vector<HttpHeaderView> fields(state_.resource);
+            for (const auto& field : event.head->headers) {
+                fields.emplace_back(field.name, field.value);
+            }
+            state_.retainInformational(HttpStatusCode::fromValue(event.head->status), fields);
             return;
+        }
         case Http3ConnectionEventKind::kRequestHead:
         case Http3ConnectionEventKind::kReset:
             return;

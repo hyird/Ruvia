@@ -5,6 +5,8 @@
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3PeerStreams.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/field/HttpStructuredFields.h"
 #include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 
@@ -12,11 +14,8 @@ namespace ruvia {
 namespace {
 using Item = detail::HttpStructuredItem;
 using Parser = detail::HttpStructuredParser;
-}  // namespace
-
-std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept {
+std::expected<void, HttpPriorityError> parsePriorityMembers(std::string_view value, HttpPriorityFields& fields) noexcept {
     Parser parser{value};
-    HttpPriorityFields fields;
     parser.spaces();
     while (parser.at < value.size()) {
         const auto key = parser.key();
@@ -51,6 +50,36 @@ std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::stri
         if (parser.at == value.size()) {
             return std::unexpected(HttpPriorityError::kInvalidSyntax);
         }
+    }
+    return {};
+}
+}  // namespace
+
+std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept {
+    HttpPriorityFields fields;
+    if (auto parsed = parsePriorityMembers(value, fields); !parsed) {
+        return std::unexpected(parsed.error());
+    }
+    return fields;
+}
+std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept {
+    HttpPriorityFields fields;
+    bool seen = false;
+    bool empty = false;
+    for (const auto& header : headers) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "priority")) {
+            continue;
+        }
+        const auto value = header.value();
+        const bool thisEmpty = value.find_first_not_of(" \t") == std::string_view::npos;
+        if (seen && (empty || thisEmpty)) {
+            return std::unexpected(HttpPriorityError::kInvalidSyntax);
+        }
+        if (auto parsed = parsePriorityMembers(value, fields); !parsed) {
+            return std::unexpected(parsed.error());
+        }
+        seen = true;
+        empty = thisEmpty;
     }
     return fields;
 }

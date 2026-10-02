@@ -93,6 +93,15 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchWebSocket(const Ht
     return dispatchStreamRoute(request, resolved, memory, handler, services);
 }
 
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchTunnel(const HttpRequest& request,
+    const ResolvedRoute& resolved, RequestMemory& memory, const RouteStreamHandler& handler,
+    ContextServices services) const {
+    if (resolved.route().endpoint().tunnel() == nullptr) {
+        throw std::logic_error("route is not a CONNECT tunnel route");
+    }
+    return dispatchStreamRoute(request, resolved, memory, handler, services);
+}
+
 Task<HttpResponse> detail::RouteTable::dispatch(const HttpRequest& request,
     const RouteResolution& resolution, RequestMemory& memory, ContextServices services) const {
     co_return co_await dispatchRequest(request, resolution, memory, services,

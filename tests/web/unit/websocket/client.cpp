@@ -24,6 +24,7 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/web/WebSocketClient.h"
 
@@ -150,6 +151,88 @@ void checkPeerExchange(ruvia::testing::TestContext& ruvia_ctx, bool replyClose,
 }
 
 }  // namespace
+
+RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peerFailure;
+    bool offered = false;
+    bool compressed = false;
+    bool uncompressed = false;
+    const std::string payload(4096, 'a');
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::string request;
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+        offered = request.find("permessage-deflate") != std::string::npos;
+        auto response = makeServerHandshakeResponse(request);
+        response.insert(response.size() - 2, "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n");
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        ruvia::WebSocketConnection protocol({.compression = {.enabled = true}});
+        std::array<char, 8192> bytes{};
+        unsigned messages = 0;
+        while (messages != 4) {
+            const auto count = co_await socket.async_read_some(asio::buffer(bytes), asio::use_awaitable);
+            if (messages == 0) {
+                compressed = (static_cast<unsigned char>(bytes[0]) & 0x40) != 0;
+            }
+            if (messages == 1) {
+                uncompressed = (static_cast<unsigned char>(bytes[0]) & 0x40) == 0;
+            }
+            (void)protocol.feed(std::string_view(bytes.data(), count));
+            while (auto event = protocol.nextEvent()) {
+                if (const auto* message = event->message()) {
+                    RUVIA_CHECK_EQ(message->payload(), payload);
+                    ++messages;
+                    RUVIA_CHECK(protocol.submitFrame(ruvia::WebSocketOpcode::kText, message->payload()) == ruvia::WebSocketFrameSubmitStatus::kAccepted);
+                    const auto output = protocol.outputPlan();
+                    co_await asio::async_write(socket, asio::buffer(output.bytes()), asio::use_awaitable);
+                    (void)protocol.consumeOutput(output.bytes().size());
+                }
+            }
+        }
+        socket.close();
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peerFailure = failure; });
+    const auto run = [&]() -> ruvia::Task<void> {
+        ruvia::WebSocketClient client(attachment.loop(), {.scheme = ruvia::WebSocketScheme::kWs,
+                                                             .host = "127.0.0.1",
+                                                             .port = peer.local_endpoint().port(),
+                                                             .deflate = {.enabled = true}});
+        {
+            auto cold = client.connect();
+        }
+        co_await client.connect();
+        for (unsigned i = 0; i < 4; ++i) {
+            {
+                auto cold = client.text("discarded");
+            }
+            std::string source = payload;
+            auto operation = client.text(source, {.compress = i != 1});
+            source.assign("changed before start");
+            co_await std::move(operation);
+            const auto message = co_await client.read();
+            RUVIA_CHECK(message.has_value());
+            if (message) {
+                RUVIA_CHECK_EQ(message->payload(), payload);
+            }
+            RUVIA_CHECK(client.connected());
+        }
+        co_await client.shutdown();
+        peer.close();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (peerFailure) {
+        std::rethrow_exception(peerFailure);
+    }
+    RUVIA_CHECK(offered);
+    RUVIA_CHECK(compressed);
+    RUVIA_CHECK(uncompressed);
+}
 
 RUVIA_TEST(websocket_client_event_loop_stop_joins_pending_connect) {
     asio::io_context io;

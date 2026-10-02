@@ -1,75 +1,29 @@
-find_package(OpenSSL 3.6.4 REQUIRED COMPONENTS SSL Crypto)
+find_package(OpenSSL 3.5 REQUIRED COMPONENTS SSL Crypto)
 
 include(CheckCXXSourceCompiles)
 include(CMakePushCheckState)
 cmake_push_check_state(RESET)
 set(CMAKE_REQUIRED_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
-unset(RUVIA_OPENSSL_HAS_QUIC_RUNTIME_API CACHE)
+unset(RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS CACHE)
 check_cxx_source_compiles([=[
-#include <cstdint>
-#include <openssl/quic.h>
+#include <openssl/core_dispatch.h>
 #include <openssl/ssl.h>
 
-#ifndef SSL_VALUE_QUIC_MAX_PENDING_CONNS
-#error OpenSSL lacks the bounded QUIC pending-connection queue API
-#endif
-
 int main() {
-    SSL_CTX* context = nullptr;
-    SSL* connection = nullptr;
-    SSL* listener = nullptr;
-    SSL* stream = nullptr;
-    std::uint64_t value{};
-    SSL_SHUTDOWN_EX_ARGS shutdownArgs{};
-    SSL_STREAM_RESET_ARGS resetArgs{};
-    SSL_CONN_CLOSE_INFO closeInfo{};
-
-    (void)OSSL_QUIC_client_method();
-    (void)OSSL_QUIC_server_method();
-    (void)SSL_new_domain(context, SSL_DOMAIN_FLAG_SINGLE_THREAD);
-    (void)SSL_new_listener_from(connection, 0);
-    (void)SSL_listen(listener);
-    (void)SSL_accept_connection(listener, SSL_ACCEPT_CONNECTION_NO_BLOCK);
-    (void)SSL_get_accept_connection_queue_len(listener);
-    (void)SSL_set_blocking_mode(connection, 0);
-    (void)SSL_set1_initial_peer_addr(connection, nullptr);
-    (void)SSL_set_default_stream_mode(connection, SSL_DEFAULT_STREAM_MODE_NONE);
-    (void)SSL_set_incoming_stream_policy(
-        connection, SSL_INCOMING_STREAM_POLICY_ACCEPT, 0);
-    (void)SSL_is_quic(connection);
-    (void)SSL_handle_events(connection);
-    (void)SSL_get_event_timeout(connection, nullptr, nullptr);
-    (void)SSL_get_conn_close_info(connection, &closeInfo, sizeof(closeInfo));
-    (void)SSL_get_feature_request_uint(
-        connection, SSL_VALUE_QUIC_IDLE_TIMEOUT, &value);
-    (void)SSL_set_feature_request_uint(
-        connection, SSL_VALUE_QUIC_IDLE_TIMEOUT, value);
-    (void)SSL_get_feature_negotiated_uint(
-        connection, SSL_VALUE_QUIC_IDLE_TIMEOUT, &value);
-    (void)SSL_new_stream(connection, SSL_STREAM_FLAG_UNI | SSL_STREAM_FLAG_NO_BLOCK);
-    (void)SSL_get_accept_stream_queue_len(connection);
-    (void)SSL_accept_stream(connection, SSL_ACCEPT_STREAM_NO_BLOCK);
-    (void)SSL_get_stream_id(stream);
-    (void)SSL_get_stream_type(stream);
-    (void)SSL_get_stream_read_state(stream);
-    (void)SSL_get_stream_write_state(stream);
-    (void)SSL_get_stream_read_error_code(stream, &value);
-    (void)SSL_stream_conclude(stream, 0);
-    (void)SSL_stream_reset(stream, &resetArgs, sizeof(resetArgs));
-    (void)SSL_shutdown_ex(connection,
-        SSL_SHUTDOWN_FLAG_RAPID | SSL_SHUTDOWN_FLAG_NO_STREAM_FLUSH |
-            SSL_SHUTDOWN_FLAG_NO_BLOCK,
-        &shutdownArgs, sizeof(shutdownArgs));
-    (void)SSL_get_generic_value_uint(
-        listener, SSL_VALUE_QUIC_MAX_PENDING_CONNS, &value);
-    (void)SSL_set_generic_value_uint(listener, SSL_VALUE_QUIC_MAX_PENDING_CONNS, value);
+    SSL* ssl = nullptr;
+    const OSSL_DISPATCH* callbacks = nullptr;
+    (void)SSL_set_quic_tls_cbs(ssl, callbacks, nullptr);
+    (void)SSL_set_quic_tls_transport_params(ssl, nullptr, 0);
+    (void)SSL_set_quic_tls_early_data_enabled(ssl, 0);
+    (void)OSSL_FUNC_SSL_QUIC_TLS_CRYPTO_SEND;
+    (void)OSSL_FUNC_SSL_QUIC_TLS_YIELD_SECRET;
     return 0;
 }
-]=] RUVIA_OPENSSL_HAS_QUIC_RUNTIME_API)
+]=] RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
 cmake_pop_check_state()
-if(NOT RUVIA_OPENSSL_HAS_QUIC_RUNTIME_API)
+if(NOT RUVIA_OPENSSL_HAS_QUIC_TLS_CALLBACKS)
     message(FATAL_ERROR
-        "ruvia-web requires OpenSSL 3.6.4 or newer with QUIC connection and stream APIs enabled")
+        "ruvia-web requires OpenSSL 3.5 or newer with external QUIC TLS callback APIs")
 endif()
 
 if(RUVIA_ENABLE_MARIADB)

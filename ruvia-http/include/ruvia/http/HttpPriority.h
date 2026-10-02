@@ -8,6 +8,8 @@
 
 namespace ruvia {
 
+class HttpHeaderView;
+
 struct HttpPriority final {
     std::uint8_t urgency{3};
     bool incremental{false};
@@ -33,6 +35,9 @@ struct HttpPriorityUpdate final {
 // types and out-of-range values are ignored; malformed structured syntax fails.
 // Missing response parameters remain absent for intermediary merging.
 [[nodiscard]] std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::string_view value) noexcept;
+// Reads all Priority field lines in wire order without allocating. A later
+// dictionary member replaces the earlier member, including an invalid value.
+[[nodiscard]] std::expected<HttpPriorityFields, HttpPriorityError> parseHttpPriority(std::span<const HttpHeaderView> headers) noexcept;
 [[nodiscard]] std::expected<std::size_t, HttpPriorityError> encodeHttpPriority(std::span<char> output, HttpPriorityFields fields) noexcept;
 [[nodiscard]] std::expected<HttpPriorityUpdate, HttpPriorityError> decodeHttp2PriorityUpdate(std::span<const char> payload) noexcept;
 [[nodiscard]] std::expected<std::size_t, HttpPriorityError> encodeHttp2PriorityUpdate(std::span<char> output, std::uint32_t streamId, HttpPriorityFields fields) noexcept;

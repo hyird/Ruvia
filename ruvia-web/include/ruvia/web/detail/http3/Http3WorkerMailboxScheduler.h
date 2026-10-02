@@ -155,12 +155,13 @@ public:
     [[nodiscard]] bool retire(ConnectionToken token) noexcept;
 
     // Performs at most one owner.publishOne() or returns one by-value transport
-    // intent plan. No intent is acknowledged here. A returned reset/close must
+    // intent plan. No intent is acknowledged here. A returned reset/open/close must
     // be explicitly acknowledged only after reliable handoff by the caller.
     [[nodiscard]] StepResult step() noexcept;
     [[nodiscard]] bool acknowledgeIntent(ConnectionToken connection,
-        const Connection::TransportIntentToken& intent) noexcept;
-    // Use only when a RESET_STREAM plan could not be handed off because the
+        const Connection::TransportIntentToken& intent,
+        std::optional<Connection::PushStreamOpenResult> opened = {}) noexcept;
+    // Use when a reset or push-open plan could not be handed off because the
     // shared CONTROL lane is full. The intent remains owned by the connection.
     [[nodiscard]] bool parkIntentForControlCapacity(ConnectionToken connection,
         const Connection::TransportIntentToken& intent) noexcept;

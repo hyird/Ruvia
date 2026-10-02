@@ -255,7 +255,8 @@ struct Http3ClientResponse::Impl final {
             }
             const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kInformationalHead,
                 .streamId = self.streamId,
-                .head = &*decoded};
+                .head = &*decoded,
+                .requestContentSignal = decoded->status == 100 ? std::optional{HttpClientRequestContentSignal::kContinue} : std::nullopt};
             self.callback(self.callbackContext, event);
             return;
         }
@@ -269,7 +270,8 @@ struct Http3ClientResponse::Impl final {
         const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kFinalHead,
             .streamId = self.streamId,
             .head = &*decoded,
-            .responseBodyPlan = self.bodyPlan};
+            .responseBodyPlan = self.bodyPlan,
+            .requestContentSignal = HttpClientRequestContentSignal::kExchangeComplete};
         self.callback(self.callbackContext, event);
     }
 };

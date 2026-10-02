@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -20,7 +21,8 @@ namespace ruvia::detail {
 // routes each block/control here individually; this class never drains shared
 // queues. DATA byte counts include HTTP/3 frame bytes, not just request body.
 // Terminal stream entries stay as tombstones until this connection is retired.
-// This buffered adapter does not provide a streaming request-body path.
+// Streaming consumers are paced by the connection owner before acceptData();
+// it retains bounded mailbox blocks while the worker body backlog is full.
 class Http3ServerStreamInput final {
     enum class StreamPhase : std::uint8_t { kOpen,
         kFinished,
@@ -31,6 +33,11 @@ class Http3ServerStreamInput final {
         kConnectionClosed };
 
     struct StreamState final {
+        explicit StreamState(std::pmr::memory_resource* resource)
+            : pendingBytes(resource) {}
+        std::pmr::string pendingBytes;
+        bool qpackBlocked{};
+        bool pendingFin{};
         std::uint64_t wireBytes{};
         std::optional<std::uint64_t> finalSize;
         std::optional<std::uint64_t> resetPublishedBytes;
@@ -42,8 +49,10 @@ class Http3ServerStreamInput final {
     };
 
     struct StreamSlot final {
+        explicit StreamSlot(std::pmr::memory_resource* resource)
+            : state(resource) {}
         std::uint64_t streamId{};
-        StreamState state{};
+        StreamState state;
         bool occupied{};
     };
 
@@ -51,6 +60,7 @@ public:
     enum class Status : std::uint8_t {
         kFed,
         kDeferredFin,
+        kDeferredQpack,
         kDeferredReset,
         kFinished,
         kReset,
@@ -89,6 +99,13 @@ public:
     Http3ServerStreamInput& operator=(const Http3ServerStreamInput&) = delete;
     Http3ServerStreamInput(Http3ServerStreamInput&&) = delete;
     Http3ServerStreamInput& operator=(Http3ServerStreamInput&&) = delete;
+
+    struct ResumedInput final {
+        std::uint64_t streamId{};
+        Result result{};
+    };
+    [[nodiscard]] bool canAcceptInput(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] std::optional<ResumedInput> resumeQpack() noexcept;
 
     // Call once for each routed mailbox block. A mismatched identity is
     // reported without touching input or session state. The borrowed block is
@@ -130,6 +147,7 @@ private:
         Status& failure) noexcept;
     void closeForConnectionError() noexcept;
     void finishRequestStream(StreamState& state) noexcept;
+    void clearQpack(StreamState& state) noexcept;
 
     Http3SansIoSessionEngine& session_;
     const std::uint64_t epoch_;
@@ -139,6 +157,8 @@ private:
     std::size_t trackedStreamCount_{};
     std::size_t observedRequestStreamCount_{};
     std::size_t activeRequestStreamCount_{};
+    std::size_t blockedQpackCount_{};
+    std::size_t nextQpackResume_{};
     bool stopped_{false};
 };
 

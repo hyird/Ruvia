@@ -7,6 +7,7 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/web/detail/app/EnvState.h"
+#include "ruvia/web/detail/http3/Http3QpackConfigValidation.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
@@ -141,6 +142,7 @@ App& App::listen(ListenConfig config) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
             if (effectiveHttp3.has_value()) {
+                detail::validateHttp3QpackConfig(effectiveHttp3->qpack);
                 ruvia::ensurePositiveDuration(effectiveHttp3->handshakeTimeout,
                     "HTTP/3 handshake timeout must be greater than zero");
                 ruvia::ensurePositiveDuration(effectiveHttp3->drainTimeout,

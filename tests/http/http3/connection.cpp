@@ -12,6 +12,7 @@
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3VarInt.h"
 
@@ -110,6 +111,7 @@ void capture(void* opaque, const ruvia::Http3ConnectionEvent& event) {
             result.bodyIndex[event.streamId] = result.bodies.size();
             result.bodies.emplace_back();
             break;
+        case ruvia::Http3ConnectionEventKind::kPushStream:
         case ruvia::Http3ConnectionEventKind::kPushPromise:
         case ruvia::Http3ConnectionEventKind::kPushCanceled:
         case ruvia::Http3ConnectionEventKind::kOriginAdvertisement:
@@ -167,6 +169,23 @@ struct CountingResource final : std::pmr::memory_resource {
 };
 
 }  // namespace
+
+RUVIA_TEST(http3_connection_single_request_capacity_accepts_all_peer_critical_streams) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::Http3Connection connection(ruvia::Http3PeerRole::kClient, &resource, {.maxActiveStreams = 1});
+    RUVIA_CHECK(connection.registerClientRequest(0, ruvia::HttpKnownMethod::kConnect).status == ruvia::Http3ConnectionStatus::kNeedMoreData);
+    const auto prefixes = ruvia::Http3LocalCriticalStreams::create({.enableConnectProtocol = true});
+    RUVIA_CHECK(prefixes.has_value());
+    if (!prefixes) {
+        return;
+    }
+    RUVIA_CHECK(connection.feed(3, prefixes->controlPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.feed(7, prefixes->qpackEncoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.feed(11, prefixes->qpackDecoderPrefix(), false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    RUVIA_CHECK(connection.peerSettings() && connection.peerSettings()->enableConnectProtocol);
+    RUVIA_CHECK(connection.registerClientRequest(4, ruvia::HttpKnownMethod::kGet).status == ruvia::Http3ConnectionStatus::kStreamError);
+    RUVIA_CHECK(connection.activeRequestCount() == 1);
+}
 
 RUVIA_TEST(http3_connection_demultiplexes_fragmented_parallel_requests_and_preserves_callback_results) {
     CountingResource resource;
@@ -1151,6 +1170,9 @@ RUVIA_TEST(http3_push_stream_before_promise_resumes_without_buffering_body) {
         RUVIA_CHECK(server.feed(2, control, false, false, ignoreEvent, nullptr).scope == ruvia::Http3ConnectionErrorScope::kNone);
         auto promise = server.preparePushPromise(0, 0, {.authority = "example.test", .path = "/asset"});
         RUVIA_CHECK(promise.has_value());
+        RUVIA_CHECK(server.promisedRequest(0) != nullptr);
+        RUVIA_CHECK_EQ(server.promisedRequest(0)->path, "/asset");
+        RUVIA_CHECK(server.promisedRequest(1) == nullptr);
         RUVIA_CHECK(client.registerClientRequest(0, ruvia::HttpKnownMethod::kGet).scope == ruvia::Http3ConnectionErrorScope::kNone);
         auto pushed = responseWire(&resource, 200, "asset");
         pushed.insert(pushed.begin(), {1, 0});

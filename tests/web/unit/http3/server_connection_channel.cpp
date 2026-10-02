@@ -259,8 +259,8 @@ struct ChannelFixture final {
     Channel::GrantPublication grant{};
     std::optional<std::uint64_t> acceptedId;
 
-    explicit ChannelFixture(std::pmr::memory_resource& memory)
-        : channel(networkWake.target(), workerWake.target()),
+    explicit ChannelFixture(std::pmr::memory_resource& memory, bool datagrams = false)
+        : channel(networkWake.target(), workerWake.target(), datagrams ? &memory : nullptr),
           worker(memory) {}
 
     void publishGrant(std::uint64_t epoch, std::uint64_t generation) {
@@ -345,7 +345,7 @@ struct ChannelFixture final {
         }
     }
 
-    void finishAttached(bool closeAlreadyPublished = false) {
+    void finishAttached(bool closeAlreadyPublished = false, std::uint64_t next_sequence = 1) {
         Connection::TransportIntent closeIntent;
         worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
             auto& connection = *runtime.connection;
@@ -419,16 +419,86 @@ struct ChannelFixture final {
                 throw std::runtime_error("worker did not receive exact reset-token ACK");
             }
         }
+        const auto lateResetSequence = resetCount == 0
+                                           ? next_sequence
+                                           : std::max(next_sequence, resetTokens[resetCount - 1].sequence + 1);
+        const auto lateResetIntent = resetIntent(grant.identity, 4, lateResetSequence,
+            ruvia::Http3ConnectionErrorCode::kRequestCancelled);
+        const Connection::TransportIntent latePushIntent{
+            .token = {.kind = Connection::TransportIntentKind::kOpenPushStream,
+                .id = {.epoch = grant.identity.epoch,
+                    .connectionGeneration = grant.identity.connectionGeneration,
+                    .streamId = 0,
+                    .pushId = 0},
+                .sequence = lateResetSequence + 1}};
         Status lateReset{};
+        Status latePush{};
         Status repeatedClose{};
         worker.call([&](Scheduler&, Runtime&) {
-            lateReset = channel.publishIntent(grant.identity,
-                resetIntent(grant.identity, 4, closeIntent.token.sequence + 1,
-                    ruvia::Http3ConnectionErrorCode::kRequestCancelled));
+            lateReset = channel.publishIntent(grant.identity, lateResetIntent);
+            latePush = channel.publishIntent(grant.identity, latePushIntent);
             repeatedClose = channel.publishIntent(grant.identity, closeIntent);
         });
-        if (lateReset != Status::kWrongState || repeatedClose != Status::kWrongState) {
-            throw std::runtime_error("close ACK reopened intents for the same generation");
+        if (lateReset != Status::kPublished || latePush != Status::kPublished ||
+            repeatedClose != Status::kWrongState) {
+            throw std::runtime_error("close ACK did not preserve owed intent publication");
+        }
+        Connection::TransportIntent lateResetReceived;
+        Connection::TransportIntent latePushReceived;
+        if (channel.receiveIntent(lateResetReceived) != Status::kReceived ||
+            lateResetReceived.token != lateResetIntent.token ||
+            channel.receiveIntent(latePushReceived) != Status::kReceived ||
+            latePushReceived.token != latePushIntent.token) {
+            throw std::runtime_error("network did not receive close-prioritized owed intents");
+        }
+        const auto finalResetIntent = resetIntent(grant.identity, 8, lateResetSequence + 2,
+            ruvia::Http3ConnectionErrorCode::kRequestCancelled);
+        Status finalResetPublication{};
+        worker.call([&](Scheduler&, Runtime&) {
+            finalResetPublication = channel.publishIntent(grant.identity, finalResetIntent);
+        });
+        if (finalResetPublication != Status::kPublished) {
+            throw std::runtime_error("worker could not refill the owed intent lane");
+        }
+        Connection::TransportIntent finalResetReceived;
+        if (channel.receiveIntent(finalResetReceived) != Status::kReceived ||
+            finalResetReceived.token != finalResetIntent.token) {
+            throw std::runtime_error("network did not receive the refilled reset intent");
+        }
+        const Connection::PushStreamOpenResult stoppedPush{
+            .status = Connection::PushStreamOpenResult::Status::kStopped};
+        if (channel.acknowledgeIntentAfterHandoff(grant.identity, lateResetReceived.token) !=
+                Status::kPublished ||
+            channel.acknowledgeIntentAfterHandoff(grant.identity, latePushReceived.token,
+                Channel::IntentSettlement::kExecutedHandoff, stoppedPush) != Status::kPublished ||
+            channel.acknowledgeIntentAfterHandoff(grant.identity, finalResetReceived.token) !=
+                Status::kFull) {
+            throw std::runtime_error("network could not preserve full owed-intent ACK state");
+        }
+        std::array<Channel::TransportIntentAck, 2> lateAcks{};
+        std::array<Status, 2> lateAckStatuses{};
+        worker.call([&](Scheduler&, Runtime&) {
+            lateAckStatuses[0] = channel.receiveIntentAck(lateAcks[0]);
+            lateAckStatuses[1] = channel.receiveIntentAck(lateAcks[1]);
+        });
+        if (lateAckStatuses[0] != Status::kReceived ||
+            lateAcks[0].token != lateResetIntent.token ||
+            lateAckStatuses[1] != Status::kReceived ||
+            lateAcks[1].token != latePushIntent.token || !lateAcks[1].pushStream ||
+            lateAcks[1].pushStream->status !=
+                Connection::PushStreamOpenResult::Status::kStopped ||
+            channel.acknowledgeIntentAfterHandoff(grant.identity, finalResetReceived.token) !=
+                Status::kPublished) {
+            throw std::runtime_error("worker did not receive exact post-close intent ACKs");
+        }
+        Channel::TransportIntentAck finalResetAck;
+        Status finalResetAckStatus{};
+        worker.call([&](Scheduler&, Runtime&) {
+            finalResetAckStatus = channel.receiveIntentAck(finalResetAck);
+        });
+        if (finalResetAckStatus != Status::kReceived ||
+            finalResetAck.token != finalResetIntent.token) {
+            throw std::runtime_error("network did not retry the exact reset ACK");
         }
         Status beforePhysicalRetirement{};
         worker.call([&](Scheduler&, Runtime&) {
@@ -725,6 +795,92 @@ RUVIA_TEST(http3ServerConnectionChannelRetainsGrantUntilAcceptedAndRequiresRealA
         RUVIA_CHECK(stoppedGrant.status == Status::kWrongState);
         RUVIA_CHECK(fixture.channel.closeNetworkPublications(fixture.grant.identity) ==
                     Status::kPublished);
+        RUVIA_CHECK(fixture.channel.readyToDestroy());
+    }
+    RUVIA_CHECK_EQ(memory.allocated, memory.freed);
+    RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
+}
+
+RUVIA_TEST(http3_server_connection_channel_consumes_late_drain_after_retirement) {
+    CountingResource memory;
+    {
+        ChannelFixture fixture(memory);
+        fixture.publishGrant(71, 16);
+        fixture.transport.queueAccept();
+        fixture.acceptAndCommit();
+        fixture.bindAndAttach();
+        Channel::AttachResult attached{std::in_place_type<Channel::AttachAck>};
+        RUVIA_CHECK(fixture.channel.receiveAttachResult(attached) == Status::kReceived);
+        RUVIA_CHECK(fixture.channel.publishAdmissionSealed(
+            fixture.grant.identity, 0, 0) == Status::kPublished);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            Channel::AdmissionSealed sealed;
+            RUVIA_CHECK(fixture.channel.receiveAdmissionSealed(sealed) == Status::kReceived);
+            RUVIA_CHECK(sealed.identity == fixture.grant.identity);
+            RUVIA_CHECK(fixture.channel.publishDrainComplete(fixture.grant.identity) ==
+                        Status::kPublished);
+        });
+
+        Connection::TransportIntent close;
+        fixture.worker.call([&](Scheduler& scheduler, Runtime& runtime) {
+            RUVIA_CHECK(runtime.connection->requestStop());
+            const auto step = scheduler.step();
+            RUVIA_CHECK(step.kind == Scheduler::StepKind::kTransportIntent);
+            RUVIA_CHECK(step.intent.token.kind == Connection::TransportIntentKind::kConnectionClose);
+            close = step.intent;
+            RUVIA_CHECK(fixture.channel.publishIntent(fixture.grant.identity, close) ==
+                        Status::kPublished);
+            RUVIA_CHECK(scheduler.beginRetirement(fixture.grant.registration.token));
+        });
+        fixture.retireTransport();
+
+        Channel::DrainComplete drain;
+        RUVIA_CHECK(fixture.channel.receiveDrainComplete(drain) == Status::kReceived);
+        RUVIA_CHECK(drain.identity == fixture.grant.identity);
+        Connection::TransportIntent networkClose;
+        RUVIA_CHECK(fixture.channel.receiveIntent(networkClose) == Status::kReceived);
+        RUVIA_CHECK(networkClose.token == close.token);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(
+                        fixture.grant.identity, close.token,
+                        Channel::IntentSettlement::kTransportRetiredSuperseded) ==
+                    Status::kPublished);
+
+        fixture.worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
+            Channel::TransportRetired retired;
+            RUVIA_CHECK(fixture.channel.receiveTransportRetired(retired) == Status::kReceived);
+            RUVIA_CHECK(retired.identity == fixture.grant.identity);
+            RUVIA_CHECK(runtime.connection->confirmTransportRetired({
+                .epoch = fixture.grant.identity.epoch,
+                .connectionGeneration = fixture.grant.identity.connectionGeneration}));
+            Channel::TransportIntentAck closeAck;
+            RUVIA_CHECK(fixture.channel.receiveIntentAck(closeAck) == Status::kReceived);
+            RUVIA_CHECK(closeAck.token == close.token);
+            RUVIA_CHECK(scheduler.acknowledgeIntent(
+                fixture.grant.registration.token, closeAck.token));
+            co_await runtime.connection->join();
+            RUVIA_CHECK(scheduler.retire(fixture.grant.registration.token));
+            runtime.connection.reset();
+            RUVIA_CHECK(fixture.channel.closeWorkerPublications(fixture.grant.identity) ==
+                        Status::kPublished);
+        });
+        RUVIA_CHECK(fixture.channel.closeNetworkPublications(fixture.grant.identity) ==
+                    Status::kPublished);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.publishWorkerFinalized(fixture.grant.identity) == Status::kPublished);
+        });
+        Channel::WorkerFinalized workerFinalized;
+        RUVIA_CHECK(fixture.channel.receiveWorkerFinalized(workerFinalized) == Status::kReceived);
+        RUVIA_CHECK(fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) ==
+                    Status::kPublished);
+        RUVIA_CHECK(fixture.channel.publishNetworkFinalized(fixture.grant.identity) ==
+                    Status::kPublished);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            Channel::NetworkFinalized networkFinalized;
+            RUVIA_CHECK(fixture.channel.receiveNetworkFinalized(networkFinalized) ==
+                        Status::kReceived);
+            RUVIA_CHECK(fixture.channel.acknowledgeNetworkFinalized(fixture.grant.identity) ==
+                        Status::kPublished);
+        });
         RUVIA_CHECK(fixture.channel.readyToDestroy());
     }
     RUVIA_CHECK_EQ(memory.allocated, memory.freed);
@@ -1051,4 +1207,123 @@ RUVIA_TEST(http3ServerConnectionChannelClosesPublicationGatesAndRejectsOldGenera
     }
     RUVIA_CHECK_EQ(memory.allocated, memory.freed);
     RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
+}
+
+RUVIA_TEST(http3ServerConnectionChannelCarriesPushOpenResultsAcrossBothOwnerThreadsAndAckBackpressure) {
+    CountingResource memory;
+    {
+        ChannelFixture fixture(memory);
+        fixture.publishGrant(73, 18);
+        fixture.transport.queueAccept();
+        fixture.acceptAndCommit();
+        fixture.bindAndAttach();
+        Channel::AttachResult attached{std::in_place_type<Channel::AttachAck>};
+        RUVIA_CHECK(fixture.channel.receiveAttachResult(attached) == Status::kReceived);
+        std::array<Channel::TransportIntent, 3> intents{};
+        for (std::size_t i = 0; i < intents.size(); ++i) {
+            intents[i].token = {.kind = Connection::TransportIntentKind::kOpenPushStream,
+                .id = {fixture.grant.identity.epoch, fixture.grant.identity.connectionGeneration, 0, i},
+                .sequence = i + 1};
+        }
+        std::array<Status, 3> statuses{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            for (std::size_t i = 0; i < intents.size(); ++i) {
+                statuses[i] = fixture.channel.publishIntent(fixture.grant.identity, intents[i]);
+            }
+        });
+        RUVIA_CHECK(statuses[0] == Status::kPublished);
+        RUVIA_CHECK(statuses[1] == Status::kPublished);
+        RUVIA_CHECK(statuses[2] == Status::kFull);
+        Channel::TransportIntent first;
+        Channel::TransportIntent second;
+        Channel::TransportIntent third;
+        RUVIA_CHECK(fixture.channel.receiveIntent(first) == Status::kReceived);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            statuses[2] = fixture.channel.publishIntent(fixture.grant.identity, intents[2]);
+        });
+        RUVIA_CHECK(statuses[2] == Status::kPublished);
+        RUVIA_CHECK(fixture.channel.receiveIntent(second) == Status::kReceived);
+        RUVIA_CHECK(fixture.channel.receiveIntent(third) == Status::kReceived);
+        const Connection::PushStreamOpenResult opened{.status = Connection::PushStreamOpenResult::Status::kOpened, .streamId = 31};
+        const Connection::PushStreamOpenResult unavailable{};
+        const Connection::PushStreamOpenResult stopped{.status = Connection::PushStreamOpenResult::Status::kStopped};
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token) == Status::kWrongState);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token,
+                        Channel::IntentSettlement::kExecutedHandoff, Connection::PushStreamOpenResult{.status = Connection::PushStreamOpenResult::Status::kOpened, .streamId = 0}) == Status::kWrongState);
+        auto forged = first.token;
+        forged.id.pushId = 123;
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, forged,
+                        Channel::IntentSettlement::kExecutedHandoff, opened) == Status::kStale);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, first.token,
+                        Channel::IntentSettlement::kExecutedHandoff, opened) == Status::kPublished);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, second.token,
+                        Channel::IntentSettlement::kExecutedHandoff, unavailable) == Status::kPublished);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, third.token,
+                        Channel::IntentSettlement::kExecutedHandoff, stopped) == Status::kFull);
+        std::array<Channel::TransportIntentAck, 3> acks{};
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.receiveIntentAck(acks[0]) == Status::kReceived);
+            RUVIA_CHECK(fixture.channel.receiveIntentAck(acks[1]) == Status::kReceived);
+        });
+        RUVIA_CHECK_EQ(acks[0].pushStream->streamId, std::uint64_t{31});
+        RUVIA_CHECK(acks[0].pushStream->status == Connection::PushStreamOpenResult::Status::kOpened);
+        RUVIA_CHECK(acks[1].pushStream->status == Connection::PushStreamOpenResult::Status::kUnavailable);
+        RUVIA_CHECK(fixture.channel.acknowledgeIntentAfterHandoff(fixture.grant.identity, third.token,
+                        Channel::IntentSettlement::kExecutedHandoff, stopped) == Status::kPublished);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.receiveIntentAck(acks[2]) == Status::kReceived);
+        });
+        RUVIA_CHECK(acks[2].pushStream->status == Connection::PushStreamOpenResult::Status::kStopped);
+        RUVIA_CHECK_EQ(acks[2].token.id.pushId, std::optional<std::uint64_t>{2});
+        fixture.finishAttached(false, 4);
+        acknowledgeFinalization(fixture);
+        RUVIA_CHECK(fixture.channel.readyToDestroy());
+    }
+    RUVIA_CHECK_EQ(memory.allocated, memory.freed);
+    RUVIA_CHECK_EQ(memory.allocations, memory.deallocations);
+}
+
+RUVIA_TEST(http3_server_connection_channel_datagrams_preserve_boundaries_drop_on_capacity_and_retire_both_lanes) {
+    CountingResource memory;
+    {
+        ChannelFixture fixture(memory, true);
+        fixture.publishGrant(1, 1);
+        fixture.transport.queueAccept();
+        fixture.acceptAndCommit();
+        fixture.bindAndAttach();
+        Channel::AttachResult attached{std::in_place_type<Channel::AttachAck>};
+        RUVIA_CHECK(fixture.channel.receiveAttachResult(attached) == Status::kReceived);
+        const std::array<std::byte, 3> bytes{std::byte{1}, std::byte{2}, std::byte{3}};
+        const auto allocations = memory.allocations;
+        for (std::size_t i = 0; i < Channel::kDatagramCapacity; ++i) {
+            RUVIA_CHECK(fixture.channel.publishRequestDatagram(fixture.grant.identity, 4, i == 0 ? std::span<const std::byte>{} : std::span(bytes)) == Status::kPublished);
+        }
+        RUVIA_CHECK(fixture.channel.publishRequestDatagram(fixture.grant.identity, 4, bytes) == Status::kFull);
+        RUVIA_CHECK(memory.allocations == allocations);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            Channel::Datagram message;
+            RUVIA_CHECK(fixture.channel.receiveRequestDatagram(message) == Status::kReceived);
+            RUVIA_CHECK(message.identity == fixture.grant.identity && message.streamId == 4 && message.size == 0);
+            RUVIA_CHECK(fixture.channel.receiveRequestDatagram(message) == Status::kReceived);
+            RUVIA_CHECK(message.size == bytes.size() && std::equal(bytes.begin(), bytes.end(), message.bytes.begin()));
+            for (std::size_t i = 0; i < Channel::kDatagramCapacity; ++i) {
+                RUVIA_CHECK(fixture.channel.publishResponseDatagram(fixture.grant.identity, 8, bytes) == Status::kPublished);
+            }
+            RUVIA_CHECK(fixture.channel.publishResponseDatagram(fixture.grant.identity, 8, bytes) == Status::kFull);
+        });
+        Channel::Datagram message;
+        RUVIA_CHECK(fixture.channel.receiveResponseDatagram(message) == Status::kReceived);
+        RUVIA_CHECK(message.identity == fixture.grant.identity && message.streamId == 8 && message.size == bytes.size());
+        // Leave packets in both directions through transport retirement. Closed
+        // publication gates precede each consumer's final discard and ACK.
+        fixture.finishAttached();
+        acknowledgeFinalization(fixture);
+        RUVIA_CHECK(fixture.channel.receiveResponseDatagram(message) == Status::kEmpty);
+        fixture.worker.call([&](Scheduler&, Runtime&) {
+            RUVIA_CHECK(fixture.channel.receiveRequestDatagram(message) == Status::kEmpty);
+            RUVIA_CHECK(fixture.channel.publishResponseDatagram(fixture.grant.identity, 8, bytes) == Status::kWrongState);
+        });
+        RUVIA_CHECK(fixture.channel.readyToDestroy());
+    }
+    RUVIA_CHECK(memory.allocated == memory.freed);
 }

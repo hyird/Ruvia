@@ -23,6 +23,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpPush.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Attributes.h"
@@ -32,6 +34,7 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/HttpTunnel.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/RequestFields.h"
@@ -51,6 +54,7 @@ class Context;
 class Env;
 class StaticRoot;
 class HttpClientHandle;
+class HttpRequestTrailers;
 
 #ifdef RUVIA_ENABLE_DATABASE
 class DbHandle;
@@ -75,6 +79,9 @@ enum class StaticFileSelectionMode : std::uint8_t;
 struct ContextAccess;
 class ContextServices;
 class RequestDeadline;
+class HttpInterimResponseOutput;
+class HttpConnectionAdvertisementOutput;
+class HttpPushOutput;
 struct SessionAccess;
 }  // namespace detail
 
@@ -139,6 +146,16 @@ private:
 
 public:
     using HeaderOptions = HttpResponse::HeaderOptions;
+
+    // Dispatches the promised GET/HEAD through the same route/middleware plan.
+    // Returns false if peer push permission/capacity is unavailable. Completion
+    // commits the promise; the connection owns and joins its response task.
+    [[nodiscard]] ScopedOperation<bool> push(HttpPushRequestView request);
+    // Sends a bodyless 1xx head before the final response. Fields are copied
+    // before return; the operation and its storage retire on the owning worker.
+    [[nodiscard]] ScopedOperation<void> inform(const HttpInterimResponseHead& response);
+    [[nodiscard]] ScopedOperation<void> advertiseOrigins(std::span<const std::string_view> origins);
+    [[nodiscard]] ScopedOperation<void> advertiseAlternativeService(std::string_view value);
 
     ~Context();
 
@@ -286,6 +303,7 @@ public:
     [[nodiscard]] HttpClientHandle httpClient() const;
     [[nodiscard]] HttpClientHandle httpClient(std::string_view alias) const;
     [[nodiscard]] WebSocket& webSocket() const;
+    [[nodiscard]] HttpTunnel& tunnel() const;
 
     [[nodiscard]] ResponseStreamWriter& stream();
 
@@ -307,6 +325,9 @@ public:
     }
 
     void header(std::string_view name, std::string_view value, HeaderOptions options);
+    // Response priority hints for downstream intermediaries. Absent members
+    // stay absent so the intermediary can merge them with client parameters.
+    void priority(HttpPriorityFields fields);
 
     // Remove a response header set by this handler, before the response is
     // committed. Setting header(name, std::nullopt) to mean deletion was a
@@ -432,6 +453,11 @@ private:
 
     RequestMemory& memory_;
     const HttpRequest& request_;
+    const HttpRequestTrailers* requestTrailers_{};
+    const std::optional<HttpPriority>* requestPriorityUpdate_{};
+    detail::HttpInterimResponseOutput* interimOutput_{};
+    detail::HttpConnectionAdvertisementOutput* connectionAdvertisements_{};
+    detail::HttpPushOutput* pushOutput_{};
     ConnInfo connInfo_;
     // Context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.

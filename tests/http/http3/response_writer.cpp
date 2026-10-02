@@ -43,6 +43,43 @@ private:
 };
 }  // namespace
 
+RUVIA_TEST(http3_streaming_head_preserves_length_projects_sse_and_trailer_semantics) {
+    CountingResource resource;
+    {
+        ruvia::HttpResponse response({.resource = &resource});
+        response.header("Content-Length", "17");
+        auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kGet,
+            ruvia::ResponseStreamKind::kSse, ruvia::ResponseTrailerIntent::kPresent, {}, &resource);
+        RUVIA_CHECK(head.has_value());
+        if (head) {
+            RUVIA_CHECK_EQ(head->head.declaredContentLength.value_or(0), 17U);
+            RUVIA_CHECK(head->commitPlan.headDisposition() == ruvia::ResponseStreamHeadDisposition::kBodyOpen);
+            RUVIA_CHECK(head->commitPlan.trailerFraming() == ruvia::ResponseStreamTrailerFraming::kHttp3TrailingHeaders);
+            Fields fields;
+            RUVIA_CHECK(ruvia::decodeHttp3FieldSection(head->head.fieldSection, collect, &fields).has_value());
+            RUVIA_CHECK(std::ranges::find(fields.values, "text/event-stream") != fields.values.end());
+            RUVIA_CHECK(std::ranges::find(fields.values, "no-store") != fields.values.end());
+            RUVIA_CHECK(std::ranges::find(fields.names, "date") != fields.names.end());
+            RUVIA_CHECK(std::ranges::find(fields.names, "transfer-encoding") == fields.names.end());
+        }
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
+    for (const auto status : {ruvia::http_status::kOk, ruvia::http_status::kNoContent}) {
+        ruvia::HttpResponse response;
+        response.status(status);
+        const auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kHead,
+            ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+        RUVIA_CHECK(head.has_value());
+        if (head) {
+            RUVIA_CHECK(head->commitPlan.headDisposition() == ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+        }
+    }
+    ruvia::HttpResponse forbidden;
+    forbidden.status(ruvia::http_status::kNoContent);
+    RUVIA_CHECK(!ruvia::encodeHttp3StreamingResponseHead(std::move(forbidden), ruvia::HttpKnownMethod::kGet,
+        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kPresent));
+}
+
 RUVIA_TEST(http3_response_head_encodes_status_and_fields_for_qpack_decode) {
     const std::array fields{ruvia::Http3FieldSectionFieldView{"content-type", "text/plain"}};
     std::pmr::monotonic_buffer_resource resource;

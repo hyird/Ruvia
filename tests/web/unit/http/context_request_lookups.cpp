@@ -6,6 +6,33 @@
 RUVIA_MODEL(HeaderSpellingModel,
     RUVIA_REQUIRED_FIELD_NAME("x-oTHER", trace, ruvia::String));
 
+RUVIA_TEST(context_request_priority_tracks_live_update_and_response_keeps_partial_hint) {
+    WorkerMemory worker;
+    HttpRequest request = makeRequest(std::pmr::get_default_resource(), "/", {HttpHeaderView{"Priority", "u=2"}, HttpHeaderView{"priority", "i"}});
+    RequestMemory requestMemory(worker);
+    std::optional<ruvia::HttpPriority> update;
+    auto context = ContextAccess::make(requestMemory, request,
+        ruvia::test::testContextServices().withRequestPriorityUpdate(update));
+    RUVIA_CHECK(context.req().priority().urgency == 2 && context.req().priority().incremental);
+    update = ruvia::HttpPriority{.urgency = 0};
+    RUVIA_CHECK(context.req().priority().urgency == 0 && !context.req().priority().incremental);
+    update = ruvia::HttpPriority{.urgency = 7, .incremental = true};
+    RUVIA_CHECK(context.req().priority().urgency == 7 && context.req().priority().incremental);
+    update.reset();
+    RUVIA_CHECK(context.req().priority().urgency == 2);
+    context.priority({.incremental = false});
+    bool invalidRejected = false;
+    try {
+        context.priority({.urgency = 8});
+    } catch (const std::invalid_argument&) {
+        invalidRejected = true;
+    }
+    RUVIA_CHECK(invalidRejected);
+    const auto response = context.text(std::string_view("priority"));
+    const auto value = response.header("Priority");
+    RUVIA_CHECK(value && *value == "i=?0");
+}
+
 // Reading a request through Context: cookies, query, route params and headers, and the caches each
 // lookup shares.
 

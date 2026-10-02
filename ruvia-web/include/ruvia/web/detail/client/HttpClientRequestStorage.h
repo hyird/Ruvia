@@ -10,6 +10,9 @@
 namespace ruvia::detail {
 
 struct HttpClientRequestStorageAccess;
+class HttpClientUploadState;
+class HttpClientTunnelState;
+class HttpClientOutputQueue;
 
 class HttpClientRequestStorage final {
 public:
@@ -29,6 +32,31 @@ public:
     HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
     HttpClientRequestStorage& setBody(std::string_view body);
 
+    void setTunnel(std::string_view authority, std::string_view protocol);
+    void bindTunnel(HttpClientTunnelState& tunnel) noexcept {
+        tunnel_ = &tunnel;
+    }
+    [[nodiscard]] HttpClientTunnelState* tunnel() const noexcept {
+        return tunnel_;
+    }
+    [[nodiscard]] HttpClientOutputQueue* output() const noexcept;
+    [[nodiscard]] bool isTunnel() const noexcept {
+        return isTunnel_;
+    }
+    [[nodiscard]] std::string_view tunnelAuthority() const& noexcept {
+        return tunnelAuthority_;
+    }
+    std::string_view tunnelAuthority() const&& = delete;
+    [[nodiscard]] std::string_view tunnelProtocol() const& noexcept {
+        return tunnelProtocol_;
+    }
+    std::string_view tunnelProtocol() const&& = delete;
+    void bindUpload(HttpClientUploadState& upload) noexcept {
+        upload_ = &upload;
+    }
+    [[nodiscard]] HttpClientUploadState* upload() const noexcept {
+        return upload_;
+    }
     [[nodiscard]] std::string_view method() const& noexcept {
         return method_;
     }
@@ -60,7 +88,12 @@ private:
     std::pmr::string target_;
     std::pmr::vector<Header> headers_;
     std::pmr::string body_;
+    std::pmr::string tunnelAuthority_;
+    std::pmr::string tunnelProtocol_;
+    bool isTunnel_{};
+    HttpClientTunnelState* tunnel_{};
     bool hasBody_{false};
+    HttpClientUploadState* upload_{};
 };
 
 struct HttpClientRequestStorageAccess final {

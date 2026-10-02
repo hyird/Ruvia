@@ -2,6 +2,7 @@
 
 #include <array>
 #include <exception>
+#include <list>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -24,16 +25,23 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/detail/client/HttpClientAdvertisementQueue.h"
 #include "ruvia/web/detail/client/HttpClientConfigStorage.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
 #include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResultBudget.h"
 
+namespace ruvia {
+class Http1ClientResponseParser;
+class Http1RequestContentWriter;
+struct Http3MessageHead;
+}  // namespace ruvia
+
 namespace ruvia::detail {
 
 class Http3ClientBodyBudget;
 class Http3ClientConnection;
-class Http3QuicClientTlsContext;
+class http3_quic_client_tls_context;
 
 class HttpClientPool;
 using HttpClientOperationCancellationMailbox = WorkerCancellationMailbox<HttpClientPool>;
@@ -57,9 +65,15 @@ public:
 
     [[nodiscard]] Task<HttpClientResponse> execute(
         HttpClientRequestStorage request, OperationOptions options);
+    [[nodiscard]] Task<HttpClientExchange> openRequest(HttpClientRequestStorage request, HttpClientUploadConfig upload, OperationOptions options);
+    [[nodiscard]] Task<HttpClientTunnelResult> openTunnel(HttpClientRequestStorage request, HttpClientTunnelConfig config, OperationOptions options);
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
+    [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() {
+        return advertisements_.next();
+    }
+    [[nodiscard]] std::optional<HttpClientPush> nextPush();
     [[nodiscard]] std::string_view host() const noexcept {
         return config_.host;
     }
@@ -71,6 +85,9 @@ public:
 private:
     friend class WorkerCancellationMailbox<HttpClientPool>;
     friend class ::ruvia::HttpClientResponse;
+    friend class ::ruvia::HttpClientTunnel;
+    friend class ::ruvia::HttpClientExchange;
+    friend class ::ruvia::HttpClientPush;
     friend class HttpClientResponseState;
 
     enum class WireProtocol : std::uint8_t { kUnknown,
@@ -185,6 +202,21 @@ private:
         bool active_{true};
     };
 
+    struct Http2PushDriver final {
+        Http2PushDriver(HttpClientPool& owner, Connection& connection, HttpClientResponse response);
+        ~Http2PushDriver();
+        HttpClientPool& owner;
+        Connection& connection;
+        HttpClientResponse response;
+        OperationTimeout timeout;
+        Http2PendingStream pending;
+        bool registered{false};
+    };
+    [[nodiscard]] Task<void> runHttp2Push(std::unique_ptr<Http2PushDriver, PmrObjectDeleter<Http2PushDriver>> driver);
+    void acceptHttp2Push(Connection& connection, const Http2PushPromiseEvent& promise);
+    [[nodiscard]] HttpClientResponseState* acceptHttp3Push(std::size_t slot, Http3ClientConnection& connection,
+        std::uint64_t requestId, const Http3MessageHead& request) noexcept;
+
     struct Http3PendingCancellation final {
         std::uint64_t cancellationId{};
         Http3ClientConnection* connection{};
@@ -249,6 +281,13 @@ private:
         HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state);
     [[nodiscard]] Task<void> executeRequestInto(
         HttpClientRequestStorage request, OperationOptions options, HttpClientResponseState* state);
+    [[nodiscard]] Task<void> executeHttp1Tunnel(Connection& connection, HttpClientResponseState& state, const OperationTimeout& timeout);
+    [[nodiscard]] Task<void> executeHttp1Response(Connection& connection, const HttpClientRequestStorage& request,
+        const OperationTimeout& timeout, HttpClientResponse& response, Http1ClientResponseParser& parser);
+    [[nodiscard]] Task<void> writeHttp1Upload(Connection& connection, HttpClientResponseState& state,
+        const OperationTimeout& timeout, Http1RequestContentWriter writer, Http1ClientResponseParser& parser,
+        std::exception_ptr& failure);
+    [[nodiscard]] Task<void> writeUploadBytes(Connection& connection, std::string_view bytes, const OperationTimeout& timeout);
     [[nodiscard]] Task<void> executeHttp1(Connection& connection,
         const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
         HttpClientResponse& response);
@@ -275,6 +314,7 @@ private:
     [[nodiscard]] bool cookieCapacityAvailable(
         std::size_t replacedBytes, std::size_t replacementBytes, bool adding) const noexcept;
     void drainHttp2Events(Connection& connection);
+    void retainHttp2Advertisement(Connection& connection, const Http2Event& event);
     void failHttp2Session(Connection& connection, std::uint64_t generation,
         std::error_code transportError,
         const std::exception_ptr& failure = std::exception_ptr{}) noexcept;
@@ -283,6 +323,7 @@ private:
     void cancelHttp2Stream(
         Connection& connection, std::uint64_t requestId, AbortReason reason) noexcept;
     void abandonResponse(HttpClientResponseState& state) noexcept;
+    void reprioritize(HttpClientResponseState& state, HttpPriority priority);
     void releaseResponseData(HttpClientResponseState& state) noexcept;
     void removeHttp2Pending(Connection& connection, Http2PendingStream& pending) noexcept;
     [[nodiscard]] Task<void> waitForHttp2SessionStop(
@@ -291,6 +332,11 @@ private:
     const WorkerHandle& worker_;
     std::pmr::memory_resource* resource_;
     HttpClientConfigStorage config_;
+    HttpClientAdvertisementQueue advertisements_;
+    std::pmr::list<HttpClientPush> pushes_;
+    std::size_t activePushes_{};
+    std::size_t receivedPushes_{};
+    std::size_t rejectedPushes_{};
     std::shared_ptr<HttpClientResultBudgetDomain> resultBudgetDomain_;
     HttpClientResponseMemoryDomain::Owner responseMemory_{};
     asio::ssl::context tlsContext_;
@@ -298,7 +344,7 @@ private:
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<HttpClientOperationCancellationMailbox> cancellationMailbox_;
     TaskScope backgroundTasks_;
-    std::unique_ptr<Http3QuicClientTlsContext, PmrObjectDeleter<Http3QuicClientTlsContext>>
+    std::unique_ptr<http3_quic_client_tls_context, PmrObjectDeleter<http3_quic_client_tls_context>>
         http3Tls_;
     std::unique_ptr<Http3ClientBodyBudget, PmrObjectDeleter<Http3ClientBodyBudget>>
         http3BodyBudget_;

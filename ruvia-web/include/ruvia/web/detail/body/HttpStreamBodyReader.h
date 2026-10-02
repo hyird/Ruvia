@@ -17,6 +17,7 @@
 #include "ruvia/http/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/http/HttpTransferCodingDecoder.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/web/detail/body/HttpBodyBuffer.h"
@@ -38,6 +39,9 @@ public:
     StreamBodyReader& operator=(const StreamBodyReader&) = delete;
 
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept;
+    [[nodiscard]] const HttpRequestTrailers& trailers() const& noexcept {
+        return trailers_;
+    }
     // Hands the pipelined suffix -- the bytes of the next request that arrived
     // in the same segment -- to `stash`, and drops this reader's claim on them.
     // The connection read buffer is deliberately untouched: every view in the
@@ -74,6 +78,7 @@ private:
     Http1RequestBodyPlan bodyPlan_;
     ProtocolByteLimit bodyLimit_;
     Http1ChunkedBodyDecoder chunkDecoder_;
+    HttpRequestTrailers trailers_;
     ruvia::ConnectionScanner::Entry& scannerEntry_;
     std::size_t readCursor_{0};
     std::size_t pendingCompactUntil_{0};

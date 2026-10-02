@@ -52,8 +52,10 @@ Http3WorkerServer::Http3WorkerServer(ruvia::WorkerRuntimeContext& runtime,
       bodyBudget_(kWorkerBodyBudgetBytes),
       retirementTasks_(worker_, {.resource = memory.resource()}),
       slots_(memory.resource()),
+      pendingInput_(memory.resource()),
       maxConnections_(maxConnections) {
     slots_.reserve(maxConnections_);
+    pendingInput_.resize(mailboxCapacity);
     for (std::size_t i = 0; i < maxConnections_; ++i) {
         slots_.emplace_back(memory.resource());
     }
@@ -88,7 +90,7 @@ void Http3WorkerServer::activationWake(void* context) noexcept {
 
 bool Http3WorkerServer::stageInstall(Install link) noexcept {
     if (staged_ || link.requestMailbox == nullptr ||
-        link.channels.size() != slots_.size() || link.networkWake.context == nullptr ||
+        link.channels.size() != slots_.size() || link.requestMailbox->blockCapacity() > pendingInput_.size() || link.networkWake.context == nullptr ||
         link.networkWake.notify == nullptr) {
         return false;
     }
@@ -207,6 +209,10 @@ void Http3WorkerServer::requestStop() noexcept {
         return;
     }
     stopping_ = true;
+    for (auto& pending : pendingInput_) {
+        pending.block.release();
+    }
+    pendingInputCount_ = 0;
     for (auto& slot : slots_) {
         if (slot.channel != nullptr) {
             const auto sealed = slot.channel->stopGrantPublication();
@@ -275,6 +281,24 @@ bool Http3WorkerServer::pump() noexcept {
     bool progress = false;
     progress = pumpChannels() || progress;
     progress = pumpInput() || progress;
+    for (auto& slot : slots_) {
+        if (!slot.connection || slot.retirementStarted || !slot.channel) {
+            continue;
+        }
+        Http3ServerConnectionChannel::Datagram datagram;
+        for (std::size_t pass = 0; pass < 16; ++pass) {
+            if (slot.channel->receiveRequestDatagram(datagram) != Http3ServerConnectionChannel::Status::kReceived) {
+                break;
+            }
+            slot.connection->receiveDatagram(std::span(datagram.bytes).first(datagram.size));
+            progress = true;
+        }
+    }
+    for (auto& slot : slots_) {
+        if (slot.connection && !slot.retirementStarted) {
+            progress = slot.connection->resumeQpackInput() || progress;
+        }
+    }
     progress = pumpScheduler() || progress;
     progress = publishDrainCompletions() || progress;
     if (scheduler_->takeLocalWakeObligation()) {
@@ -357,7 +381,7 @@ bool Http3WorkerServer::pumpChannels() noexcept {
         while (slot.channel->receiveIntentAck(intentAck) ==
                Http3ServerConnectionChannel::Status::kReceived) {
             progress = true;
-            if (!scheduler_->acknowledgeIntent(slot.registration.token, intentAck.token)) {
+            if (!scheduler_->acknowledgeIntent(slot.registration.token, intentAck.token, intentAck.pushStream)) {
                 std::terminate();
             }
         }
@@ -442,6 +466,44 @@ bool Http3WorkerServer::pumpInput() noexcept {
         return false;
     }
     bool progress = false;
+    const auto sameStream = [](const Http3StreamMessageId& a, const Http3StreamMessageId& b) noexcept {
+        return a.epoch == b.epoch && a.connectionGeneration == b.connectionGeneration && a.streamId == b.streamId;
+    };
+    const auto consume = [this, &progress](Http3StreamMailbox::BorrowedBlock& block) noexcept {
+        auto* slot = findSlot(block.id());
+        if (stopping_ || slot == nullptr || slot->connection == nullptr) {
+            block.release();
+            progress = true;
+            return;
+        }
+        if (!slot->connection->canAcceptInput(block.id().streamId, block.bytes().size())) {
+            return;
+        }
+        const auto result = slot->connection->acceptData(block);
+        block.release();
+        progress = true;
+        if (result.connectionCloseRequired) {
+            (void)slot->connection->requestStop();
+            beginSlotRetirement(*slot);
+        }
+    };
+    for (auto& pending : pendingInput_) {
+        if (pendingInputCount_ == 0) {
+            break;
+        }
+        if (!pending.block) {
+            continue;
+        }
+        const bool earlier = std::ranges::any_of(pendingInput_, [&](const PendingInput& other) {
+            return other.block && other.sequence < pending.sequence && sameStream(other.block.id(), pending.block.id());
+        });
+        if (!earlier) {
+            consume(pending.block);
+            if (!pending.block) {
+                --pendingInputCount_;
+            }
+        }
+    }
     for (std::size_t count = 0; count < kMailboxPumpBudget;) {
         bool received = false;
         Http3StreamControl control;
@@ -462,14 +524,21 @@ bool Http3WorkerServer::pumpInput() noexcept {
             received = true;
             progress = true;
             ++count;
-            if (auto* slot = findSlot(block.id()); slot != nullptr && slot->connection != nullptr) {
-                const auto result = slot->connection->acceptData(block);
-                if (result.connectionCloseRequired) {
-                    (void)slot->connection->requestStop();
-                    beginSlotRetirement(*slot);
-                }
+            const bool earlier = pendingInputCount_ != 0 && std::ranges::any_of(pendingInput_, [&](const PendingInput& pending) {
+                return pending.block && sameStream(pending.block.id(), block.id());
+            });
+            if (!earlier) {
+                consume(block);
             }
-            block.release();
+            if (block) {
+                auto free = std::ranges::find_if(pendingInput_, [](const PendingInput& pending) { return !pending.block; });
+                if (free == pendingInput_.end() || nextInputSequence_ == (std::numeric_limits<std::uint64_t>::max)()) {
+                    std::terminate();
+                }
+                free->block = std::move(block);
+                free->sequence = nextInputSequence_++;
+                ++pendingInputCount_;
+            }
         }
         if (!received) {
             break;
@@ -581,12 +650,22 @@ bool Http3WorkerServer::constructConnection(
             .connectionGeneration = bind.identity.connectionGeneration,
             .session = {
                 .maxBufferedBodyBytes = options_.maxBufferedBodyBytes,
+                .maxStreamBodyBytes = options_.maxStreamBodyBytes,
                 .maxLiveStreams = maxTrackedStreams,
                 .maxBufferedBytesInFlight = kWorkerBodyBudgetBytes,
+                .connection = {.maxActiveStreams = maxTrackedStreams, .qpackMaxTableCapacity = static_cast<std::size_t>(bind.settings.qpackMaxTableCapacity), .qpackBlockedStreams = static_cast<std::size_t>(bind.settings.qpackBlockedStreams), .enableConnectProtocol = bind.settings.enableConnectProtocol, .enableDatagrams = bind.settings.h3Datagram},
+                .maxQuicDatagramPayloadBytes = bind.maxQuicDatagramPayloadBytes,
             },
             .maxTrackedStreams = maxTrackedStreams,
             .connectionScanner = &connectionScanner_,
             .executor = executor_,
+            .datagramOutput = {.context = &slot, .send = [](void* raw, std::uint64_t streamId, std::span<const std::byte> bytes) {
+                                   auto& output_slot = *static_cast<Slot*>(raw);
+                                   if (!output_slot.channel || output_slot.retirementStarted || output_slot.transportRetired || output_slot.workerPublicationsClosed) {
+                                       throw std::runtime_error("HTTP Datagram connection is closed");
+                                   }
+                                   static_cast<void>(output_slot.channel->publishResponseDatagram(output_slot.identity, streamId, bytes));
+                               }},
         };
         slot.connection = makePmrObject<Http3ServerConnection>(memory_.resource(), routes_,
             memory_, services, options_, responseMailbox_, slot.registration.activation,
@@ -673,6 +752,18 @@ bool Http3WorkerServer::finalizeWorkerPublications(Slot& slot) noexcept {
     return progress;
 }
 
+Task<void> Http3WorkerServer::join_retired_slot(Slot& slot) {
+    co_await slot.connection->join();
+    if (!scheduler_ || !scheduler_->retire(slot.registration.token)) {
+        std::terminate();
+    }
+    slot.connection.reset();
+    activeConnections_.fetch_sub(1, std::memory_order_relaxed);
+    slot.transportRetired = false;
+    slot.workerRetirementComplete = true;
+    (void)notification_.notify();
+}
+
 void Http3WorkerServer::finishStoppedSlots() noexcept {
     if (!scheduler_) {
         return;
@@ -680,22 +771,12 @@ void Http3WorkerServer::finishStoppedSlots() noexcept {
     for (auto& slot : slots_) {
         if (slot.connection == nullptr || !slot.retirementStarted ||
             !slot.transportRetired || slot.retirementTaskStarted ||
-            slot.connection->activeTaskCount() != 0) {
+            slot.connection->pendingTransportIntentCount() != 0) {
             continue;
         }
         slot.retirementTaskStarted = true;
         try {
-            retirementTasks_.spawn([this, &slot]() -> Task<void> {
-                co_await slot.connection->join();
-                if (!scheduler_ || !scheduler_->retire(slot.registration.token)) {
-                    std::terminate();
-                }
-                slot.connection.reset();
-                activeConnections_.fetch_sub(1, std::memory_order_relaxed);
-                slot.transportRetired = false;
-                slot.workerRetirementComplete = true;
-                (void)notification_.notify();
-            }());
+            retirementTasks_.spawn(join_retired_slot(slot));
         } catch (...) {
             std::terminate();
         }

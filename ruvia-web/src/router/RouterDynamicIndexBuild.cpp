@@ -12,6 +12,8 @@ void detail::RouteTable::buildDynamicRoutes() {
     auto& plan = *ownedPlan_;
     plan.dynamicMethodMask_ = 0;
     plan.dynamicNodeArena_.clear();
+    plan.connectProtocols_.clear();
+    plan.connectProtocols_.reserve(plan.connectRouteIndices_.size());
     for (auto& root : plan.dynamicRoots_) {
         root = DynamicNode(plan.resource_);
     }
@@ -27,10 +29,20 @@ void detail::RouteTable::buildDynamicRoutes() {
 
     for (std::size_t routeIndex = 0; routeIndex < routes_.size(); ++routeIndex) {
         auto& route = routes_[routeIndex];
-        if (route.dynamic()) {
+        if (route.dynamic() && route.endpoint().tunnel() != nullptr) {
+            const auto protocol = route.endpoint().tunnel()->protocol();
+            auto found = std::ranges::find(plan.connectProtocols_, protocol, &CompiledRoutePlan::ConnectProtocolIndex::protocol);
+            if (found == plan.connectProtocols_.end()) {
+                found = plan.connectProtocols_.emplace(plan.connectProtocols_.end(), plan.resource_, protocol);
+            }
+            insertDynamic(found->root, route, routeIndex);
+        } else if (route.dynamic()) {
             plan.dynamicMethodMask_ |= 1U << methodIndex(route.method());
             insertDynamic(plan.dynamicRoots_[methodIndex(route.method())], route, routeIndex);
         }
+    }
+    for (auto& protocol : plan.connectProtocols_) {
+        sortDynamicNode(protocol.root);
     }
     for (auto& root : plan.dynamicRoots_) {
         sortDynamicNode(root);

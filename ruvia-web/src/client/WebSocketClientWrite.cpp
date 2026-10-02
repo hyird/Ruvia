@@ -38,6 +38,23 @@ Task<void> WebSocketClientState::writeTransport(
         co_return;
     }
     arm(writeTimer_, configuredTimeout, AbortReason::kTimeout);
+    try {
+        if (http3_) {
+            co_await http3_->write(bytes);
+        } else if (http2_) {
+            co_await http2_->write(bytes);
+        } else {
+            co_await writeSocket(bytes);
+        }
+        disarm(writeTimer_);
+        throwAbort();
+    } catch (...) {
+        disarm(writeTimer_);
+        throw;
+    }
+}
+
+Task<void> WebSocketClientState::writeSocket(std::string_view bytes) {
     auto initiateWrite = [this, bytes](auto handler) {
         if (config_.scheme == WebSocketScheme::kWss) {
             asio::async_write(stream_, asio::buffer(bytes), std::move(handler));
@@ -46,7 +63,6 @@ Task<void> WebSocketClientState::writeTransport(
         }
     };
     const auto completion = co_await ruvia::asyncAsio<std::size_t>(std::move(initiateWrite));
-    disarm(writeTimer_);
     throwAbort();
     if (completion.errorCode()) {
         throw WebSocketClientError(
@@ -68,6 +84,11 @@ Task<void> WebSocketClientState::flushOutput() {
             continue;
         }
         if (plan.disposition() == WebSocketTransportDisposition::kEndTransport) {
+            if (http3_) {
+                co_await http3_->finish();
+            } else if (http2_) {
+                co_await http2_->finish();
+            }
             protocol.commitTransportEnd();
             closeOnWorker(AbortReason::kNone);
         }
@@ -94,18 +115,18 @@ Task<void> WebSocketClientState::throwProtocolErrorAfterFlush(
 }
 
 ScopedOperation<void> WebSocketClientState::write(
-    WebSocketOpcode opcode, std::string_view payload, OperationOptions options) {
+    WebSocketOpcode opcode, std::string_view payload, OperationOptions options, WebSocketSendOptions sendOptions) {
     validateOperationOptions(options);
     requireCurrent();
     std::pmr::string owned(payload, memory_.resource());
     return makeScopedOperation(operationScope_,
-        writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options),
+        writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options), sendOptions,
             ActivityLease(writeActive_, "concurrent WebSocket client writes are not supported")),
         &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state,
-    WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options,
+    WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, WebSocketSendOptions sendOptions,
     ActivityLease activity) {
     static_cast<void>(activity);
     state->requireOpen();
@@ -113,7 +134,7 @@ Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState
     co_await state->waitForWriteIdle();
     state->requireOpen();
     WriteGuard writeGuard(*state, WritePhase::kApplication);
-    const auto submitted = state->requireProtocol().submitFrame(opcode, payload);
+    const auto submitted = state->requireProtocol().submitFrame(opcode, payload, sendOptions.compress);
     switch (submitted) {
         case WebSocketFrameSubmitStatus::kAccepted:
             break;

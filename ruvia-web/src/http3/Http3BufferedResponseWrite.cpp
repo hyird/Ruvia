@@ -43,13 +43,31 @@ Http3BufferedResponseWrite::create(const HttpResponse& response,
     if (response.fileBody() && writePlan.sendBody() && writePlan.contentLength() != 0) {
         return std::unexpected(Error::kFileBodyUnsupported);
     }
-
     try {
-        Http3BufferedResponseWrite cursor(workerPool);
-        auto encoded = encodeHttp3ResponseHead(response, writePlan, {}, cursor.workerPool_);
+        auto encoded = encodeHttp3ResponseHead(response, writePlan, {}, workerPool);
         if (!encoded) {
             return std::unexpected(Error::kResponseEncoding);
         }
+        return create(response, writePlan, std::move(*encoded), workerPool);
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(Error::kOutOfMemory);
+    } catch (...) {
+        return std::unexpected(Error::kResponseEncoding);
+    }
+}
+
+std::expected<Http3BufferedResponseWrite, Http3BufferedResponseWrite::Error>
+Http3BufferedResponseWrite::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan,
+    Http3ResponseHead encodedHead, std::pmr::memory_resource* workerPool) noexcept {
+    if (!writePlan.matchesResponse(response)) {
+        return std::unexpected(Error::kInvalidResponsePlan);
+    }
+    if (response.fileBody() && writePlan.sendBody() && writePlan.contentLength() != 0) {
+        return std::unexpected(Error::kFileBodyUnsupported);
+    }
+    try {
+        Http3BufferedResponseWrite cursor(workerPool);
+        const auto* encoded = &encodedHead;
         cursor.decodedFieldSectionSize_ = encoded->decodedFieldSectionSize();
         if (encoded->fieldSection.size() > std::numeric_limits<std::size_t>::max() -
                                                kHttp3FrameHeaderMaxBytes) {

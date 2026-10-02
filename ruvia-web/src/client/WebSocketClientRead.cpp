@@ -83,6 +83,18 @@ Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
 Task<std::size_t> WebSocketClientState::readTransport(
     std::span<char> output, std::optional<std::chrono::milliseconds> configuredTimeout) {
     arm(readTimer_, configuredTimeout, AbortReason::kTimeout);
+    try {
+        const auto count = http3_ ? co_await http3_->read(output) : (http2_ ? co_await http2_->read(output) : co_await readSocket(output));
+        disarm(readTimer_);
+        throwAbort();
+        co_return count;
+    } catch (...) {
+        disarm(readTimer_);
+        throw;
+    }
+}
+
+Task<std::size_t> WebSocketClientState::readSocket(std::span<char> output) {
     auto initiateRead = [this, output](auto handler) {
         if (config_.scheme == WebSocketScheme::kWss) {
             stream_.async_read_some(asio::buffer(output.data(), output.size()), std::move(handler));
@@ -92,7 +104,6 @@ Task<std::size_t> WebSocketClientState::readTransport(
         }
     };
     const auto completion = co_await ruvia::asyncAsio<std::size_t>(std::move(initiateRead));
-    disarm(readTimer_);
     throwAbort();
     if (completion.errorCode() == asio::error::eof ||
         completion.errorCode() == asio::ssl::error::stream_truncated) {

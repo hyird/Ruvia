@@ -57,6 +57,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
             services, *this, errorHandlerFor(request.path()), notFoundHandlerFor(request.path())));
     const auto* responseStreamOutput = services.responseOutput().responseStream();
     const bool webSocketRoute = route.endpoint().webSocket() != nullptr;
+    const bool tunnelRoute = route.endpoint().tunnel() != nullptr;
     ResponseStreamContextBinding streamContextBinding(
         responseStreamOutput != nullptr ? &responseStreamOutput->writer() : nullptr);
     if (responseStreamOutput != nullptr) {
@@ -111,6 +112,7 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
             co_return std::nullopt;
         }
         if ((webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) ||
+            (tunnelRoute && detail::ContextAccess::tunnelHandshakeStarted(context)) ||
             (responseStreamOutput != nullptr &&
                 detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);
@@ -127,8 +129,8 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     // the stream with a clean terminator would frame a truncated body as complete.
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
-    if ((webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) || (responseStreamOutput != nullptr &&
-                                                                                             detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
+    if ((webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) ||
+        (tunnelRoute && detail::ContextAccess::tunnelHandshakeStarted(context)) || (responseStreamOutput != nullptr && detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
         if (auto contextException = context.exception()) {
             std::rethrow_exception(contextException);
         }
@@ -137,7 +139,8 @@ Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     const bool streamCommitted = responseStreamOutput != nullptr &&
                                  detail::StreamingAccess::committed(responseStreamOutput->writer());
     const bool handlerInvoked = middlewareChain.handlerInvoked();
-    const bool webSocketHandled = webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context);
+    const bool webSocketHandled = (webSocketRoute && detail::ContextAccess::webSocketHandshakeStarted(context)) ||
+                                  (tunnelRoute && detail::ContextAccess::tunnelHandshakeStarted(context));
     // Middleware may replace an uncommitted response stream with a buffered
     // response after `next()`. A WebSocket terminal can still fail during
     // handshake preparation; only a started handshake prevents HTTP recovery.

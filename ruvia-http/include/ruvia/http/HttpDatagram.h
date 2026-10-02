@@ -46,6 +46,11 @@ enum class HttpCapsuleStatus : std::uint8_t { kNeedMoreData,
     kEnd,
     kTruncated,
     kLimit };
+struct HttpCapsuleFeedResult final {
+    HttpCapsuleStatus status{HttpCapsuleStatus::kNeedMoreData};
+    std::size_t consumedBytes{};
+    bool capsuleComplete{};
+};
 struct HttpCapsuleConfig final {
     std::uint64_t maxCapsuleLength{16 * 1024 * 1024};
 };
@@ -58,8 +63,13 @@ class HttpCapsuleDecoder final {
 public:
     explicit HttpCapsuleDecoder(HttpCapsuleConfig config = {});
     [[nodiscard]] HttpCapsuleStatus feed(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context);
+    // Stops at the first complete capsule. The unconsumed suffix stays with the
+    // caller; FIN is committed only after all input is consumed. This permits
+    // pull-based adapters without buffering a queue of complete capsules.
+    [[nodiscard]] HttpCapsuleFeedResult feedOne(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context);
 
 private:
+    [[nodiscard]] HttpCapsuleFeedResult feedImpl(std::span<const char> input, bool fin, HttpCapsuleCallback callback, void* context, bool one);
     HttpCapsuleConfig config_;
     std::array<char, 16> header_{};
     std::size_t headerSize_{0}, typeSize_{0};
@@ -86,13 +96,33 @@ struct HttpDatagramSessionConfig final {
     // Maximum QUIC DATAGRAM payload, after transport frame overhead is removed.
     std::size_t maxQuicPayloadBytes{0};
 };
+enum class Http3DatagramReceiveStatus : std::uint8_t { kDeliver,
+    kDrop,
+    kStreamError,
+    kConnectionError };
+struct Http3DatagramReceiveContext final {
+    bool localH3Datagram{};
+    bool streamExists{};
+    bool receiveOpen{};
+    bool supportsDatagrams{};
+};
+// RFC 9297: closed/uncreated streams drop packets; a known request without
+// datagram semantics is aborted. SETTINGS arrival may race unreliable packets.
+[[nodiscard]] Http3DatagramReceiveStatus planHttp3DatagramReceive(
+    Http3DatagramView datagram, Http3DatagramReceiveContext context) noexcept;
+struct HttpDatagramWritePlan final {
+    std::array<char, 16> prefix{};
+    std::size_t prefixSize{};
+    std::span<const char> payload{};
+    HttpDatagramTransport transport{HttpDatagramTransport::kCapsule};
+};
 struct HttpUdpDatagramWritePlan final {
     std::array<char, 24> prefix{};
     std::size_t prefixSize{0};
     std::span<const char> payload{};
     HttpDatagramTransport transport{HttpDatagramTransport::kCapsule};
 };
-// One accepted CONNECT-UDP tunnel. Construct after request negotiation (clients
+// One accepted HTTP Datagram channel, with optional CONNECT-UDP semantics. Construct after request negotiation (clients
 // may optimistically send before the response). Owns no memory or transport.
 // Returned payloads borrow caller input; unknown context IDs are dropped.
 class HttpDatagramSession final {
@@ -105,6 +135,10 @@ public:
     void closeReceive() noexcept {
         receiveOpen_ = false;
     }
+    [[nodiscard]] std::expected<HttpDatagramWritePlan, HttpDatagramError> prepareDatagram(
+        std::span<const char> payload, HttpDatagramTransport transport) const noexcept;
+    [[nodiscard]] std::expected<std::optional<std::span<const char>>, HttpDatagramError> receiveDatagram(
+        std::span<const char> input, HttpDatagramTransport transport) const noexcept;
     [[nodiscard]] std::expected<HttpUdpDatagramWritePlan, HttpDatagramError> prepareUdpDatagram(
         std::span<const char> payload, HttpDatagramTransport transport) const noexcept;
     // Capsule input is the complete DATAGRAM capsule value, excluding type/length.

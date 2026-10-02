@@ -789,6 +789,8 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string body;
+    bool trailersObserved = false;
+    bool earlyHintsObserved = false;
 
     asio::co_spawn(
         io,
@@ -799,10 +801,13 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(ruvia::HttpKnownMethod::kPost,
                 std::pmr::string("/echo", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &echoHandler),
-                ruvia::detail::RequestBodyMode::kBuffered,
-                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
-                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+                ruvia::detail::RouteHandler(&trailersObserved, [](void* raw, ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+                    *static_cast<bool*>(raw) = context.req().trailer("x-checksum") == "abc" && !context.req().header("x-checksum") && context.req().trailers().size() == 1;
+                    const std::array fields{ruvia::HttpHeaderView("Link", std::string_view("</style.css>; rel=preload"))};
+                    co_await context.inform(ruvia::HttpInterimResponseHead(ruvia::http_status::kEarlyHints, fields));
+                    co_return context.text("handler-ran");
+                }),
+                ruvia::detail::RequestBodyMode::kBuffered, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{}, std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             co_await ruvia::asAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
@@ -854,6 +859,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 co_return;
             }
 
+            ruvia::HpackDecoder decoder({.resource = std::pmr::get_default_resource()});
             for (;;) {
                 char hb[ruvia::kHttp2FrameHeaderBytes];
                 if (!co_await readExact(hb, sizeof(hb))) {
@@ -864,6 +870,14 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 std::string payload(header.length, '\0');
                 if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
                     break;
+                }
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) && header.streamId == 1) {
+                    HpackCollect fields;
+                    const auto decoded = decoder.decode(payload, [&fields](std::string_view name, std::string_view value) { return HpackCollect::onHeader(&fields, name, value); });
+                    RUVIA_CHECK(decoded.decoded());
+                    if (fields.joined.contains(":status=103;")) {
+                        earlyHintsObserved = fields.joined.contains("link=</style.css>; rel=preload;") && (header.flags & sansio_driver_test::kFlagEndStream) == 0;
+                    }
                 }
                 if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
                     header.streamId == 1 && !payload.empty()) {
@@ -877,6 +891,8 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
 
     io.run();
     RUVIA_CHECK(body == "handler-ran");  // trailers ended the request; handler dispatched
+    RUVIA_CHECK(trailersObserved);
+    RUVIA_CHECK(earlyHintsObserved);
 }
 
 RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {

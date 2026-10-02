@@ -7,13 +7,16 @@
 #include <optional>
 #include <span>
 
+#include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3ConnectionError.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3MessageBody.h"
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/Http3PeerStreams.h"
 #include "ruvia/http/Http3QpackConnection.h"
+#include "ruvia/http/Http3ResponseWriter.h"
 #include "ruvia/http/Http3Settings.h"
+#include "ruvia/http/HttpClientResponseHead.h"
 #include "ruvia/http/HttpConnectionAdvertisement.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpPriority.h"
@@ -34,6 +37,9 @@ enum class Http3ConnectionStatus : std::uint8_t {
 
 enum class Http3ConnectionEventKind : std::uint8_t {
     kPushPromise,
+    // A received push stream has decoded its Push ID. This can precede its
+    // promise; streamId is the physical server-initiated unidirectional stream.
+    kPushStream,
     kPushCanceled,
     kPriorityUpdate,
     kOriginAdvertisement,
@@ -59,12 +65,16 @@ struct Http3ConnectionEvent final {
     std::optional<std::uint64_t> pushId{};
     std::optional<HttpPriorityUpdate> priorityUpdate{};
     const HttpOriginAdvertisement* originAdvertisement{nullptr};
+    std::optional<HttpClientRequestContentSignal> requestContentSignal{};
 };
 
 using Http3ConnectionCallback = void (*)(void*, const Http3ConnectionEvent&);
 
 struct Http3ConnectionConfig final {
     std::size_t maxActiveStreams{128};
+    // Peer unidirectional streams include control/QPACK and are independent
+    // of the request/push concurrency budget.
+    std::size_t maxPeerUnidirectionalStreams{128};
     std::size_t maxFieldSectionSize{64 * 1024};
     std::size_t maxFields{256};
     std::size_t maxEncodedFieldSectionBytes{64 * 1024};
@@ -150,12 +160,28 @@ public:
     [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> prepareOriginAdvertisement(
         std::span<const std::string_view> origins);
     [[nodiscard]] std::optional<std::uint64_t> peerMaxPushId() const noexcept;
+    // Validated promise metadata, borrowed until connection retirement. Available
+    // to either role after preparing or receiving the complete PUSH_PROMISE.
+    [[nodiscard]] const Http3MessageHead* promisedRequest(std::uint64_t pushId) const& noexcept;
+    const Http3MessageHead* promisedRequest(std::uint64_t) const&& = delete;
 
     // Uses peer SETTINGS to encode a QPACK section for any local message or
     // promise. Before SETTINGS, only static/literal representations are used.
     // Message helpers validate HTTP semantics; this entry point owns compression.
     [[nodiscard]] std::expected<std::pmr::vector<char>, Http3QpackConnectionError> encodeFieldSection(
         std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields);
+    [[nodiscard]] std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> encodeClientRequestHead(
+        std::uint64_t streamId, Http3ClientRequestHeadView view, Http3FieldSectionLimits limits = {});
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId,
+        const HttpResponse& response, Http3FieldSectionLimits limits = {});
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId,
+        const HttpResponse& response, HttpBufferedResponseWritePlan plan, Http3FieldSectionLimits limits = {});
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId,
+        HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits = {});
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId,
+        const HttpInterimResponseHead& response, Http3FieldSectionLimits limits = {});
+    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId,
+        std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits = {});
     [[nodiscard]] std::span<const char> pendingQpackEncoderOutput() const& noexcept;
     std::span<const char> pendingQpackEncoderOutput() const&& = delete;
     [[nodiscard]] bool consumeQpackEncoderOutput(std::size_t bytes) noexcept;

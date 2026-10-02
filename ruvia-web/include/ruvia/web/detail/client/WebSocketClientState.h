@@ -23,6 +23,8 @@
 #include "ruvia/web/WebSocketClient.h"
 #include "ruvia/web/detail/client/ClientCloseState.h"
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
+#include "ruvia/web/detail/http2/WebSocketHttp2Transport.h"
+#include "ruvia/web/detail/http3/WebSocketHttp3Transport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
 namespace ruvia::detail {
@@ -46,11 +48,13 @@ public:
 
     [[nodiscard]] ScopedOperation<std::optional<WebSocketMessage>> read(OperationOptions options);
     [[nodiscard]] ScopedOperation<void> write(
-        WebSocketOpcode opcode, std::string_view payload, OperationOptions options);
+        WebSocketOpcode opcode, std::string_view payload, OperationOptions options, WebSocketSendOptions sendOptions = {});
     [[nodiscard]] ScopedOperation<void> close(
         WebSocketCloseOptions options, OperationOptions operationOptions);
 
 private:
+    friend class WebSocketHttp2Transport;
+    friend class WebSocketHttp3Transport;
     enum class Phase : std::uint8_t { kFresh,
         kConnecting,
         kOpen,
@@ -145,7 +149,7 @@ private:
         std::shared_ptr<WebSocketClientState> state, OperationOptions options,
         ActivityLease activity);
     [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state,
-        WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options,
+        WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, WebSocketSendOptions sendOptions,
         ActivityLease activity);
     [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state,
         WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions,
@@ -178,6 +182,8 @@ private:
     [[nodiscard]] Task<void> writeTransport(std::string_view bytes,
         std::optional<std::chrono::milliseconds> configuredTimeout);
     [[nodiscard]] Task<void> performHandshake();
+    [[nodiscard]] Task<std::size_t> readSocket(std::span<char> output);
+    [[nodiscard]] Task<void> writeSocket(std::string_view bytes);
     void arm(WorkerTimerRegistration& timer, std::optional<std::chrono::milliseconds> timeout,
         AbortReason reason);
     void disarm(WorkerTimerRegistration& timer) noexcept;
@@ -201,7 +207,10 @@ private:
     ClientCloseState closeState_;
     std::pmr::string input_;
     std::optional<ruvia::WebSocketConnection> protocol_;
+    std::optional<WebSocketHttp2Transport> http2_;
+    std::optional<WebSocketHttp3Transport> http3_;
     std::pmr::string selectedSubprotocol_;
+    WebSocketCompression negotiatedCompression_{};
     StopSource stopSource_;
     EventLoopStopRegistration stopRegistration_;
     std::atomic<Phase> phase_{Phase::kFresh};

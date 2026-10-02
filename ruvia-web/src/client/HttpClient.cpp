@@ -198,8 +198,20 @@ HttpClientHandle HttpClient::withOptions(OperationOptions options) const& {
     return state_->handle(std::move(options));
 }
 
+ScopedOperation<HttpClientExchange> HttpClient::openRequest(const HttpClientRequestView& head, HttpClientUploadConfig upload) const& {
+    return withOptions({}).openRequest(head, upload);
+}
+
 ScopedOperation<HttpClientResponse> HttpClient::send(const HttpClientRequestView& request) const& {
     return withOptions({}).send(request);
+}
+
+ScopedOperation<HttpClientTunnelResult> HttpClient::openUdpTunnel(const HttpClientUdpTunnelRequestView& request, HttpClientTunnelConfig config) const& {
+    return withOptions({}).openUdpTunnel(request, config);
+}
+
+ScopedOperation<HttpClientTunnelResult> HttpClient::openTunnel(const HttpClientTunnelRequestView& request, HttpClientTunnelConfig config) const& {
+    return withOptions({}).openTunnel(request, config);
 }
 
 void HttpClient::close() noexcept {
@@ -212,6 +224,13 @@ Task<void> HttpClient::shutdown() & {
 
 HttpClientStats HttpClient::stats() const {
     return state_->stats();
+}
+std::optional<HttpClientPush> HttpClient::nextPush() const& {
+    return withOptions({}).nextPush();
+}
+
+std::optional<HttpClientAdvertisement> HttpClient::nextAdvertisement() const& {
+    return withOptions({}).nextAdvertisement();
 }
 
 std::string_view HttpClient::host() const& {

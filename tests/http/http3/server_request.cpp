@@ -448,3 +448,36 @@ RUVIA_TEST(http3_server_request_copies_mixed_callback_head_resources) {
     }
     RUVIA_CHECK_EQ(requestResource.outstanding, 0U);
 }
+
+RUVIA_TEST(http3_server_request_expectation_plan_tracks_remaining_content_and_repeated_fields) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto head = makeGet(&resource);
+    head.method = "POST";
+    head.contentLength = 3;
+    head.headers.emplace_back("expect", "100-continue", &resource);
+    ruvia::Http3ServerRequest request(head, &resource, &resource);
+    const auto initial = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(initial.sendContinue() != nullptr);
+    const std::array bytes{std::byte{'a'}, std::byte{'b'}, std::byte{'c'}};
+    request.appendBody(bytes);
+    {
+        const auto complete = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+        RUVIA_CHECK(complete.noAction() != nullptr);
+    }
+    request.finishBody();
+    {
+        const auto complete = request.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+        RUVIA_CHECK(complete.noAction() != nullptr);
+    }
+    head.headers.emplace_back("expect", "custom-expectation", &resource);
+    ruvia::Http3ServerRequest unsupported(head, &resource, &resource);
+    const auto rejected = unsupported.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(rejected.rejection() != nullptr);
+    const auto ignored = unsupported.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kIgnore);
+    RUVIA_CHECK(ignored.sendContinue() != nullptr);
+    head.headers.pop_back();
+    head.contentLength = 0;
+    ruvia::Http3ServerRequest empty(head, &resource, &resource);
+    const auto emptyPlan = empty.expectationPlan(ruvia::HttpUnsupportedExpectationPolicy::kReject);
+    RUVIA_CHECK(emptyPlan.noAction() != nullptr);
+}

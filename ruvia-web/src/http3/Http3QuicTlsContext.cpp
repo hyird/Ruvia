@@ -11,26 +11,28 @@
 namespace ruvia::detail {
 namespace {
 
-void configureQuicTlsContext(SSL_CTX* context,
+void configure_quic_tls_context(SSL_CTX* context,
     const HttpServerListenerDefinition::TlsIdentity& identity,
     const std::optional<HttpServerListenerDefinition::TlsClientCertificatePolicy>&
-        clientCertificates,
-    int (*alpnCallback)(SSL*, const unsigned char**, unsigned char*, const unsigned char*,
+        client_certificates,
+    int (*alpn_callback)(SSL*, const unsigned char**, unsigned char*, const unsigned char*,
         unsigned int, void*) noexcept) {
     if (context == nullptr) {
         throw std::runtime_error("failed to create QUIC TLS context");
     }
-    // OpenSSL's QUIC method uses TLS 1.3 exclusively. Its min/max protocol
-    // setters can report success while the corresponding getters remain zero.
+    if (SSL_CTX_set_min_proto_version(context, TLS1_3_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(context, TLS1_3_VERSION) != 1) {
+        throw std::runtime_error("failed to configure QUIC TLS 1.3");
+    }
     SSL_CTX_set_options(context, SSL_OP_NO_COMPRESSION);
-    SSL_CTX_set_alpn_select_cb(context, alpnCallback, nullptr);
-    configureHttpServerTlsIdentity(context, identity, clientCertificates);
+    SSL_CTX_set_alpn_select_cb(context, alpn_callback, nullptr);
+    configureHttpServerTlsIdentity(context, identity, client_certificates);
     // Password callback data belongs to the input configuration; credentials are now loaded.
     SSL_CTX_set_default_passwd_cb(context, nullptr);
     SSL_CTX_set_default_passwd_cb_userdata(context, nullptr);
 }
 
-void configureIdentityContext(SSL_CTX* context,
+void configure_identity_context(SSL_CTX* context,
     const HttpServerListenerDefinition::TlsIdentity& identity) {
     if (context == nullptr) {
         throw std::runtime_error("failed to create QUIC SNI identity context");
@@ -43,63 +45,59 @@ void configureIdentityContext(SSL_CTX* context,
 
 }  // namespace
 
-Http3QuicTlsContext::Http3QuicTlsContext(const HttpServerListenerDefinition::Tls& tls,
+http3_quic_tls_context::http3_quic_tls_context(const HttpServerListenerDefinition::Tls& tls,
     std::pmr::memory_resource* resource)
-    : identityContexts_(pmrResourceOrDefault(resource)),
-      sniIdentities_(pmrResourceOrDefault(resource)) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    (void)tls;
-    throw std::runtime_error("QUIC server TLS requires OpenSSL 3.6 or newer");
-#else
-    identityContexts_.reserve(tls.sniIdentities.size());
-    sniIdentities_.reserve(tls.sniIdentities.size());
+    : identity_contexts_(pmrResourceOrDefault(resource)),
+      sni_identities_(pmrResourceOrDefault(resource)) {
+    const auto* const method = TLS_method();
+    identity_contexts_.reserve(tls.sniIdentities.size());
+    sni_identities_.reserve(tls.sniIdentities.size());
 
     for (const auto& configured : tls.sniIdentities) {
-        ContextOwner identityContext(SSL_CTX_new(OSSL_QUIC_server_method()));
-        configureIdentityContext(identityContext.get(), configured.identity);
-        SSL_CTX* const rawContext = identityContext.get();
-        X509* const certificate = SSL_CTX_get0_certificate(rawContext);
-        EVP_PKEY* const privateKey = SSL_CTX_get0_privatekey(rawContext);
+        context_owner identity_context(SSL_CTX_new(method));
+        configure_identity_context(identity_context.get(), configured.identity);
+        SSL_CTX* const raw_context = identity_context.get();
+        X509* const certificate = SSL_CTX_get0_certificate(raw_context);
+        EVP_PKEY* const private_key = SSL_CTX_get0_privatekey(raw_context);
         STACK_OF(X509)* chain = nullptr;
-        if (certificate == nullptr || privateKey == nullptr ||
-            SSL_CTX_get0_chain_certs(rawContext, &chain) != 1) {
+        if (certificate == nullptr || private_key == nullptr ||
+            SSL_CTX_get0_chain_certs(raw_context, &chain) != 1) {
             throw std::runtime_error("failed to preload QUIC SNI certificate identity");
         }
-        identityContexts_.push_back(std::move(identityContext));
-        sniIdentities_.push_back(
-            SniIdentity{std::pmr::string(configured.host, sniIdentities_.get_allocator().resource()),
-                rawContext, certificate, privateKey, chain});
+        identity_contexts_.push_back(std::move(identity_context));
+        sni_identities_.push_back(
+            sni_identity{std::pmr::string(configured.host, sni_identities_.get_allocator().resource()),
+                raw_context, certificate, private_key, chain});
     }
 
-    ContextOwner defaultContext(SSL_CTX_new(OSSL_QUIC_server_method()));
-    configureQuicTlsContext(defaultContext.get(), tls.identity, tls.clientCertificates,
-        &selectAlpnProtocol);
-    defaultContext_ = defaultContext.get();
-    SSL_CTX_set_cert_cb(defaultContext_, &selectCertificate, this);
+    context_owner default_context(SSL_CTX_new(method));
+    configure_quic_tls_context(default_context.get(), tls.identity, tls.clientCertificates,
+        &select_alpn_protocol);
+    default_context_ = default_context.get();
+    SSL_CTX_set_cert_cb(default_context_, &select_certificate, this);
     // SSL objects and active QUIC connections borrow this context's cert callback
-    // argument, and SNI cert_cb copies from identityContexts_; all must stay alive.
-    defaultContextOwner_ = std::move(defaultContext);
-#endif
+    // argument, and SNI cert_cb copies from identity_contexts_; all must stay alive.
+    default_context_owner_ = std::move(default_context);
 }
 
-Http3QuicTlsContext::~Http3QuicTlsContext() = default;
+http3_quic_tls_context::~http3_quic_tls_context() = default;
 
-void Http3QuicTlsContext::ContextDeleter::operator()(SSL_CTX* context) const noexcept {
+void http3_quic_tls_context::context_deleter::operator()(SSL_CTX* context) const noexcept {
     SSL_CTX_free(context);
 }
 
-int Http3QuicTlsContext::selectCertificate(SSL* ssl, void* argument) noexcept {
+int http3_quic_tls_context::select_certificate(SSL* ssl, void* argument) noexcept {
     if (ssl == nullptr || argument == nullptr) {
         return 0;
     }
-    const char* const serverName = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
-    if (serverName == nullptr) {
+    const char* const server_name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (server_name == nullptr) {
         return 1;
     }
 
-    const auto& owner = *static_cast<const Http3QuicTlsContext*>(argument);
-    for (const auto& entry : owner.sniIdentities_) {
-        if (!httpAsciiEqualsIgnoreCase(entry.host, serverName)) {
+    const auto& owner = *static_cast<const http3_quic_tls_context*>(argument);
+    for (const auto& entry : owner.sni_identities_) {
+        if (!httpAsciiEqualsIgnoreCase(entry.host, server_name)) {
             continue;
         }
 
@@ -107,25 +105,25 @@ int Http3QuicTlsContext::selectCertificate(SSL* ssl, void* argument) noexcept {
         // remains owned for the lifetime of this callback. OpenSSL retains what
         // it needs on the SSL object; the helper context continues owning the chain.
         return SSL_use_cert_and_key(
-                   ssl, entry.certificate, entry.privateKey, entry.chain, 1) == 1
+                   ssl, entry.certificate, entry.private_key, entry.chain, 1) == 1
                    ? 1
                    : 0;
     }
     return 1;
 }
 
-int Http3QuicTlsContext::selectAlpnProtocol(SSL*, const unsigned char** output,
-    unsigned char* outputLength, const unsigned char* input, unsigned int inputLength,
+int http3_quic_tls_context::select_alpn_protocol(SSL*, const unsigned char** output,
+    unsigned char* output_length, const unsigned char* input, unsigned int input_length,
     void*) noexcept {
     constexpr unsigned char h3[] = {'h', '3'};
-    for (unsigned int offset = 0; offset < inputLength;) {
+    for (unsigned int offset = 0; offset < input_length;) {
         const unsigned int length = input[offset++];
-        if (length > inputLength - offset) {
+        if (length > input_length - offset) {
             return SSL_TLSEXT_ERR_ALERT_FATAL;
         }
         if (length == sizeof(h3) && input[offset] == h3[0] && input[offset + 1] == h3[1]) {
             *output = input + offset;
-            *outputLength = static_cast<unsigned char>(sizeof(h3));
+            *output_length = static_cast<unsigned char>(sizeof(h3));
             return SSL_TLSEXT_ERR_OK;
         }
         offset += length;

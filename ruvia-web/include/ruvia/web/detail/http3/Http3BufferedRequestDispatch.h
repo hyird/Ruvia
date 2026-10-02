@@ -18,13 +18,18 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/WebSocketProtocolTypes.h"
+#include "ruvia/web/Streaming.h"
+#include "ruvia/web/detail/http/HttpDatagramInput.h"
+#include "ruvia/web/detail/http/HttpStreamReadResult.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
+#include "ruvia/web/detail/http/context/HttpConnectionAdvertisementOutput.h"
+#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
+#include "ruvia/web/detail/http/context/HttpPushOutput.h"
 #include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 #include "ruvia/web/detail/http3/Http3StreamMailbox.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/RequestDeadline.h"
-#include "ruvia/web/detail/websocket/WsTransportReadResult.h"
 
 namespace ruvia::detail {
 
@@ -35,9 +40,12 @@ struct Http3TunnelCallbacks final {
     bool (*attachScanner)(void*, std::uint64_t, ConnectionScanner::Entry&) noexcept {};
     void (*outputReady)(void*, std::uint64_t) noexcept {};
     void (*abort)(void*, std::uint64_t) noexcept {};
+    void (*inputConsumed)(void*) noexcept {};
+    Task<bool> (*push)(void*, std::uint64_t, HttpPushRequestView){};
+    void (*sendDatagram)(void*, std::uint64_t, std::span<const std::byte>){};
 };
 
-// Worker-affine owner for one buffered HTTP/3 request or WebSocket tunnel. It
+// Worker-affine owner for one HTTP/3 request or WebSocket tunnel. It
 // pins the session request while routing, response preparation and bounded
 // publication run; it does not own or expose the session stream's private memory.
 //
@@ -72,6 +80,7 @@ public:
         kCancelled,
         kFilePayloadUnsupported,
         kTunnelComplete,
+        kOutputComplete,
         kFailed,
     };
 
@@ -128,7 +137,7 @@ public:
         WorkerMemory& worker, ContextServices services, const HttpServerOptions& options,
         Http3StreamMailbox& outbound, Http3StreamMessageId messageId,
         ConnectionScanner::Entry& scannerEntry, asio::any_io_executor executor,
-        Http3TunnelCallbacks tunnelCallbacks);
+        Http3TunnelCallbacks tunnelCallbacks, std::uint64_t responsePreludeBytes = 0);
     ~Http3BufferedRequestDispatch();
     Http3BufferedRequestDispatch(const Http3BufferedRequestDispatch&) = delete;
     Http3BufferedRequestDispatch& operator=(const Http3BufferedRequestDispatch&) = delete;
@@ -137,6 +146,12 @@ public:
 
     // Both tasks are lazy. The first actual start acquires the request lease;
     // constructing and discarding either cold task changes no session state.
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers) {
+        return session_.encodeStreamingResponseHead(messageId_.streamId, std::move(response), method, kind, trailers);
+    }
+    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {
+        return session_.encodeResponseTrailers(messageId_.streamId, fields);
+    }
     [[nodiscard]] Task<PrepareStatus> prepare() &;
     Task<PrepareStatus> prepare() && = delete;
     [[nodiscard]] Task<RunStatus> runHandler() &;
@@ -175,10 +190,25 @@ public:
 
     [[nodiscard]] Task<std::error_code> publishTunnelHandshake(
         std::span<const char> headersFrame);
+    void commitFinalResponse() {
+        interimOutput_.commitFinal();
+    }
+    [[nodiscard]] Task<void> publishResponseFrame(std::uint64_t type, std::span<const char> payload);
+    [[nodiscard]] Task<void> publishResponseBytes(std::span<const char> bytes);
+    [[nodiscard]] Task<void> finishResponse();
+    [[nodiscard]] bool responseAborted() const noexcept {
+        return cancellationRequested() || tunnelAborted_;
+    }
+    [[nodiscard]] bool responseFieldSectionAllowed(std::size_t decodedSize) const noexcept;
     void notifyTunnelInput() noexcept;
-    [[nodiscard]] Task<WsTransportReadResult> readTunnel(std::pmr::string& buffer);
+    [[nodiscard]] Task<HttpStreamReadResult> readTunnel(std::pmr::string& buffer);
+    [[nodiscard]] Task<std::optional<HttpDatagramInput>> readDatagramInput();
+    [[nodiscard]] HttpDatagramSessionConfig datagramConfig() const {
+        return session_.datagramConfig(messageId_.streamId);
+    }
+    void sendDatagram(std::span<const std::byte> bytes);
     [[nodiscard]] Task<std::error_code> writeTunnel(std::string_view bytes,
-        WebSocketTransportDisposition disposition);
+        HttpStreamEnd disposition);
     [[nodiscard]] Task<bool> waitTunnelReceiveEnd();
     void abortTunnel() noexcept;
     [[nodiscard]] asio::any_io_executor executor() const noexcept {
@@ -210,9 +240,16 @@ private:
 
     [[nodiscard]] Task<RunStatus> runHandlerInner();
     [[nodiscard]] Task<RunStatus> runWebSocketHandler();
+    [[nodiscard]] Task<std::optional<HttpResponse>> runTunnelHandler();
+    [[nodiscard]] Task<void> writeInterimResponse(const HttpInterimResponseHead& head);
+    [[nodiscard]] Task<void> awaitResponsePublication();
+    [[nodiscard]] Task<RunStatus> writeBufferedAfterInterim(HttpBufferedResponseWritePlan plan);
+    [[nodiscard]] Task<RunStatus> writeFileResponse(HttpBufferedResponseWritePlan plan);
+    [[nodiscard]] Task<std::optional<std::span<const std::byte>>> readRequestBody();
+    [[nodiscard]] Task<void> drainRequestBody();
     [[nodiscard]] bool onWorker() const noexcept;
     void notifyTunnelOutput() noexcept;
-    [[nodiscard]] PublishResult publishTunnelStep(PublicationDemand demand) noexcept;
+    [[nodiscard]] PublishResult publishStreamStep(PublicationDemand demand) noexcept;
     [[nodiscard]] bool cancellationRequested() const noexcept;
     void latchCancellationReason() const noexcept;
     [[nodiscard]] bool exceedsPeerFieldSectionLimit() const noexcept;
@@ -233,6 +270,8 @@ private:
     ConnectionScanner::PeriodicCheckRegistration peerTransportFinCheck_;
     asio::any_io_executor executor_;
     const Http3TunnelCallbacks tunnelCallbacks_;
+    std::pmr::string activeRequestBody_;
+    std::optional<BodyReader> requestBodyReader_;
     WorkerSignal tunnelInputAvailable_;
     WorkerSignal tunnelOutputAvailable_;
 
@@ -242,16 +281,16 @@ private:
     std::optional<RequestMemory> requestMemory_;
     std::optional<HttpResponse> response_;
     std::optional<Http3BufferedResponseOutput> output_;
-    std::pmr::string tunnelHandshakeFrame_;
-    std::size_t tunnelHandshakeOffset_{};
+    std::pmr::string streamFrame_;
+    std::size_t streamFrameOffset_{};
     std::pmr::string tunnelDataFrame_;
-    std::uint64_t tunnelPublishedWireBytes_{};
-    bool tunnelMode_{};
+    std::uint64_t streamPublishedWireBytes_{};
+    bool streamOutputActive_{};
     bool tunnelDataPending_{};
     bool tunnelEstablishedPending_{};
     bool tunnelEstablishedPublished_{};
     bool tunnelFinPending_{};
-    bool tunnelOutputEnded_{};
+    bool streamOutputEnded_{};
     std::chrono::milliseconds peerTransportFinTimeout_{};
     std::int64_t peerTransportFinDeadlineMs_{};
     bool peerFinTimeoutArmed_{};
@@ -272,6 +311,9 @@ private:
     bool cancellationRequested_{false};
     bool deadlineArmed_{};
     bool publicationDeadlineCallbackRegistered_{};
+    HttpInterimResponseOutput interimOutput_;
+    HttpConnectionAdvertisementOutput connectionAdvertisements_;
+    HttpPushOutput pushOutput_;
 };
 
 }  // namespace ruvia::detail

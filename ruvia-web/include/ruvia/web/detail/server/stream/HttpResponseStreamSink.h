@@ -24,6 +24,8 @@
 #include "ruvia/http/HttpResponseHeadBuffer.h"
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/context/ContextAccess.h"
+#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
 #include "ruvia/web/detail/server/response/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
@@ -83,6 +85,7 @@ public:
 
 private:
     void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) {
+        interimOutput_ = context != nullptr ? ContextAccess::interimOutput(*context) : nullptr;
         state_.bindContext(context, streamingHead);
     }
 
@@ -124,6 +127,9 @@ private:
             connectionPlan_ = streamHead.connectionPlan();
             // Mark committed before the write; a partial header flush must never be
             // followed by the normal error-response path on the same socket.
+            if (interimOutput_ != nullptr) {
+                interimOutput_->commitFinal();
+            }
             state_.markCommitted(streamHead.commitPlan());
         } catch (...) {
             // Representation metadata and protocol framing are one pre-wire
@@ -285,6 +291,7 @@ private:
     Http1RequestConnectionPlan connectionPlan_;
     HttpStreamingResponseCompression compression_;
     ResponseStreamState state_;
+    HttpInterimResponseOutput* interimOutput_{};
 };
 
 }  // namespace ruvia::detail

@@ -103,6 +103,12 @@ class ControllerRegistrationAccess final {
         scope.registerSseRoute(method, path, handler, middlewares);
     }
 
+    static void addTunnelRoute(const ControllerRouteBuilder& scope, std::string_view protocol,
+        std::string_view target, ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares, HttpTunnelRouteConfig config = {}) {
+        scope.registerTunnelRoute(protocol, target, handler, middlewares, config);
+    }
+
     static void addWebSocketRoute(const ControllerRouteBuilder& scope, HttpKnownMethod method,
         std::string_view path, ControllerRouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> middlewares,

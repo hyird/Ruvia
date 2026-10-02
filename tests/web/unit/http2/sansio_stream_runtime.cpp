@@ -892,7 +892,7 @@ RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_al
     resource.rejectAllocations(true);
     bool aborted = false;
     bool readCompleted = false;
-    std::optional<ruvia::detail::WsTransportReadResult> readResult;
+    std::optional<ruvia::detail::HttpStreamReadResult> readResult;
     std::pmr::string readBuffer(&resource);
     asio::co_spawn(io, [&]() -> asio::awaitable<void> {
             readResult.emplace(co_await ruvia::asAwaitable(transport.readMore(readBuffer)));
@@ -1460,13 +1460,13 @@ RUVIA_TEST(http2_websocket_tunnel_count_follows_stream_runtime_lifetime) {
     Http2SansIoStreamRuntimeTable table(&resource, termination);
     auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
     RUVIA_CHECK(runtime.selectRoute(RouteResolution{}, RequestBodyMode::kStream));
-    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{0});
-    RUVIA_CHECK(!table.markWebSocketTunnel(3));
-    RUVIA_CHECK(table.markWebSocketTunnel(1));
-    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{1});
-    RUVIA_CHECK(!table.markWebSocketTunnel(1));
+    RUVIA_CHECK_EQ(table.tunnelCount(), std::size_t{0});
+    RUVIA_CHECK(!table.markTunnel(3));
+    RUVIA_CHECK(table.markTunnel(1));
+    RUVIA_CHECK_EQ(table.tunnelCount(), std::size_t{1});
+    RUVIA_CHECK(!table.markTunnel(1));
     RUVIA_CHECK(table.remove(1));
-    RUVIA_CHECK_EQ(table.webSocketTunnelCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(table.tunnelCount(), std::size_t{0});
 }
 
 RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {

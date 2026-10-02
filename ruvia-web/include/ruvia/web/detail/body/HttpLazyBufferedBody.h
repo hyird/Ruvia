@@ -19,6 +19,9 @@ public:
     [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {
         return reader_.consumption();
     }
+    [[nodiscard]] const HttpRequestTrailers& trailers() const& noexcept {
+        return reader_.trailers();
+    }
 
     void takePipeline(std::pmr::string& stash) {
         reader_.takePipeline(stash);

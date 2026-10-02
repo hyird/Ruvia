@@ -1,5 +1,4 @@
 #pragma once
-
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -11,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/core/ConfigValidation.h"
+#include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -113,10 +113,11 @@ inline void validateHttpServerTlsOptions(const HttpServerListenerDefinition::Tls
 
 inline constexpr std::size_t kHttp3PeerUnidirectionalStreamAllowance = 64;
 inline constexpr std::size_t kHttp3PostGoawayRequestAllowance = 64;
+inline constexpr std::size_t kHttp3ServerPushAllowance = Http3ConnectionConfig{}.maxRememberedPushes;
 
 [[nodiscard]] inline std::size_t http3WorkerTrackedStreamCapacity(
     std::size_t maxRequestsPerConnection) {
-    constexpr auto allowance = kHttp3PeerUnidirectionalStreamAllowance;
+    constexpr auto allowance = kHttp3PeerUnidirectionalStreamAllowance + kHttp3ServerPushAllowance;
     if (maxRequestsPerConnection > std::numeric_limits<std::size_t>::max() - allowance) {
         throw std::invalid_argument("HTTP/3 worker stream capacity is not representable");
     }

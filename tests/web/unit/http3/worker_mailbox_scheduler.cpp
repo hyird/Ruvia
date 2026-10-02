@@ -534,6 +534,38 @@ ruvia::Task<void> stopAndRetire(Scheduler& scheduler, Scheduler::ConnectionToken
     RUVIA_CHECK(scheduler.retire(token));
 }
 
+ruvia::Task<void> exercise_retirement_waits_for_intent_acknowledgement(
+    Fixture& fixture, const ruvia::WorkerHandle& worker,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    Scheduler scheduler(worker, 1, fixture.worker.resource());
+    Mailbox outbound(2, 2, 2, fixture.worker.resource());
+    RUVIA_CHECK(scheduler.bindMailbox(outbound));
+    const auto registration = scheduler.reserve(kEpoch, kGeneration);
+    RUVIA_CHECK(registration.has_value());
+    if (!registration) {
+        throw std::runtime_error("scheduler retirement fixture slot unavailable");
+    }
+    Connection owner(fixture.routes.implementation.routeTable(), fixture.worker,
+        fixture.services, fixture.options, outbound, registration->activation,
+        ConnectionConfig{.epoch = kEpoch,
+            .connectionGeneration = kGeneration,
+            .maxTrackedStreams = 8});
+    RUVIA_CHECK(scheduler.attach(registration->token, owner));
+    RUVIA_CHECK(owner.requestStop());
+    const auto close = scheduler.step();
+    RUVIA_CHECK(close.kind == Scheduler::StepKind::kTransportIntent);
+    RUVIA_CHECK(close.intent.token.kind == Connection::TransportIntentKind::kConnectionClose);
+    RUVIA_CHECK(scheduler.beginRetirement(registration->token));
+    co_await owner.join();
+    RUVIA_CHECK(owner.confirmTransportRetired({.epoch = registration->token.epoch,
+        .connectionGeneration = registration->token.connectionGeneration}));
+    RUVIA_CHECK(!scheduler.retire(registration->token));
+    RUVIA_CHECK(scheduler.acknowledgeIntent(registration->token, close.intent.token));
+    RUVIA_CHECK(scheduler.retire(registration->token));
+    RUVIA_CHECK(outbound.stop());
+    static_cast<void>(ruvia_ctx);
+}
+
 ruvia::Task<void> stopAfter(ruvia::EventLoopAttachment& attachment,
     ruvia::Task<void> operation) {
     try {
@@ -1380,6 +1412,20 @@ ruvia::Task<void> exerciseClaimedCapacityCallbackOutlivesStopAndScheduler(
 }
 
 }  // namespace
+
+RUVIA_TEST(http3_worker_mailbox_scheduler_waits_for_intent_ack_before_retirement) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    {
+        Fixture fixture(worker, upstream);
+        runWorkerTask(attachment,
+            exercise_retirement_waits_for_intent_acknowledgement(fixture, worker, ruvia_ctx));
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+}
 
 RUVIA_TEST(http3WorkerMailboxSchedulerRotatesConnectionsAndPublicationLanes) {
     auto& io = ruvia::test::newTestIoContext();

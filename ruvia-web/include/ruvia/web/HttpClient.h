@@ -1,9 +1,13 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "ruvia/core/EventLoop.h"
+#include "ruvia/http/HttpClientTunnelRequestView.h"
 #include "ruvia/web/HttpClientHandle.h"
+#include "ruvia/web/HttpClientTunnel.h"
+#include "ruvia/web/HttpClientTunnelConfig.h"
 
 namespace ruvia {
 
@@ -33,6 +37,10 @@ public:
         const HttpClientRequestView& request) const&;
     ScopedOperation<HttpClientResponse> send(const HttpClientRequestView&) const&& = delete;
 
+    [[nodiscard]] ScopedOperation<HttpClientExchange> openRequest(
+        const HttpClientRequestView& head, HttpClientUploadConfig upload = {}) const&;
+    ScopedOperation<HttpClientExchange> openRequest(const HttpClientRequestView&, HttpClientUploadConfig = {}) const&& = delete;
+
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.
     void close() noexcept;
@@ -43,7 +51,15 @@ public:
     [[nodiscard]] Task<void> shutdown() &;
     Task<void> shutdown() && = delete;
 
+    [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openTunnel(const HttpClientTunnelRequestView& request, HttpClientTunnelConfig config = {}) const&;
+    ScopedOperation<HttpClientTunnelResult> openTunnel(const HttpClientTunnelRequestView&, HttpClientTunnelConfig = {}) const&& = delete;
+    [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView& request, HttpClientTunnelConfig config = {}) const&;
+    ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView&, HttpClientTunnelConfig = {}) const&& = delete;
     [[nodiscard]] HttpClientStats stats() const;
+    [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() const&;
+    [[nodiscard]] std::optional<HttpClientPush> nextPush() const&;
+    std::optional<HttpClientPush> nextPush() const&& = delete;
+    std::optional<HttpClientAdvertisement> nextAdvertisement() const&& = delete;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <memory_resource>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,22 @@
 #include "test_harness.h"
 
 namespace {
+
+struct counting_resource final : std::pmr::memory_resource {
+    std::size_t allocations{};
+    std::size_t deallocations{};
+    void* do_allocate(std::size_t size, std::size_t alignment) override {
+        ++allocations;
+        return std::pmr::new_delete_resource()->allocate(size, alignment);
+    }
+    void do_deallocate(void* pointer, std::size_t size, std::size_t alignment) override {
+        ++deallocations;
+        std::pmr::new_delete_resource()->deallocate(pointer, size, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 struct TemporaryDirectory final {
     TemporaryDirectory() {
@@ -99,11 +116,6 @@ struct IdentityFiles final {
 
 RUVIA_TEST(http3QuicClientTlsContextConfiguresPeerAndCleansUp) {
     using namespace ruvia::detail;
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(ruvia::testing::throwsOn([] {
-        Http3QuicClientTlsContext context(ClientTransportConfigView{});
-    }));
-#else
     TemporaryDirectory directory;
     const IdentityFiles files(directory.path);
     const std::string certificatePath = files.certificateFile.string();
@@ -115,16 +127,18 @@ RUVIA_TEST(http3QuicClientTlsContextConfiguresPeerAndCleansUp) {
     config.certificateChainFile = certificatePath;
     config.privateKeyFile = keyPath;
     {
-        Http3QuicClientTlsContext context(config);
-        SSL_CTX* const sslContext = context.nativeHandle();
+        counting_resource resource;
+        http3_quic_client_tls_context context(config, &resource);
+        SSL_CTX* const sslContext = context.native_handle();
         RUVIA_CHECK(sslContext != nullptr);
-        RUVIA_CHECK(SSL_CTX_get_ssl_method(sslContext) == OSSL_QUIC_client_method());
+        RUVIA_CHECK(SSL_CTX_get_ssl_method(sslContext) == TLS_method());
+        RUVIA_CHECK(SSL_CTX_get_min_proto_version(sslContext) == TLS1_3_VERSION);
+        RUVIA_CHECK(SSL_CTX_get_max_proto_version(sslContext) == TLS1_3_VERSION);
         RUVIA_CHECK(SSL_CTX_get_verify_mode(sslContext) == SSL_VERIFY_PEER);
         RUVIA_CHECK(SSL_CTX_check_private_key(sslContext) == 1);
 
         std::unique_ptr<SSL, decltype(&SSL_free)> dns(SSL_new(sslContext), SSL_free);
         RUVIA_CHECK(dns != nullptr);
-        RUVIA_CHECK(SSL_is_quic(dns.get()) == 1);
         context.prepare(dns.get(), "client.ruvia-test.local.");
         // OpenSSL does not expose the configured client SNI via SSL_get_servername
         // before a peer ClientHello/handshake; prepare() applies the DNS-only SNI.
@@ -140,12 +154,20 @@ RUVIA_TEST(http3QuicClientTlsContextConfiguresPeerAndCleansUp) {
         RUVIA_CHECK(ipTarget != nullptr);
         RUVIA_CHECK(std::string_view(ipTarget) == "127.0.0.1");
         OPENSSL_free(ipTarget);
+
+        const std::string longHost(48, 'a');
+        const std::string host = longHost + ".test";
+        std::unique_ptr<SSL, decltype(&SSL_free)> longDns(SSL_new(sslContext), SSL_free);
+        RUVIA_CHECK(longDns != nullptr);
+        context.prepare(longDns.get(), host);
+        RUVIA_CHECK(std::string_view(X509_VERIFY_PARAM_get0_host(SSL_get0_param(longDns.get()), 0)) == host);
+        RUVIA_CHECK(resource.allocations != 0);
+        RUVIA_CHECK(resource.allocations == resource.deallocations);
     }
 
     config.caFile = missingCaPath;
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { Http3QuicClientTlsContext context(config); }));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { http3_quic_client_tls_context context(config); }));
     config.caFile = certificatePath;
     config.privateKeyFile = certificatePath;
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] { Http3QuicClientTlsContext context(config); }));
-#endif
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { http3_quic_client_tls_context context(config); }));
 }

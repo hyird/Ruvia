@@ -11,7 +11,9 @@
 
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/Http3ServerRequest.h"
+#include "ruvia/http/HttpDatagram.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 
@@ -27,9 +29,13 @@ class RouteTable;
 // budget to all sessions owned by that worker.
 struct Http3SansIoSessionLimits final {
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    std::optional<std::size_t> maxStreamBodyBytes{};
+    std::size_t maxStreamBacklogBytes{64 * 1024};
     std::size_t maxLiveStreams{32};
     std::size_t maxBufferedBytesInFlight{64 * 1024 * 1024};
     std::size_t maxTunnelBufferedBytes{64 * 1024};
+    Http3ConnectionConfig connection{.enableConnectProtocol = true};
+    std::size_t maxQuicDatagramPayloadBytes{};
 };
 
 // Worker-affine receive-side slice of an HTTP/3 Web session. It synchronously
@@ -109,19 +115,75 @@ public:
     // below are for synchronous inspection; asynchronous handlers hold a lease.
     [[nodiscard]] std::optional<RequestLease> acquireRequest(std::uint64_t streamId) & noexcept;
     std::optional<RequestLease> acquireRequest(std::uint64_t streamId) && = delete;
+    [[nodiscard]] std::optional<std::uint64_t> peerMaxPushId() const noexcept {
+        return connection_.peerMaxPushId();
+    }
+    [[nodiscard]] std::size_t maxRememberedPushes() const noexcept {
+        return limits_.connection.maxRememberedPushes;
+    }
+    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> preparePushPromise(
+        std::uint64_t parentStreamId, std::uint64_t pushId, HttpPushRequestView request) {
+        return connection_.preparePushPromise(parentStreamId, pushId, request);
+    }
+    // Copies validated promise metadata into an ordinary request lease on the
+    // actual server UNI stream. Prefix publication remains the driver's job.
+    [[nodiscard]] std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> admitPushStream(
+        std::uint64_t streamId, std::uint64_t pushId);
+    void observePushCancellation(void* context, void (*cancel)(void*, std::uint64_t) noexcept);
     [[nodiscard]] const Http3ServerRequest* request(std::uint64_t streamId) const noexcept;
     [[nodiscard]] const RouteResolution* resolution(std::uint64_t streamId) const noexcept;
     [[nodiscard]] StreamState streamState(std::uint64_t streamId) const noexcept;
     [[nodiscard]] Rejection rejection(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] bool streamingRequest(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] bool canAcceptInput(std::uint64_t streamId, std::size_t wireBytes) const noexcept;
+    [[nodiscard]] Rejection streamingBodyFailure(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] const HttpRequestTrailers* requestTrailers(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] const std::optional<HttpPriority>* requestPriorityUpdate(std::uint64_t streamId) const noexcept;
+    void bindControlOutputWake(void* context, void (*wake)(void*) noexcept);
+    [[nodiscard]] bool queueOriginAdvertisement(std::span<const std::string_view> origins);
+    [[nodiscard]] std::span<const char> pendingControlOutput() const noexcept {
+        return controlOutput_;
+    }
+    [[nodiscard]] bool consumeControlOutput(std::size_t bytes) noexcept;
     // Worker-PMR bounded tunnel queue. Output is copied synchronously; no
     // borrowed mailbox or parser view escapes the feed callback.
     [[nodiscard]] TunnelReadResult readTunnelData(
         std::uint64_t streamId, std::span<char> output) noexcept;
+    [[nodiscard]] Http3DatagramReceiveStatus receiveDatagram(Http3DatagramView datagram);
+    [[nodiscard]] std::optional<std::pmr::string> takeDatagram(std::uint64_t streamId);
+    [[nodiscard]] HttpDatagramSessionConfig datagramConfig(std::uint64_t streamId) const;
     [[nodiscard]] bool tunnelInputOverflowed(std::uint64_t streamId) const noexcept;
     [[nodiscard]] bool tunnelReceiveEnded(std::uint64_t streamId) const noexcept;
     // Effective peer response field-section limit. nullopt means the peer has
     // not sent the setting or omitted it (RFC 9114 default: unlimited).
     [[nodiscard]] std::optional<std::uint64_t> peerMaxFieldSectionSize() const noexcept;
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeConnectResponseHead(std::uint64_t streamId, const HttpResponse& response) {
+        return connection_.encodeConnectResponseHead(streamId, response);
+    }
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan) {
+        return connection_.encodeResponseHead(streamId, response, plan);
+    }
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers) {
+        return connection_.encodeStreamingResponseHead(streamId, std::move(response), method, kind, trailers);
+    }
+    [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId, const HttpInterimResponseHead& response) {
+        return connection_.encodeInterimResponseHead(streamId, response);
+    }
+    [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields) {
+        return connection_.encodeResponseTrailers(streamId, fields);
+    }
+    [[nodiscard]] std::span<const char> pendingQpackEncoderOutput() const noexcept {
+        return connection_.pendingQpackEncoderOutput();
+    }
+    [[nodiscard]] std::span<const char> pendingQpackDecoderOutput() const noexcept {
+        return connection_.pendingQpackDecoderOutput();
+    }
+    [[nodiscard]] bool consumeQpackEncoderOutput(std::size_t size) noexcept {
+        return connection_.consumeQpackEncoderOutput(size);
+    }
+    [[nodiscard]] bool consumeQpackDecoderOutput(std::size_t size) noexcept {
+        return connection_.consumeQpackDecoderOutput(size);
+    }
     [[nodiscard]] std::size_t activeStreamCount() const noexcept;
     [[nodiscard]] bool terminated() const noexcept;
     // Release only after validated FIN (including a rejected request), or
@@ -156,6 +218,11 @@ private:
     std::size_t tunnelBytesInFlight_{0};
     std::size_t activeLeases_{0};
     Http3Connection connection_;
+    std::pmr::string controlOutput_;
+    void* controlWakeContext_{};
+    void (*controlWake_)(void*) noexcept {};
+    void* pushCancellationContext_{};
+    void (*pushCancellation_)(void*, std::uint64_t) noexcept {};
     std::pmr::unordered_map<std::uint64_t, StreamPtr> streams_;
     Http3ConnectionResult failure_{Http3ConnectionStatus::kConnectionError,
         Http3ConnectionErrorScope::kConnection, Http3ConnectionErrorCode::kInternalError};

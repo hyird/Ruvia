@@ -42,6 +42,10 @@ public:
         const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan,
         std::pmr::memory_resource* workerPool) noexcept;
 
+    [[nodiscard]] static std::expected<Http3BufferedResponseWrite, Error> create(
+        const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan,
+        Http3ResponseHead encodedHead, std::pmr::memory_resource* workerPool) noexcept;
+
     Http3BufferedResponseWrite(const Http3BufferedResponseWrite&) = delete;
     Http3BufferedResponseWrite& operator=(const Http3BufferedResponseWrite&) = delete;
     // Moving is allowed only when no offered span is awaiting acknowledgement.

@@ -5,7 +5,10 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/http/HttpAscii.h"
+#include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
@@ -33,7 +36,7 @@ namespace {
 Task<void> HttpClientPool::initializeHttp2(
     Connection& connection, const ruvia::OperationTimeout& timeout) {
     connection.http2 = makePmrObject<::ruvia::Http2Connection>(
-        resource_, ::ruvia::Http2Connection::client({.resource = resource_}));
+        resource_, ::ruvia::Http2Connection::client({.resource = resource_, .enablePush = config_.push.enabled, .receiveOriginAdvertisements = config_.advertisements.receiveOrigins}));
     while (connection.http2->wantsWrite()) {
         const auto output = connection.http2->pendingOutput();
         co_await write(connection, output, timeout);
@@ -47,7 +50,8 @@ Task<void> HttpClientPool::initializeHttp2(
                 HttpClientError::Code::kIoError, "upstream closed during HTTP/2 preface");
         }
         const auto status = connection.http2->feed(std::string_view(input.data(), bytes));
-        while (connection.http2->nextEvent()) {
+        while (auto event = connection.http2->nextEvent()) {
+            retainHttp2Advertisement(connection, *event);
         }
         if (status == Http2FeedResult::kProtocolFailure || connection.http2->connectionError()) {
             throw HttpClientError(
@@ -90,6 +94,110 @@ Task<void> HttpClientPool::initializeHttp2(
     }
 }
 
+void HttpClientPool::retainHttp2Advertisement(Connection& connection, const Http2Event& event) {
+    const auto slot = static_cast<std::size_t>(&connection - connections_.data());
+    if (const auto* origins = event.originAdvertisement()) {
+        (void)advertisements_.retain(slot, HttpProtocolVersion::kHttp2, *origins);
+    } else if (const auto* service = event.alternativeServiceAdvertisement()) {
+        (void)advertisements_.retain(slot, *service);
+    }
+}
+
+HttpClientPool::Http2PushDriver::Http2PushDriver(HttpClientPool& pool, Connection& conn, HttpClientResponse value)
+    : owner(pool),
+      connection(conn),
+      response(std::move(value)),
+      timeout(pool.config_.push.timeout),
+      pending(pool.worker_, response) {}
+HttpClientPool::Http2PushDriver::~Http2PushDriver() {
+    if (registered) {
+        owner.removeHttp2Pending(connection, pending);
+        --owner.activePushes_;
+    }
+}
+
+void HttpClientPool::acceptHttp2Push(Connection& connection, const Http2PushPromiseEvent& promise) {
+    const auto authority = http2Authority(config_, resource_);
+    if (!config_.push.enabled || pushes_.size() >= config_.push.maxQueuedPushes ||
+        activePushes_ >= config_.push.maxConcurrentPushes ||
+        !httpAsciiEqualsIgnoreCase(promise.request.scheme, config_.scheme == HttpScheme::kHttps ? "https" : "http") ||
+        !httpAuthoritiesEqual(BorrowedText(promise.request.authority), BorrowedText(std::string_view(authority)),
+            config_.scheme == HttpScheme::kHttps ? 443 : 80)) {
+        ++rejectedPushes_;
+        submitHttp2Reset(connection, promise.promisedStreamId);
+        return;
+    }
+    try {
+        HttpClientResponse response(*this);
+        auto& state = *response.state_;
+        state.bufferedLimit = config_.maxResponseBytes;
+        state.transport = HttpClientResponseTransport::kHttp2;
+        state.requestMethod = classifyHttpMethod(promise.request.method);
+        state.connectionIndex = static_cast<std::size_t>(&connection - connections_.data());
+        state.streamId = promise.promisedStreamId;
+        state.requestId = ++connection.http2Runtime->nextRequestId;
+        if (state.requestId == 0) {
+            state.requestId = ++connection.http2Runtime->nextRequestId;
+        }
+        state.promisedRequest.emplace(state.resource);
+        auto& request = *state.promisedRequest;
+        request.method = promise.request.method;
+        request.scheme = promise.request.scheme;
+        request.authority = promise.request.authority;
+        request.path = promise.request.path;
+        request.headers.reserve(promise.request.headers.size());
+        for (const auto& field : promise.request.headers) {
+            request.headers.push_back(HttpHeader::copyOf(field.name(), field.value(), state.resource));
+        }
+        auto driver = makePmrObject<Http2PushDriver>(resource_, *this, connection, HttpClientResponse(response.state_, true));
+        driver->pending.timeout = &driver->timeout;
+        driver->pending.requestId = state.requestId;
+        driver->pending.streamId = promise.promisedStreamId;
+        connection.http2Runtime->pending.push_back(&driver->pending);
+        driver->registered = true;
+        ++activePushes_;
+        // Register before the reader drains another event. The driver is address
+        // stable and its destructor unregisters on cold spawn failure as well.
+        backgroundTasks_.spawn(runHttp2Push(std::move(driver)));
+        pushes_.push_back(HttpClientPush(std::move(response)));
+        ++receivedPushes_;
+    } catch (...) {
+        ++rejectedPushes_;
+        submitHttp2Reset(connection, promise.promisedStreamId);
+        // A resource admission failure is local to this push, not its parent.
+    }
+}
+Task<void> HttpClientPool::runHttp2Push(std::unique_ptr<Http2PushDriver, PmrObjectDeleter<Http2PushDriver>> driver) {
+    auto& pending = driver->pending;
+    auto& state = *driver->response.state_;
+    WorkerTimerRegistration timer;
+    try {
+        if (const auto remaining = driver->timeout.remaining()) {
+            WorkerHandleAccess::scheduleTimer(worker_, timer, workerTimerDeadlineAfter(*remaining),
+                [this, raw = driver.get()](WorkerTimerOutcome outcome) noexcept {
+                    if (outcome == WorkerTimerOutcome::kExpired) {
+                        cancelHttp2Stream(raw->connection, raw->pending.requestId, AbortReason::kTimeout);
+                    }
+                });
+        }
+        while (!pending.complete && !pending.failed()) {
+            co_await pending.signal.wait();
+        }
+        timer.cancel();
+        state.failure = pending.failure;
+        if (pending.error) {
+            state.errorCode = static_cast<std::uint8_t>(*pending.error);
+        }
+    } catch (...) {
+        state.failure = std::current_exception();
+        submitHttp2Reset(driver->connection, pending.streamId);
+    }
+    state.complete = true;
+    state.headSignal.notify();
+    state.dataSignal.notify();
+    state.spaceSignal.notify();
+}
+
 void HttpClientPool::drainHttp2Events(Connection& connection) {
     if (!connection.http2) {
         return;
@@ -116,7 +224,29 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
     };
     bool releasedData = false;
     while (auto event = connection.http2->nextEvent()) {
-        if (auto* head = event->responseHead()) {
+        retainHttp2Advertisement(connection, *event);
+        if (const auto* push = event->pushPromise()) {
+            acceptHttp2Push(connection, *push);
+        } else if (const auto* interim = event->informationalHead()) {
+            auto* pending = findPending(interim->streamId());
+            if (pending == nullptr || pending->complete || pending->failed()) {
+                continue;
+            }
+            try {
+                auto& state = *pending->response->state_;
+                std::pmr::vector<HttpHeaderView> fields(state.resource);
+                for (const auto& field : interim->head().headers()) {
+                    fields.emplace_back(field.name(), field.value());
+                }
+                state.retainInformational(interim->head().status(), fields);
+                if (state.upload && interim->requestContentSignal() == HttpClientRequestContentSignal::kContinue) {
+                    state.upload->contentReleased = true;
+                    pending->signal.notify();
+                }
+            } catch (...) {
+                failPending(*pending, interim->streamId(), std::current_exception(), true);
+            }
+        } else if (auto* head = event->responseHead()) {
             auto* pending = findPending(head->streamId());
             if (pending == nullptr || pending->complete || pending->failed()) {
                 continue;
@@ -124,6 +254,9 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             try {
                 auto responseHead = std::move(*head).takeHead();
                 auto& state = *pending->response->state_;
+                if (state.upload && !state.upload->ended) {
+                    state.upload->stop();
+                }
                 state.status = responseHead.status();
                 state.protocolVersion = responseHead.protocolVersion();
                 state.responseBodyPlan = planHttpResponseBody(state.requestMethod, state.status);
@@ -134,50 +267,87 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                     state.headers.push_back(HttpHeader::copyOf(
                         header.name(), header.value(), state.resource));
                 }
-                configureHttpClientResponseDecoding(state);
+                if (state.tunnel) {
+                    state.tunnel->accepted = state.responseBodyPlan->contentSemantics() == HttpResponseContentSemantics::kConnectTunnel;
+                    if (state.tunnel->accepted && state.tunnel->udp) {
+                        std::pmr::vector<HttpHeaderView> fields(state.resource);
+                        for (const auto& field : state.headers) {
+                            fields.emplace_back(field.name(), field.value());
+                        }
+                        if (!validateHttpConnectUdpResponse(state.protocolVersion, state.status.value(), fields)) {
+                            throw HttpClientError(HttpClientError::Code::kProtocolError, "invalid CONNECT-UDP response head");
+                        }
+                    }
+                    if (!state.tunnel->accepted) {
+                        state.tunnel->stop();
+                    }
+                    pending->signal.notify();
+                }
+                if (!state.tunnel || !state.tunnel->accepted) {
+                    configureHttpClientResponseDecoding(state);
+                }
                 state.headReady = true;
                 pending->response->state_->headSignal.notify();
             } catch (...) {
                 failPending(*pending, head->streamId(), std::current_exception(), true);
             }
-        } else if (auto* chunk = event->messageBodyChunk()) {
-            auto* pending = findPending(chunk->streamId());
-            if (pending != nullptr && !pending->complete && !pending->failed()) {
-                auto& state = *pending->response->state_;
-                const auto retained =
-                    state.buffered.size() - state.offset + state.pending.size();
-                if (state.collectAll && chunk->bytes().size() >
-                                            config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
-                    pending->error = HttpClientError::Code::kResponseTooLarge;
-                    submitHttp2Reset(connection, chunk->streamId());
-                    pending->signal.notify();
-                } else {
-                    try {
-                        state.pending.append(chunk->bytes());
-                        state.dataSignal.notify();
-                    } catch (...) {
-                        failPending(*pending, chunk->streamId(), std::current_exception(), true);
-                    }
-                }
-            }
-            if (pending != nullptr && !pending->complete && !pending->failed() &&
-                !pending->response->state_->collectAll) {
-                auto credit = chunk->takeCredit();
-                if (credit.valid()) {
-                    auto& retained = pending->response->state_->http2DataCredit;
-                    if (retained) {
-                        if (retained->merge(std::move(credit)) !=
-                            Http2ReceivedDataCreditMergeStatus::kMerged) {
-                            std::terminate();
-                        }
+        } else if (event->messageBodyChunk() != nullptr || event->tunnelData() != nullptr) {
+            const auto consume = [&](auto* chunk) {
+                auto* pending = findPending(chunk->streamId());
+                if (pending != nullptr && !pending->complete && !pending->failed()) {
+                    auto& state = *pending->response->state_;
+                    const auto retained =
+                        state.buffered.size() - state.offset + state.pending.size();
+                    if (state.collectAll && chunk->bytes().size() >
+                                                config_.maxResponseBytes - std::min(retained, config_.maxResponseBytes)) {
+                        pending->error = HttpClientError::Code::kResponseTooLarge;
+                        submitHttp2Reset(connection, chunk->streamId());
+                        pending->signal.notify();
                     } else {
-                        retained.emplace(std::move(credit));
+                        try {
+                            state.pending.append(chunk->bytes());
+                            state.dataSignal.notify();
+                        } catch (...) {
+                            failPending(*pending, chunk->streamId(), std::current_exception(), true);
+                        }
                     }
                 }
+                if (pending != nullptr && !pending->complete && !pending->failed() &&
+                    !pending->response->state_->collectAll) {
+                    auto credit = chunk->takeCredit();
+                    if (credit.valid()) {
+                        auto& retained = pending->response->state_->http2DataCredit;
+                        if (retained) {
+                            if (retained->merge(std::move(credit)) !=
+                                Http2ReceivedDataCreditMergeStatus::kMerged) {
+                                std::terminate();
+                            }
+                        } else {
+                            retained.emplace(std::move(credit));
+                        }
+                    }
+                }
+                // Unretained event credits return on destruction, including failed
+                // or cancelled streams. Wake the writer to flush WINDOW_UPDATE.
+                releasedData = true;
+            };
+            if (auto* chunk = event->messageBodyChunk()) {
+                consume(chunk);
+            } else {
+                consume(event->tunnelData());
             }
-            // Unretained event credits return on destruction, including failed
-            // or cancelled streams. Wake the writer to flush WINDOW_UPDATE.
-            releasedData = true;
+        } else if (const auto* tunnelEnd = event->tunnelEnd()) {
+            if (auto* pending = findPending(tunnelEnd->streamId()); pending != nullptr && !pending->failed()) {
+                auto& state = *pending->response->state_;
+                if (!state.tunnel || !state.tunnel->accepted) {
+                    pending->error = HttpClientError::Code::kProtocolError;
+                } else {
+                    state.tunnel->receiveEnded = true;
+                    state.dataSignal.notify();
+                }
+                pending->signal.notify();
+            }
+            runtime.stateSignal.notify();
         } else if (auto* end = event->messageEnd()) {
             if (auto* pending = findPending(end->streamId());
                 pending != nullptr && !pending->failed()) {
@@ -219,8 +389,11 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             if (auto* pending = findPending(closed->streamId());
                 pending != nullptr && !pending->complete && !pending->failed() &&
                 !pending->retryable) {
-                pending->error = HttpClientError::Code::kProtocolError;
-                pending->signal.notify();
+                const auto& state = *pending->response->state_;
+                if (!state.tunnel || !state.tunnel->accepted || !state.tunnel->receiveEnded || !state.tunnel->endRequested) {
+                    pending->error = HttpClientError::Code::kProtocolError;
+                    pending->signal.notify();
+                }
             }
             runtime.stateSignal.notify();
         } else if (const auto* unprocessed = event->requestUnprocessed()) {
@@ -234,6 +407,11 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
         } else if (event->goaway() != nullptr) {
             runtime.draining = true;
             runtime.stateSignal.notify();
+        }
+    }
+    for (const auto streamId : connection.http2->takeDrainedDataStreams()) {
+        if (auto* pending = findPending(streamId); pending != nullptr) {
+            pending->signal.notify();
         }
     }
     if (releasedData || connection.http2->wantsWrite()) {
@@ -543,8 +721,8 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
     source.headers = std::span<const HttpHeaderView>(headers);
     auto authority = http2Authority(config_, resource_);
     const auto* body = source.content.borrowedBytes();
-    const auto content =
-        body ? ::ruvia::Http2RequestContent::knownLength(body->value().size()) : ::ruvia::Http2RequestContent::none();
+    const auto content = request.upload() != nullptr ? ::ruvia::Http2RequestContent::streaming(request.upload()->config.contentLength) : body ? ::ruvia::Http2RequestContent::knownLength(body->value().size())
+                                                                                                                                              : ::ruvia::Http2RequestContent::none();
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         auto& runtime = *connection.http2Runtime;
@@ -622,14 +800,18 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
                 pending.error = HttpClientError::Code::kTimeout;
                 break;
             }
-            const auto submitted =
-                connection.http2->submitRequestHead(::ruvia::Http2RegularRequestHeadView{
-                    .method = source.method,
-                    .scheme = config_.scheme == HttpScheme::kHttps ? "https" : "http",
-                    .authority = BorrowedText(std::string_view(authority)),
-                    .target = source.target,
-                    .headers = headers,
-                    .content = content});
+            const auto submitted = request.isTunnel()
+                                       ? (request.tunnelProtocol().empty()
+                                                 ? connection.http2->submitRequestHead(Http2ConnectRequestHeadView{.authority = BorrowedText(request.tunnelAuthority()), .headers = headers})
+                                                 : connection.http2->submitRequestHead(Http2ExtendedConnectRequestHeadView{.protocol = BorrowedText(request.tunnelProtocol()), .scheme = config_.scheme == HttpScheme::kHttps ? "https" : "http", .authority = BorrowedText(request.tunnelAuthority()), .target = source.target, .headers = headers}))
+                                       : connection.http2->submitRequestHead(::ruvia::Http2RegularRequestHeadView{
+                                             .method = source.method,
+                                             .scheme = config_.scheme == HttpScheme::kHttps ? "https" : "http",
+                                             .authority = BorrowedText(std::string_view(authority)),
+                                             .target = source.target,
+                                             .headers = headers,
+                                             .content = content,
+                                             .expectation = request.upload() != nullptr ? request.upload()->config.expectation : HttpClientRequestExpectation::kNone});
             if (const auto* accepted = submitted.submitted()) {
                 pending.streamId = accepted->streamId();
                 response.state_->streamId = pending.streamId;
@@ -661,7 +843,90 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             break;
         }
 
+        if (auto* upload = request.output(); upload != nullptr && pending.streamId != 0 && !pending.failed() && !pending.retryable) {
+            upload->wakeTarget = &pending.signal;
+            upload->wake = [](void* target) noexcept { static_cast<WorkerSignal*>(target)->notify(); };
+            struct UploadWakeGuard {
+                HttpClientOutputQueue& upload;
+                ~UploadWakeGuard() {
+                    upload.wake = nullptr;
+                    upload.wakeTarget = nullptr;
+                }
+            } wakeGuard{*upload};
+            WorkerTimerRegistration continueTimer;
+            if (request.upload() != nullptr && !request.upload()->contentReleased) {
+                WorkerHandleAccess::scheduleTimer(worker_, continueTimer, workerTimerDeadlineAfter(request.upload()->config.continueTimeout), [upload, policy = request.upload()](WorkerTimerOutcome outcome) noexcept {
+                    if (outcome == WorkerTimerOutcome::kExpired && !upload->stopped) {
+                        policy->contentReleased = true;
+                        upload->notifyData();
+                    }
+                });
+            }
+            while (!upload->ended && !upload->stopped && !pending.complete && !pending.failed() && !pending.retryable) {
+                if (request.isTunnel() ? !request.tunnel()->accepted : !request.upload()->contentReleased) {
+                    co_await pending.signal.wait();
+                    continue;
+                }
+                continueTimer.cancel();
+                if (!request.isTunnel()) {
+                    const auto released = connection.http2->releaseRequestContent(pending.streamId);
+                    if (released == Http2RequestContentReleaseStatus::kClosed) {
+                        break;
+                    }
+                }
+                if (upload->chunkReady) {
+                    const auto submitted = connection.http2->submitData(pending.streamId, upload->chunk, Http2EndStream::kKeepOpen);
+                    if (submitted == Http2DataSubmitStatus::kBackpressured || submitted == Http2DataSubmitStatus::kExpectationPending) {
+                        co_await pending.signal.wait();
+                        continue;
+                    }
+                    if (submitted != Http2DataSubmitStatus::kAccepted && submitted != Http2DataSubmitStatus::kQueued) {
+                        pending.error = HttpClientError::Code::kInvalidRequest;
+                        submitHttp2Reset(connection, pending.streamId);
+                        break;
+                    }
+                    runtime.writeSignal.notify();
+                    while (connection.http2->hasQueuedData(pending.streamId) && !pending.failed() && !pending.retryable && !upload->stopped) {
+                        co_await pending.signal.wait();
+                    }
+                    if (!pending.failed() && !pending.retryable && !upload->stopped) {
+                        upload->acknowledgeChunk();
+                    }
+                } else if (upload->endRequested) {
+                    std::pmr::vector<HttpHeaderView> trailers(response.state_->resource);
+                    bool finishAccepted{};
+                    if (request.isTunnel()) {
+                        const auto finished = connection.http2->submitData(pending.streamId, {}, Http2EndStream::kEndStream);
+                        finishAccepted = finished == Http2DataSubmitStatus::kAccepted || finished == Http2DataSubmitStatus::kQueued;
+                    } else {
+                        for (const auto& field : request.upload()->trailers) {
+                            trailers.emplace_back(field.name(), field.value());
+                        }
+                        const auto finished = connection.http2->finishRequest(pending.streamId, trailers);
+                        finishAccepted = finished == Http2FinishRequestStatus::kAccepted || finished == Http2FinishRequestStatus::kQueued;
+                    }
+                    if (!finishAccepted) {
+                        pending.error = HttpClientError::Code::kInvalidRequest;
+                        submitHttp2Reset(connection, pending.streamId);
+                        break;
+                    }
+                    runtime.writeSignal.notify();
+                    while (connection.http2->hasQueuedData(pending.streamId) && !pending.failed() && !pending.retryable && !upload->stopped) {
+                        co_await pending.signal.wait();
+                    }
+                    if (!pending.failed() && !pending.retryable && !upload->stopped) {
+                        upload->finish();
+                    }
+                } else {
+                    co_await pending.signal.wait();
+                }
+            }
+        }
         while (!pending.complete && !pending.failed() && !pending.retryable) {
+            if (request.tunnel() != nullptr && request.tunnel()->accepted && request.tunnel()->receiveEnded && request.tunnel()->ended) {
+                pending.complete = true;
+                break;
+            }
             co_await pending.signal.wait();
         }
         deadlineTimer.cancel();
@@ -669,7 +934,7 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
         const auto error = pending.error;
         const auto failure = pending.failure;
         pendingRegistration.reset();
-        if (retryable && attempt == 0 && !timeout.expired()) {
+        if (retryable && request.output() == nullptr && attempt == 0 && !timeout.expired()) {
             continue;
         }
         if (retryable) {

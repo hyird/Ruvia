@@ -1,3 +1,4 @@
+#include <chrono>
 #include <concepts>
 #include <memory>
 #include <stdexcept>
@@ -6,6 +7,7 @@
 
 #include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/Timer.h"
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http2Types.h"
@@ -170,6 +172,86 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
     RUVIA_CHECK(got404Status);
     RUVIA_CHECK(gotAltSvc);
     RUVIA_CHECK(gotResponseEnd);
+}
+
+RUVIA_TEST(sansio_driver_h2_context_sends_origin_and_altsvc_and_observes_priority_update) {
+    auto& io = ruvia::test::newTestIoContext();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const auto port = acceptor.local_endpoint().port();
+    bool originsReceived = false, serviceReceived = false, responseEnded = false, priorityObserved = false;
+    std::exception_ptr failure;
+    const auto completion = [&](std::exception_ptr error) {
+        if (error && !failure) {
+            failure = error;
+        }
+    };
+    asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+        ruvia::WorkerMemory worker;
+        ruvia::detail::Router router;
+        auto& implementation = ruvia::detail::RouterImpl::from(router);
+        implementation.registerRoute(ruvia::HttpKnownMethod::kGet,
+            std::pmr::string("/advertise", worker.resource()),
+            ruvia::detail::RouteHandler(&priorityObserved,
+                +[](void* raw, ruvia::Context& context) -> ruvia::Task<ruvia::HttpResponse> {
+                    const std::array<std::string_view, 1> origins{"https://example.test"};
+                    co_await context.advertiseOrigins(origins);
+                    co_await context.advertiseAlternativeService("h3=\":443\"; ma=60");
+                    (void)co_await ruvia::sleepFor(context.worker(), std::chrono::milliseconds(1));
+                    const auto priority = context.req().priority();
+                    *static_cast<bool*>(raw) = priority.urgency == 1 && priority.incremental;
+                    co_return context.text("advertised");
+                }),
+            ruvia::detail::RequestBodyMode::kBuffered,
+            std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+            std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+        implementation.finalize();
+        co_await ruvia::asAwaitable(ruvia::test::runBareTlsHttp2SansIoSession(
+            socket, implementation.routeTable(), worker, "127.0.0.1")); }, completion);
+    asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        tcp::socket socket(io);
+        co_await socket.async_connect(tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+        auto connection = ruvia::Http2Connection::client({.receiveOriginAdvertisements = true});
+        const std::array fields{ruvia::HttpHeaderView("priority", "u=6")};
+        const auto request = connection.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+            .authority = ruvia::BorrowedText("example.test"), .target = "/advertise", .headers = fields});
+        if (!request.submitted() || connection.submitPriorityUpdate(request.submitted()->streamId(),
+                                        {.urgency = 1, .incremental = true}) != ruvia::Http2SubmitStatus::kAccepted) {
+            throw std::runtime_error("could not submit advertisement request and priority update");
+        }
+        const auto flush = [&]() -> asio::awaitable<void> {
+            const auto output = connection.pendingOutput();
+            if (!output.empty()) {
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+                (void)connection.consumeOutput(output.size());
+            }
+        };
+        co_await flush();
+        while (!responseEnded) {
+            std::array<char, 16384> input{};
+            const auto size = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            if (connection.feed(std::string_view(input.data(), size)) == ruvia::Http2FeedResult::kProtocolFailure) {
+                throw std::runtime_error("advertisement peer sent invalid HTTP/2 frames");
+            }
+            while (auto event = connection.nextEvent()) {
+                if (const auto* origins = event->originAdvertisement()) {
+                    originsReceived = origins->origins.size() == 1 && origins->origins[0] == "https://example.test";
+                }
+                if (const auto* service = event->alternativeServiceAdvertisement()) {
+                    serviceReceived = service->streamId == 1 && service->origin.empty() && service->fieldValue == "h3=\":443\"; ma=60";
+                }
+                if (const auto* end = event->messageEnd()) {
+                    responseEnded = end->streamId() == 1;
+                }
+            }
+            co_await flush();
+        }
+        closeClientSocket(socket); }, completion);
+    io.run();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK(originsReceived && serviceReceived && responseEnded && priorityObserved);
 }
 
 RUVIA_TEST(sansio_driver_h2_bodyless_response_survives_empty_accept_encoding_set) {

@@ -15,7 +15,9 @@ struct Capture {
 void capsule(void* context, ruvia::HttpCapsuleEvent event) {
     auto& capture = *static_cast<Capture*>(context);
     capture.type = event.type;
-    capture.body.append(event.payload.data(), event.payload.size());
+    if (!event.payload.empty()) {
+        capture.body.append(event.payload.data(), event.payload.size());
+    }
     capture.ends += event.endCapsule;
 }
 }  // namespace
@@ -68,4 +70,67 @@ RUVIA_TEST(http3_datagram_settings_validate_boolean_and_round_trip) {
     RUVIA_CHECK(decoded->h3Datagram);
     const std::array invalid{char(0x33), char(2)};
     RUVIA_CHECK(!ruvia::decodeHttp3Settings(invalid).has_value());
+}
+
+RUVIA_TEST(http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after_the_suffix) {
+    std::array<char, 16> header;
+    std::string wire;
+    for (const auto& item : std::array<std::pair<std::uint64_t, std::string_view>, 3>{{{0x123456789ULL, "first"}, {0, ""}, {7, "last"}}}) {
+        const auto encoded = ruvia::encodeHttpCapsuleHeader(header, item.first, item.second.size());
+        wire.append(header.data(), *encoded);
+        wire.append(item.second);
+    }
+    for (std::size_t block : {std::size_t{1}, std::size_t{3}, wire.size()}) {
+        ruvia::HttpCapsuleDecoder decoder;
+        Capture captured;
+        std::size_t offset{}, complete{};
+        std::string allPayload;
+        while (offset != wire.size()) {
+            const auto count = std::min(block, wire.size() - offset);
+            const auto result = decoder.feedOne(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
+            RUVIA_CHECK(result.consumedBytes > 0 && result.consumedBytes <= count);
+            offset += result.consumedBytes;
+            if (result.capsuleComplete) {
+                const std::array<std::uint64_t, 3> expectedTypes{0x123456789ULL, 0, 7};
+                const std::array<std::string_view, 3> expectedPayloads{"first", "", "last"};
+                RUVIA_CHECK(captured.type == expectedTypes[complete]);
+                RUVIA_CHECK(captured.body == expectedPayloads[complete]);
+                captured.body.clear();
+                ++complete;
+            }
+            RUVIA_CHECK(result.status == (offset == wire.size() ? ruvia::HttpCapsuleStatus::kEnd : ruvia::HttpCapsuleStatus::kNeedMoreData));
+        }
+        RUVIA_CHECK_EQ(complete, std::size_t{3});
+        RUVIA_CHECK_EQ(captured.ends, std::size_t{3});
+        const auto ended = decoder.feedOne({}, true, capsule, &captured);
+        RUVIA_CHECK(ended.status == ruvia::HttpCapsuleStatus::kEnd && !ended.capsuleComplete && ended.consumedBytes == 0);
+    }
+    ruvia::HttpCapsuleDecoder truncated;
+    const std::array partial{char(0), char(3), char('a')};
+    const auto result = truncated.feedOne(partial, true, nullptr, nullptr);
+    RUVIA_CHECK(result.status == ruvia::HttpCapsuleStatus::kTruncated && !result.capsuleComplete && result.consumedBytes == partial.size());
+}
+
+RUVIA_TEST(http_datagram_generic_channel_frames_opaque_payloads_and_plans_receive_failures) {
+    using namespace ruvia;
+    HttpDatagramSession session({.http3StreamId = 12, .localH3Datagram = true, .peerH3Datagram = true, .quicDatagram = true, .maxQuicPayloadBytes = 8});
+    const std::string_view opaque("\1\0\xff", 3);
+    const auto native = session.prepareDatagram(std::span(opaque.data(), opaque.size()), HttpDatagramTransport::kQuic);
+    RUVIA_CHECK(native && native->prefixSize == 1 && native->prefix[0] == 3);
+    const std::string packet = std::string(native->prefix.data(), native->prefixSize) + std::string(opaque);
+    const auto received = session.receiveDatagram(std::span(packet.data(), packet.size()), HttpDatagramTransport::kQuic);
+    RUVIA_CHECK(received && *received && std::string_view((**received).data(), (**received).size()) == opaque);
+    const auto capsule = session.prepareDatagram({}, HttpDatagramTransport::kCapsule);
+    RUVIA_CHECK(capsule && capsule->prefixSize == 2 && capsule->prefix[0] == 0 && capsule->prefix[1] == 0);
+    RUVIA_CHECK(!session.prepareDatagram(std::span<const char>("12345678", 8), HttpDatagramTransport::kQuic));
+    session.closeReceive();
+    RUVIA_CHECK(!*session.receiveDatagram(std::span(packet.data(), packet.size()), HttpDatagramTransport::kQuic));
+    session.closeSend();
+    RUVIA_CHECK(!session.prepareDatagram({}, HttpDatagramTransport::kCapsule));
+    const Http3DatagramView view{12, {}};
+    RUVIA_CHECK(planHttp3DatagramReceive(view, {true, true, true, true}) == Http3DatagramReceiveStatus::kDeliver);
+    RUVIA_CHECK(planHttp3DatagramReceive(view, {true, false, true, false}) == Http3DatagramReceiveStatus::kDrop);
+    RUVIA_CHECK(planHttp3DatagramReceive(view, {true, true, false, false}) == Http3DatagramReceiveStatus::kDrop);
+    RUVIA_CHECK(planHttp3DatagramReceive(view, {true, true, true, false}) == Http3DatagramReceiveStatus::kStreamError);
+    RUVIA_CHECK(planHttp3DatagramReceive(view, {false, true, true, true}) == Http3DatagramReceiveStatus::kConnectionError);
 }

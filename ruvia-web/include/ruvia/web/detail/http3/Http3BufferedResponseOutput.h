@@ -69,7 +69,12 @@ public:
     [[nodiscard]] static std::expected<Http3BufferedResponseOutput, Error> create(
         const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan,
         WorkerMemory& worker, Http3StreamMailbox& mailbox, MessageId messageId,
-        std::optional<std::uint64_t> peerMaxFieldSectionSize = std::nullopt) noexcept;
+        std::optional<std::uint64_t> peerMaxFieldSectionSize = std::nullopt, std::uint64_t initialPublishedWireBytes = 0) noexcept;
+
+    [[nodiscard]] static std::expected<Http3BufferedResponseOutput, Error> create(
+        const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
+        WorkerMemory& worker, Http3StreamMailbox& mailbox, MessageId messageId,
+        std::optional<std::uint64_t> peerMaxFieldSectionSize = std::nullopt, std::uint64_t initialPublishedWireBytes = 0) noexcept;
 
     Http3BufferedResponseOutput(const Http3BufferedResponseOutput&) = delete;
     Http3BufferedResponseOutput& operator=(const Http3BufferedResponseOutput&) = delete;
@@ -104,7 +109,7 @@ private:
 
     Http3BufferedResponseOutput(const HttpResponse& response,
         Http3StreamMailbox& mailbox, MessageId messageId,
-        Http3BufferedResponseWrite cursor) noexcept;
+        Http3BufferedResponseWrite cursor, std::uint64_t initialPublishedWireBytes) noexcept;
 
     [[nodiscard]] static Error cursorError(Http3BufferedResponseWrite::Error error) noexcept;
     [[nodiscard]] Result fail(Error error, std::size_t bytesAccepted = 0,
