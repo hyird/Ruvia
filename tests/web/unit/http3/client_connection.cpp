@@ -2490,6 +2490,10 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                     }
                     RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
                 }
+                RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().inFlightRequests == 0; }, 2s));
+                co_await tunnel.finish();
+                RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
+                RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)tunnel.write("late"); }));
             } catch (...) {
                 failure = std::current_exception();
             }
