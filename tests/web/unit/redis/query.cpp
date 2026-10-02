@@ -10,6 +10,7 @@
 #include "ruvia/web/detail/redis/RedisQueryCompile.h"
 #include "ruvia/web/redis/RedisEntity.h"
 
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -60,16 +61,16 @@ RUVIA_TEST(redis_query_compiles_binary_and_empty_tag_literals_safely) {
     auto* const resource = std::pmr::get_default_resource();
     const auto mapping = makeMapping(resource);
     const auto binary = std::string("a\0b", 3);
-    ruvia::DbFindOptions binaryOptions{
-        .where = RedisQueryUser::column<"email">() ==
+    ruvia::redis_find_options binaryOptions{
+        .where = RedisQueryUser::field<"email">() ==
                  std::string_view(binary.data(), binary.size())};
     const auto binaryArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         binaryOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(binaryArgs, 2),
         std::string_view("@email:{x610062}"));
 
-    ruvia::DbFindOptions emptyOptions{
-        .where = RedisQueryUser::column<"email">() == std::string_view{}};
+    ruvia::redis_find_options emptyOptions{
+        .where = RedisQueryUser::field<"email">() == std::string_view{}};
     const auto emptyArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         emptyOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(emptyArgs, 2), std::string_view("@email:{x}"));
@@ -77,11 +78,11 @@ RUVIA_TEST(redis_query_compiles_binary_and_empty_tag_literals_safely) {
 
 RUVIA_TEST(redis_query_compiles_parenthesized_logical_numeric_and_order) {
     const auto mapping = makeMapping(std::pmr::get_default_resource());
-    auto predicate = (RedisQueryUser::column<"email">() == "alice@example.com") &&
-                     (RedisQueryUser::column<"age">() >= 18);
-    ruvia::DbFindOptions options{
+    auto predicate = (RedisQueryUser::field<"email">() == "alice@example.com") &&
+                     (RedisQueryUser::field<"age">() >= 18);
+    ruvia::redis_find_options options{
         .where = std::move(predicate),
-        .order = {{.column = "age", .direction = ruvia::DbOrderDirection::kDesc}},
+        .order = {{.field = "age", .direction = ruvia::redis_order_direction::descending}},
         .skip = 5,
         .take = 10};
     const auto args = ruvia::detail::compileRedisFind<RedisQueryUser>(
@@ -99,35 +100,35 @@ RUVIA_TEST(redis_query_compiles_parenthesized_logical_numeric_and_order) {
 RUVIA_TEST(redis_query_compiles_null_between_and_in_with_presence) {
     auto* const resource = std::pmr::get_default_resource();
     const auto mapping = makeMapping(resource);
-    ruvia::DbFindOptions nullOptions{
-        .where = RedisQueryUser::column<"active">().isNull()};
+    ruvia::redis_find_options nullOptions{
+        .where = RedisQueryUser::field<"active">().is_null()};
     const auto nullArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         nullOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(nullArgs, 2),
         std::string_view("-@__ruvia_present_active:{1}"));
 
-    ruvia::DbFindOptions notEqualOptions{
-        .where = RedisQueryUser::column<"email">() != "disabled"};
+    ruvia::redis_find_options notEqualOptions{
+        .where = RedisQueryUser::field<"email">() != "disabled"};
     const auto notEqualArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         notEqualOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(notEqualArgs, 2), std::string_view(
                                              "(@__ruvia_present_email:{1} -@email:{x64697361626c6564})"));
 
-    ruvia::DbFindOptions numericNotEqualOptions{
-        .where = RedisQueryUser::column<"age">() != 18};
+    ruvia::redis_find_options numericNotEqualOptions{
+        .where = RedisQueryUser::field<"age">() != 18};
     const auto numericNotEqualArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         numericNotEqualOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(numericNotEqualArgs, 2), std::string_view(
                                                     "(@age:[-inf +inf] -@age:[18 18])"));
 
-    ruvia::DbFindOptions rangeOptions{
-        .where = RedisQueryUser::column<"age">().between(18, 65)};
+    ruvia::redis_find_options rangeOptions{
+        .where = RedisQueryUser::field<"age">().between(18, 65)};
     const auto rangeArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         rangeOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(rangeArgs, 2), std::string_view("@age:[18 65]"));
 
-    ruvia::DbFindOptions floatOptions{
-        .where = RedisQueryUser::column<"ratio">() == 0.1F};
+    ruvia::redis_find_options floatOptions{
+        .where = RedisQueryUser::field<"ratio">() == 0.1F};
     const auto floatArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         floatOptions, mapping, resource);
     const auto encodedFloat = ruvia::detail::encodeRedisNumber(0.1F, resource);
@@ -140,8 +141,8 @@ RUVIA_TEST(redis_query_compiles_null_between_and_in_with_presence) {
     RUVIA_CHECK_EQ(arg(floatArgs, 2), expectedFloat);
 
     const std::int32_t ages[] = {18, 21, 65};
-    ruvia::DbFindOptions inOptions{
-        .where = RedisQueryUser::column<"age">().in(std::span<const std::int32_t>(ages))};
+    ruvia::redis_find_options inOptions{
+        .where = RedisQueryUser::field<"age">().in(std::span<const std::int32_t>(ages))};
     const auto inArgs = ruvia::detail::compileRedisFind<RedisQueryUser>(
         inOptions, mapping, resource);
     RUVIA_CHECK_EQ(arg(inArgs, 2), std::string_view(
@@ -151,32 +152,32 @@ RUVIA_TEST(redis_query_compiles_null_between_and_in_with_presence) {
 RUVIA_TEST(redis_query_rejects_foreign_text_and_invalid_sorting) {
     auto* const resource = std::pmr::get_default_resource();
     const auto mapping = makeMapping(resource);
-    ruvia::DbFindOptions foreign{
-        .where = OtherRedisQueryUser::column<"email">() == "alice@example.com"};
+    ruvia::redis_find_options foreign{
+        .where = OtherRedisQueryUser::field<"email">() == "alice@example.com"};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::compileRedisFind<RedisQueryUser>(foreign, mapping, resource);
     }));
 
-    ruvia::DbFindOptions text{
-        .where = RedisQueryUser::column<"title">().like("red*")};
+    ruvia::redis_find_options text{
+        .where = RedisQueryUser::field<"title">() == "red*"};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::compileRedisFind<RedisQueryUser>(text, mapping, resource);
     }));
 
-    ruvia::DbFindOptions twoOrders{
-        .order = {{.column = "age"}, {.column = "age"}}};
+    ruvia::redis_find_options twoOrders{
+        .order = {{.field = "age"}, {.field = "age"}}};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::compileRedisFind<RedisQueryUser>(twoOrders, mapping, resource);
     }));
 
-    ruvia::DbFindOptions notSortable{
-        .order = {{.column = "email"}}};
+    ruvia::redis_find_options notSortable{
+        .order = {{.field = "email"}}};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::compileRedisFind<RedisQueryUser>(notSortable, mapping, resource);
     }));
 
-    ruvia::DbFindOptions overflow{
-        .where = RedisQueryUser::column<"age">() >
+    ruvia::redis_find_options overflow{
+        .where = RedisQueryUser::field<"age">() >
                  std::numeric_limits<std::int64_t>::max()};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::compileRedisFind<RedisQueryUser>(overflow, mapping, resource);
@@ -200,18 +201,18 @@ RUVIA_TEST(redis_query_compiles_index_and_primary_key_fast_path) {
     RUVIA_CHECK_EQ(arg(args, 14), std::string_view("AS"));
     RUVIA_CHECK_EQ(arg(args, 15), std::string_view("__ruvia_present_email"));
 
-    auto primary = RedisQueryUser::column<"id">() == 42;
+    auto primary = RedisQueryUser::field<"id">() == 42;
     const auto key = ruvia::detail::redisPrimaryKey<RedisQueryUser>(primary, resource);
     RUVIA_CHECK(key.has_value());
     RUVIA_CHECK_EQ(*key, std::string_view("42"));
 
-    auto largePrimary = RedisQueryUser::column<"id">() ==
+    auto largePrimary = RedisQueryUser::field<"id">() ==
                         std::numeric_limits<std::int64_t>::max();
     const auto largeKey = ruvia::detail::redisPrimaryKey<RedisQueryUser>(largePrimary, resource);
     RUVIA_CHECK(largeKey.has_value());
     RUVIA_CHECK_EQ(*largeKey, std::string_view("9223372036854775807"));
 
-    auto unsignedPrimary = RedisUnsignedKey::column<"id">() == std::numeric_limits<std::uint64_t>::max();
+    auto unsignedPrimary = RedisUnsignedKey::field<"id">() == std::numeric_limits<std::uint64_t>::max();
     const auto unsignedKey = ruvia::detail::redisPrimaryKey<RedisUnsignedKey>(unsignedPrimary, resource);
     RUVIA_CHECK(unsignedKey.has_value());
     RUVIA_CHECK_EQ(*unsignedKey, std::string_view("18446744073709551615"));
@@ -220,15 +221,58 @@ RUVIA_TEST(redis_query_compiles_index_and_primary_key_fast_path) {
 RUVIA_TEST(redis_query_compiles_open_and_closed_numeric_bounds) {
     auto* resource = std::pmr::get_default_resource();
     const auto mapping = makeMapping(resource);
-    std::pair<ruvia::DbPredicate, std::string_view> cases[] = {
-        {RedisQueryUser::column<"age">() > 5, "@age:[(5 +inf]"},
-        {RedisQueryUser::column<"age">() >= 5, "@age:[5 +inf]"},
-        {RedisQueryUser::column<"age">() < 5, "@age:[-inf (5]"},
-        {RedisQueryUser::column<"age">() <= 5, "@age:[-inf 5]"},
+    std::pair<ruvia::redis_predicate, std::string_view> cases[] = {
+        {RedisQueryUser::field<"age">() > 5, "@age:[(5 +inf]"},
+        {RedisQueryUser::field<"age">() >= 5, "@age:[5 +inf]"},
+        {RedisQueryUser::field<"age">() < 5, "@age:[-inf (5]"},
+        {RedisQueryUser::field<"age">() <= 5, "@age:[-inf 5]"},
     };
     for (auto& [predicate, expected] : cases) {
-        ruvia::DbFindOptions options{.where = std::move(predicate)};
+        ruvia::redis_find_options options{.where = std::move(predicate)};
         const auto args = ruvia::detail::compileRedisFind<RedisQueryUser>(options, mapping, resource);
         RUVIA_CHECK_EQ(arg(args, 2), expected);
     }
+}
+
+RUVIA_TEST(redis_predicate_owns_literals_and_reclaims_composed_storage) {
+    ruvia::test::CountingMemoryResource resource;
+    struct default_resource_guard {
+        std::pmr::memory_resource* previous;
+        ~default_resource_guard() {
+            std::pmr::set_default_resource(previous);
+        }
+    } guard{std::pmr::set_default_resource(&resource)};
+    {
+        auto mapping = makeMapping(&resource);
+        std::string text(200, 'x');
+        auto filter = RedisQueryUser::field<"email">() == text;
+        text.assign(200, 'y');
+        auto range = RedisQueryUser::field<"age">().between(18, 65);
+        ruvia::redis_find_options options{.where = std::move(filter) && range};
+        RUVIA_CHECK(filter.empty());
+        const auto args = ruvia::detail::compileRedisFind<RedisQueryUser>(options, mapping, &resource);
+        std::string expected{"(@email:{x"};
+        for (int i = 0; i < 200; ++i) {
+            expected += "78";
+        }
+        expected += "} @age:[18 65])";
+        RUVIA_CHECK_EQ(std::string_view(arg(args, 2)), std::string_view(expected));
+        RUVIA_CHECK(!range.empty());
+        RUVIA_CHECK(resource.liveAllocations() > 0);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(redis_predicate_compiles_disjunction_not_in_and_model_scalars) {
+    auto* resource = std::pmr::get_default_resource();
+    auto mapping = makeMapping(resource);
+    ruvia::redis_find_options options{
+        .where = (RedisQueryUser::field<"age">() == ruvia::Int32{18}) ||
+                 (RedisQueryUser::field<"active">() == ruvia::Bool{true})};
+    auto args = ruvia::detail::compileRedisFind<RedisQueryUser>(options, mapping, resource);
+    RUVIA_CHECK_EQ(arg(args, 2), std::string_view("(@age:[18 18]|@active:{x31})"));
+    ruvia::redis_find_options excluded{.where = RedisQueryUser::field<"age">().not_in({18, 21})};
+    auto excluded_args = ruvia::detail::compileRedisFind<RedisQueryUser>(excluded, mapping, resource);
+    RUVIA_CHECK_EQ(arg(excluded_args, 2), std::string_view("(@__ruvia_present_age:{1} -(@age:[18 18]|@age:[21 21]))"));
 }

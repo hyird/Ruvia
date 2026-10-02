@@ -10,7 +10,7 @@ enum class RedisIndexKind : std::uint8_t { kNone,
     kText,
     kNumeric };
 struct RedisIndexConfig final {
-    std::string column{};
+    std::string field{};
     RedisIndexKind kind{RedisIndexKind::kTag};
     bool sortable{false};
 };

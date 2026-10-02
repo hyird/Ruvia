@@ -8,7 +8,7 @@
 #include <tuple>
 #include <type_traits>
 
-#include "ruvia/web/db/DbEntity.h"
+#include "ruvia/web/detail/entity/ValueStorage.h"
 #include "ruvia/web/detail/model/Traits.h"
 
 namespace ruvia::detail {

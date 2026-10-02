@@ -24,6 +24,12 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/detail/redis/RedisClientRuntime.h"
 #include "ruvia/web/redis/RedisClient.h"
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/DbClient.h"
+#include "ruvia/web/detail/db/DbQueryCache.h"
+#include "ruvia/web/detail/db/DbRegistry.h"
+#include "ruvia/web/detail/db/DbResultAccess.h"
+#endif
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -46,10 +52,13 @@ public:
         kNestedArrays,
         kDeepArrays,
         kValidNestedArray,
+        kQueryCache,
         kRejectThenPing };
 
-    explicit RedisPeer(Mode mode = Mode::kNormal, asio::ssl::context* tls_context = nullptr)
+    explicit RedisPeer(Mode mode = Mode::kNormal, asio::ssl::context* tls_context = nullptr,
+        std::string cache_payload = {})
         : mode_(mode),
+          cache_payload_(std::move(cache_payload)),
           tls_context_(tls_context),
           acceptor_(io_, {asio::ip::tcp::v4(), 0}),
           socket_(io_),
@@ -180,7 +189,9 @@ private:
             } else if (args.front() == "PING") {
                 reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::to_string(args[1].size()) + "\r\n" + args[1] + "\r\n";
             } else if (args.front() == "GET") {
-                reply = "$128\r\n" + std::string(128, 'v') + "\r\n";
+                reply = mode_ == Mode::kQueryCache
+                            ? "$" + std::to_string(cache_payload_.size()) + "\r\n" + cache_payload_ + "\r\n"
+                            : "$128\r\n" + std::string(128, 'v') + "\r\n";
             } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
                 expiration_.set_value(args);
                 reply = ":1\r\n";
@@ -194,6 +205,7 @@ private:
     }
 
     Mode mode_;
+    std::string cache_payload_;
     asio::ssl::context* tls_context_;
     bool firstConnection_{true};
     asio::io_context io_;
@@ -222,7 +234,7 @@ ruvia::Task<void> checkCommands(ruvia::RedisClient& client, ruvia::testing::Test
     auto retained = co_await client.get("retained");
     RUVIA_CHECK(retained.has_value());
     auto users = client.getRepository<ClientUser>();
-    auto user = co_await users.findOne({.where = ClientUser::column<"id">() == "1"});
+    auto user = co_await users.findOne({.where = ClientUser::field<"id">() == "1"});
     RUVIA_CHECK(user.has_value());
     std::string mutablePing(128, 'm');
     auto coldPing = client.ping(mutablePing);
@@ -838,3 +850,57 @@ RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     pool.join();
     RUVIA_CHECK(cancelled);
 }
+
+#ifdef RUVIA_ENABLE_DATABASE
+RUVIA_TEST(db_query_cache_reuses_connected_redis_and_leaves_its_pool_open) {
+    using access = ruvia::detail::DbResultAccess;
+    auto* resource = std::pmr::get_default_resource();
+    auto rows = access::makeResult(resource);
+    auto row = access::ownedRow(resource);
+    access::ownedColumnNames(row).emplace_back("name");
+    access::ownedFields(row).push_back(access::ownedField("cached", resource));
+    access::rows(rows).push_back(std::move(row));
+    auto bytes = ruvia::detail::encodeDbCacheRows(rows, resource);
+    RedisPeer peer(RedisPeer::Mode::kQueryCache, nullptr, std::string(bytes));
+    ruvia::EventLoopPool pool({.loopCount = 1});
+    auto loop = pool.loop(0);
+    ruvia::RedisClient redis(loop, peer.config());
+    auto run = [&]() -> ruvia::Task<void> {
+        co_await redis.connect();
+        auto store = redis.withOptions({});
+#ifdef RUVIA_ENABLE_POSTGRESQL
+        ruvia::DbConfig config{.driver = ruvia::DbDriver::kPostgreSql};
+#else
+        ruvia::DbConfig config{.driver = ruvia::DbDriver::kMariaDb};
+#endif
+        ruvia::DbClient client(loop, config, store, ruvia::DbCacheConfig{});
+        ruvia::test::CountingMemoryResource operation_memory;
+        {
+            ruvia::detail::DbRegistry databases(loop.ioContext(), redis.worker(),
+                &operation_memory, config, store, ruvia::DbCacheConfig{});
+            ruvia::detail::ScopedOperationScope scope;
+            auto database = databases.get(scope);
+            ruvia::DbQuery query;
+            query.select(query.column("name")).from("items").cache(true);
+            const auto baseline = operation_memory.liveAllocations();
+            for (int index = 0; index < 3; ++index) {
+                {
+                    const auto result = co_await database.query(query);
+                    RUVIA_CHECK_EQ(result.size(), std::size_t{1});
+                    RUVIA_CHECK_EQ(result[0]["name"].as<std::string_view>().value(), std::string_view("cached"));
+                }
+                RUVIA_CHECK_EQ(operation_memory.liveAllocations(), baseline);
+            }
+            databases.closeNow();
+            co_await redis.ping();
+        }
+        RUVIA_CHECK_EQ(operation_memory.liveAllocations(), std::size_t{0});
+        co_await client.shutdown();
+        co_await redis.ping();
+        co_await redis.shutdown();
+    };
+    pool.start();
+    loop.start(run()).get();
+    pool.join();
+}
+#endif

@@ -80,8 +80,8 @@ public:
 
 private:
     const WorkerHandle& worker_;
-    DbRegistry databases_;
     RedisRegistry redis_;
+    DbRegistry databases_;
     std::shared_ptr<HttpClientResultBudgetDomain> httpClientResultBudgetDomain_;
     HttpClientRegistry httpClients_;
     WorkerStateRegistry workerStates_;

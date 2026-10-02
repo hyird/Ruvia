@@ -21,6 +21,10 @@
 #include "ruvia/web/detail/db/DbQueryCacheState.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/detail/redis/RedisClientRuntime.h"
+#include "ruvia/web/detail/redis/RedisRegistry.h"
+#endif
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -756,8 +760,11 @@ RUVIA_TEST(db_repository_cached_operations_own_inputs_and_release_cold_storage) 
     test::CountingMemoryResource resource;
     {
         auto config = databaseConfig();
-        config.cache.emplace();
-        detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config);
+        detail::RedisClientRuntime redis(runtime.context, runtime.worker,
+            detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
+        detail::ScopedOperationScope redis_scope;
+        auto store = redis.handle(redis_scope);
+        detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config, store, DbCacheConfig{});
         detail::ScopedOperationScope scope;
         auto handle = registry.get(scope);
         auto cache = handle.queryResultCache();
@@ -798,8 +805,11 @@ RUVIA_TEST(db_query_result_cache_cold_drop_and_shutdown_report_typed_failures) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource;
     auto config = databaseConfig();
-    config.cache.emplace();
-    detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config);
+    detail::RedisClientRuntime redis(runtime.context, runtime.worker,
+        detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
+    detail::ScopedOperationScope redis_scope;
+    auto store = redis.handle(redis_scope);
+    detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config, store, DbCacheConfig{});
     detail::ScopedOperationScope scope;
     auto handle = registry.get(scope);
     auto cache = handle.queryResultCache();
@@ -833,8 +843,8 @@ RUVIA_TEST(db_query_result_cache_cold_drop_and_shutdown_report_typed_failures) {
             auto operation = cache.clear();
             co_await std::move(operation);
         }());
-    } catch (const RedisError& error) {
-        closing = error.code() == RedisError::Code::kClosing;
+    } catch (const DbError& error) {
+        closing = error.code() == DbError::Code::kClosing;
     }
     RUVIA_CHECK(closing);
     RUVIA_CHECK(!scope.hasPendingOperations());
@@ -844,7 +854,11 @@ RUVIA_TEST(db_cache_policy_snapshots_settings_and_bypasses_writes_and_locks) {
     RepositoryRuntime runtime;
     auto* resource = std::pmr::get_default_resource();
     DbCacheConfig config{.alwaysEnabled = true};
-    detail::DbQueryCacheState cache(runtime.context, runtime.worker, detail::DbCacheConfigStorage(config, resource), config.nameSpace, resource);
+    detail::RedisClientRuntime redis(runtime.context, runtime.worker,
+        detail::RedisConfigStorage(RedisConfig{}, resource), resource);
+    detail::ScopedOperationScope redis_scope;
+    auto store = redis.handle(redis_scope);
+    detail::DbQueryCacheState cache(store, detail::DbCacheConfigStorage(config, resource), config.nameSpace, resource);
     DbQuery query;
     query.select(query.column("id")).from("items");
     const auto driver = databaseConfig().driver;
@@ -869,13 +883,93 @@ RUVIA_TEST(db_cache_policy_snapshots_settings_and_bypasses_writes_and_locks) {
     RUVIA_CHECK(!cache.key(withWrite, statement, driver));
     RUVIA_CHECK(testing::throwsOn([&] { query.cache(std::chrono::milliseconds(0)); }));
     RUVIA_CHECK(testing::throwsOn([&] { query.cache("id", std::chrono::milliseconds(-1)); }));
-    auto settings = databaseConfig();
-    settings.cache.emplace();
-    settings.cache->duration = std::chrono::milliseconds(0);
-    RUVIA_CHECK(testing::throwsOn([&] { detail::DbConfigStorage stored(settings, resource); }));
-    settings.cache->duration = std::chrono::seconds(1);
-    settings.cache->nameSpace.clear();
-    RUVIA_CHECK(testing::throwsOn([&] { detail::DbConfigStorage stored(settings, resource); }));
+    config.duration = std::chrono::milliseconds(0);
+    RUVIA_CHECK(testing::throwsOn([&] { detail::DbCacheConfigStorage stored(config, resource); }));
+    config.duration = std::chrono::seconds(1);
+    config.nameSpace.clear();
+    RUVIA_CHECK(testing::throwsOn([&] { detail::DbCacheConfigStorage stored(config, resource); }));
+}
+
+RUVIA_TEST(db_query_cache_binding_preserves_store_and_expires_with_its_scope) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource resource;
+    detail::RedisClientRuntime redis(runtime.context, runtime.worker,
+        detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
+    detail::ScopedOperationScope redis_scope;
+    auto store = redis.handle(redis_scope);
+    detail::ScopedOperationScope db_scope;
+    detail::DbRegistry registry(runtime.context, runtime.worker, &resource,
+        databaseConfig(), store, DbCacheConfig{});
+    auto cache = registry.get(db_scope).queryResultCache();
+    auto pending = cache.clear();
+    redis_scope.close();
+    RUVIA_CHECK(testing::throwsOn([&] {
+        runVoid([&]() -> Task<void> { co_await std::move(pending); }());
+    }));
+    RUVIA_CHECK(!db_scope.hasPendingOperations());
+
+    detail::ScopedOperationScope second_scope;
+    auto second_store = redis.handle(second_scope);
+    detail::DbRegistry second(runtime.context, runtime.worker, &resource,
+        databaseConfig(), second_store, DbCacheConfig{});
+    second.closeNow();
+    {
+        auto ping = second_store.ping();
+    }
+    RUVIA_CHECK(!second_scope.hasPendingOperations());
+}
+
+RUVIA_TEST(db_query_cache_binding_rejects_another_worker) {
+    RepositoryRuntime database_runtime;
+    RepositoryRuntime redis_runtime;
+    auto* resource = std::pmr::get_default_resource();
+    detail::RedisClientRuntime redis(redis_runtime.context, redis_runtime.worker,
+        detail::RedisConfigStorage(RedisConfig{}, resource), resource);
+    detail::ScopedOperationScope scope;
+    auto store = redis.handle(scope);
+    RUVIA_CHECK(testing::throwsOn([&] {
+        detail::DbRegistry registry(database_runtime.context, database_runtime.worker,
+            resource, databaseConfig(), store, DbCacheConfig{});
+    }));
+}
+
+RUVIA_TEST(db_query_cache_registration_owns_policy_and_resolves_registered_alias) {
+    RepositoryRuntime runtime;
+    test::CountingMemoryResource resource;
+    {
+        const std::array redis_definitions{detail::RedisDefinition{
+            std::pmr::string("cache", &resource), detail::RedisConfigStorage(RedisConfig{}, &resource)}};
+        detail::RedisRegistry redis(runtime.context, &resource, redis_definitions, runtime.worker);
+        db_query_cache_registration registration{
+            .redis_alias = "cache", .policy = {.nameSpace = std::string(200, 'n')}};
+        std::array databases{detail::DbDefinition{
+            std::pmr::string("default", &resource), detail::DbConfigStorage(databaseConfig(), &resource)}};
+        databases[0].query_cache.emplace(registration, &resource);
+        registration.redis_alias = "changed";
+        registration.policy.nameSpace.assign(200, 'x');
+        RUVIA_CHECK_EQ(databases[0].query_cache->redis_alias, std::string_view("cache"));
+        RUVIA_CHECK_EQ(databases[0].query_cache->policy.nameSpace, std::string_view(std::string(200, 'n')));
+        {
+            detail::DbRegistry registry(runtime.context, runtime.worker, &resource, databases, &redis);
+            detail::ScopedOperationScope scope;
+            auto cache = registry.get(scope).queryResultCache();
+            const auto baseline = resource.liveAllocations();
+            {
+                auto cold = cache.clear();
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+        }
+        databases[0].query_cache->redis_alias = "missing";
+        bool missing = false;
+        try {
+            detail::DbRegistry registry(runtime.context, runtime.worker, &resource, databases, &redis);
+        } catch (const RedisError& error) {
+            missing = error.code() == RedisError::Code::kNotConfigured;
+        }
+        RUVIA_CHECK(missing);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 #endif
 

@@ -22,8 +22,8 @@ WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const Worker
     std::pmr::memory_resource* resource, WorkerCapabilityDefinitions definitions,
     WorkerCapabilityOptions options)
     : worker_(requireWorkerCapabilitiesWorker(worker)),
-      databases_(ioContext, worker_, resource, definitions.databases),
       redis_(ioContext, resource, definitions.redis, worker_),
+      databases_(ioContext, worker_, resource, definitions.databases, &redis_),
       httpClientResultBudgetDomain_(
           std::make_shared<HttpClientResultBudgetDomain>(options.httpClientResultBudget)),
       httpClients_(ioContext, worker_, resource, definitions.httpClients,
@@ -35,11 +35,11 @@ WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const Worker
 
 Task<void> WorkerCapabilities::connect() {
     try {
-        if (!databases_.empty()) {
-            co_await databases_.connect();
-        }
         if (!redis_.empty()) {
             co_await redis_.connect();
+        }
+        if (!databases_.empty()) {
+            co_await databases_.connect();
         }
     } catch (...) {
         closeNow();
@@ -53,8 +53,8 @@ Task<void> WorkerCapabilities::join() {
 
 void WorkerCapabilities::closeNow() noexcept {
     httpClients_.closeNow();
-    redis_.closeNow();
     databases_.closeNow();
+    redis_.closeNow();
 }
 
 void WorkerCapabilities::initializeWorkerState() {

@@ -5,11 +5,12 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/web/EntityRows.h"
 #include "ruvia/web/db/DbRows.h"
 
 namespace ruvia {
 template <typename Entity>
-class DbEntityRows;
+class entity_rows;
 }
 
 namespace ruvia::detail {
@@ -19,9 +20,9 @@ namespace ruvia::detail {
 // friend declaration per driver.
 struct DbResultAccess final {
     template <typename Entity>
-    [[nodiscard]] static DbEntityRows<Entity> makeEntityRows(std::pmr::memory_resource* resource, std::size_t size) {
-        DbEntityRows<Entity> result(resource);
-        result.rows_.reserve(size);
+    [[nodiscard]] static entity_rows<Entity> makeEntityRows(std::pmr::memory_resource* resource, std::size_t size) {
+        entity_rows<Entity> result(resource);
+        result.reserve(size);
         return result;
     }
 

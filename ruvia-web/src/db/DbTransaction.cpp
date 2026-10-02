@@ -118,7 +118,7 @@ Task<DbRows> DbTransaction::queryTask(const DbQuery& query) {
     if (cache_) {
         auto key = cache_->key(query, statement, detail::dbPoolDriver(lease.client));
         return queryCachedPrepared<false>(std::move(statement), std::nullopt, std::move(key), std::nullopt,
-            query.cacheDuration(), std::nullopt, *cache_, operationScope(), std::move(operation));
+            query.cacheDuration(), std::nullopt, *cache_, std::move(operation));
     }
     return queryPrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation));
 }
@@ -137,7 +137,7 @@ Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountTask(const DbQuery& 
         auto firstKey = cache_->key(query, first, driver);
         auto secondKey = cache_->key(count, second, driver);
         return queryCachedPrepared<true>(std::move(first), std::move(second), std::move(firstKey), std::move(secondKey),
-            query.cacheDuration(), count.cacheDuration(), *cache_, operationScope(), std::move(operation));
+            query.cacheDuration(), count.cacheDuration(), *cache_, std::move(operation));
     }
     return queryAndCountPrepared(std::move(first), std::move(second), std::move(operation));
 }
@@ -149,7 +149,7 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
     std::optional<std::chrono::milliseconds> firstDuration,
     std::optional<std::chrono::milliseconds> secondDuration,
     detail::DbQueryCacheState& cache,
-    detail::ScopedOperationScope& scope, OperationGuard pending) {
+    OperationGuard pending) {
     OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
@@ -160,7 +160,7 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
         auto rows = co_await cache.wrap(firstDuration, std::move(firstKey),
             detail::DbCacheQuery(lease.client, lease.slot, std::move(first.sql_),
                 std::move(first.params_), lease.resource, &backendFailed),
-            scope, std::move(firstOptions), operationTimeout);
+            std::move(firstOptions), operationTimeout);
         if (operationTimeout.expired()) {
             detail::throwDbCacheTimeout();
         }
@@ -169,7 +169,7 @@ Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction
             auto total = co_await cache.wrap(secondDuration, std::move(secondKey),
                 detail::DbCacheQuery(lease.client, lease.slot, std::move(second->sql_),
                     std::move(second->params_), lease.resource, &backendFailed),
-                scope, std::move(secondOptions), operationTimeout);
+                std::move(secondOptions), operationTimeout);
             if (operationTimeout.expired()) {
                 detail::throwDbCacheTimeout();
             }

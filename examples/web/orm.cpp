@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +15,9 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/DbSchema.h"
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/RedisClient.h"
+#endif
 
 namespace {
 using namespace ruvia;
@@ -139,18 +144,53 @@ Task<void> demonstrateCache(DbClient& db) {
     co_await db.queryResultCache().remove(ids);
 }
 
-Task<void> run(DbClient& db, EventLoopAttachment& attachment, bool useCache) {
+Task<void> run(const DbConfig& settings, EventLoopAttachment& attachment) {
     std::exception_ptr failure;
+    std::unique_ptr<DbClient> db;
+#ifdef RUVIA_ENABLE_REDIS
+    std::unique_ptr<RedisClient> redis;
+#endif
     try {
-        co_await db.connect();
-        co_await demonstrate(db);
-        if (useCache) {
-            co_await demonstrateCache(db);
+        if (const auto* port = std::getenv("RUVIA_ORM_CACHE_REDIS_PORT")) {
+#ifdef RUVIA_ENABLE_REDIS
+            const auto value = std::stoul(port);
+            if (value == 0 || value > 65535) {
+                throw std::invalid_argument("invalid cache Redis port");
+            }
+            RedisConfig config{.port = static_cast<std::uint16_t>(value)};
+            if (const auto* host = std::getenv("RUVIA_ORM_CACHE_REDIS_HOST")) {
+                config.host = host;
+            }
+            redis = std::make_unique<RedisClient>(attachment.loop(), config);
+            co_await redis->connect();
+            auto store = redis->withOptions({});
+            db = std::make_unique<DbClient>(attachment.loop(), settings, store,
+                DbCacheConfig{.nameSpace = "orm-demo"});
+#else
+            (void)port;
+            throw std::invalid_argument("ORM query caching requires Redis support");
+#endif
+        } else {
+            db = std::make_unique<DbClient>(attachment.loop(), settings);
         }
+        co_await db->connect();
+        co_await demonstrate(*db);
+#ifdef RUVIA_ENABLE_REDIS
+        if (redis) {
+            co_await demonstrateCache(*db);
+        }
+#endif
     } catch (...) {
         failure = std::current_exception();
     }
-    co_await db.shutdown();
+    if (db) {
+        co_await db->shutdown();
+    }
+#ifdef RUVIA_ENABLE_REDIS
+    if (redis) {
+        co_await redis->shutdown();
+    }
+#endif
     attachment.stop();
     if (failure) {
         std::rethrow_exception(failure);
@@ -177,16 +217,6 @@ DbConfig config() {
     }
     result.connectTimeout = std::chrono::seconds(5);
     result.queryTimeout = std::chrono::seconds(10);
-    if (const auto* port = std::getenv("RUVIA_ORM_CACHE_REDIS_PORT")) {
-        const auto value = std::stoul(port);
-        if (value == 0 || value > 65535) {
-            throw std::invalid_argument("invalid cache Redis port");
-        }
-        result.cache.emplace();
-        result.cache->options.port = static_cast<std::uint16_t>(value);
-        result.cache->nameSpace = "orm-demo";
-        read("RUVIA_ORM_CACHE_REDIS_HOST", result.cache->options.host);
-    }
     return result;
 }
 }  // namespace
@@ -217,8 +247,7 @@ int main(int argc, char** argv) {
         if (execute) {
             asio::io_context context(1);
             auto attachment = attachEventLoop(context);
-            DbClient db(attachment.loop(), settings);
-            auto root = attachment.loop().start(run(db, attachment, settings.cache.has_value()));
+            auto root = attachment.loop().start(run(settings, attachment));
             attachment.run();
             root.get();
         }

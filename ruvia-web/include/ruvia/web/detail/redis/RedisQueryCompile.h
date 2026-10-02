@@ -15,13 +15,12 @@
 #include <type_traits>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/db/DbEntity.h"
-#include "ruvia/web/db/DbFindOptions.h"
-#include "ruvia/web/detail/db/DbExpressionAccess.h"
-#include "ruvia/web/detail/db/DbValueAccess.h"
+#include "ruvia/web/EntityRows.h"
 #include "ruvia/web/detail/model/Traits.h"
 #include "ruvia/web/detail/redis/RedisEntityKey.h"
+#include "ruvia/web/detail/redis/RedisPredicateStorage.h"
 #include "ruvia/web/detail/redis/RedisRepositoryConfig.h"
+#include "ruvia/web/redis/RedisFindOptions.h"
 
 namespace ruvia::detail {
 
@@ -195,9 +194,9 @@ template <typename Entity>
 }
 
 template <typename Entity>
-void validateColumnTable(std::string_view table) {
-    if (!table.empty() && table != Entity::tableName()) {
-        throw std::invalid_argument("Redis predicate belongs to another entity table");
+void validate_entity_prefix(std::string_view table) {
+    if (!table.empty() && table != Entity::prefix()) {
+        throw std::invalid_argument("Redis predicate belongs to another entity prefix");
     }
 }
 
@@ -218,34 +217,34 @@ void validateColumnTable(std::string_view table) {
 }
 
 [[nodiscard]] inline std::pmr::string canonicalNumeric(
-    const DbValue& value, ColumnInfo::ValueKind columnType,
+    const redis_literal& value, ColumnInfo::ValueKind columnType,
     std::pmr::memory_resource* resource) {
     resource = pmrResourceOrDefault(resource);
-    const auto type = DbValueAccess::type(value);
-    if (type == DbValueType::kNull) {
+    const auto type = redis_literal_access::type(value);
+    if (type == redis_literal_kind::null) {
         throw std::invalid_argument("Redis numeric predicate cannot compare with NULL");
     }
     char buffer[128]{};
     std::to_chars_result result{};
     switch (type) {
-        case DbValueType::kSigned: {
-            const auto number = DbValueAccess::signedValue(value);
+        case redis_literal_kind::signed_integer: {
+            const auto number = redis_literal_access::signed_value(value);
             if (std::fabs(static_cast<long double>(number)) > kMaxExactRedisNumber) {
                 throw std::invalid_argument("Redis numeric predicate exceeds exact range");
             }
             result = std::to_chars(std::begin(buffer), std::end(buffer), number);
             break;
         }
-        case DbValueType::kUnsigned: {
-            const auto number = DbValueAccess::unsignedValue(value);
+        case redis_literal_kind::unsigned_integer: {
+            const auto number = redis_literal_access::unsigned_value(value);
             if (static_cast<long double>(number) > kMaxExactRedisNumber) {
                 throw std::invalid_argument("Redis numeric predicate exceeds exact range");
             }
             result = std::to_chars(std::begin(buffer), std::end(buffer), number);
             break;
         }
-        case DbValueType::kDouble: {
-            double number = DbValueAccess::doubleValue(value);
+        case redis_literal_kind::real: {
+            double number = redis_literal_access::real_value(value);
             if (!std::isfinite(number) ||
                 std::fabs(static_cast<long double>(number)) > kMaxExactRedisNumber) {
                 throw std::invalid_argument("Redis numeric predicate is outside exact range");
@@ -263,8 +262,8 @@ void validateColumnTable(std::string_view table) {
             }
             break;
         }
-        case DbValueType::kBool:
-            buffer[0] = DbValueAccess::boolValue(value) ? '1' : '0';
+        case redis_literal_kind::boolean:
+            buffer[0] = redis_literal_access::boolean_value(value) ? '1' : '0';
             result.ptr = buffer + 1;
             result.ec = std::errc{};
             break;
@@ -278,22 +277,22 @@ void validateColumnTable(std::string_view table) {
 }
 
 [[nodiscard]] inline std::pmr::string canonicalTag(
-    const DbValue& value, ColumnInfo::ValueKind columnType,
+    const redis_literal& value, ColumnInfo::ValueKind columnType,
     std::pmr::memory_resource* resource) {
-    switch (DbValueAccess::type(value)) {
-        case DbValueType::kString:
+    switch (redis_literal_access::type(value)) {
+        case redis_literal_kind::string:
             if (!isTextColumnKind(columnType)) {
                 throw std::invalid_argument("Redis TAG predicate value type does not match column");
             }
-            return encodeRedisTag(DbValueAccess::text(value), resource);
-        case DbValueType::kBool:
+            return encodeRedisTag(redis_literal_access::text(value), resource);
+        case redis_literal_kind::boolean:
             if (columnType != ColumnInfo::ValueKind::kBool) {
                 throw std::invalid_argument("Redis TAG predicate value type does not match column");
             }
-            return encodeRedisTag(DbValueAccess::boolValue(value) ? "1" : "0", resource);
-        case DbValueType::kSigned:
-        case DbValueType::kUnsigned:
-        case DbValueType::kDouble:
+            return encodeRedisTag(redis_literal_access::boolean_value(value) ? "1" : "0", resource);
+        case redis_literal_kind::signed_integer:
+        case redis_literal_kind::unsigned_integer:
+        case redis_literal_kind::real:
             if (!isNumericColumnKind(columnType)) {
                 throw std::invalid_argument("Redis TAG predicate value type does not match column");
             }
@@ -304,15 +303,15 @@ void validateColumnTable(std::string_view table) {
 }
 
 [[nodiscard]] inline std::pmr::string canonicalText(
-    const DbValue& value, std::pmr::memory_resource* resource) {
-    if (DbValueAccess::type(value) != DbValueType::kString) {
+    const redis_literal& value, std::pmr::memory_resource* resource) {
+    if (redis_literal_access::type(value) != redis_literal_kind::string) {
         throw std::invalid_argument("Redis TEXT predicate requires a string value");
     }
-    return std::pmr::string(DbValueAccess::text(value), resource);
+    return std::pmr::string(redis_literal_access::text(value), resource);
 }
 
 [[nodiscard]] inline std::pmr::string canonicalPrimaryKey(
-    const DbValue& value, ColumnInfo::ValueKind columnType,
+    const redis_literal& value, ColumnInfo::ValueKind columnType,
     std::pmr::memory_resource* resource) {
     if (isTextColumnKind(columnType)) {
         return canonicalText(value, resource);
@@ -320,20 +319,20 @@ void validateColumnTable(std::string_view table) {
     if (!isIntegerColumnKind(columnType)) {
         throw std::invalid_argument("Redis primary key must be text or integer");
     }
-    const auto type = DbValueAccess::type(value);
+    const auto type = redis_literal_access::type(value);
     char buffer[128]{};
     std::to_chars_result result{};
     switch (type) {
-        case DbValueType::kSigned:
+        case redis_literal_kind::signed_integer:
             result = std::to_chars(std::begin(buffer), std::end(buffer),
-                DbValueAccess::signedValue(value));
+                redis_literal_access::signed_value(value));
             break;
-        case DbValueType::kUnsigned:
+        case redis_literal_kind::unsigned_integer:
             result = std::to_chars(std::begin(buffer), std::end(buffer),
-                DbValueAccess::unsignedValue(value));
+                redis_literal_access::unsigned_value(value));
             break;
-        case DbValueType::kDouble: {
-            const double number = DbValueAccess::doubleValue(value);
+        case redis_literal_kind::real: {
+            const double number = redis_literal_access::real_value(value);
             if (!std::isfinite(number) || std::trunc(number) != number ||
                 std::fabs(static_cast<long double>(number)) > kMaxExactRedisNumber) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
@@ -381,14 +380,14 @@ inline void appendPresence(std::pmr::string& output, std::string_view field,
 }
 
 inline void appendTagComparison(std::pmr::string& output, std::string_view field,
-    const DbValue& value, ColumnInfo::ValueKind columnType, DbBinaryOperator operation,
+    const redis_literal& value, ColumnInfo::ValueKind columnType, redis_binary_operator operation,
     std::pmr::memory_resource* resource) {
-    const auto null = DbValueAccess::type(value) == DbValueType::kNull;
+    const auto null = redis_literal_access::type(value) == redis_literal_kind::null;
     if (null) {
-        if (operation == DbBinaryOperator::kEqual) {
+        if (operation == redis_binary_operator::equal) {
             output.push_back('-');
             appendPresence(output, field, resource);
-        } else if (operation == DbBinaryOperator::kNotEqual) {
+        } else if (operation == redis_binary_operator::not_equal) {
             appendPresence(output, field, resource);
         } else {
             throw std::invalid_argument("unsupported NULL TAG comparison");
@@ -403,10 +402,10 @@ inline void appendTagComparison(std::pmr::string& output, std::string_view field
     term.append(encoded.data(), encoded.size());
     term += '}';
     switch (operation) {
-        case DbBinaryOperator::kEqual:
+        case redis_binary_operator::equal:
             output.append(term.data(), term.size());
             return;
-        case DbBinaryOperator::kNotEqual:
+        case redis_binary_operator::not_equal:
             output.push_back('(');
             appendPresence(output, field, resource);
             output += " -";
@@ -419,14 +418,14 @@ inline void appendTagComparison(std::pmr::string& output, std::string_view field
 }
 
 inline void appendNumericComparison(std::pmr::string& output, std::string_view field,
-    const DbValue& value, ColumnInfo::ValueKind columnType, DbBinaryOperator operation,
+    const redis_literal& value, ColumnInfo::ValueKind columnType, redis_binary_operator operation,
     std::pmr::memory_resource* resource) {
-    const auto null = DbValueAccess::type(value) == DbValueType::kNull;
+    const auto null = redis_literal_access::type(value) == redis_literal_kind::null;
     if (null) {
-        if (operation == DbBinaryOperator::kEqual) {
+        if (operation == redis_binary_operator::equal) {
             output.push_back('-');
             appendPresence(output, field, resource);
-        } else if (operation == DbBinaryOperator::kNotEqual) {
+        } else if (operation == redis_binary_operator::not_equal) {
             appendPresence(output, field, resource);
         } else {
             throw std::invalid_argument("unsupported NULL NUMERIC comparison");
@@ -434,7 +433,7 @@ inline void appendNumericComparison(std::pmr::string& output, std::string_view f
         return;
     }
     const auto number = canonicalNumeric(value, columnType, resource);
-    const bool notEqual = operation == DbBinaryOperator::kNotEqual;
+    const bool notEqual = operation == redis_binary_operator::not_equal;
     if (notEqual) {
         output.push_back('(');
     }
@@ -442,12 +441,12 @@ inline void appendNumericComparison(std::pmr::string& output, std::string_view f
     output.append(field.data(), field.size());
     output += ":[";
     switch (operation) {
-        case DbBinaryOperator::kEqual:
+        case redis_binary_operator::equal:
             output.append(number.data(), number.size());
             output.push_back(' ');
             output.append(number.data(), number.size());
             break;
-        case DbBinaryOperator::kNotEqual:
+        case redis_binary_operator::not_equal:
             output += "-inf +inf] -@";
             output.append(field.data(), field.size());
             output += ":[";
@@ -457,20 +456,20 @@ inline void appendNumericComparison(std::pmr::string& output, std::string_view f
             output.push_back(']');
             output.push_back(')');
             return;
-        case DbBinaryOperator::kLess:
+        case redis_binary_operator::less:
             output += "-inf (";
             output.append(number.data(), number.size());
             break;
-        case DbBinaryOperator::kLessEqual:
+        case redis_binary_operator::less_equal:
             output += "-inf ";
             output.append(number.data(), number.size());
             break;
-        case DbBinaryOperator::kGreater:
+        case redis_binary_operator::greater:
             output.push_back('(');
             output.append(number.data(), number.size());
             output += " +inf";
             break;
-        case DbBinaryOperator::kGreaterEqual:
+        case redis_binary_operator::greater_equal:
             output.append(number.data(), number.size());
             output += " +inf";
             break;
@@ -481,13 +480,13 @@ inline void appendNumericComparison(std::pmr::string& output, std::string_view f
 }
 
 template <typename Entity>
-void appendExpression(std::pmr::string& output, DbExpression expression,
+void appendExpression(std::pmr::string& output, redis_expression expression,
     const RedisMapping& mapping, std::pmr::memory_resource* resource,
     std::size_t depth = 0U);
 
 template <typename Entity>
 void appendIndexedComparison(std::pmr::string& output, std::string_view field,
-    const DbValue& value, DbBinaryOperator operation, const RedisMapping& mapping,
+    const redis_literal& value, redis_binary_operator operation, const RedisMapping& mapping,
     std::pmr::memory_resource* resource) {
     const auto info = columnInfo<Entity>(field);
     switch (indexKind(mapping, field)) {
@@ -498,9 +497,9 @@ void appendIndexedComparison(std::pmr::string& output, std::string_view field,
             appendNumericComparison(output, field, value, info.valueKind, operation, resource);
             return;
         case RedisIndexKind::kText:
-            if (DbValueAccess::type(value) == DbValueType::kNull &&
-                (operation == DbBinaryOperator::kEqual || operation == DbBinaryOperator::kNotEqual)) {
-                if (operation == DbBinaryOperator::kEqual) {
+            if (redis_literal_access::type(value) == redis_literal_kind::null &&
+                (operation == redis_binary_operator::equal || operation == redis_binary_operator::not_equal)) {
+                if (operation == redis_binary_operator::equal) {
                     output.push_back('-');
                     appendPresence(output, field, resource);
                 } else {
@@ -508,7 +507,7 @@ void appendIndexedComparison(std::pmr::string& output, std::string_view field,
                 }
                 return;
             }
-            throw std::invalid_argument("Redis TEXT predicates are not exposed by DbPredicate");
+            throw std::invalid_argument("Redis TEXT predicates are not exposed by redis_predicate");
         default:
             throw std::invalid_argument("invalid Redis query index kind");
     }
@@ -516,14 +515,14 @@ void appendIndexedComparison(std::pmr::string& output, std::string_view field,
 
 template <typename Entity>
 void appendInList(std::pmr::string& output, std::string_view field,
-    DbExpression list, DbBinaryOperator operation, const RedisMapping& mapping,
+    redis_expression list, redis_binary_operator operation, const RedisMapping& mapping,
     std::pmr::memory_resource* resource) {
-    const auto listInfo = DbExpressionAccess::inspect(list);
-    if (listInfo.kind != DbExpressionInspection::Kind::kList) {
+    const auto listInfo = redis_expression_access::inspect(list);
+    if (listInfo.kind != redis_expression_inspection::kind_type::list) {
         throw std::invalid_argument("Redis IN requires a literal list");
     }
-    const auto count = DbExpressionAccess::operandCount(list);
-    const bool negated = operation == DbBinaryOperator::kNotIn;
+    const auto count = redis_expression_access::operand_count(list);
+    const bool negated = operation == redis_binary_operator::not_in;
     if (count == 0U) {
         if (negated) {
             output.push_back('*');
@@ -546,10 +545,10 @@ void appendInList(std::pmr::string& output, std::string_view field,
         if (index != 0U) {
             output.push_back('|');
         }
-        const auto item = DbExpressionAccess::operand(list, index);
-        const auto itemInfo = DbExpressionAccess::inspect(item);
-        if (itemInfo.kind != DbExpressionInspection::Kind::kValue || itemInfo.value == nullptr ||
-            DbValueAccess::type(*itemInfo.value) == DbValueType::kNull) {
+        const auto item = redis_expression_access::operand(list, index);
+        const auto itemInfo = redis_expression_access::inspect(item);
+        if (itemInfo.kind != redis_expression_inspection::kind_type::literal || itemInfo.value == nullptr ||
+            redis_literal_access::type(*itemInfo.value) == redis_literal_kind::null) {
             throw std::invalid_argument("Redis IN list requires non-null literal values");
         }
         const auto kind = indexKind(mapping, field);
@@ -581,30 +580,30 @@ void appendInList(std::pmr::string& output, std::string_view field,
 }
 
 template <typename Entity>
-void appendBetween(std::pmr::string& output, DbExpression expression,
+void appendBetween(std::pmr::string& output, redis_expression expression,
     const RedisMapping& mapping, std::pmr::memory_resource* resource) {
-    const auto inspection = DbExpressionAccess::inspect(expression);
-    if (inspection.kind != DbExpressionInspection::Kind::kBetween ||
-        DbExpressionAccess::operandCount(expression) != 3U) {
+    const auto inspection = redis_expression_access::inspect(expression);
+    if (inspection.kind != redis_expression_inspection::kind_type::between ||
+        redis_expression_access::operand_count(expression) != 3U) {
         throw std::invalid_argument("invalid Redis BETWEEN expression");
     }
-    const auto column = DbExpressionAccess::operand(expression, 0);
-    const auto lower = DbExpressionAccess::operand(expression, 1);
-    const auto upper = DbExpressionAccess::operand(expression, 2);
-    const auto columnInfoValue = DbExpressionAccess::inspect(column);
-    const auto lowerInfo = DbExpressionAccess::inspect(lower);
-    const auto upperInfo = DbExpressionAccess::inspect(upper);
-    if (columnInfoValue.kind != DbExpressionInspection::Kind::kColumn ||
-        lowerInfo.kind != DbExpressionInspection::Kind::kValue || lowerInfo.value == nullptr ||
-        upperInfo.kind != DbExpressionInspection::Kind::kValue || upperInfo.value == nullptr) {
+    const auto column = redis_expression_access::operand(expression, 0);
+    const auto lower = redis_expression_access::operand(expression, 1);
+    const auto upper = redis_expression_access::operand(expression, 2);
+    const auto columnInfoValue = redis_expression_access::inspect(column);
+    const auto lowerInfo = redis_expression_access::inspect(lower);
+    const auto upperInfo = redis_expression_access::inspect(upper);
+    if (columnInfoValue.kind != redis_expression_inspection::kind_type::field ||
+        lowerInfo.kind != redis_expression_inspection::kind_type::literal || lowerInfo.value == nullptr ||
+        upperInfo.kind != redis_expression_inspection::kind_type::literal || upperInfo.value == nullptr) {
         throw std::invalid_argument("Redis BETWEEN requires a column and literal bounds");
     }
-    validateColumnTable<Entity>(columnInfoValue.table);
-    const auto field = columnInfoValue.column;
+    validate_entity_prefix<Entity>(columnInfoValue.entity_prefix);
+    const auto field = columnInfoValue.field;
     const auto info = columnInfo<Entity>(field);
     if (indexKind(mapping, field) != RedisIndexKind::kNumeric ||
-        DbValueAccess::type(*lowerInfo.value) == DbValueType::kNull ||
-        DbValueAccess::type(*upperInfo.value) == DbValueType::kNull) {
+        redis_literal_access::type(*lowerInfo.value) == redis_literal_kind::null ||
+        redis_literal_access::type(*upperInfo.value) == redis_literal_kind::null) {
         throw std::invalid_argument("Redis BETWEEN requires a NUMERIC indexed column");
     }
     const auto low = canonicalNumeric(*lowerInfo.value, info.valueKind, resource);
@@ -617,95 +616,87 @@ void appendBetween(std::pmr::string& output, DbExpression expression,
     range.push_back(' ');
     range.append(high.data(), high.size());
     range.push_back(']');
-    if (!inspection.negated) {
-        output.append(range.data(), range.size());
-        return;
-    }
-    output.push_back('(');
-    appendPresence(output, field, resource);
-    output += " -";
     output.append(range.data(), range.size());
-    output.push_back(')');
 }
 
 template <typename Entity>
-void appendExpression(std::pmr::string& output, DbExpression expression,
+void appendExpression(std::pmr::string& output, redis_expression expression,
     const RedisMapping& mapping, std::pmr::memory_resource* resource,
     std::size_t depth) {
     constexpr std::size_t maxDepth = 64U;
     if (depth > maxDepth) {
         throw std::invalid_argument("Redis predicate nesting is too deep");
     }
-    const auto inspection = DbExpressionAccess::inspect(expression);
-    using Kind = DbExpressionInspection::Kind;
-    if (inspection.kind == Kind::kBetween) {
+    const auto inspection = redis_expression_access::inspect(expression);
+    using Kind = redis_expression_inspection::kind_type;
+    if (inspection.kind == Kind::between) {
         appendBetween<Entity>(output, expression, mapping, resource);
         return;
     }
-    if (inspection.kind == Kind::kBinary) {
-        if (inspection.binary == DbBinaryOperator::kAnd ||
-            inspection.binary == DbBinaryOperator::kOr) {
-            if (DbExpressionAccess::operandCount(expression) != 2U) {
+    if (inspection.kind == Kind::binary) {
+        if (inspection.binary == redis_binary_operator::logical_and ||
+            inspection.binary == redis_binary_operator::logical_or) {
+            if (redis_expression_access::operand_count(expression) != 2U) {
                 throw std::invalid_argument("invalid Redis logical expression");
             }
             output.push_back('(');
-            appendExpression<Entity>(output, DbExpressionAccess::operand(expression, 0), mapping, resource, depth + 1U);
-            output.push_back(inspection.binary == DbBinaryOperator::kAnd ? ' ' : '|');
-            appendExpression<Entity>(output, DbExpressionAccess::operand(expression, 1), mapping, resource, depth + 1U);
+            appendExpression<Entity>(output, redis_expression_access::operand(expression, 0), mapping, resource, depth + 1U);
+            output.push_back(inspection.binary == redis_binary_operator::logical_and ? ' ' : '|');
+            appendExpression<Entity>(output, redis_expression_access::operand(expression, 1), mapping, resource, depth + 1U);
             output.push_back(')');
             return;
         }
-        if (inspection.binary == DbBinaryOperator::kIn ||
-            inspection.binary == DbBinaryOperator::kNotIn) {
-            if (DbExpressionAccess::operandCount(expression) != 2U) {
+        if (inspection.binary == redis_binary_operator::in ||
+            inspection.binary == redis_binary_operator::not_in) {
+            if (redis_expression_access::operand_count(expression) != 2U) {
                 throw std::invalid_argument("invalid Redis IN expression");
             }
-            const auto left = DbExpressionAccess::inspect(DbExpressionAccess::operand(expression, 0));
-            if (left.kind != Kind::kColumn) {
+            const auto left = redis_expression_access::inspect(redis_expression_access::operand(expression, 0));
+            if (left.kind != Kind::field) {
                 throw std::invalid_argument("Redis IN requires a column");
             }
-            validateColumnTable<Entity>(left.table);
-            (void)columnInfo<Entity>(left.column);
-            appendInList<Entity>(output, left.column,
-                DbExpressionAccess::operand(expression, 1), inspection.binary, mapping, resource);
+            validate_entity_prefix<Entity>(left.entity_prefix);
+            (void)columnInfo<Entity>(left.field);
+            appendInList<Entity>(output, left.field,
+                redis_expression_access::operand(expression, 1), inspection.binary, mapping, resource);
             return;
         }
-        if (inspection.binary != DbBinaryOperator::kEqual &&
-            inspection.binary != DbBinaryOperator::kNotEqual &&
-            inspection.binary != DbBinaryOperator::kLess &&
-            inspection.binary != DbBinaryOperator::kLessEqual &&
-            inspection.binary != DbBinaryOperator::kGreater &&
-            inspection.binary != DbBinaryOperator::kGreaterEqual) {
+        if (inspection.binary != redis_binary_operator::equal &&
+            inspection.binary != redis_binary_operator::not_equal &&
+            inspection.binary != redis_binary_operator::less &&
+            inspection.binary != redis_binary_operator::less_equal &&
+            inspection.binary != redis_binary_operator::greater &&
+            inspection.binary != redis_binary_operator::greater_equal) {
             throw std::invalid_argument("unsupported Redis predicate operator");
         }
-        if (DbExpressionAccess::operandCount(expression) != 2U) {
+        if (redis_expression_access::operand_count(expression) != 2U) {
             throw std::invalid_argument("invalid Redis comparison expression");
         }
-        const auto leftExpression = DbExpressionAccess::operand(expression, 0);
-        const auto rightExpression = DbExpressionAccess::operand(expression, 1);
-        const auto left = DbExpressionAccess::inspect(leftExpression);
-        const auto right = DbExpressionAccess::inspect(rightExpression);
-        DbExpressionInspection column{};
-        const DbValue* value = nullptr;
+        const auto leftExpression = redis_expression_access::operand(expression, 0);
+        const auto rightExpression = redis_expression_access::operand(expression, 1);
+        const auto left = redis_expression_access::inspect(leftExpression);
+        const auto right = redis_expression_access::inspect(rightExpression);
+        redis_expression_inspection column{};
+        const redis_literal* value = nullptr;
         auto operation = inspection.binary;
-        if (left.kind == Kind::kColumn && right.kind == Kind::kValue) {
+        if (left.kind == Kind::field && right.kind == Kind::literal) {
             column = left;
             value = right.value;
-        } else if (right.kind == Kind::kColumn && left.kind == Kind::kValue) {
+        } else if (right.kind == Kind::field && left.kind == Kind::literal) {
             column = right;
             value = left.value;
             switch (operation) {
-                case DbBinaryOperator::kLess:
-                    operation = DbBinaryOperator::kGreater;
+                case redis_binary_operator::less:
+                    operation = redis_binary_operator::greater;
                     break;
-                case DbBinaryOperator::kLessEqual:
-                    operation = DbBinaryOperator::kGreaterEqual;
+                case redis_binary_operator::less_equal:
+                    operation = redis_binary_operator::greater_equal;
                     break;
-                case DbBinaryOperator::kGreater:
-                    operation = DbBinaryOperator::kLess;
+                case redis_binary_operator::greater:
+                    operation = redis_binary_operator::less;
                     break;
-                case DbBinaryOperator::kGreaterEqual:
-                    operation = DbBinaryOperator::kLessEqual;
+                case redis_binary_operator::greater_equal:
+                    operation = redis_binary_operator::less_equal;
                     break;
                 default:
                     break;
@@ -716,30 +707,9 @@ void appendExpression(std::pmr::string& output, DbExpression expression,
         if (value == nullptr) {
             throw std::invalid_argument("Redis comparison has no literal value");
         }
-        validateColumnTable<Entity>(column.table);
-        appendIndexedComparison<Entity>(output, column.column, *value,
+        validate_entity_prefix<Entity>(column.entity_prefix);
+        appendIndexedComparison<Entity>(output, column.field, *value,
             operation, mapping, resource);
-        return;
-    }
-    if (inspection.kind == Kind::kUnary) {
-        if (inspection.unary != DbUnaryOperator::kIsNull &&
-            inspection.unary != DbUnaryOperator::kIsNotNull) {
-            throw std::invalid_argument("unsupported Redis unary predicate");
-        }
-        if (DbExpressionAccess::operandCount(expression) != 1U) {
-            throw std::invalid_argument("invalid Redis unary predicate");
-        }
-        const auto child = DbExpressionAccess::inspect(DbExpressionAccess::operand(expression, 0));
-        if (child.kind != Kind::kColumn) {
-            throw std::invalid_argument("Redis NULL predicate requires a column");
-        }
-        validateColumnTable<Entity>(child.table);
-        (void)columnInfo<Entity>(child.column);
-        (void)indexKind(mapping, child.column);
-        if (inspection.unary == DbUnaryOperator::kIsNull) {
-            output.push_back('-');
-        }
-        appendPresence(output, child.column, resource);
         return;
     }
     throw std::invalid_argument("unsupported Redis expression");
@@ -765,7 +735,7 @@ template <typename Entity>
 
 template <typename Entity>
 [[nodiscard]] std::pmr::vector<std::pmr::string> compileRedisFind(
-    const DbFindOptions& options, const RedisMapping& mapping,
+    const redis_find_options& options, const RedisMapping& mapping,
     std::pmr::memory_resource* resource, bool countOnly = false,
     std::optional<std::uint64_t> takeOverride = {}) {
     resource = pmrResourceOrDefault(resource);
@@ -774,7 +744,7 @@ template <typename Entity>
     redis_query_detail::appendArgument(args, "FT.SEARCH");
     redis_query_detail::appendArgument(args, index);
     std::pmr::string query(resource);
-    const auto root = DbPredicateAccess::root(options.where);
+    const auto root = redis_predicate_access::root(options.where);
     if (root.empty()) {
         query = "*";
     } else {
@@ -803,17 +773,14 @@ template <typename Entity>
             throw std::invalid_argument("Redis Search supports one SORTBY column per query");
         }
         const auto& order = options.order.front();
-        if (order.nulls != DbNullsOrder::kDefault) {
-            throw std::invalid_argument("Redis Search does not support NULLS FIRST/LAST");
-        }
-        const auto field = redis_query_detail::sortField<Entity>(order.column, mapping, resource);
+        const auto field = redis_query_detail::sortField<Entity>(order.field, mapping, resource);
         redis_query_detail::appendArgument(args, "SORTBY");
         redis_query_detail::appendArgument(args, field);
         switch (order.direction) {
-            case DbOrderDirection::kAsc:
+            case redis_order_direction::ascending:
                 redis_query_detail::appendArgument(args, "ASC");
                 break;
-            case DbOrderDirection::kDesc:
+            case redis_order_direction::descending:
                 redis_query_detail::appendArgument(args, "DESC");
                 break;
             default:
@@ -845,7 +812,7 @@ template <typename Entity>
     }
     std::size_t schemaCount = 0U;
     for (const auto& definition : mapping.indexes) {
-        const auto field = std::string_view(definition.column);
+        const auto field = std::string_view(definition.field);
         (void)redis_query_detail::columnInfo<Entity>(field);
         if (!redis_query_detail::isSafeIdentifier(field)) {
             throw std::invalid_argument("invalid Redis index column name");
@@ -859,7 +826,7 @@ template <typename Entity>
             throw std::invalid_argument("Redis index column uses reserved __ruvia_ namespace");
         }
         for (const auto& other : mapping.indexes) {
-            if (&other != &definition && other.column == definition.column) {
+            if (&other != &definition && other.field == definition.field) {
                 throw std::invalid_argument("duplicate Redis index column");
             }
         }
@@ -929,39 +896,39 @@ template <typename Entity>
 
 template <typename Entity>
 [[nodiscard]] std::optional<std::pmr::string> redisPrimaryKey(
-    const DbPredicate& predicate, std::pmr::memory_resource* resource) {
+    const redis_predicate& predicate, std::pmr::memory_resource* resource) {
     resource = pmrResourceOrDefault(resource);
-    const auto root = DbPredicateAccess::root(predicate);
+    const auto root = redis_predicate_access::root(predicate);
     if (root.empty()) {
         return std::nullopt;
     }
-    const auto rootInfo = DbExpressionAccess::inspect(root);
-    if (rootInfo.kind != DbExpressionInspection::Kind::kBinary ||
-        rootInfo.binary != DbBinaryOperator::kEqual ||
-        DbExpressionAccess::operandCount(root) != 2U) {
+    const auto rootInfo = redis_expression_access::inspect(root);
+    if (rootInfo.kind != redis_expression_inspection::kind_type::binary ||
+        rootInfo.binary != redis_binary_operator::equal ||
+        redis_expression_access::operand_count(root) != 2U) {
         return std::nullopt;
     }
-    const auto leftExpression = DbExpressionAccess::operand(root, 0);
-    const auto rightExpression = DbExpressionAccess::operand(root, 1);
-    const auto left = DbExpressionAccess::inspect(leftExpression);
-    const auto right = DbExpressionAccess::inspect(rightExpression);
-    DbExpressionInspection column{};
-    const DbValue* value = nullptr;
-    if (left.kind == DbExpressionInspection::Kind::kColumn && right.kind == DbExpressionInspection::Kind::kValue) {
+    const auto leftExpression = redis_expression_access::operand(root, 0);
+    const auto rightExpression = redis_expression_access::operand(root, 1);
+    const auto left = redis_expression_access::inspect(leftExpression);
+    const auto right = redis_expression_access::inspect(rightExpression);
+    redis_expression_inspection column{};
+    const redis_literal* value = nullptr;
+    if (left.kind == redis_expression_inspection::kind_type::field && right.kind == redis_expression_inspection::kind_type::literal) {
         column = left;
         value = right.value;
-    } else if (right.kind == DbExpressionInspection::Kind::kColumn && left.kind == DbExpressionInspection::Kind::kValue) {
+    } else if (right.kind == redis_expression_inspection::kind_type::field && left.kind == redis_expression_inspection::kind_type::literal) {
         column = right;
         value = left.value;
     } else {
         return std::nullopt;
     }
-    redis_query_detail::validateColumnTable<Entity>(column.table);
-    const auto info = redis_query_detail::columnInfo<Entity>(column.column);
+    redis_query_detail::validate_entity_prefix<Entity>(column.entity_prefix);
+    const auto info = redis_query_detail::columnInfo<Entity>(column.field);
     if (!info.primaryKey) {
         return std::nullopt;
     }
-    if (value == nullptr || DbValueAccess::type(*value) == DbValueType::kNull) {
+    if (value == nullptr || redis_literal_access::type(*value) == redis_literal_kind::null) {
         throw std::invalid_argument("Redis primary key cannot be NULL");
     }
     if (!redis_query_detail::isTextColumnKind(info.valueKind) &&

@@ -17,8 +17,7 @@
 #include <variant>
 
 #include "ruvia/core/ScopedOperation.h"
-#include "ruvia/web/db/DbExecResult.h"
-#include "ruvia/web/db/DbFindOptions.h"
+#include "ruvia/web/EntityRows.h"
 #include "ruvia/web/detail/redis/RedisEntityCodec.h"
 #include "ruvia/web/detail/redis/RedisEntityKey.h"
 #include "ruvia/web/detail/redis/RedisQueryCompile.h"
@@ -26,8 +25,10 @@
 #include "ruvia/web/detail/redis/RedisRepositoryConfig.h"
 #include "ruvia/web/detail/redis/RedisRepositoryMapping.h"
 #include "ruvia/web/redis/RedisEntity.h"
+#include "ruvia/web/redis/RedisFindOptions.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
+#include "ruvia/web/redis/RedisWriteResult.h"
 
 namespace ruvia::detail {
 
@@ -75,38 +76,36 @@ public:
     }
     RedisRepository& operator=(RedisRepository&&) = delete;
 
-    [[nodiscard]] ScopedOperation<DbExecResult> insert(
+    [[nodiscard]] ScopedOperation<redis_write_result> insert(
         const Entity& entity, RedisWriteOptions options = {}) const {
         return write("insert", detail::redisEntityId(entity, resource()), entity, options);
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> upsert(
+    [[nodiscard]] ScopedOperation<redis_write_result> upsert(
         const Entity& entity, RedisWriteOptions options = {}) const {
         return write("upsert", detail::redisEntityId(entity, resource()), entity, options);
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> update(
-        const DbPredicate& predicate, const Entity& changes,
+    [[nodiscard]] ScopedOperation<redis_write_result> update(
+        const redis_predicate& predicate, const Entity& changes,
         RedisWriteOptions options = {}) const {
         auto* memory = resource();
         const auto id = requirePrimaryKey(predicate, memory);
         return write("update", *id, changes, options);
     }
 
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> find(
-        const DbFindOptions& options = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Entity>> find(
+        const redis_find_options& options = {}) const {
         const auto memory = resource();
-        validateFindOptions(options);
         auto args = detail::compileRedisFind<Entity>(options, mapping(), memory);
         const auto views = detail::redisOrmArgumentViews(args);
         detail::RedisMapMany<Entity> mapper{std::pmr::string(mapping().prefix, memory)};
-        return handle_.template commandMapped<DbEntityRows<Entity>>(views, std::move(mapper));
+        return handle_.template commandMapped<entity_rows<Entity>>(views, std::move(mapper));
     }
 
     [[nodiscard]] ScopedOperation<std::optional<Entity>> findOne(
-        const DbFindOptions& options) const {
+        const redis_find_options& options) const {
         const auto memory = resource();
-        validateFindOptions(options);
         const bool plain = options.order.empty() && !options.skip && !options.take;
         if (plain) {
             if (const auto id = detail::redisPrimaryKey<Entity>(options.where, memory)) {
@@ -123,30 +122,27 @@ public:
         return handle_.template commandMapped<std::optional<Entity>>(views, std::move(mapper));
     }
 
-    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> findAndCount(
-        const DbFindOptions& options = {}) const {
+    [[nodiscard]] ScopedOperation<std::pair<entity_rows<Entity>, std::uint64_t>> findAndCount(
+        const redis_find_options& options = {}) const {
         const auto memory = resource();
-        validateFindOptions(options);
         auto args = detail::compileRedisFind<Entity>(options, mapping(), memory);
         const auto views = detail::redisOrmArgumentViews(args);
         detail::RedisMapSearch<Entity> mapper{std::pmr::string(mapping().prefix, memory)};
-        return handle_.template commandMapped<std::pair<DbEntityRows<Entity>, std::uint64_t>>(
+        return handle_.template commandMapped<std::pair<entity_rows<Entity>, std::uint64_t>>(
             views, std::move(mapper));
     }
 
     [[nodiscard]] ScopedOperation<std::uint64_t> count(
-        const DbFindOptions& options = {}) const {
+        const redis_find_options& options = {}) const {
         const auto memory = resource();
-        validateFindOptions(options);
         auto args = detail::compileRedisFind<Entity>(options, mapping(), memory, true);
         const auto views = detail::redisOrmArgumentViews(args);
         return handle_.template commandMapped<std::uint64_t>(views, detail::RedisMapCount{});
     }
 
     [[nodiscard]] ScopedOperation<bool> exists(
-        const DbFindOptions& options = {}) const {
+        const redis_find_options& options = {}) const {
         const auto memory = resource();
-        validateFindOptions(options);
         if (options.order.empty() && !options.skip && !options.take) {
             if (const auto id = detail::redisPrimaryKey<Entity>(options.where, memory)) {
                 const auto key = detail::redisEntityKey<Entity>(*id, memory, mapping().prefix);
@@ -159,27 +155,27 @@ public:
             views, detail::RedisRepositoryMapExists<Entity>{});
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> deleteBy(
-        const DbPredicate& predicate) const {
+    [[nodiscard]] ScopedOperation<redis_write_result> deleteBy(
+        const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = requirePrimaryKey(predicate, memory);
         return deleteById(*id, memory);
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> remove(const Entity& entity) const {
+    [[nodiscard]] ScopedOperation<redis_write_result> remove(const Entity& entity) const {
         auto* memory = resource();
         return deleteById(detail::redisEntityId(entity, memory), memory);
     }
 
     [[nodiscard]] ScopedOperation<bool> expire(
-        const DbPredicate& predicate, std::chrono::seconds ttl) const {
+        const redis_predicate& predicate, std::chrono::seconds ttl) const {
         auto* memory = resource();
         const auto id = requirePrimaryKey(predicate, memory);
         const auto key = detail::redisEntityKey<Entity>(*id, memory, mapping().prefix);
         return handle_.expire(key, ttl);
     }
 
-    [[nodiscard]] ScopedOperation<RedisTtl> ttl(const DbPredicate& predicate) const {
+    [[nodiscard]] ScopedOperation<RedisTtl> ttl(const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = requirePrimaryKey(predicate, memory);
         const auto key = detail::redisEntityKey<Entity>(*id, memory, mapping().prefix);
@@ -232,23 +228,8 @@ private:
         repository.mapping_.reset();
     }
 
-    static void validateFindOptions(const DbFindOptions& options) {
-        if (!options.relations.empty()) {
-            throw std::invalid_argument("Redis repository does not support relations");
-        }
-        if (options.lock) {
-            throw std::invalid_argument("Redis repository does not support row locks");
-        }
-        const bool cacheDisabled = std::holds_alternative<std::monostate>(options.cache) ||
-                                   (std::holds_alternative<bool>(options.cache) &&
-                                       !std::get<bool>(options.cache));
-        if (!cacheDisabled) {
-            throw std::invalid_argument("Redis repository does not support query cache options");
-        }
-    }
-
     [[nodiscard]] static std::optional<std::pmr::string> requirePrimaryKey(
-        const DbPredicate& predicate, std::pmr::memory_resource* memory) {
+        const redis_predicate& predicate, std::pmr::memory_resource* memory) {
         auto result = detail::redisPrimaryKey<Entity>(predicate, memory);
         if (!result) {
             throw std::invalid_argument(
@@ -257,16 +238,16 @@ private:
         return result;
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> deleteById(
+    [[nodiscard]] ScopedOperation<redis_write_result> deleteById(
         std::string_view id, std::pmr::memory_resource* memory) const {
         const auto key = detail::redisEntityKey<Entity>(id, memory, mapping().prefix);
         auto args = detail::redisOrmDeleteArguments(key, memory);
         const auto views = detail::redisOrmArgumentViews(args);
-        return handle_.template commandMapped<DbExecResult>(
+        return handle_.template commandMapped<redis_write_result>(
             views, detail::redisOrmDeleteResult);
     }
 
-    [[nodiscard]] ScopedOperation<DbExecResult> write(
+    [[nodiscard]] ScopedOperation<redis_write_result> write(
         std::string_view mode, std::string_view id, const Entity& entity,
         RedisWriteOptions options) const {
         auto* memory = resource();
@@ -329,7 +310,7 @@ private:
         });
 
         const auto views = detail::redisOrmArgumentViews(args);
-        return handle_.template commandMapped<DbExecResult>(
+        return handle_.template commandMapped<redis_write_result>(
             views, detail::redisOrmExecResult);
     }
 

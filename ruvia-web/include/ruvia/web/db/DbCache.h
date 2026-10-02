@@ -5,12 +5,9 @@
 #include <string>
 #include <variant>
 
-#include "ruvia/web/redis/RedisTypes.h"
-
 namespace ruvia {
 
 struct DbCacheConfig final {
-    RedisConfig options{};
     std::chrono::milliseconds duration{1000};
     bool alwaysEnabled{false};
     bool ignoreErrors{false};
@@ -24,5 +21,11 @@ struct DbCacheOptions final {
 };
 
 using DbCacheSetting = std::variant<std::monostate, bool, std::chrono::milliseconds, DbCacheOptions>;
+
+// App startup resolves this alias to its existing worker-local Redis capability.
+struct db_query_cache_registration final {
+    std::string redis_alias{"default"};
+    DbCacheConfig policy{};
+};
 
 }  // namespace ruvia
