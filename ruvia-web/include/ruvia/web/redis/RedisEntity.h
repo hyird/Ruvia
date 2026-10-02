@@ -1,10 +1,16 @@
 #pragma once
 
+#include <cstddef>
+#include <memory_resource>
+#include <stdexcept>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
-#include "ruvia/web/db/DbPredicate.h"
+#include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/detail/entity/ValueStorage.h"
 #include "ruvia/web/detail/redis/RedisEntityTraits.h"
+#include "ruvia/web/redis/RedisPredicate.h"
 
 namespace ruvia {
 
@@ -28,42 +34,106 @@ template <typename T>
 struct IsRedisColumn : std::false_type {};
 template <FixedString Name, typename T, RedisColumnOptions Options>
 struct IsRedisColumn<RedisColumn<Name, T, Options>> : std::true_type {};
-
-// Reuse the owning value slots without exposing SQL column configuration or
-// conversion to a SQL entity. This adapter never participates in query mapping.
-template <typename Column>
-using RedisColumnStorage = DbColumn<Column::name, typename Column::value_type,
-    DbColumnOptions{.primaryKey = Column::options.primaryKey, .nullable = Column::options.nullable}>;
 }  // namespace detail
 
-template <FixedString Name, typename... ColumnTypes>
-class RedisEntity : private DbEntity<Name, detail::RedisColumnStorage<ColumnTypes>...> {
+template <FixedString Prefix, typename... ColumnTypes>
+class RedisEntity {
     static_assert((detail::IsRedisColumn<ColumnTypes>::value && ...),
         "Redis entities require RUVIA_REDIS_COLUMN descriptors");
     static_assert((std::size_t{ColumnTypes::options.primaryKey} + ... + std::size_t{0}) == 1,
         "Redis entities require exactly one primary key");
-    using Storage = DbEntity<Name, detail::RedisColumnStorage<ColumnTypes>...>;
+    static_assert(detail::uniqueEntityColumns<ColumnTypes...>(), "duplicate Redis entity column name");
+    using slots_type = std::tuple<detail::entity_value_slot<typename ColumnTypes::value_type>...>;
+    template <FixedString Name>
+    static consteval std::size_t index() {
+        constexpr auto value = detail::entityColumnIndex<Name, ColumnTypes...>();
+        static_assert(value < sizeof...(ColumnTypes), "unknown Redis entity column");
+        return value;
+    }
 
 public:
     using RedisEntityType = RedisEntity;
     using Columns = std::tuple<ColumnTypes...>;
-    using Relations = std::tuple<>;
-    using Storage::columnIndex;
-    using Storage::columnName;
-    using Storage::get;
-    using Storage::isNull;
-    using Storage::isSet;
-    using Storage::reset;
-    using Storage::resource;
-    using Storage::set;
-    using Storage::setNull;
-    using Storage::Storage;
-    using Storage::tableName;
-
-    template <FixedString Field>
-    static DbFieldReference<RedisEntity, Field> column() {
+    static constexpr std::string_view prefix() noexcept {
+        return Prefix.view();
+    }
+    template <FixedString Name>
+    static consteval std::size_t columnIndex() {
+        return index<Name>();
+    }
+    template <FixedString Name>
+    static consteval std::string_view columnName() {
+        (void)index<Name>();
+        return Name.view();
+    }
+    template <FixedString Name>
+    static redis_field_reference<RedisEntity, Name> field() {
         return {};
     }
+
+    explicit RedisEntity(std::pmr::memory_resource* resource = nullptr)
+        : resource_(detail::pmrResourceOrDefault(resource)),
+          slots_(detail::entity_value_slot<typename ColumnTypes::value_type>(resource_)...) {}
+    RedisEntity(const RedisEntity&) = delete;
+    RedisEntity& operator=(const RedisEntity&) = delete;
+    RedisEntity(RedisEntity&&) noexcept = default;
+    RedisEntity& operator=(RedisEntity&&) = delete;
+
+    template <FixedString Name>
+    auto& get() & {
+        auto& slot = std::get<index<Name>()>(slots_);
+        if (slot.state != decltype(slot.state)::value) {
+            throw std::logic_error("Redis entity value is not set");
+        }
+        return slot.value;
+    }
+    template <FixedString Name>
+    const auto& get() const& {
+        const auto& slot = std::get<index<Name>()>(slots_);
+        if (slot.state != decltype(slot.state)::value) {
+            throw std::logic_error("Redis entity value is not set");
+        }
+        return slot.value;
+    }
+    template <FixedString Name>
+    const auto& get() const&& = delete;
+    template <FixedString Name, typename Value>
+    void set(Value&& value) {
+        auto& slot = std::get<index<Name>()>(slots_);
+        detail::assignEntityValue(slot.value, std::forward<Value>(value), resource_);
+        slot.state = decltype(slot.state)::value;
+    }
+    template <FixedString Name>
+    void setNull()
+        requires(std::tuple_element_t<index<Name>(), Columns>::options.nullable)
+    {
+        auto& slot = std::get<index<Name>()>(slots_);
+        slot.clear();
+        slot.state = decltype(slot.state)::null;
+    }
+    template <FixedString Name>
+    void reset() {
+        auto& slot = std::get<index<Name>()>(slots_);
+        slot.clear();
+        slot.state = decltype(slot.state)::unset;
+    }
+    template <FixedString Name>
+    bool isSet() const {
+        const auto& slot = std::get<index<Name>()>(slots_);
+        return slot.state != decltype(slot.state)::unset;
+    }
+    template <FixedString Name>
+    bool isNull() const {
+        const auto& slot = std::get<index<Name>()>(slots_);
+        return slot.state == decltype(slot.state)::null;
+    }
+    std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
+
+private:
+    std::pmr::memory_resource* resource_;
+    slots_type slots_;
 };
 
 #define RUVIA_REDIS_COLUMN(Name, Type, ...) ::ruvia::RedisColumn<::ruvia::FixedString{#Name}, Type __VA_OPT__(, ) __VA_ARGS__>

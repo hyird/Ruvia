@@ -21,7 +21,7 @@ namespace ruvia {
 
 class DbQuery;
 template <typename Entity>
-class DbEntityRows;
+class entity_rows;
 template <typename Entity, typename Executor>
 class DbRepository;
 template <typename Entity, typename Executor>

@@ -55,13 +55,13 @@ Task<std::pair<DbRows, DbRows>> queryPairPrepared(detail::DbCacheQuery first,
     std::optional<std::pmr::string> secondKey,
     std::optional<std::chrono::milliseconds> firstDuration,
     std::optional<std::chrono::milliseconds> secondDuration,
-    detail::DbQueryCacheState* cache, detail::ScopedOperationScope& scope,
+    detail::DbQueryCacheState* cache,
     OperationOptions options) {
     const ruvia::OperationTimeout operationTimeout(options.timeout);
 
     auto firstOptions = detail::dbCacheRemainingOptions(options, operationTimeout);
     DbRows rows = cache
-                      ? co_await cache->wrap(firstDuration, std::move(firstKey), std::move(first), scope,
+                      ? co_await cache->wrap(firstDuration, std::move(firstKey), std::move(first),
                             std::move(firstOptions), operationTimeout)
                       : co_await std::move(first)(std::move(firstOptions));
     if (operationTimeout.expired()) {
@@ -70,7 +70,7 @@ Task<std::pair<DbRows, DbRows>> queryPairPrepared(detail::DbCacheQuery first,
 
     auto secondOptions = detail::dbCacheRemainingOptions(options, operationTimeout);
     DbRows count = cache
-                       ? co_await cache->wrap(secondDuration, std::move(secondKey), std::move(second), scope,
+                       ? co_await cache->wrap(secondDuration, std::move(secondKey), std::move(second),
                              std::move(secondOptions), operationTimeout)
                        : co_await std::move(second)(std::move(secondOptions));
     if (operationTimeout.expired()) {
@@ -144,7 +144,7 @@ Task<DbRows> DbHandle::queryTask(const DbQuery& query) const {
     return cache_->wrap(query.cacheDuration(), std::move(key),
         detail::DbCacheQuery(client_, std::nullopt, std::move(statement.sql_),
             std::move(statement.params_), resource_),
-        operationScope(), options_);
+        options_);
 }
 
 Task<std::pair<DbRows, DbRows>> DbHandle::queryAndCountTask(const DbQuery& query, const DbQuery& count) const {
@@ -161,7 +161,7 @@ Task<std::pair<DbRows, DbRows>> DbHandle::queryAndCountTask(const DbQuery& query
         detail::DbCacheQuery(client_, std::nullopt, std::move(first.sql_), std::move(first.params_), resource_),
         detail::DbCacheQuery(client_, std::nullopt, std::move(second.sql_), std::move(second.params_), resource_),
         std::move(firstKey), std::move(secondKey), query.cacheDuration(), count.cacheDuration(), cache_,
-        operationScope(), options_);
+        options_);
 }
 
 ScopedOperation<DbRows> DbHandle::query(const DbQuery& query) const {

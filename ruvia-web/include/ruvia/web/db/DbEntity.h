@@ -13,7 +13,9 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/EntityRows.h"
 #include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/detail/entity/ValueStorage.h"
 
 namespace ruvia {
 
@@ -22,8 +24,6 @@ template <typename E>
 struct DbEntityAccess;
 struct DbResultAccess;
 }  // namespace detail
-template <typename Entity>
-class DbEntityRows;
 
 enum class DbRelationKind : unsigned char { kOneToOne,
     kManyToOne,
@@ -193,12 +193,6 @@ struct DbEntityTypeTraits {
     using value_type = T;
     static constexpr DbDataType dataType = DbDataType::kInferred;
 };
-template <typename T>
-struct IsPmrVector : std::false_type {};
-template <typename T>
-struct IsPmrVector<std::pmr::vector<T>> : std::true_type {
-    using value_type = T;
-};
 template <>
 struct DbEntityTypeTraits<bool> {
     using value_type = bool;
@@ -248,36 +242,6 @@ struct DbEntityTypeTraits<std::pmr::vector<T>> {
 };
 
 template <typename T>
-struct DbEntitySlot {
-    enum class State : unsigned char { kUnset,
-        kNull,
-        kValue };
-    explicit DbEntitySlot(std::pmr::memory_resource* resource)
-        : resource_(resource),
-          value(makeValue(resource)) {}
-    static T makeValue(std::pmr::memory_resource* resource) {
-        if constexpr (std::is_same_v<T, String>) {
-            return String(ModelOptions{.resource = resource});
-        } else if constexpr (std::is_same_v<T, std::pmr::string> || IsPmrVector<T>::value) {
-            return T(resource);
-        } else {
-            return T{};
-        }
-    }
-    void clear() {
-        // Even an empty container can allocate (for example, a debug iterator
-        // proxy). Keep the current value alive until that construction succeeds.
-        auto empty = makeValue(resource_);
-        static_assert(std::is_nothrow_move_constructible_v<T>);
-        value.~T();
-        std::construct_at(&value, std::move(empty));
-    }
-    std::pmr::memory_resource* resource_{nullptr};
-    State state{State::kUnset};
-    T value;
-};
-
-template <typename T>
 struct DbRelationDeleter final {
     std::pmr::memory_resource* resource{nullptr};
     void operator()(T* value) const noexcept {
@@ -290,10 +254,10 @@ struct DbRelationDeleter final {
 
 template <typename T, bool Collection = false>
 struct DbRelationSlot final {
-    enum class State : unsigned char { kUnset,
-        kNull,
-        kValue };
-    using Stored = std::conditional_t<Collection, DbEntityRows<T>, T>;
+    enum class state_type : unsigned char { unset,
+        null,
+        value };
+    using Stored = std::conditional_t<Collection, entity_rows<T>, T>;
     using pointer = std::unique_ptr<Stored, DbRelationDeleter<Stored>>;
     explicit DbRelationSlot(std::pmr::memory_resource* resource)
         : resource_(resource),
@@ -302,15 +266,15 @@ struct DbRelationSlot final {
     DbRelationSlot& operator=(const DbRelationSlot&) = delete;
     DbRelationSlot(DbRelationSlot&& other) noexcept
         : resource_(other.resource_),
-          state(std::exchange(other.state, State::kUnset)),
+          state(std::exchange(other.state, state_type::unset)),
           value(std::move(other.value)) {}
     DbRelationSlot& operator=(DbRelationSlot&&) = delete;
     std::pmr::memory_resource* resource_;
-    State state{State::kUnset};
+    state_type state{state_type::unset};
     pointer value;
     void reset() noexcept {
         value.reset();
-        state = State::kUnset;
+        state = state_type::unset;
     }
 };
 
@@ -327,70 +291,6 @@ struct tuple_filter<Predicate, T, Ts...> {
 };
 template <template <typename> class Predicate, typename... Ts>
 using tuple_filter_t = typename tuple_filter<Predicate, Ts...>::type;
-
-template <FixedString Name, typename... ColumnTypes>
-consteval std::size_t entityColumnIndex() {
-    constexpr bool matches[] = {ColumnTypes::name == Name...};
-    for (std::size_t i = 0; i < sizeof...(ColumnTypes); ++i) {
-        if (matches[i]) {
-            return i;
-        }
-    }
-    return sizeof...(ColumnTypes);
-}
-template <typename... ColumnTypes>
-consteval bool uniqueEntityColumns() {
-    constexpr std::string_view names[] = {ColumnTypes::name.view()...};
-    for (std::size_t i = 0; i < sizeof...(ColumnTypes); ++i) {
-        for (std::size_t j = i + 1; j < sizeof...(ColumnTypes); ++j) {
-            if (names[i] == names[j]) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
-template <typename T>
-struct is_optional : std::false_type {};
-template <typename T>
-struct is_optional<std::optional<T>> : std::true_type {
-    using value_type = T;
-};
-
-template <typename T, typename V>
-void assignEntityValue(T& out, V&& value, std::pmr::memory_resource* resource) {
-    if constexpr (std::is_same_v<T, String>) {
-        out.assignOwned(std::string_view(value));
-    } else if constexpr (std::is_same_v<T, std::pmr::string>) {
-        out = std::forward<V>(value);
-    } else if constexpr (is_optional<T>::value) {
-        if (!value) {
-            out.reset();
-        } else {
-            using Element = typename is_optional<T>::value_type;
-            auto owned = DbEntitySlot<Element>::makeValue(resource);
-            assignEntityValue(owned, *value, resource);
-            out.emplace(std::move(owned));
-        }
-    } else if constexpr (IsPmrVector<T>::value) {
-        using Element = typename IsPmrVector<T>::value_type;
-        if constexpr (std::is_arithmetic_v<Element> || std::is_same_v<Element, std::pmr::string>) {
-            out = std::forward<V>(value);
-        } else {
-            T owned(resource);
-            owned.reserve(value.size());
-            for (const auto& item : value) {
-                auto element = DbEntitySlot<Element>::makeValue(resource);
-                assignEntityValue(element, item, resource);
-                owned.push_back(std::move(element));
-            }
-            out = std::move(owned);
-        }
-    } else {
-        out = std::forward<V>(value);
-    }
-}
 
 }  // namespace detail
 
@@ -430,7 +330,7 @@ class DbEntity {
     using RelationsTuple = detail::tuple_filter_t<is_db_relation, Members...>;
     static_assert(detail::uniqueEntityColumns<Members...>(), "duplicate database entity member name");
     template <typename C>
-    using ColumnSlot = detail::DbEntitySlot<typename C::value_type>;
+    using ColumnSlot = detail::entity_value_slot<typename C::value_type>;
     template <typename R>
     using RelationSlot = detail::DbRelationSlot<typename R::TargetEntity, R::isCollection>;
     template <std::size_t... I>
@@ -538,13 +438,13 @@ public:
     auto& get() & {
         if constexpr (isRelation<Name>()) {
             auto& s = relationSlot<Name>();
-            if (s.state != decltype(s.state)::kValue) {
+            if (s.state != decltype(s.state)::value) {
                 throw std::logic_error("database entity relation is not loaded");
             }
             return *s.value;
         } else {
             auto& s = slot<Name>();
-            if (s.state != decltype(s.state)::kValue) {
+            if (s.state != decltype(s.state)::value) {
                 throw std::logic_error("database entity value is not set");
             }
             return s.value;
@@ -561,14 +461,14 @@ public:
         static_assert(!isRelation<Name>(), "relations cannot be assigned; use relation loading access");
         auto& s = slot<Name>();
         detail::assignEntityValue(s.value, std::forward<V>(value), resource_);
-        s.state = decltype(s.state)::kValue;
+        s.state = decltype(s.state)::value;
     }
     template <FixedString Name>
     void setNull()
         requires(!isRelation<Name>() && std::tuple_element_t<index<Name>(), Columns>::options.nullable)
     {
         slot<Name>().clear();
-        slot<Name>().state = decltype(slot<Name>().state)::kNull;
+        slot<Name>().state = decltype(slot<Name>().state)::null;
     }
     template <FixedString Name>
     void reset() {
@@ -576,23 +476,23 @@ public:
             relationSlot<Name>().reset();
         } else {
             slot<Name>().clear();
-            slot<Name>().state = decltype(slot<Name>().state)::kUnset;
+            slot<Name>().state = decltype(slot<Name>().state)::unset;
         }
     }
     template <FixedString Name>
     bool isSet() const {
         if constexpr (isRelation<Name>()) {
-            return relationSlot<Name>().state != decltype(relationSlot<Name>().state)::kUnset;
+            return relationSlot<Name>().state != decltype(relationSlot<Name>().state)::unset;
         } else {
-            return slot<Name>().state != decltype(slot<Name>().state)::kUnset;
+            return slot<Name>().state != decltype(slot<Name>().state)::unset;
         }
     }
     template <FixedString Name>
     bool isNull() const {
         if constexpr (isRelation<Name>()) {
-            return relationSlot<Name>().state == decltype(relationSlot<Name>().state)::kNull;
+            return relationSlot<Name>().state == decltype(relationSlot<Name>().state)::null;
         } else {
-            return slot<Name>().state == decltype(slot<Name>().state)::kNull;
+            return slot<Name>().state == decltype(slot<Name>().state)::null;
         }
     }
     std::pmr::memory_resource* resource() const noexcept {
@@ -605,48 +505,6 @@ private:
     std::pmr::memory_resource* resource_;
     ColumnSlots columnSlots_;
     RelationSlots relationSlots_;
-};
-
-template <typename Entity>
-class DbEntityRows final {
-public:
-    explicit DbEntityRows(std::pmr::memory_resource* resource = nullptr)
-        : rows_(detail::pmrResourceOrDefault(resource)) {}
-    DbEntityRows(const DbEntityRows&) = delete;
-    DbEntityRows& operator=(const DbEntityRows&) = delete;
-    DbEntityRows(DbEntityRows&&) noexcept = default;
-    DbEntityRows& operator=(DbEntityRows&&) = delete;
-    std::size_t size() const noexcept {
-        return rows_.size();
-    }
-    bool empty() const noexcept {
-        return rows_.empty();
-    }
-    const Entity& operator[](std::size_t i) const& noexcept {
-        return rows_[i];
-    }
-    Entity& operator[](std::size_t i) & noexcept {
-        return rows_[i];
-    }
-    const Entity& operator[](std::size_t) const&& = delete;
-    const Entity* begin() const& noexcept {
-        return rows_.data();
-    }
-    const Entity* end() const& noexcept {
-        return rows_.data() + rows_.size();
-    }
-    const Entity* begin() const&& = delete;
-    const Entity* end() const&& = delete;
-    void push_back(Entity&& entity) {
-        if (entity.resource() != rows_.get_allocator().resource()) {
-            throw std::invalid_argument("entity result elements must use the result's memory resource");
-        }
-        rows_.push_back(std::move(entity));
-    }
-
-private:
-    friend struct detail::DbResultAccess;
-    std::pmr::vector<Entity> rows_;
 };
 
 #define RUVIA_DB_COLUMN(Name, Type, ...) ::ruvia::DbColumn<::ruvia::FixedString{#Name}, Type __VA_OPT__(, ) __VA_ARGS__>

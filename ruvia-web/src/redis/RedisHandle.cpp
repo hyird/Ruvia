@@ -82,6 +82,11 @@ RedisHandle RedisHandle::withOptions(OperationOptions options) const {
     return configured;
 }
 
+const WorkerHandle& RedisHandle::worker() const& {
+    requireActive();
+    return pool_->worker_;
+}
+
 detail::RedisCommandExecutor RedisHandle::executor() const {
     return executor(*pool_);
 }

@@ -284,8 +284,8 @@ public:
           key_(resource_) {}
 
     template <typename Entity>
-    DbEntityRows<Entity> decode(const DbRows& rows) {
-        DbEntityRows<Entity> result(resource_);
+    entity_rows<Entity> decode(const DbRows& rows) {
+        entity_rows<Entity> result(resource_);
         if (rows.empty()) {
             return result;
         }
@@ -437,7 +437,7 @@ private:
 template <typename Entity>
 struct DbMapRelatedEntities final {
     DbRelationPlan plan;
-    DbEntityRows<Entity> operator()(DbRows&& rows, std::pmr::memory_resource* resource) {
+    entity_rows<Entity> operator()(DbRows&& rows, std::pmr::memory_resource* resource) {
         return DbRelationDecoder(plan, resource).template decode<Entity>(rows);
     }
 };

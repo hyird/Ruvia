@@ -110,8 +110,8 @@ void applyFindOptions(DbQuery& query, const DbFindOptions& options, std::string_
 }
 template <typename E>
 struct DbMapEntityRows final {
-    DbEntityRows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
-        return mapDbEntityRows<E>(std::move(rows), resource);
+    entity_rows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
+        return mapentity_rows<E>(std::move(rows), resource);
     }
 };
 template <typename E>
@@ -172,7 +172,7 @@ struct DbMapProjection final {
         });
         return result;
     }
-    DbEntityRows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
+    entity_rows<E> operator()(DbRows&& rows, std::pmr::memory_resource* resource) const {
         auto result = DbResultAccess::makeEntityRows<E>(resource, rows.size());
         DbEntityRowDecoder<E> decoder(selectedColumns_);
         for (const auto& row : rows) {
@@ -392,16 +392,16 @@ public:
         return *this;
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> getMany() const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> getMany() const {
         auto mapper = projectionMapper<Output>();
         if constexpr (std::same_as<Output, Entity>) {
             if (relations_ && !relations_->empty()) {
                 auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-                return executor_.template queryMapped<DbEntityRows<Entity>>(prepared ? *prepared : query_,
+                return executor_.template queryMapped<entity_rows<Entity>>(prepared ? *prepared : query_,
                     detail::DbMapRelatedEntities<Entity>{relations_->clone()});
             }
         }
-        return executor_.template queryMapped<DbEntityRows<Output>>(query_, std::move(mapper));
+        return executor_.template queryMapped<entity_rows<Output>>(query_, std::move(mapper));
     }
     template <typename Output = Entity>
     [[nodiscard]] ScopedOperation<std::optional<Output>> getOne() const {
@@ -430,7 +430,7 @@ public:
         return executor_.template queryMapped<bool>(query, detail::DbMapExists{});
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Output>, std::uint64_t>> getManyAndCount() const {
+    [[nodiscard]] ScopedOperation<std::pair<entity_rows<Output>, std::uint64_t>> getManyAndCount() const {
         if (query_.hasWrites()) {
             throw std::invalid_argument("getManyAndCount cannot execute a write CTE twice");
         }
@@ -440,11 +440,11 @@ public:
         if constexpr (std::same_as<Output, Entity>) {
             if (relations_ && !relations_->empty()) {
                 auto prepared = relations_->template prepare<Entity>(query_, alias_, executor_.queryDriver());
-                return executor_.template queryMappedAndCount<DbEntityRows<Entity>>(prepared ? *prepared : query_, count,
+                return executor_.template queryMappedAndCount<entity_rows<Entity>>(prepared ? *prepared : query_, count,
                     detail::DbMapRelatedEntities<Entity>{relations_->clone()});
             }
         }
-        return executor_.template queryMappedAndCount<DbEntityRows<Output>>(query_, count, std::move(mapper));
+        return executor_.template queryMappedAndCount<entity_rows<Output>>(query_, count, std::move(mapper));
     }
     [[nodiscard]] DbStatement getQueryAndParameters() const {
         if (relations_ && !relations_->empty()) {
@@ -646,7 +646,7 @@ public:
         return executor_.execute(query_);
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> getMany() const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> getMany() const {
         validate();
         if (!query_.returnsRows()) {
             throw std::invalid_argument("getMany requires RETURNING");
@@ -656,7 +656,7 @@ public:
                 throw std::invalid_argument("DTO returning requires an explicit projection");
             }
         }
-        return executor_.template queryMapped<DbEntityRows<Output>>(query_, detail::DbMapProjection<Output>(selected_));
+        return executor_.template queryMapped<entity_rows<Output>>(query_, detail::DbMapProjection<Output>(selected_));
     }
     [[nodiscard]] DbStatement getQueryAndParameters() const {
         validate();
@@ -727,13 +727,13 @@ public:
     [[nodiscard]] DbWriteQueryBuilder<Entity, Executor> createInsertBuilder(std::span<const Entity> entities) const {
         return DbWriteQueryBuilder<Entity, Executor>(executor_, insertQuery(entities), true);
     }
-    [[nodiscard]] ScopedOperation<DbEntityRows<Entity>> find(const DbFindOptions& options = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Entity>> find(const DbFindOptions& options = {}) const {
         return findBuilder(options).getMany();
     }
     [[nodiscard]] ScopedOperation<std::optional<Entity>> findOne(const DbFindOptions& options) const {
         return findBuilder(options).getOne();
     }
-    [[nodiscard]] ScopedOperation<std::pair<DbEntityRows<Entity>, std::uint64_t>> findAndCount(const DbFindOptions& options = {}) const {
+    [[nodiscard]] ScopedOperation<std::pair<entity_rows<Entity>, std::uint64_t>> findAndCount(const DbFindOptions& options = {}) const {
         return findBuilder(options).getManyAndCount();
     }
     [[nodiscard]] ScopedOperation<std::uint64_t> count(const DbFindOptions& options = {}) const {
@@ -806,26 +806,26 @@ public:
         return update(predicate, std::span<const DbAssignment>(changes.begin(), changes.size()));
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> insertReturning(const Entity& entity, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> insertReturning(const Entity& entity, std::span<const DbSelection> fields = {}) const {
         return insertReturning<Output>(std::span<const Entity>(&entity, 1), fields);
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> insertReturning(std::span<const Entity> entities, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> insertReturning(std::span<const Entity> entities, std::span<const DbSelection> fields = {}) const {
         auto query = insertQuery(entities);
         return returning<Output>(query, fields);
     }
     template <typename Output = Entity, detail::DbWriteCondition Condition = DbPredicate>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> updateReturning(const Condition& predicate, const Entity& changes, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> updateReturning(const Condition& predicate, const Entity& changes, std::span<const DbSelection> fields = {}) const {
         auto query = updateQuery(predicate, changes);
         return returning<Output>(query, fields);
     }
     template <typename Output = Entity, detail::DbWriteCondition Condition = DbPredicate>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> updateReturning(const Condition& predicate, std::span<const DbAssignment> changes, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> updateReturning(const Condition& predicate, std::span<const DbAssignment> changes, std::span<const DbSelection> fields = {}) const {
         auto query = updateQuery(predicate, changes);
         return returning<Output>(query, fields);
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> deleteReturning(const DbPredicate& predicate, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> deleteReturning(const DbPredicate& predicate, std::span<const DbSelection> fields = {}) const {
         if (predicate.empty()) {
             throw std::invalid_argument("repository deleteReturning requires a condition");
         }
@@ -834,11 +834,11 @@ public:
         return returning<Output>(query, fields);
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> upsertReturning(const Entity& entity, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> upsertReturning(const Entity& entity, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
         return upsertReturning<Output>(std::span<const Entity>(&entity, 1), options, fields);
     }
     template <typename Output = Entity>
-    [[nodiscard]] ScopedOperation<DbEntityRows<Output>> upsertReturning(std::span<const Entity> entities, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
+    [[nodiscard]] ScopedOperation<entity_rows<Output>> upsertReturning(std::span<const Entity> entities, const DbUpsertOptions& options, std::span<const DbSelection> fields = {}) const {
         auto query = upsertQuery(entities, options);
         return returning<Output>(query, fields);
     }
@@ -880,7 +880,7 @@ private:
     }
 
     template <typename Output>
-    ScopedOperation<DbEntityRows<Output>> returning(DbQuery& query, std::span<const DbSelection> fields) const {
+    ScopedOperation<entity_rows<Output>> returning(DbQuery& query, std::span<const DbSelection> fields) const {
         std::pmr::vector<std::pmr::string> columns(query.resource());
         if (fields.empty()) {
             static_assert(requires { typename Output::Columns; });
@@ -904,7 +904,7 @@ private:
             }
             columns = detail::applyProjection(query, fields, {}, true);
         }
-        return executor_.template queryMapped<DbEntityRows<Output>>(query, detail::DbMapProjection<Output>(columns));
+        return executor_.template queryMapped<entity_rows<Output>>(query, detail::DbMapProjection<Output>(columns));
     }
     template <detail::DbWriteCondition Condition = DbPredicate>
     DbQuery updateQuery(const Condition& predicate, const Entity& changes) const {

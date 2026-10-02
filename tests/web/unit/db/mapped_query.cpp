@@ -63,9 +63,9 @@ ruvia::Task<ruvia::DbRows> rowsTask() {
 RUVIA_TEST(db_mapped_query_success_owns_result_after_source_task) {
     asio::io_context context;
     bool called = false;
-    std::optional<ruvia::DbEntityRows<Entity>> result;
+    std::optional<ruvia::entity_rows<Entity>> result;
     startTask(context,
-        ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Entity>>(rowsTask(), std::pmr::get_default_resource(), ruvia::detail::DbMapEntityRows<Entity>{}),
+        ruvia::detail::mapDbQuery<ruvia::entity_rows<Entity>>(rowsTask(), std::pmr::get_default_resource(), ruvia::detail::DbMapEntityRows<Entity>{}),
         [&](std::exception_ptr failure, auto value) {
             called = true;
             if (failure) {
@@ -210,10 +210,10 @@ RUVIA_TEST(db_mapped_query_repeated_results_release_temporaries_and_retain_field
     ruvia::test::CountingMemoryResource resource;
     const auto perform = [&] {
         context.restart();
-        std::optional<ruvia::DbEntityRows<Entity>> result;
+        std::optional<ruvia::entity_rows<Entity>> result;
         std::exception_ptr failure;
         startTask(context,
-            ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Entity>>(
+            ruvia::detail::mapDbQuery<ruvia::entity_rows<Entity>>(
                 ownedRowsTask(std::pmr::string(500, 'x', &resource), &resource), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
             [&](std::exception_ptr error, auto value) {
                 if (error) {
@@ -260,7 +260,7 @@ RUVIA_TEST(db_mapping_rebinds_column_positions_when_row_schema_changes) {
     resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(firstFields.data(), firstFields.size(), firstNames.data(), firstNames.size(), resource));
     resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(secondFields.data(), secondFields.size(), reversedNames.data(), reversedNames.size(), resource));
     resultRows.push_back(ruvia::detail::DbResultAccess::borrowedRow(thirdFields.data(), thirdFields.size(), reversedNames.data(), reversedNames.size(), resource));
-    const auto mapped = ruvia::detail::mapDbEntityRows<Entity>(std::move(rows), resource);
+    const auto mapped = ruvia::detail::mapentity_rows<Entity>(std::move(rows), resource);
     RUVIA_CHECK_EQ(mapped.size(), std::size_t{3});
     RUVIA_CHECK_EQ(mapped[0].get<"id">(), 3);
     RUVIA_CHECK_EQ(mapped[0].get<"name">(), std::string_view("first"));
@@ -324,7 +324,7 @@ RUVIA_TEST(db_mapping_reserves_known_row_count_once) {
         const auto entityAllocations = reservedAllocations.template operator()<Numeric>();
         const auto projectionAllocations = reservedAllocations.template operator()<Projection>();
         {
-            const auto mapped = ruvia::detail::mapDbEntityRows<Numeric>(makeRows(), &resource);
+            const auto mapped = ruvia::detail::mapentity_rows<Numeric>(makeRows(), &resource);
             RUVIA_CHECK_EQ(mapped.size(), count);
             RUVIA_CHECK_EQ(resource.allocationCount(), entityAllocations);
             for (const auto& entity : mapped) {
@@ -380,7 +380,7 @@ RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_resul
             names.emplace_back("id");
         }
         names.emplace_back("name");
-        return ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Output>>(
+        return ruvia::detail::mapDbQuery<ruvia::entity_rows<Output>>(
             ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource, invalid, gate), &resource,
             ruvia::detail::DbMapProjection<Output>(names));
     };
@@ -389,7 +389,7 @@ RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_resul
         RUVIA_CHECK(resource.liveAllocations() > 0);
     }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
-    std::optional<ruvia::DbEntityRows<Output>> retained;
+    std::optional<ruvia::entity_rows<Output>> retained;
     startTask(context, operation(false, nullptr, true), [&](std::exception_ptr failure, auto value) {
         if (failure) {
             std::rethrow_exception(failure);
@@ -440,14 +440,14 @@ RUVIA_TEST(db_mapped_query_cold_drop_conversion_failure_and_cancellation_release
     asio::io_context context;
     ruvia::test::CountingMemoryResource resource;
     {
-        auto cold = ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Entity>>(
+        auto cold = ruvia::detail::mapDbQuery<ruvia::entity_rows<Entity>>(
             ownedRowsTask(std::pmr::string(500, 'x', &resource), &resource), &resource, ruvia::detail::DbMapEntityRows<Entity>{});
         RUVIA_CHECK(resource.liveAllocations() > 0);
     }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
     bool conversionFailure = false;
     startTask(context,
-        ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Entity>>(
+        ruvia::detail::mapDbQuery<ruvia::entity_rows<Entity>>(
             ownedRowsTask(std::pmr::string(500, 'x', &resource), &resource, true), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
         [&](std::exception_ptr failure, auto) {
             if (failure) {
@@ -465,7 +465,7 @@ RUVIA_TEST(db_mapped_query_cold_drop_conversion_failure_and_cancellation_release
     bool cancelled = false;
     context.restart();
     startTask(context,
-        ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Entity>>(
+        ruvia::detail::mapDbQuery<ruvia::entity_rows<Entity>>(
             ownedRowsTask(std::pmr::string(500, 'x', &resource), &resource, false, &gate), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
         [&](std::exception_ptr failure, auto) {
             if (failure) {
@@ -495,7 +495,7 @@ RUVIA_TEST(db_relation_mapped_query_cold_drop_and_cancellation_release_owned_pla
         query.select(query.column("id", "s")).from("sources", "s");
         ruvia::detail::DbRelationPlan plan(&resource);
         plan.add<Source>(query, "s", "target");
-        return ruvia::detail::mapDbQuery<ruvia::DbEntityRows<Source>>(
+        return ruvia::detail::mapDbQuery<ruvia::entity_rows<Source>>(
             ownedRowsTask(std::pmr::string(500, 'x', &resource), &resource, false, gate),
             &resource, ruvia::detail::DbMapRelatedEntities<Source>{std::move(plan)});
     };
@@ -546,7 +546,7 @@ ruvia::Task<ruvia::DbRows> countRowsTask(std::pmr::memory_resource* resource,
 }
 
 RUVIA_TEST(db_mapped_page_repeated_operations_release_temporaries_and_retain_results) {
-    using Page = std::pair<ruvia::DbEntityRows<Entity>, std::uint64_t>;
+    using Page = std::pair<ruvia::entity_rows<Entity>, std::uint64_t>;
     asio::io_context context;
     ruvia::test::CountingMemoryResource resource;
     const auto perform = [&] {
@@ -554,7 +554,7 @@ RUVIA_TEST(db_mapped_page_repeated_operations_release_temporaries_and_retain_res
         std::optional<Page> result;
         std::exception_ptr failure;
         auto query = ruvia::detail::queryDbPair(ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource), countRowsTask(&resource));
-        startTask(context, ruvia::detail::mapDbQueryAndCount<ruvia::DbEntityRows<Entity>>(std::move(query), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
+        startTask(context, ruvia::detail::mapDbQueryAndCount<ruvia::entity_rows<Entity>>(std::move(query), &resource, ruvia::detail::DbMapEntityRows<Entity>{}),
             [&](std::exception_ptr error, auto value) {
                 if (error) {
                     failure = std::move(error);
@@ -593,7 +593,7 @@ RUVIA_TEST(db_mapped_page_cold_drop_failures_and_cancellation_release_both_queri
     asio::io_context context;
     ruvia::test::CountingMemoryResource resource;
     const auto operation = [&](QueryGate* first, QueryGate* second, bool invalidRow, bool invalidCount, bool* countStarted) {
-        return ruvia::detail::mapDbQueryAndCount<ruvia::DbEntityRows<Entity>>(
+        return ruvia::detail::mapDbQueryAndCount<ruvia::entity_rows<Entity>>(
             ruvia::detail::queryDbPair(ownedRowsTask(std::pmr::string(500, 'p', &resource), &resource, invalidRow, first),
                 countRowsTask(&resource, second, invalidCount, countStarted)),
             &resource, ruvia::detail::DbMapEntityRows<Entity>{});

@@ -13,8 +13,20 @@ namespace ruvia {
 App& App::database(DbRegistrationConfig config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot configure database while app is running", [&](detail::AppState& state) {
-            detail::upsertNamedCapabilityDefinition(state.databases, config.alias, config.config,
-                "database alias must not be empty", detail::appResource());
+            auto* resource = detail::appResource();
+            detail::validateCapabilityAlias(config.alias, "database alias must not be empty");
+            detail::DbDefinition replacement{std::pmr::string(config.alias, resource),
+                detail::DbConfigStorage(config.config, resource)};
+            if (config.query_cache) {
+                replacement.query_cache.emplace(*config.query_cache, resource);
+            }
+            for (auto& definition : state.databases) {
+                if (std::string_view(definition.alias) == std::string_view(config.alias)) {
+                    definition = std::move(replacement);
+                    return;
+                }
+            }
+            state.databases.push_back(std::move(replacement));
         });
 }
 

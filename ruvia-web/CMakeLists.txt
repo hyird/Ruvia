@@ -42,15 +42,6 @@ ruvia_collect_cpp_sources(RUVIA_WEB_SOURCES src)
 list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/(db|redis)/")
 list(FILTER RUVIA_WEB_SOURCES EXCLUDE REGEX "/src/auth/Jwt[^/]*\\.cpp$")
 
-list(APPEND RUVIA_WEB_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
-
-if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL OR RUVIA_ENABLE_REDIS)
-    list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbValue.cpp)
-endif()
-
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     list(APPEND RUVIA_WEB_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbClient.cpp
@@ -59,6 +50,7 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbProcedure.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryResultCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
@@ -66,7 +58,9 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSchemaTimescale.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbStreamResult.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTransaction.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbValue.cpp)
 endif()
 
 if(RUVIA_ENABLE_MARIADB)
@@ -200,15 +194,7 @@ ruvia_install_target(ruvia-web web)
 set(_ruvia_web_excluded_header_directories)
 set(_ruvia_web_excluded_headers)
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    if(RUVIA_ENABLE_REDIS)
-        file(GLOB _ruvia_web_excluded_headers RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/web/db/*.h")
-        foreach(_ruvia_shared_header IN ITEMS DbEntity DbPredicate DbQuery DbTypes DbCache DbFindOptions DbExecResult)
-            list(REMOVE_ITEM _ruvia_web_excluded_headers "include/ruvia/web/db/${_ruvia_shared_header}.h")
-        endforeach()
-    else()
-        list(APPEND _ruvia_web_excluded_header_directories db)
-    endif()
+    list(APPEND _ruvia_web_excluded_header_directories db)
 endif()
 if(NOT RUVIA_ENABLE_REDIS)
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)

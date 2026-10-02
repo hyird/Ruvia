@@ -87,24 +87,24 @@ RedisOrmArguments redisOrmDeleteArguments(std::string_view key, std::pmr::memory
     return args;
 }
 
-DbExecResult redisOrmExecResult(RedisValue&& reply, std::pmr::memory_resource*) {
+redis_write_result redisOrmExecResult(RedisValue&& reply, std::pmr::memory_resource*) {
     const auto value = redisValueInteger(reply);
     switch (value) {
         case 0:
-            return RedisOrmResultAccess::makeExecResult(0);
+            return redis_write_result(0);
         case 1:
         case 2:
-            return RedisOrmResultAccess::makeExecResult(1);
+            return redis_write_result(1);
         default:
             throw RedisError(RedisError::Code::kProtocolError,
                 "invalid entity write affected-row reply");
     }
 }
 
-DbExecResult redisOrmDeleteResult(RedisValue&& reply, std::pmr::memory_resource*) {
+redis_write_result redisOrmDeleteResult(RedisValue&& reply, std::pmr::memory_resource*) {
     const auto value = redisValueInteger(reply);
     if (value == 0 || value == 1) {
-        return RedisOrmResultAccess::makeExecResult(static_cast<std::uint64_t>(value));
+        return redis_write_result(static_cast<std::uint64_t>(value));
     }
     throw RedisError(RedisError::Code::kProtocolError,
         "invalid entity delete affected-row reply");

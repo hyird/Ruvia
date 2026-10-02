@@ -16,7 +16,7 @@ struct DbEntityAccess final {
         slot.reset();
         std::pmr::polymorphic_allocator<Target> allocator(entity.resource());
         slot.value.reset(allocator.template new_object<Target>(entity.resource()));
-        slot.state = decltype(slot.state)::kValue;
+        slot.state = decltype(slot.state)::value;
         return *slot.value;
     }
 
@@ -26,11 +26,11 @@ struct DbEntityAccess final {
         auto& slot = entity.template relationSlot<Name>();
         using Relation = std::tuple_element_t<E::template relationIndex<Name>(), typename E::Relations>;
         static_assert(Relation::isCollection, "ensureRelationCollection requires a collection relation");
-        if (slot.state != decltype(slot.state)::kValue) {
+        if (slot.state != decltype(slot.state)::value) {
             using Stored = typename std::remove_reference_t<decltype(slot)>::Stored;
             std::pmr::polymorphic_allocator<Stored> allocator(entity.resource());
             slot.value.reset(allocator.template new_object<Stored>(entity.resource()));
-            slot.state = decltype(slot.state)::kValue;
+            slot.state = decltype(slot.state)::value;
         }
         return *slot.value;
     }
@@ -42,7 +42,7 @@ struct DbEntityAccess final {
         static_assert(!Relation::isCollection, "a loaded collection can be empty but cannot be NULL");
         auto& slot = entity.template relationSlot<Name>();
         slot.reset();
-        slot.state = decltype(slot.state)::kNull;
+        slot.state = decltype(slot.state)::null;
     }
 };
 

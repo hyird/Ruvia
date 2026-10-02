@@ -9,7 +9,7 @@
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
 namespace ruvia::detail {
 struct RedisIndexDefinition final {
-    std::pmr::string column;
+    std::pmr::string field;
     RedisIndexKind kind{RedisIndexKind::kNone};
     bool sortable{false};
 };
@@ -18,7 +18,7 @@ struct RedisMapping final {
     std::pmr::vector<RedisIndexDefinition> indexes;
     [[nodiscard]] RedisIndexKind indexKind(std::string_view column) const noexcept {
         for (const auto& index : indexes) {
-            if (index.column == column) {
+            if (index.field == column) {
                 return index.kind;
             }
         }
@@ -26,7 +26,7 @@ struct RedisMapping final {
     }
     [[nodiscard]] bool sortable(std::string_view column) const noexcept {
         for (const auto& index : indexes) {
-            if (index.column == column) {
+            if (index.field == column) {
                 return index.sortable;
             }
         }
@@ -36,7 +36,7 @@ struct RedisMapping final {
 template <typename Entity>
 RedisMapping normalizeRedisMapping(const RedisRepositoryConfig& config, std::pmr::memory_resource* resource) {
     validateRedisEntity<Entity>();
-    RedisMapping result{std::pmr::string(config.prefix.empty() ? Entity::tableName() : std::string_view(config.prefix), resource), std::pmr::vector<RedisIndexDefinition>(resource)};
+    RedisMapping result{std::pmr::string(config.prefix.empty() ? Entity::prefix() : std::string_view(config.prefix), resource), std::pmr::vector<RedisIndexDefinition>(resource)};
     if (result.prefix.empty()) {
         throw std::invalid_argument("Redis entity prefix cannot be empty");
     }
@@ -47,13 +47,13 @@ RedisMapping normalizeRedisMapping(const RedisRepositoryConfig& config, std::pmr
     });
     for (const auto& index : config.indexes) {
         for (const auto& existing : result.indexes) {
-            if (std::string_view(existing.column) == std::string_view(index.column)) {
+            if (std::string_view(existing.field) == std::string_view(index.field)) {
                 throw std::invalid_argument("duplicate Redis index column");
             }
         }
         bool found = false;
         forEachRedisField<Entity>([&]<typename Field> {
-            if (Field::name.view() != index.column) {
+            if (Field::name.view() != index.field) {
                 return;
             }
             found = true;
@@ -81,7 +81,7 @@ RedisMapping normalizeRedisMapping(const RedisRepositoryConfig& config, std::pmr
         if (!found) {
             throw std::invalid_argument("unknown Redis index column");
         }
-        result.indexes.push_back({std::pmr::string(index.column, resource), index.kind, index.sortable});
+        result.indexes.push_back({std::pmr::string(index.field, resource), index.kind, index.sortable});
     }
     return result;
 }

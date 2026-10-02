@@ -45,7 +45,7 @@ RUVIA_TEST(redis_entity_tracks_unset_value_and_null_states) {
     RedisUser user(&resource);
 
     RUVIA_CHECK_EQ(user.resource(), &resource);
-    RUVIA_CHECK_EQ(RedisUser::tableName(), std::string_view("user"));
+    RUVIA_CHECK_EQ(RedisUser::prefix(), std::string_view("user"));
     RUVIA_CHECK(!user.isSet<"id">());
     RUVIA_CHECK(!user.isNull<"id">());
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)user.get<"id">(); }));
@@ -196,8 +196,8 @@ RUVIA_TEST(redis_entity_mapping_owns_config_and_reclaims_storage) {
     {
         ruvia::RedisRepositoryConfig config{
             .prefix = std::string(128, 'p'),
-            .indexes = {{.column = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
-                {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric}}};
+            .indexes = {{.field = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
+                {.field = "age", .kind = ruvia::RedisIndexKind::kNumeric}}};
         auto mapping = ruvia::detail::normalizeRedisMapping<RedisUser>(config, &resource);
         config.prefix.clear();
         config.indexes.clear();
@@ -216,10 +216,10 @@ RUVIA_TEST(redis_entity_mapping_rejects_unknown_duplicate_and_mismatched_indexes
             (void)ruvia::detail::normalizeRedisMapping<RedisUser>(config, std::pmr::get_default_resource());
         });
     };
-    RUVIA_CHECK(rejected({.indexes = {{.column = "missing"}}}));
-    RUVIA_CHECK(rejected({.indexes = {{.column = "name"}, {.column = "name"}}}));
-    RUVIA_CHECK(rejected({.indexes = {{.column = "name", .kind = ruvia::RedisIndexKind::kNumeric}}}));
-    RUVIA_CHECK(rejected({.indexes = {{.column = "age", .kind = ruvia::RedisIndexKind::kText}}}));
-    RUVIA_CHECK(rejected({.indexes = {{.column = "age", .kind = ruvia::RedisIndexKind::kTag}}}));
-    RUVIA_CHECK(rejected({.indexes = {{.column = "name", .kind = ruvia::RedisIndexKind::kNone}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "missing"}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "name"}, {.field = "name"}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "name", .kind = ruvia::RedisIndexKind::kNumeric}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "age", .kind = ruvia::RedisIndexKind::kText}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "age", .kind = ruvia::RedisIndexKind::kTag}}}));
+    RUVIA_CHECK(rejected({.indexes = {{.field = "name", .kind = ruvia::RedisIndexKind::kNone}}}));
 }

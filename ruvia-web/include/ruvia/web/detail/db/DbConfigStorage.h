@@ -7,23 +7,28 @@
 #include <string_view>
 
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/db/DbCache.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/client/ClientTlsConfigStorage.h"
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
 
 namespace ruvia::detail {
 
 struct DbCacheConfigStorage final {
     template <typename Config>
     DbCacheConfigStorage(const Config& source, std::pmr::memory_resource* resource)
-        : options(source.options, resource),
-          duration(source.duration),
+        : duration(source.duration),
           alwaysEnabled(source.alwaysEnabled),
           ignoreErrors(source.ignoreErrors),
-          nameSpace(source.nameSpace, resource) {}
-    RedisConfigStorage options;
+          nameSpace(source.nameSpace, resource) {
+#ifndef RUVIA_ENABLE_REDIS
+        throw std::invalid_argument("database query caching requires Redis support");
+#endif
+        if (duration.count() <= 0 || nameSpace.empty()) {
+            throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
+        }
+    }
     std::chrono::milliseconds duration;
     bool alwaysEnabled;
     bool ignoreErrors;
@@ -55,7 +60,6 @@ struct DbConfigStorage final {
     std::optional<std::chrono::milliseconds> writeTimeout;
     std::optional<std::chrono::milliseconds> queryTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
-    std::optional<DbCacheConfigStorage> cache{};
 
 private:
     struct ValidatedConfigTag final {};
@@ -73,9 +77,6 @@ private:
           writeTimeout(source.writeTimeout),
           queryTimeout(source.queryTimeout),
           acquireTimeout(source.acquireTimeout) {
-        if (source.cache) {
-            cache.emplace(*source.cache, resource);
-        }
     }
 
     DbConfigStorage(
@@ -92,12 +93,25 @@ private:
           writeTimeout(source.writeTimeout),
           queryTimeout(source.queryTimeout),
           acquireTimeout(source.acquireTimeout) {
-        if (source.cache) {
-            cache.emplace(*source.cache, resource);
-        }
     }
 };
 
-using DbDefinition = NamedCapabilityDefinition<DbConfigStorage>;
+struct db_query_cache_registration_storage final {
+    db_query_cache_registration_storage(const db_query_cache_registration& source,
+        std::pmr::memory_resource* resource)
+        : redis_alias(source.redis_alias, resource),
+          policy(source.policy, resource) {
+        validateCapabilityAlias(redis_alias, "database query cache Redis alias must not be empty");
+    }
+    std::pmr::string redis_alias;
+    DbCacheConfigStorage policy;
+};
+
+struct DbDefinition final {
+    using ConfigStorage = DbConfigStorage;
+    std::pmr::string alias;
+    DbConfigStorage config;
+    std::optional<db_query_cache_registration_storage> query_cache{};
+};
 
 }  // namespace ruvia::detail

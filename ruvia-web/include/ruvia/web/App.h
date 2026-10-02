@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,6 +22,7 @@
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
+#include "ruvia/web/db/DbCache.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -39,6 +41,7 @@ struct AppState;
 struct DbRegistrationConfig final {
     std::string alias{"default"};
     DbConfig config{};
+    std::optional<db_query_cache_registration> query_cache{};
 };
 #endif
 

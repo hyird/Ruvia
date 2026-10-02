@@ -20,8 +20,8 @@ RUVIA_REDIS_ENTITY(CachedUser, "users",
 const ruvia::RedisRepositoryConfig userRedisConfig{
     .prefix = "ruvia:example:users",
     .indexes = {
-        {.column = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
-        {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric},
+        {.field = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
+        {.field = "age", .kind = ruvia::RedisIndexKind::kNumeric},
     },
 };
 RUVIA_MODEL(CreateCachedUser,
@@ -62,7 +62,7 @@ private:
         user.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
         auto users = c.redis().getRepository<CachedUser>(userRedisConfig);
         const auto result = co_await users.insert(user, {.ttl = std::chrono::hours(1)});
-        if (result.affectedRows() == 0) {
+        if (result.affected_entities() == 0) {
             co_return c.error({.status = ruvia::http_status::kConflict, .message = "user already exists"});
         }
         CachedUserResponse response({.resource = c.arena()});
@@ -71,7 +71,7 @@ private:
         co_return c.json(response);
     }
     ruvia::Task<ruvia::HttpResponse> find(ruvia::Context& c) {
-        auto user = co_await c.redis().getRepository<CachedUser>(userRedisConfig).findOne({.where = CachedUser::column<"id">() == c.req().param("id").value_or("")});
+        auto user = co_await c.redis().getRepository<CachedUser>(userRedisConfig).findOne({.where = CachedUser::field<"id">() == c.req().param("id").value_or("")});
         if (!user) {
             co_return c.error({.status = ruvia::http_status::kNotFound, .message = "user not found"});
         }
@@ -80,9 +80,9 @@ private:
         co_return c.json(response);
     }
     ruvia::Task<ruvia::HttpResponse> adults(ruvia::Context& c) {
-        const ruvia::DbFindOptions findOptions{
-            .where = CachedUser::column<"age">() >= 18,
-            .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},
+        const ruvia::redis_find_options findOptions{
+            .where = CachedUser::field<"age">() >= 18,
+            .order = {{.field = "name", .direction = ruvia::redis_order_direction::ascending}},
             .take = 20};
         auto users = co_await c.redis().getRepository<CachedUser>(userRedisConfig).find(findOptions);
         CachedUsersResponse response({.resource = c.arena()});

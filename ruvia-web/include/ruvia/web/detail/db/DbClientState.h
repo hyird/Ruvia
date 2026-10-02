@@ -15,6 +15,8 @@ namespace ruvia::detail {
 class DbClientState final : public std::enable_shared_from_this<DbClientState> {
 public:
     DbClientState(EventLoop loop, const DbConfig& config);
+    DbClientState(EventLoop loop, const DbConfig& config, const RedisHandle& cache_store,
+        const DbCacheConfig& cache_policy);
     ~DbClientState();
 
     DbClientState(const DbClientState&) = delete;

@@ -25,17 +25,17 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/web/db/DbExecResult.h"
-#include "ruvia/web/db/DbFindOptions.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisRepositoryCommands.h"
 #include "ruvia/web/detail/redis/RedisRepositoryMapping.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/RedisEntity.h"
+#include "ruvia/web/redis/RedisFindOptions.h"
 #include "ruvia/web/redis/RedisHandle.h"
 #include "ruvia/web/redis/RedisRepository.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
+#include "ruvia/web/redis/RedisWriteResult.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -58,7 +58,7 @@ RUVIA_REDIS_ENTITY(TestRedisAdminUser, "users:admin",
 
 const ruvia::RedisRepositoryConfig kTestRedisRepositoryConfig{
     .prefix = "users",
-    .indexes = {{.column = "name", .kind = RedisIndexKind::kTag}},
+    .indexes = {{.field = "name", .kind = RedisIndexKind::kTag}},
 };
 
 class RedisTestWorker final {
@@ -517,25 +517,22 @@ RUVIA_TEST(redis_repository_command_mappers_validate_wire_results) {
 
     auto inserted = ruvia::detail::redisOrmExecResult(
         ruvia::detail::RedisTypesAccess::integerValue(1, &resource), &resource);
-    RUVIA_CHECK_EQ(inserted.affectedRows(), std::uint64_t{1});
-    RUVIA_CHECK(!inserted.lastInsertId().has_value());
+    RUVIA_CHECK_EQ(inserted.affected_entities(), std::uint64_t{1});
 
     auto updated = ruvia::detail::redisOrmExecResult(
         ruvia::detail::RedisTypesAccess::integerValue(2, &resource), &resource);
-    RUVIA_CHECK_EQ(updated.affectedRows(), std::uint64_t{1});
-    RUVIA_CHECK(!updated.lastInsertId().has_value());
+    RUVIA_CHECK_EQ(updated.affected_entities(), std::uint64_t{1});
 
     auto skipped = ruvia::detail::redisOrmExecResult(
         ruvia::detail::RedisTypesAccess::integerValue(0, &resource), &resource);
-    RUVIA_CHECK_EQ(skipped.affectedRows(), std::uint64_t{0});
-    RUVIA_CHECK(!skipped.lastInsertId().has_value());
+    RUVIA_CHECK_EQ(skipped.affected_entities(), std::uint64_t{0});
 
     auto deleted = ruvia::detail::redisOrmDeleteResult(
         ruvia::detail::RedisTypesAccess::integerValue(1, &resource), &resource);
-    RUVIA_CHECK_EQ(deleted.affectedRows(), std::uint64_t{1});
+    RUVIA_CHECK_EQ(deleted.affected_entities(), std::uint64_t{1});
     auto missing = ruvia::detail::redisOrmDeleteResult(
         ruvia::detail::RedisTypesAccess::integerValue(0, &resource), &resource);
-    RUVIA_CHECK_EQ(missing.affectedRows(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(missing.affected_entities(), std::uint64_t{0});
 
     RUVIA_CHECK(ruvia::detail::redisOrmBooleanResult(
         ruvia::detail::RedisTypesAccess::integerValue(1, &resource), &resource));
@@ -642,17 +639,17 @@ RUVIA_TEST(redis_repository_cold_operations_release_owned_arguments) {
         {
             auto upsert = repository.upsert(entity);
             auto insert = repository.insert(entity);
-            auto update = repository.update(TestRedisUser::column<"id">() == "u-1", entity);
+            auto update = repository.update(TestRedisUser::field<"id">() == "u-1", entity);
             auto many = repository.find();
-            auto one = repository.findOne({.where = TestRedisUser::column<"id">() == "u-1"});
+            auto one = repository.findOne({.where = TestRedisUser::field<"id">() == "u-1"});
             auto page = repository.findAndCount();
-            auto count = repository.count({.where = TestRedisUser::column<"name">() == "Alice"});
-            auto exists = repository.exists({.where = TestRedisUser::column<"name">() == "Alice"});
-            auto removed = repository.deleteBy(TestRedisUser::column<"id">() == "u-1");
+            auto count = repository.count({.where = TestRedisUser::field<"name">() == "Alice"});
+            auto exists = repository.exists({.where = TestRedisUser::field<"name">() == "Alice"});
+            auto removed = repository.deleteBy(TestRedisUser::field<"id">() == "u-1");
             auto removedEntity = repository.remove(entity);
             auto expire = repository.expire(
-                TestRedisUser::column<"id">() == "u-1", std::chrono::seconds(30));
-            auto ttl = repository.ttl(TestRedisUser::column<"id">() == "u-1");
+                TestRedisUser::field<"id">() == "u-1", std::chrono::seconds(30));
+            auto ttl = repository.ttl(TestRedisUser::field<"id">() == "u-1");
             auto createIndex = repository.createIndex();
             auto dropIndex = repository.dropIndex();
             (void)upsert;
@@ -737,7 +734,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
             warmup.set<"active">(true);
             warmup.set<"role">("admin");
             const auto warmupResult = co_await repository.insert(warmup);
-            const bool warmupSucceeded = warmupResult.affectedRows() == 1;
+            const bool warmupSucceeded = warmupResult.affected_entities() == 1;
             baselineAfterWarmup = operationResource.liveAllocations();
 
             std::optional<TestRedisUser> input;
@@ -752,7 +749,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
             // Destroying the entity before the operation starts must be safe.
             // The repository has synchronously copied every field into operation storage.
             try {
-                const auto result = (co_await std::move(pending)).affectedRows();
+                const auto result = (co_await std::move(pending)).affected_entities();
                 co_return warmupSucceeded&& result == 1 ? 1 : 0;
             } catch (...) {
                 co_return 0;
@@ -828,7 +825,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_release_each_operation) {
         for (int index = 0; index != 64; ++index) {
             bool cancelled = false;
             try {
-                auto operation = repository.exists({.where = TestRedisUser::column<"name">() == id});
+                auto operation = repository.exists({.where = TestRedisUser::field<"name">() == id});
                 (void)co_await std::move(operation);
             } catch (const ruvia::RedisError& error) {
                 cancelled = error.code() == ruvia::RedisError::Code::kCancelled;
@@ -934,7 +931,7 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
         auto exercise = [&]() -> ruvia::Task<ruvia::RedisError::Code> {
             {
                 auto warmup = repository.exists(
-                    {.where = TestRedisUser::column<"id">() == warmupId});
+                    {.where = TestRedisUser::field<"id">() == warmupId});
                 try {
                     warmupSucceeded = co_await std::move(warmup);
                 } catch (const ruvia::RedisError& error) {
@@ -945,7 +942,7 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
 
             try {
                 auto operation = repository.exists(
-                    {.where = TestRedisUser::column<"name">() == "Alice"});
+                    {.where = TestRedisUser::field<"name">() == "Alice"});
                 (void)co_await std::move(operation);
             } catch (const ruvia::RedisError& error) {
                 co_return error.code();
@@ -996,7 +993,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         [&] { (void)repository.insert(makeUser(std::pmr::get_default_resource()),
                   {.ttl = std::chrono::milliseconds(10), .persist = true}); }));
     RUVIA_CHECK(throwsInvalidArgument([&] {
-        (void)repository.findOne({.where = TestRedisUser::column<"id">() == ""});
+        (void)repository.findOne({.where = TestRedisUser::field<"id">() == ""});
     }));
 }
 
@@ -1011,7 +1008,7 @@ RUVIA_TEST(redis_repository_rejects_operations_after_scope_closes) {
     scope.close();
 
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        (void)repository.exists({.where = TestRedisUser::column<"name">() == "Alice"});
+        (void)repository.exists({.where = TestRedisUser::field<"name">() == "Alice"});
     }));
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)repository.find(); }));
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)repository.createIndex(); }));
@@ -1027,7 +1024,7 @@ RUVIA_TEST(redis_repository_expired_escaped_repository_releases_owned_mapping) {
     ruvia::detail::ScopedOperationScope scope;
     ruvia::RedisRepositoryConfig config;
     config.prefix.assign(256, 'p');
-    config.indexes.push_back({.column = "name", .kind = RedisIndexKind::kTag});
+    config.indexes.push_back({.field = "name", .kind = RedisIndexKind::kTag});
 
     const auto baseline = operationResource.liveAllocations();
     auto repository = registry.get(scope).getRepository<TestRedisUser>(config);

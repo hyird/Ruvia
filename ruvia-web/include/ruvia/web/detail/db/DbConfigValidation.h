@@ -7,7 +7,6 @@
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/client/ClientTlsConfigStorage.h"
-#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 
 namespace ruvia::detail {
 
@@ -43,15 +42,6 @@ private:
 
 inline void validateDbConfig(const DbConfig& config) {
     validate_client_tls_config(config.tls);
-    if (config.cache) {
-#ifndef RUVIA_ENABLE_REDIS
-        throw std::invalid_argument("database query caching requires Redis support");
-#endif
-        validateRedisConfig(config.cache->options);
-        if (config.cache->duration.count() <= 0 || config.cache->nameSpace.empty()) {
-            throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
-        }
-    }
     const auto driver = config.driver;
     if (driver == DbDriver::kMariaDb && config.tls.mode == client_tls_mode::verify_identity) {
         std::error_code error;

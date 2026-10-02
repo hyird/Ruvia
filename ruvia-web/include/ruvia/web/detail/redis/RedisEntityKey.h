@@ -34,7 +34,7 @@ template <typename Entity>
 template <typename Entity>
 [[nodiscard]] inline std::pmr::string redisEntityStoragePrefix(
     std::pmr::memory_resource* resource = nullptr) {
-    return redisEntityStoragePrefix(Entity::tableName(), resource);
+    return redisEntityStoragePrefix(Entity::prefix(), resource);
 }
 
 template <typename Entity>
@@ -44,7 +44,7 @@ template <typename Entity>
         throw std::invalid_argument("Redis entity ID must not be empty");
     }
     auto key = redisEntityStoragePrefix(
-        prefix.empty() ? Entity::tableName() : prefix, resource);
+        prefix.empty() ? Entity::prefix() : prefix, resource);
     key.append(id.data(), id.size());
     return key;
 }

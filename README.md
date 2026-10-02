@@ -1485,7 +1485,7 @@ auto entities = co_await partial.getMany();
 ```
 
 `insertReturning`, `updateReturning`, `upsertReturning` and `deleteReturning`
-return `DbEntityRows<Output>`. The default output is the repository entity and the
+return `entity_rows<Output>`. The default output is the repository entity and the
 default RETURNING list is its complete column set. An explicit list supports
 partial entities and computed DTO fields. These operations require PostgreSQL;
 unsupported drivers fail before starting I/O. Ordinary write methods continue
@@ -1689,9 +1689,10 @@ that transaction is moved or destroyed.
 
 ### Redis query result caching
 
-Enable `RUVIA_ENABLE_REDIS` together with either database driver. Set
-`DbConfig::cache` to configure a worker-local Redis cache for that database;
-App registrations and standalone `DbClient` use the same implementation.
+Enable `RUVIA_ENABLE_REDIS` together with either database driver. Register a
+Redis capability, then bind its alias in the database registration. The cache
+uses that worker's existing Redis pools. Cache policy is separate from the
+database connection configuration.
 Cache keys isolate the registration alias, driver, endpoint, database and login
 identity even when registrations share the same configured cache namespace.
 
@@ -1700,12 +1701,34 @@ using namespace std::chrono_literals;
 ruvia::DbConfig settings{
     .driver = ruvia::DbDriver::kPostgreSql,
     .username = "app",
-    .database = "devices",
-    .cache = ruvia::DbCacheConfig{
-        .options = {.host = "127.0.0.1", .port = 6379},
-        .duration = 1s,
-        .nameSpace = "devices"}};
+    .database = "devices"};
+ruvia::app()
+    .redis({.alias = "cache", .config = {.host = "127.0.0.1", .port = 6379}})
+    .database({.config = settings,
+        .query_cache = ruvia::db_query_cache_registration{
+            .redis_alias = "cache",
+            .policy = {.duration = 1s, .nameSpace = "devices"}}});
 ```
+
+For a standalone client, first connect a `RedisClient` on the same event loop,
+then construct the database client with its capability and the cache policy:
+
+```cpp
+co_await redis.connect();
+auto cache_store = redis.withOptions({});
+ruvia::DbClient db(loop, settings, cache_store,
+    ruvia::DbCacheConfig{.duration = 1s, .nameSpace = "devices"});
+co_await db.connect();
+// Run database operations, destroy their results, then close in this order.
+co_await db.shutdown();
+co_await redis.shutdown();
+```
+
+The Redis owner and its capability scope must remain alive while the database
+uses the cache. Closing the database cancels its cache work without closing the
+shared Redis pools. Closing the Redis scope safely expires the borrowed cache
+capability. A missing App alias or a capability from another worker is rejected
+before the database is published.
 
 The API follows TypeORM's query-cache conventions. Configuring Redis makes the
 cache available; individual queries opt in unless `alwaysEnabled = true`.
@@ -1916,8 +1939,9 @@ pipelines, transactions and Lua API remain available as the separate direct
 route, illustrated in [redis.cpp](examples/web/redis.cpp).
 Declare Redis entities with `RUVIA_REDIS_ENTITY` and `RUVIA_REDIS_COLUMN`;
 SQL entities use `RUVIA_DB_ENTITY` and `RUVIA_DB_COLUMN`. Repositories reject
-entities declared for the other backend. The two entity types share field-access
-and predicate syntax, `DbFindOptions`, `DbEntityRows` and `DbExecResult`.
+entities declared for the other backend. Both use the same field-access methods
+and `entity_rows`, while Redis filters use `Entity::field<"name">()`,
+`redis_predicate`, and `redis_find_options`.
 `RedisColumnOptions` exposes only `primaryKey` and `nullable`; Redis prefix and
 Search indexes are configured separately:
 
@@ -1933,8 +1957,8 @@ RUVIA_REDIS_ENTITY(User, "users",
 const ruvia::RedisRepositoryConfig userRedisConfig{
     .prefix = "app:users",
     .indexes = {
-        {.column = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
-        {.column = "age", .kind = ruvia::RedisIndexKind::kNumeric},
+        {.field = "name", .kind = ruvia::RedisIndexKind::kTag, .sortable = true},
+        {.field = "age", .kind = ruvia::RedisIndexKind::kNumeric},
     },
 };
 
@@ -1944,16 +1968,16 @@ user.set<"id">("u-42");
 user.set<"name">("Alice");
 user.set<"age">(25);
 const auto inserted = co_await users.insert(user, {.ttl = std::chrono::hours(1)});
-if (inserted.affectedRows() == 0) {
+if (inserted.affected_entities() == 0) {
     // The primary key already exists; neither fields nor TTL were changed.
 }
 
-auto loaded = co_await users.findOne({.where = User::column<"id">() == "u-42"});
+auto loaded = co_await users.findOne({.where = User::field<"id">() == "u-42"});
 User changes(c.pool());
 changes.set<"name">("Alice Smith");
 changes.setNull<"note">();
-co_await users.update(User::column<"id">() == "u-42", changes);
-const auto expiration = co_await users.ttl(User::column<"id">() == "u-42");
+co_await users.update(User::field<"id">() == "u-42", changes);
+const auto expiration = co_await users.ttl(User::field<"id">() == "u-42");
 ```
 
 Each Redis entity needs exactly one non-nullable string or integer primary key;
@@ -1966,12 +1990,11 @@ the repository. Column names beginning with `__ruvia_` are reserved.
 Hash mapping supports owning strings (`ruvia::String` or `std::pmr::string`),
 booleans, supported native integer/floating types and Ruvia scalar wrappers.
 Array, JSON, nested columns and SQL relation descriptors are unsupported.
-Redis rejects relation loading, SQL locking and enabled query caching.
+Redis find options contain only filters, field ordering and pagination.
 
 `insert` creates absent entities; `update` changes existing entities; `upsert`
 merges supplied fields and inserts when absent. `deleteBy` and `remove` delete an
-entity. Mutations return `DbExecResult`: `affectedRows()` is zero or one and
-`lastInsertId()` is empty. `update`, `deleteBy`, `expire` and `ttl` require an exact
+entity. Mutations return `redis_write_result`: `affected_entities()` is zero or one. `update`, `deleteBy`, `expire` and `ttl` require an exact
 single-primary-key equality predicate. Unset fields are preserved on updates;
 `setNull` removes a nullable hash field. Empty strings remain values. New entities
 require all non-nullable fields. Updates cannot change their primary key.
@@ -1993,17 +2016,17 @@ explicitly once during deployment through a request or `WebWorkerContext` handle
 ```cpp
 co_await users.createIndex();
 auto [matches, total] = co_await users.findAndCount({
-    .where = (User::column<"name">() == "Alice Smith")
-        && (User::column<"age">() >= 18),
-    .order = {{.column = "name", .direction = ruvia::DbOrderDirection::kAsc}},
+    .where = (User::field<"name">() == "Alice Smith")
+        && (User::field<"age">() >= 18),
+    .order = {{.field = "name", .direction = ruvia::redis_order_direction::ascending}},
     .skip = 0,
     .take = 20,
 });
 ```
 
-`find` returns `DbEntityRows<User>`, `findOne` returns `std::optional<User>`, and
+`find` returns `entity_rows<User>`, `findOne` returns `std::optional<User>`, and
 `count` counts matches independently of pagination. `exists` accepts the same
-`DbFindOptions`. `findAndCount` returns the page and search engine total from one
+`redis_find_options`. `findAndCount` returns the page and search engine total from one
 command. Results may omit documents that expire while Search loads them. Empty
 predicates match the whole index; `find` defaults to a page of 100. Search supports
 one sortable column per query; equal values do not guarantee stable page order.
@@ -2013,8 +2036,9 @@ fields, preserving punctuation, commas, empty strings and binary values.
 `kNumeric` provides comparisons and ranges; indexed values and query operands
 must be finite and within `[-(2^53-1), 2^53-1]`. Unindexed integer columns retain
 their full native range. `kText` creates a text index for external Search clients;
-SQL `like`/`ilike` are not translated into text-search semantics. Unsupported SQL
-expressions fail before sending a command. Null predicates use internal presence
+Filters support scalar comparisons, `between`, `in`, `not_in`, `is_null`,
+`is_not_null`, and logical `&&` / `||`. Text-search expressions are not exposed
+by the repository filter API. Null predicates use internal presence
 fields; inequality comparisons exclude absent fields.
 
 Index creation is explicit; an existing index or missing Search capability

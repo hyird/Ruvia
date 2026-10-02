@@ -44,7 +44,6 @@ public:
 
 private:
     friend struct detail::DbResultAccess;
-    friend struct detail::RedisOrmResultAccess;
 
     struct NoRawResult final {};
 

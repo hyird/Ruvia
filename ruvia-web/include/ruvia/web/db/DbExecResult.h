@@ -7,7 +7,6 @@ namespace ruvia {
 
 namespace detail {
 struct DbResultAccess;
-struct RedisOrmResultAccess;
 }  // namespace detail
 
 // Result of a statement whose contract is side effects rather than a row set.
@@ -25,7 +24,6 @@ public:
 
 private:
     friend struct detail::DbResultAccess;
-    friend struct detail::RedisOrmResultAccess;
 
     constexpr DbExecResult(
         std::uint64_t affectedRows, std::optional<std::uint64_t> lastInsertId) noexcept

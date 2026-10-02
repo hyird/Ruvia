@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/db/DbEntity.h"
+#include "ruvia/web/EntityRows.h"
 #include "ruvia/web/detail/redis/RedisEntityCodec.h"
 #include "ruvia/web/detail/redis/RedisEntityKey.h"
 #include "ruvia/web/detail/redis/RedisRepositoryCommands.h"
@@ -79,7 +79,7 @@ struct RedisMapOne final {
 template <typename Entity>
 struct RedisMapSearch final {
     std::pmr::string prefix;
-    std::pair<DbEntityRows<Entity>, std::uint64_t> operator()(
+    std::pair<entity_rows<Entity>, std::uint64_t> operator()(
         RedisValue&& reply, std::pmr::memory_resource* resource) const {
         const auto values = redisOrmArray(reply);
         if (values.empty() || values.size() % 2 != 1) {
@@ -89,7 +89,7 @@ struct RedisMapSearch final {
         if (count < (values.size() - 1) / 2) {
             throw RedisError(RedisError::Code::kProtocolError, "invalid entity search count");
         }
-        DbEntityRows<Entity> rows(resource);
+        entity_rows<Entity> rows(resource);
         for (std::size_t i = 1; i < values.size(); i += 2) {
             const auto key = redisOrmString(values[i]);
             // A document may expire between index matching and field loading.
@@ -105,7 +105,7 @@ struct RedisMapSearch final {
 template <typename Entity>
 struct RedisMapMany final {
     std::pmr::string prefix;
-    DbEntityRows<Entity> operator()(
+    entity_rows<Entity> operator()(
         RedisValue&& reply, std::pmr::memory_resource* resource) const {
         return RedisMapSearch<Entity>{std::pmr::string(prefix, resource)}(
             std::move(reply), resource)
