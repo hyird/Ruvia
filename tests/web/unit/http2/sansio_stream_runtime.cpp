@@ -1598,6 +1598,7 @@ RUVIA_TEST(http2_buffered_bodies_share_live_worker_and_connection_allocations) {
     inbound_buffer_resource second_connection(&worker, 700);
     std::optional<Http2BufferedRequestBody> first(std::in_place, &first_connection);
     std::optional<Http2BufferedRequestBody> second(std::in_place, &second_connection);
+    const auto second_empty_bytes = second_connection.used();
     const std::string payload(512, 'a');
     const auto accepted = first->store(payload, ProtocolByteLimit::limited(4096));
     RUVIA_CHECK(accepted.stored() != nullptr);
@@ -1612,7 +1613,9 @@ RUVIA_TEST(http2_buffered_bodies_share_live_worker_and_connection_allocations) {
     RUVIA_CHECK(connection_rejected.backlogOverflow() != nullptr);
     RUVIA_CHECK_EQ(first->bytes(), payload);
     first.reset();
-    RUVIA_CHECK_EQ(worker.used(), std::size_t{0});
+    RUVIA_CHECK_EQ(first_connection.used(), std::size_t{0});
+    // The second, empty body is still alive and can own a debug iterator proxy.
+    RUVIA_CHECK_EQ(worker.used(), second_empty_bytes);
     const auto retried = second->store(payload, ProtocolByteLimit::limited(4096));
     RUVIA_CHECK(retried.stored() != nullptr);
     second.reset();

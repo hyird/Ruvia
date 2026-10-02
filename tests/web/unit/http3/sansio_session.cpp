@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/Bytes.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
@@ -923,12 +924,16 @@ RUVIA_TEST(http3_body_allocations_share_worker_budget_and_remain_pinned_by_lease
     RUVIA_CHECK_EQ(shared.used(), held);
     RUVIA_CHECK_EQ(lease->request().request().bodyBytes().size(), std::size_t{1024});
     RUVIA_CHECK(second.feed(0, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
+    const auto second_empty_bytes = shared.used() - held;
     RUVIA_CHECK(second.feed(0, chunk, true).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(second.rejection(0) == Engine::Rejection::kWorkerBodyBudgetExhausted);
     RUVIA_CHECK(!second.terminated());
-    RUVIA_CHECK_EQ(shared.used(), held);
+    RUVIA_CHECK_EQ(shared.used(), held + second_empty_bytes);
+    RUVIA_CHECK(second.request(0) != nullptr && second.request(0)->bodyBytes() == 0);
+    RUVIA_CHECK_EQ(ruvia::asChars(lease->request().request().bodyBytes()), std::string_view(payload));
     lease.reset();
-    RUVIA_CHECK_EQ(shared.used(), std::size_t{0});
+    // The rejected stream keeps its empty containers until session retirement.
+    RUVIA_CHECK_EQ(shared.used(), second_empty_bytes);
     RUVIA_CHECK(second.feed(4, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
     RUVIA_CHECK(second.feed(4, chunk, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
     RUVIA_CHECK(shared.used() >= 1024);
