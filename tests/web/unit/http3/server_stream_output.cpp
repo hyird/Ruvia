@@ -29,8 +29,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3ClientResponse.h"
+#include "ruvia/http/http3_buffered_response_cursor.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http3/Http3BufferedResponseWrite.h"
 #include "ruvia/web/detail/http3/Http3ServerConnection.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamOutput.h"
 #include "ruvia/web/detail/router/Router.h"
@@ -334,7 +334,7 @@ private:
     ruvia::HttpResponse response;
     response.body(body);
     const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-    auto created = Http3BufferedResponseWrite::create(response, plan, resource);
+    auto created = ruvia::http3_buffered_response_cursor::create(response, plan, resource);
     if (!created) {
         throw std::runtime_error("failed to create HTTP/3 buffered response write cursor");
     }
@@ -353,7 +353,7 @@ private:
             throw std::runtime_error("failed to acknowledge HTTP/3 response segment");
         }
     }
-    if (!cursor.finReady() || !cursor.acknowledgeFin(true) || !cursor.finished()) {
+    if (!cursor.fin_ready() || !cursor.acknowledge_fin(true) || !cursor.finished()) {
         throw std::runtime_error("HTTP/3 response cursor did not finish");
     }
     return bytes;
@@ -1497,7 +1497,7 @@ RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndRetur
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 3, .maxQueuedBlocks = 1, .maxDriveWorkItems = 2});
     constexpr std::array<char, 3> instructions{3, '\x80', 1};
-    const auto sent = mailbox.trySendCritical({kEpoch, kGeneration, Http3CriticalStreamOutput::Kind::kQpackDecoder}, std::as_bytes(std::span(instructions)));
+    const auto sent = mailbox.trySendCritical({kEpoch, kGeneration, ruvia::http3_critical_stream_output::stream_kind::qpack_decoder}, std::as_bytes(std::span(instructions)));
     RUVIA_CHECK(sent == Mailbox::SendResult::kSentNotifyPeer);
     BorrowedBlock block;
     RUVIA_CHECK(mailbox.tryReceive(block));

@@ -273,6 +273,13 @@ interfaces with worker-local DNS, sockets, TLS/ALPN and EVP callbacks, UDP,
 connection reuse, timeouts, and cancellation. ngtcp2 is an HTTP component
 dependency, not a direct Web dependency.
 
+Custom HTTP/3 runtimes can use `ruvia::http3_buffered_response_cursor` from
+`ruvia/http/http3_buffered_response_cursor.h` to emit buffered response frames,
+and `ruvia::http3_critical_stream_output` from
+`ruvia/http/http3_critical_stream_output.h` for control/QPACK prefixes and a
+server GOAWAY. Both expose stable byte spans and explicit acceptance; callers
+provide transport I/O and keep borrowed storage alive until acceptance.
+
 ## Outbound HTTP Client
 
 Register outbound origins once before `App::run()`. Every Web worker then owns

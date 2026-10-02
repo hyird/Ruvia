@@ -7,8 +7,8 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/http/http3_critical_stream_output.h"
 #include "ruvia/http/quic_connection.h"
-#include "ruvia/web/detail/http3/Http3CriticalStreamOutput.h"
 
 namespace ruvia::detail {
 
@@ -19,7 +19,7 @@ namespace ruvia::detail {
 // one GOAWAY after SETTINGS; the opened streams are NEVER concluded here.
 class Http3CriticalStreamDriver final {
 public:
-    using Kind = Http3CriticalStreamOutput::Kind;
+    using Kind = ruvia::http3_critical_stream_output::stream_kind;
     using StreamId = std::uint64_t;
     enum class Result : std::uint8_t { kBlocked,
         kProgress,
@@ -89,7 +89,7 @@ public:
 
     // Server-only: identifier is a client-initiated request-stream boundary.
     [[nodiscard]] bool queueGoaway(std::uint64_t identifier) noexcept {
-        return !fatal_ && output_.queueGoaway(identifier);
+        return !fatal_ && output_.queue_goaway(identifier);
     }
 
     // True when all prefixes and any queued GOAWAY have been accepted by QUIC.
@@ -103,7 +103,7 @@ public:
     }
 
 private:
-    Http3CriticalStreamOutput output_;
+    ruvia::http3_critical_stream_output output_;
     std::array<std::optional<StreamId>, 3> streams_{};
     bool fatal_{false};
 };

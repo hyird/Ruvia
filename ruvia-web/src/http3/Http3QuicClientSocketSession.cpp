@@ -322,7 +322,7 @@ Http3QuicClientSocketSession::Http3QuicClientSocketSession(asio::io_context& io,
 }
 
 ruvia::quic_stream_write_result Http3QuicClientSocketSession::writeCriticalStream(
-    Http3CriticalStreamOutput::Kind kind, std::span<const char> bytes) {
+    ruvia::http3_critical_stream_output::stream_kind kind, std::span<const char> bytes) {
     requireOwnerThread();
     if (!criticalStreams_ || !criticalStreams_->complete()) {
         return {.status = ruvia::quic_operation_status::would_block};

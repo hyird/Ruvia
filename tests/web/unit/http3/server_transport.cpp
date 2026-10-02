@@ -1243,9 +1243,9 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
         return critical.complete();
     }));
 
-    constexpr std::array kinds{Http3CriticalStreamDriver::Kind::kControl,
-        Http3CriticalStreamDriver::Kind::kQpackEncoder,
-        Http3CriticalStreamDriver::Kind::kQpackDecoder};
+    constexpr std::array kinds{Http3CriticalStreamDriver::Kind::control,
+        Http3CriticalStreamDriver::Kind::qpack_encoder,
+        Http3CriticalStreamDriver::Kind::qpack_decoder};
     std::array<std::uint64_t, 4> stream_ids{};
     for (std::size_t index = 0; index < kinds.size(); ++index) {
         const auto stream_id = critical.streamId(kinds[index]);
@@ -1259,18 +1259,18 @@ RUVIA_TEST(http3QuicServerTransportGracefullyFlushesAnOpenStreamBeforeNoErrorClo
     RUVIA_CHECK_EQ(application.status, ruvia::quic_operation_status::accepted);
     stream_ids.back() = application.stream_id;
 
-    Http3CriticalStreamOutput expected_output(*prefixes);
-    RUVIA_CHECK(expected_output.queueGoaway(0));
+    ruvia::http3_critical_stream_output expected_output(*prefixes);
+    RUVIA_CHECK(expected_output.queue_goaway(0));
     std::array<std::string, 4> expected{
         std::string{},
         std::string(prefixes->qpackEncoderPrefix().begin(), prefixes->qpackEncoderPrefix().end()),
         std::string(prefixes->qpackDecoderPrefix().begin(), prefixes->qpackDecoderPrefix().end()),
         "graceful close flushes this stream"};
-    auto goaway = expected_output.next(Http3CriticalStreamOutput::Kind::kControl);
+    auto goaway = expected_output.next(ruvia::http3_critical_stream_output::stream_kind::control);
     expected[0].append(goaway.data(), goaway.size());
-    RUVIA_CHECK(expected_output.acknowledge(Http3CriticalStreamOutput::Kind::kControl,
+    RUVIA_CHECK(expected_output.acknowledge(ruvia::http3_critical_stream_output::stream_kind::control,
         goaway.size()));
-    goaway = expected_output.next(Http3CriticalStreamOutput::Kind::kControl);
+    goaway = expected_output.next(ruvia::http3_critical_stream_output::stream_kind::control);
     expected[0].append(goaway.data(), goaway.size());
 
     const auto payload = std::as_bytes(std::span(expected.back().data(), expected.back().size()));
