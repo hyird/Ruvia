@@ -206,18 +206,24 @@ RUVIA_TEST(http2_server_goaway_releases_unprocessed_local_push_streams) {
 
 namespace {
 struct PushResource final : std::pmr::memory_resource {
-    std::size_t live{0};
+    std::size_t live_bytes{0};
+    std::size_t live_allocations{0};
     bool fail{false};
     void* do_allocate(std::size_t bytes, std::size_t alignment) override {
         if (fail) {
             throw std::bad_alloc();
         }
         auto* pointer = std::pmr::new_delete_resource()->allocate(bytes, alignment);
-        live += bytes;
+        live_bytes += bytes;
+        ++live_allocations;
         return pointer;
     }
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        live -= bytes;
+        if (live_allocations == 0 || live_bytes < bytes) {
+            std::terminate();
+        }
+        live_bytes -= bytes;
+        --live_allocations;
         std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
     }
     bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
@@ -247,7 +253,8 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
         transfer(client, server);
         auto closed = server.nextEvent();
         closed.reset();
-        std::size_t baseline = 0;
+        std::size_t baseline_bytes = 0;
+        std::size_t baseline_allocations = 0;
         for (std::size_t i = 0; i < 32; ++i) {
             {
                 const auto push = server.submitPushPromise(1, {.authority = "example.test", .path = "/asset"});
@@ -281,10 +288,14 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
             RUVIA_CHECK(!client.nextEvent());
             RUVIA_CHECK(!server.nextEvent());
             if (i == 3) {
-                baseline = resource.live;
+                // Retained connection/container storage (including implementation-specific
+                // sentinels) is the stable baseline; per-push storage must return to it.
+                baseline_bytes = resource.live_bytes;
+                baseline_allocations = resource.live_allocations;
             }
             if (i > 3) {
-                RUVIA_CHECK_EQ(resource.live, baseline);
+                RUVIA_CHECK_EQ(resource.live_bytes, baseline_bytes);
+                RUVIA_CHECK_EQ(resource.live_allocations, baseline_allocations);
             }
             RUVIA_CHECK(retained->pushPromise()->request.path == "/retained");
         }
@@ -300,5 +311,6 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_release_storage_and_pre
         resource.fail = false;
         RUVIA_CHECK_EQ(server.pendingOutput().size(), outputSize);
     }
-    RUVIA_CHECK_EQ(resource.live, 0u);
+    RUVIA_CHECK_EQ(resource.live_bytes, 0u);
+    RUVIA_CHECK_EQ(resource.live_allocations, 0u);
 }

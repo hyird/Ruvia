@@ -676,6 +676,10 @@ bool testEventLoopPostProtectsReentrantHeapCopy() {
         .payloadValid = &payloadValid};
     std::optional<HeapReentrantPostCallable> input;
     input.emplace(state, &resource);
+    const auto callable_storage = resource.allocations - resource.deallocations;
+    if (callable_storage == 0) {
+        return false;
+    }
 
     auto rejected = loop.post(*input);
     if (rejected != ruvia::PostStatus::kWorkerStopping || rejected.rejected() == nullptr ||
@@ -683,11 +687,11 @@ bool testEventLoopPostProtectsReentrantHeapCopy() {
         return false;
     }
     input.reset();
-    if (resource.allocations != resource.deallocations + 1) {
+    if (resource.allocations - resource.deallocations != callable_storage) {
         return false;
     }
     auto retry = std::move(rejected).takeRejected();
-    if (resource.allocations != resource.deallocations + 1) {
+    if (resource.allocations - resource.deallocations != callable_storage) {
         return false;
     }
     ruvia::EventLoopPool recovery({.loopCount = 1, .mailboxCapacity = 1});

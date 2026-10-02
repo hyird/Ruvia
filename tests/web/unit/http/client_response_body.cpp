@@ -1553,17 +1553,18 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
     ruvia::test::CountingMemoryResource resource;
     LoopbackResponseServer server(io, worker.handle, {"one", "two", "three", "four"});
     auto config = localHttpClientConfig(server.port());
-    const ruvia::detail::HttpClientDefinition definitions[]{
-        {std::pmr::string("default", &resource),
-            ruvia::detail::HttpClientConfigStorage(config, &resource)},
-    };
+    std::optional<ruvia::detail::HttpClientDefinition> definition;
+    definition.emplace(ruvia::detail::HttpClientDefinition{
+        std::pmr::string("default", &resource),
+        ruvia::detail::HttpClientConfigStorage(config, &resource)});
+    const auto definition_baseline = resource.liveAllocations();
     auto budget = std::make_shared<ruvia::detail::HttpClientResultBudgetDomain>(
         ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 64});
     std::optional<ruvia::HttpClientResponse> retainedResponse;
     std::optional<ruvia::HttpClientResponseBytes> retainedBody;
     {
-        ruvia::detail::HttpClientRegistry registry(
-            io, worker.handle, &resource, definitions, budget);
+        ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
+            std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1), budget);
         ruvia::detail::ScopedOperationScope scope;
         server.start();
         auto operation = [&]() -> ruvia::Task<void> {
@@ -1634,8 +1635,10 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
         };
         runOperation(worker, io, operation);
     }
-    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.liveAllocations(), definition_baseline);
     RUVIA_CHECK_EQ(budget->retainedBytes(), std::size_t{0});
+    definition.reset();
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
@@ -1645,13 +1648,14 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
     LoopbackResponseServer server(
         io, worker.handle, {"warm", "unused"}, std::chrono::milliseconds::zero(), true, 1);
     auto config = localHttpClientConfig(server.port());
-    const ruvia::detail::HttpClientDefinition definitions[]{
-        {std::pmr::string("default", &resource),
-            ruvia::detail::HttpClientConfigStorage(config, &resource)},
-    };
+    std::optional<ruvia::detail::HttpClientDefinition> definition;
+    definition.emplace(ruvia::detail::HttpClientDefinition{
+        std::pmr::string("default", &resource),
+        ruvia::detail::HttpClientConfigStorage(config, &resource)});
+    const auto definition_baseline = resource.liveAllocations();
     {
-        ruvia::detail::HttpClientRegistry registry(
-            io, worker.handle, &resource, definitions);
+        ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
+            std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1));
         ruvia::detail::ScopedOperationScope scope;
         ruvia::StopSource preCancelled;
         preCancelled.requestStop();
@@ -1699,6 +1703,8 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
         };
         runOperation(worker, io, operation);
     }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), definition_baseline);
+    definition.reset();
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
 }
 

@@ -401,10 +401,11 @@ RUVIA_TEST(http1_buffered_content_length_allocates_only_received_progress) {
             std::pmr::polymorphic_allocator<char>(&budget), {}, plan,
             ruvia::ProtocolByteLimit::limited(16 * 1024 * 1024), scanner);
         std::pmr::string body(&budget);
+        const auto empty_body_baseline = budget.used();
         {
             auto unstarted = reader.readAll(body);
         }
-        RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
+        RUVIA_CHECK_EQ(budget.used(), empty_body_baseline);
         auto result = asio::co_spawn(io, [&]() -> asio::awaitable<void> {
             try {
                 (void)co_await ruvia::asAwaitable(reader.readAll(body));
@@ -415,7 +416,7 @@ RUVIA_TEST(http1_buffered_content_length_allocates_only_received_progress) {
         result.get();
         RUVIA_CHECK(incomplete);
         RUVIA_CHECK(body.empty());
-        RUVIA_CHECK(budget.used() <= 64 * 1024);
+        RUVIA_CHECK(budget.used() <= empty_body_baseline + 64 * 1024);
     }
     RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
 }

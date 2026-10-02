@@ -381,18 +381,27 @@ RUVIA_TEST(client_response_memory_budget_is_shared_and_charged_before_buffer_gro
             {
                 std::pmr::string held(first->resource());
                 held.assign(1024, 'a');
-                const auto charge = budget->in_flight_bytes();
-                RUVIA_CHECK(charge >= 1025U);
-                std::pmr::string rejected(second->resource());
-                bool limited = false;
-                try {
-                    rejected.assign(1024, 'b');
-                } catch (const ruvia::HttpClientError& error) {
-                    limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+                const auto held_charge = budget->in_flight_bytes();
+                RUVIA_CHECK(held_charge >= 1025U);
+                {
+                    std::pmr::string rejected(second->resource());
+                    // Debug standard libraries may allocate per-container
+                    // metadata from the PMR resource, independently of string
+                    // capacity. Preserve that live baseline when testing the
+                    // failed growth's transactional budget behavior.
+                    const auto pre_growth_charge = budget->in_flight_bytes();
+                    RUVIA_CHECK(pre_growth_charge >= held_charge);
+                    bool limited = false;
+                    try {
+                        rejected.assign(1024, 'b');
+                    } catch (const ruvia::HttpClientError& error) {
+                        limited = error.code() == ruvia::HttpClientError::Code::kResultBudgetExceeded;
+                    }
+                    RUVIA_CHECK(limited);
+                    RUVIA_CHECK_EQ(budget->in_flight_bytes(), pre_growth_charge);
+                    RUVIA_CHECK_EQ(held.size(), 1024U);
                 }
-                RUVIA_CHECK(limited);
-                RUVIA_CHECK_EQ(budget->in_flight_bytes(), charge);
-                RUVIA_CHECK_EQ(held.size(), 1024U);
+                RUVIA_CHECK_EQ(budget->in_flight_bytes(), held_charge);
             }
             RUVIA_CHECK_EQ(budget->in_flight_bytes(), 0U);
         }
