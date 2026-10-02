@@ -812,7 +812,7 @@ RUVIA_TEST(http3_server_connection_channel_consumes_late_drain_after_retirement)
         Channel::AttachResult attached{std::in_place_type<Channel::AttachAck>};
         RUVIA_CHECK(fixture.channel.receiveAttachResult(attached) == Status::kReceived);
         RUVIA_CHECK(fixture.channel.publishAdmissionSealed(
-            fixture.grant.identity, 0, 0) == Status::kPublished);
+                        fixture.grant.identity, 0, 0) == Status::kPublished);
         fixture.worker.call([&](Scheduler&, Runtime&) {
             Channel::AdmissionSealed sealed;
             RUVIA_CHECK(fixture.channel.receiveAdmissionSealed(sealed) == Status::kReceived);
@@ -849,8 +849,7 @@ RUVIA_TEST(http3_server_connection_channel_consumes_late_drain_after_retirement)
             Channel::TransportRetired retired;
             RUVIA_CHECK(fixture.channel.receiveTransportRetired(retired) == Status::kReceived);
             RUVIA_CHECK(retired.identity == fixture.grant.identity);
-            RUVIA_CHECK(runtime.connection->confirmTransportRetired({
-                .epoch = fixture.grant.identity.epoch,
+            RUVIA_CHECK(runtime.connection->confirmTransportRetired({.epoch = fixture.grant.identity.epoch,
                 .connectionGeneration = fixture.grant.identity.connectionGeneration}));
             Channel::TransportIntentAck closeAck;
             RUVIA_CHECK(fixture.channel.receiveIntentAck(closeAck) == Status::kReceived);

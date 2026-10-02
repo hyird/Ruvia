@@ -103,6 +103,9 @@ if(RUVIA_BUILD_HTTP)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
         ${_ruvia_http_unit_sources})
+    if(WIN32)
+        target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
+    endif()
     target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_http_ngtcp2_core)
 endif()
 

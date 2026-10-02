@@ -126,10 +126,10 @@ Http3ClientRequestWrite::create(HttpClientRequestStorage&& request, std::string_
         // HTTP owns framing validation and automatic field generation. A
         // bodyless request still has a known zero-byte body for validating an
         // explicit Content-Length, but does not acquire Content-Length: 0.
-        const std::optional<std::uint64_t> bodyLength = connect ? std::nullopt
+        const std::optional<std::uint64_t> bodyLength = connect             ? std::nullopt
                                                         : upload != nullptr ? upload->config.contentLength
-                                                        : sendsBody ? std::optional<std::uint64_t>(preparedRequest->body().size())
-                                                                    : std::optional<std::uint64_t>(0);
+                                                        : sendsBody         ? std::optional<std::uint64_t>(preparedRequest->body().size())
+                                                                            : std::optional<std::uint64_t>(0);
         const bool emit_content_length = sendsBody ||
                                          (upload != nullptr && upload->config.contentLength.has_value());
         // Extended CONNECT cannot be encoded before received SETTINGS authorize
@@ -207,8 +207,8 @@ bool Http3ClientRequestWrite::prepareConnectionHead(std::uint64_t streamId, Http
         fields.push_back({"expect", "100-continue", false});
     }
     const bool connect = request_.method() == "CONNECT";
-    const auto length = connect ? std::nullopt
-                        : request_.upload() != nullptr ? request_.upload()->config.contentLength
+    const auto length = connect                                             ? std::nullopt
+                        : request_.upload() != nullptr                      ? request_.upload()->config.contentLength
                         : HttpClientRequestStorageAccess::hasBody(request_) ? std::optional<std::uint64_t>{request_.body().size()}
                                                                             : std::optional<std::uint64_t>{0};
     const auto encoded = engine.encodeRequestHead(streamId, {.method = request_.method(),
@@ -218,7 +218,7 @@ bool Http3ClientRequestWrite::prepareConnectionHead(std::uint64_t streamId, Http
                                                                 .fields = fields,
                                                                 .bodyLength = length,
                                                                 .emit_content_length = HttpClientRequestStorageAccess::hasBody(request_) ||
-                                                                                     (request_.upload() != nullptr && request_.upload()->config.contentLength.has_value()),
+                                                                                       (request_.upload() != nullptr && request_.upload()->config.contentLength.has_value()),
                                                                 .protocol = request_.tunnelProtocol(),
                                                                 .peerEnableConnectProtocol = engine.peerSettings() && engine.peerSettings()->enableConnectProtocol});
     if (!encoded) {

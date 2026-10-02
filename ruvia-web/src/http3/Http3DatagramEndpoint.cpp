@@ -152,7 +152,7 @@ Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_datagram(
             return pump_result::pending;
         }
         fail(bytes.size() > max_payload ? std::make_error_code(std::errc::message_size)
-                                                : invalid_datagram());
+                                        : invalid_datagram());
         return pump_result::error;
     }
     std::ranges::copy(bytes, send_buffer_.begin());
