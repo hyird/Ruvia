@@ -1,7 +1,7 @@
 #pragma once
 
-#include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -9,49 +9,47 @@
 
 namespace ruvia {
 
-enum class HttpContentEncodeStep : std::uint8_t {
-    kProducedOrPending,
-    kFinished,
-    // Terminal: the encoder may no longer be written or finished after a
-    // failure because a codec can have consumed input before output storage
-    // reports an allocation failure.
-    kFailure,
+class http_content_encoder_error final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
 };
 
-// Incremental response content encoder. The caller owns the output buffer and
-// may clear/reuse it for every transport write. A stream owns one encoder from
-// its response head until end(); buffered responses continue to use
-// encodeHttpContent() so they retain their transactional whole-body behavior.
-class HttpContentEncoder final {
+// Synchronous incremental representation encoder. Each write consumes all of
+// its input and appends to caller-owned output; it does not retain either view.
+// The PMR resource must outlive the stable-address encoder. Output can be cleared
+// between calls and remains valid after encoder destruction.
+// Codec failures throw http_content_encoder_error; allocation exceptions retain
+// their original type when the codec returns through its C API. Brotli builds
+// that exit on internal OOM cannot be recovered by this boundary.
+// Either failure is terminal because input/output may have
+// progressed. Later operations throw std::logic_error. finish() is idempotent;
+// writing after successful finish throws std::logic_error without changing output.
+class http_content_encoder final {
 public:
-    struct Impl;
-
-    HttpContentEncoder(HttpContentCoding coding, std::pmr::memory_resource* resource);
-    ~HttpContentEncoder();
-
-    HttpContentEncoder(const HttpContentEncoder&) = delete;
-    HttpContentEncoder& operator=(const HttpContentEncoder&) = delete;
-    HttpContentEncoder(HttpContentEncoder&&) = delete;
-    HttpContentEncoder& operator=(HttpContentEncoder&&) = delete;
+    http_content_encoder(HttpContentCoding coding, std::pmr::memory_resource* resource);
+    ~http_content_encoder();
+    http_content_encoder(const http_content_encoder&) = delete;
+    http_content_encoder& operator=(const http_content_encoder&) = delete;
+    http_content_encoder(http_content_encoder&&) = delete;
+    http_content_encoder& operator=(http_content_encoder&&) = delete;
 
     [[nodiscard]] HttpContentCoding coding() const noexcept {
         return coding_;
     }
 
-    // Encode one input chunk. When flush is true, the coding emits all bytes
-    // currently visible to the peer; this is needed for low-latency SSE.
-    [[nodiscard]] HttpContentEncodeStep write(
-        std::string_view input, std::pmr::string& output, bool flush = false);
-
-    // Finish the representation and append the final coding bytes.
-    [[nodiscard]] HttpContentEncodeStep finish(std::pmr::string& output);
+    // flush emits pending bytes for low-latency response streams such as SSE.
+    void write(std::string_view input, std::pmr::string& output, bool flush = false);
+    void finish(std::pmr::string& output);
 
 private:
+    struct impl;
+    enum class phase : unsigned char { active,
+        finished,
+        failed };
     HttpContentCoding coding_;
     std::pmr::memory_resource* resource_;
-    Impl* impl_;
-    bool finished_{false};
-    bool failed_{false};
+    impl* impl_{nullptr};
+    phase phase_{phase::active};
 };
 
 }  // namespace ruvia

@@ -427,16 +427,14 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
     RUVIA_CHECK(compression.active());
 
     std::string encoded;
-    RUVIA_CHECK(compression.write(std::string_view(kCompressibleBody).substr(0, 700)) !=
-                ruvia::HttpContentEncodeStep::kFailure);
+    compression.write(std::string_view(kCompressibleBody).substr(0, 700));
     encoded.append(compression.output());
-    RUVIA_CHECK(compression.write(std::string_view(kCompressibleBody).substr(700)) !=
-                ruvia::HttpContentEncodeStep::kFailure);
+    compression.write(std::string_view(kCompressibleBody).substr(700));
     encoded.append(compression.output());
-    RUVIA_CHECK(compression.finish() == ruvia::HttpContentEncodeStep::kFinished);
+    compression.finish();
     encoded.append(compression.output());
-    RUVIA_CHECK(compression.write("late") == ruvia::HttpContentEncodeStep::kFailure);
-    RUVIA_CHECK(compression.finish() == ruvia::HttpContentEncodeStep::kFinished);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.write("late"); }));
+    compression.finish();
     RUVIA_CHECK(!compression.active());
 
     const auto decoded = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, encoded,
@@ -461,9 +459,16 @@ RUVIA_TEST(streaming_compression_failure_is_terminal) {
 
     resource.failAllocations(true);
     const std::string chunk(4096, 'x');
-    RUVIA_CHECK(compression.write(chunk) == ruvia::HttpContentEncodeStep::kFailure);
-    RUVIA_CHECK(compression.write("retry") == ruvia::HttpContentEncodeStep::kFailure);
-    RUVIA_CHECK(compression.finish() == ruvia::HttpContentEncodeStep::kFailure);
+    bool allocation_failed = false;
+    try {
+        compression.write(chunk);
+    } catch (const std::bad_alloc&) {
+        allocation_failed = true;
+    }
+    RUVIA_CHECK(allocation_failed);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.write("retry"); }));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.finish(); }));
+    RUVIA_CHECK(compression.output().empty());
     RUVIA_CHECK(!compression.active());
 }
 
@@ -477,8 +482,8 @@ RUVIA_TEST(streaming_compression_precommit_abort_is_terminal) {
     compression.abort();
 
     RUVIA_CHECK(!compression.active());
-    RUVIA_CHECK(compression.write("retry") == ruvia::HttpContentEncodeStep::kFailure);
-    RUVIA_CHECK(compression.finish() == ruvia::HttpContentEncodeStep::kFailure);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.write("retry"); }));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { compression.finish(); }));
 }
 
 RUVIA_TEST(streaming_compression_respects_encoder_availability_at_representation_boundary) {

@@ -227,10 +227,18 @@ RUVIA_TEST(http3QuicClientSocketSessionMigratesWithTwoLiveUdpPaths) {
     RUVIA_CHECK(session.transport().info().confirmed);
 
     const auto old_endpoint = session.localEndpoint();
-    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
-        (void)session.start_path_migration(old_endpoint);
-    }));
+    // A connected UDP endpoint may be rebound on Windows. If the OS allows
+    // the candidate socket, QUIC rejects migrating to its existing path.
+    bool same_path_rejected = false;
+    try {
+        const auto same_path = session.start_path_migration(old_endpoint);
+        same_path_rejected = same_path.status == ruvia::quic_migration_status::rejected;
+    } catch (const std::system_error& error) {
+        same_path_rejected = error.code() == asio::error::address_in_use;
+    }
+    RUVIA_CHECK(same_path_rejected);
     RUVIA_CHECK(session.localEndpoint() == old_endpoint);
+    RUVIA_CHECK(!session.active_path_migration());
 
     const auto reserve_endpoint = [&] {
         udp::socket reservation(io, udp::endpoint(asio::ip::address_v4::loopback(), 0));

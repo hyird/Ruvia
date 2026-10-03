@@ -59,14 +59,23 @@ public:
         report(std::move(unobserved));
     }
 
-    void completeFailure(std::exception_ptr failure) noexcept {
+    void stage_failure(std::exception_ptr failure) noexcept {
+        const std::lock_guard lock(mutex_);
+        if (complete_) {
+            std::terminate();
+        }
+        failure_ = std::move(failure);
+    }
+
+    // Publish only after the delivery owner has destroyed all intermediate
+    // result objects. Their moved-from storage may still borrow a caller PMR.
+    void publish_completion() noexcept {
         std::exception_ptr unobserved;
         {
             const std::lock_guard lock(mutex_);
             if (complete_) {
                 std::terminate();
             }
-            failure_ = std::move(failure);
             complete_ = true;
             if (!handleAlive_) {
                 unobserved = failure_;
@@ -74,6 +83,11 @@ public:
         }
         completed_.notify_all();
         report(std::move(unobserved));
+    }
+
+    void completeFailure(std::exception_ptr failure) noexcept {
+        stage_failure(std::move(failure));
+        publish_completion();
     }
 
 protected:
@@ -88,17 +102,6 @@ protected:
         }
         handleAlive_ = false;
         return failure_;
-    }
-
-    void completeSuccess() noexcept {
-        {
-            const std::lock_guard lock(mutex_);
-            if (complete_) {
-                std::terminate();
-            }
-            complete_ = true;
-        }
-        completed_.notify_all();
     }
 
     mutable std::mutex mutex_;
@@ -128,9 +131,8 @@ class RootTaskState final : public RootTaskStateBase {
 public:
     using RootTaskStateBase::RootTaskStateBase;
 
-    void completeValue(T value) {
+    void stage_value(T value) {
         value_.emplace(std::move(value));
-        completeSuccess();
     }
 
     [[nodiscard]] T get() {
@@ -139,6 +141,12 @@ public:
         if (failure) {
             std::rethrow_exception(failure);
         }
+        struct retire_value final {
+            std::optional<T>& value;
+            ~retire_value() {
+                value.reset();
+            }
+        } retire{value_};
         return std::move(*value_);
     }
 
@@ -151,9 +159,7 @@ class RootTaskState<void> final : public RootTaskStateBase {
 public:
     using RootTaskStateBase::RootTaskStateBase;
 
-    void completeValue() noexcept {
-        completeSuccess();
-    }
+    void stage_value() noexcept {}
 
     void get() {
         beforeGet();

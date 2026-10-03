@@ -714,8 +714,11 @@ loops.join();
 Keep the `RootTask` and consume it before stopping resources the task may still
 use. Register resource cancellation with `onStop()` so admitted roots can finish
 when the loop stops; a root waiting indefinitely without a cancellation path
-prevents retirement. `get()` waits and rethrows the task exception. Destroying an in-flight
-`RootTask` never destroys its suspended coroutine frame; an eventual unobserved
+prevents retirement. `get()` waits and rethrows the task exception. Readiness is
+published only after the task frame and completion-delivery temporaries retire;
+`get()` also releases the internal moved-from result before returning. Any PMR
+resource used by the returned result must still outlive that result.
+Destroying an in-flight `RootTask` never destroys its suspended coroutine frame; an eventual unobserved
 failure is routed to the loop failure sink and a pooled loop rethrows it from
 `join()`. This setup-time root ownership does not replace bounded
 `EventLoop::post()` for ongoing cross-thread submissions. `asAwaitable()`
@@ -2788,11 +2791,38 @@ request's key, offered subprotocols, and permessage-deflate parameters.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
 
-`HttpTransferCodingDecoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
-provides incremental transfer decoding with caller-owned input and output storage.
-Its typed failures report invalid encoding or a decoded-size limit violation,
+`http_content_encoder` from `<ruvia/http/HttpContentEncoder.h>` incrementally
+encodes representations into caller-owned PMR output. Each synchronous `write()`
+consumes its entire input; `finish()` appends the final bytes and is idempotent.
+The encoder does not retain input or output, and output survives its destruction.
+Keep the encoder at a stable address and its resource alive through destruction.
+Codec failures throw `http_content_encoder_error`; allocation exceptions retain
+their original type when a codec returns through its C API. Brotli builds that
+exit on internal out-of-memory conditions cannot be recovered by this boundary.
+A failure is terminal: later calls throw `std::logic_error`, as do writes after
+successful finish. HTTP/1, HTTP/2, and HTTP/3 stream sinks share this error
+contract and abort the response stream without replacing the original exception.
+
+`HttpTransferCodings::values` is a bounded `transfer_coding_sequence`, not a
+vector. It owns one lazily allocated PMR buffer for at most `kMaxTransferCodings`
+entries. Construction and move construction do not allocate. Copies retain the
+source resource; assignment retains the destination resource, transferring the
+buffer only when resources compare equal. The resource must outlive its owner.
+HTTP field parsing publishes one owned sequence transactionally: syntax or
+allocation failure leaves the previously committed field value unchanged.
+
+`http_transfer_coding_stack_decoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
+is the single incremental transfer-decoding entry point for one or more codings.
+Pass the coding sequence in protocol order (for example,
+`std::array{HttpTransferCoding::kGzip}`); construction copies it and decoding
+runs in reverse order. Input is not retained and output borrows caller-owned
+scratch storage. Drain output before calling `finish_input()` at framing EOF.
+Each layer enforces the decoded-size budget; all decoder state uses the supplied
+PMR resource, which must outlive the decoder. Its typed terminal failures retain
+wire consumption and report invalid encoding or a decoded-size limit violation,
 not request-specific HTTP statuses. Request drivers use the HTTP request-body
 error mapping; response drivers retain their own response error contract.
+The single-coding zlib stage is private; there is no separate public decoder.
 
 `Http1ChunkedBodyDecoder` from `<ruvia/http/Http1ChunkedBodyDecoder.h>`
 provides zero-copy chunk framing. Its aggregate configuration selects payload

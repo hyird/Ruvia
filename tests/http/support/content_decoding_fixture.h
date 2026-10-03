@@ -39,6 +39,7 @@ using ruvia::decodeHttpRequestContent;
 using ruvia::encodeHttpContent;
 using ruvia::Http1ChunkedBodyDecoder;
 using ruvia::Http1RequestBodyPlan;
+using ruvia::http_transfer_coding_stack_decoder;
 using ruvia::HttpContentCoding;
 using ruvia::HttpContentDecodeError;
 using ruvia::HttpContentDecodeFailure;
@@ -57,7 +58,6 @@ using ruvia::HttpTransferCoding;
 using ruvia::HttpTransferCodingDecodeFailure;
 using ruvia::HttpTransferCodingDecodeNeedInput;
 using ruvia::HttpTransferCodingDecodeOutputView;
-using ruvia::HttpTransferCodingDecoder;
 using ruvia::HttpTransferCodingDecodeResult;
 using ruvia::HttpTransferCodingDecoderFailure;
 using ruvia::HttpTransferCodings;
@@ -139,7 +139,7 @@ struct TransferDecodeObservation final {
 };
 
 inline TransferDecodeObservation appendTransferDecoded(
-    HttpTransferCodingDecoder& decoder, std::string_view input, std::pmr::string& output) {
+    http_transfer_coding_stack_decoder& decoder, std::string_view input, std::pmr::string& output) {
     std::array<char, std::size_t{8} * 1024> window{};
     for (;;) {
         const auto result = decoder.decode(input, window);

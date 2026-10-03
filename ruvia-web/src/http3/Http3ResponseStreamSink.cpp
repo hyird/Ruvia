@@ -99,8 +99,11 @@ Task<void> Http3ResponseStreamSink::write(std::string_view bytes) {
     constexpr std::size_t blockBytes = 16 * 1024;
     for (std::size_t offset = 0; offset < bytes.size();) {
         const auto count = std::min(blockBytes, bytes.size() - offset);
-        if (compression_.write(bytes.substr(offset, count)) == HttpContentEncodeStep::kFailure) {
-            throw std::runtime_error("HTTP/3 response compression failed");
+        try {
+            compression_.write(bytes.substr(offset, count));
+        } catch (...) {
+            state_.markAborted();
+            throw;
         }
         co_await writeEncoded(compression_.output());
         offset += count;
@@ -120,8 +123,11 @@ Task<void> Http3ResponseStreamSink::end(std::span<const HttpHeaderView> trailers
         co_return;
     }
     if (compression_.active()) {
-        if (compression_.finish() != HttpContentEncodeStep::kFinished) {
-            throw std::runtime_error("HTTP/3 response compression finalization failed");
+        try {
+            compression_.finish();
+        } catch (...) {
+            state_.markAborted();
+            throw;
         }
         co_await writeEncoded(compression_.output());
     }

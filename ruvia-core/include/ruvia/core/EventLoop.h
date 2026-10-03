@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -92,48 +93,74 @@ public:
         // a posted task throws. Own that destructor path so wait()/get() cannot
         // hang and an unobserved failure still reaches the loop sink.
         struct LaunchGuard final {
-            std::shared_ptr<detail::RootTaskState<T>> completion;
+            std::optional<Task<T>> task_;
+            std::shared_ptr<detail::RootTaskState<T>> completion_;
 
-            explicit LaunchGuard(std::shared_ptr<detail::RootTaskState<T>> state) noexcept
-                : completion(std::move(state)) {}
+            LaunchGuard(Task<T> task, std::shared_ptr<detail::RootTaskState<T>> state) noexcept
+                : task_(std::move(task)),
+                  completion_(std::move(state)) {}
             LaunchGuard(const LaunchGuard&) = delete;
             LaunchGuard& operator=(const LaunchGuard&) = delete;
             LaunchGuard(LaunchGuard&& other) noexcept
-                : completion(std::move(other.completion)) {}
+                : task_(std::move(other.task_)),
+                  completion_(std::move(other.completion_)) {}
             LaunchGuard& operator=(LaunchGuard&&) = delete;
             ~LaunchGuard() {
-                if (completion == nullptr) {
-                    return;
+                // A rejected or discarded launch still owns a cold frame.
+                // Retire it before waking a caller that may reclaim its inputs.
+                task_.reset();
+                if (completion_ != nullptr) {
+                    completion_->completeFailure(
+                        std::make_exception_ptr(std::runtime_error("event loop is stopping")));
                 }
-                completion->completeFailure(
-                    std::make_exception_ptr(std::runtime_error("event loop is stopping")));
             }
             void release() noexcept {
-                completion.reset();
+                task_.reset();
+                completion_.reset();
             }
         };
-        auto posted = post([task = std::move(task), completion, boundExecutor,
+        struct root_completion final {
+            std::shared_ptr<detail::RootTaskState<T>> completion_;
+            std::shared_ptr<void> retirement_lease_;
+            bool delivered_{false};
+
+            root_completion(std::shared_ptr<detail::RootTaskState<T>> state,
+                std::shared_ptr<void> lease) noexcept
+                : completion_(std::move(state)),
+                  retirement_lease_(std::move(lease)) {}
+            root_completion(const root_completion&) = delete;
+            root_completion& operator=(const root_completion&) = delete;
+            root_completion(root_completion&& other) noexcept
+                : completion_(std::move(other.completion_)),
+                  retirement_lease_(std::move(other.retirement_lease_)),
+                  delivered_(std::exchange(other.delivered_, false)) {}
+            root_completion& operator=(root_completion&&) = delete;
+            ~root_completion() {
+                if (delivered_) {
+                    completion_->publish_completion();
+                }
+            }
+            void operator()(detail::TaskCompletionResult<T> result) noexcept {
+                try {
+                    if (const auto* failure = result.failure()) {
+                        completion_->stage_failure(failure->exception());
+                    } else if constexpr (std::is_void_v<T>) {
+                        completion_->stage_value();
+                    } else {
+                        completion_->stage_value(std::move(*result.success()).takeValue());
+                    }
+                } catch (...) {
+                    completion_->stage_failure(std::current_exception());
+                }
+                delivered_ = true;
+            }
+        };
+        auto posted = post([completion, boundExecutor,
                                retirementLease = std::move(retirementLease),
-                               launch = LaunchGuard(completion)]() mutable {
+                               launch = LaunchGuard(std::move(task), completion)]() mutable {
             try {
-                detail::asyncStartTask(std::move(task),
-                    asio::bind_executor(boundExecutor,
-                        [completion, retirementLease](detail::TaskCompletionResult<T> result) mutable {
-                            try {
-                                if (const auto* failure = result.failure()) {
-                                    completion->completeFailure(failure->exception());
-                                    return;
-                                }
-                                if constexpr (std::is_void_v<T>) {
-                                    completion->completeValue();
-                                } else {
-                                    completion->completeValue(
-                                        std::move(*result.success()).takeValue());
-                                }
-                            } catch (...) {
-                                completion->completeFailure(std::current_exception());
-                            }
-                        }));
+                detail::asyncStartTask(std::move(*launch.task_),
+                    asio::bind_executor(boundExecutor, root_completion(completion, retirementLease)));
                 launch.release();
             } catch (...) {
                 launch.release();

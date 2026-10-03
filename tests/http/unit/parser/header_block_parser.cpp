@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -72,47 +73,141 @@ RUVIA_TEST(content_length_field_updates_are_transactional) {
     RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
 }
 
-RUVIA_TEST(transfer_encoding_state_recovers_after_value_publication_allocation_failure) {
-    failing_memory_resource resource;
+RUVIA_TEST(transfer_encoding_field_allocation_failures_preserve_committed_value) {
+    for (const bool populated : {false, true}) {
+        bool saw_failure = false;
+        bool saw_success = false;
+        for (std::size_t fail_after = 0; fail_after < 32; ++fail_after) {
+            failing_memory_resource resource;
+            {
+                HttpTransferEncodingState state(&resource);
+                if (populated) {
+                    RUVIA_CHECK(state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+                }
+                const auto baseline = resource.live_allocations();
+                resource.fail_after(fail_after);
+                bool allocation_failed = false;
+                try {
+                    RUVIA_CHECK(state.parseField("custom, deflate, chunked") == HttpTransferEncodingParseStatus::kUnsupported);
+                } catch (const std::bad_alloc&) {
+                    allocation_failed = true;
+                }
+                resource.allow_allocations();
+                if (allocation_failed) {
+                    saw_failure = true;
+                    RUVIA_CHECK_EQ(resource.live_allocations(), baseline);
+                    RUVIA_CHECK(!state.unsupported());
+                    RUVIA_CHECK_EQ(state.value().has_value(), populated);
+                    if (populated && state.value()) {
+                        const auto* old_value = state.value()->nonChunked();
+                        RUVIA_CHECK(old_value != nullptr);
+                        if (old_value != nullptr) {
+                            const auto& codings = old_value->transferCodings().values;
+                            RUVIA_CHECK_EQ(codings.size(), std::size_t{1});
+                            RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
+                            RUVIA_CHECK(codings.get_allocator().resource() == &resource);
+                        }
+                    }
+                    RUVIA_CHECK(state.parseField("custom, deflate, chunked") == HttpTransferEncodingParseStatus::kUnsupported);
+                } else {
+                    saw_success = true;
+                }
+                RUVIA_CHECK(state.unsupported());
+                const auto* value = state.value()->finalChunked();
+                RUVIA_CHECK(value != nullptr);
+                if (value != nullptr) {
+                    const auto& codings = value->transferCodings().values;
+                    RUVIA_CHECK_EQ(codings.size(), populated ? std::size_t{2} : std::size_t{1});
+                    RUVIA_CHECK(codings[codings.size() - 1] == HttpTransferCoding::kDeflate);
+                    RUVIA_CHECK(codings.get_allocator().resource() == &resource);
+                }
+            }
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+            if (saw_success) {
+                break;
+            }
+        }
+        RUVIA_CHECK(saw_failure);
+        RUVIA_CHECK(saw_success);
+    }
+}
+
+RUVIA_TEST(transfer_coding_sequence_preserves_resource_and_ownership) {
+    failing_memory_resource source_resource;
+    failing_memory_resource target_resource;
     {
-        HttpTransferEncodingState state(&resource);
-        RUVIA_CHECK(state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
-        const auto baseline = resource.live_allocations();
-        resource.fail_after(2);
+        ruvia::HttpTransferCodings source(&source_resource);
+        source.values.push_back(HttpTransferCoding::kGzip);
+        auto copy = source;
+        RUVIA_CHECK(copy.values.get_allocator().resource() == &source_resource);
+        RUVIA_CHECK(copy.values.data() != source.values.data());
+        const auto* storage = source.values.data();
+        const auto baseline = source_resource.live_allocations();
+        source_resource.fail_after(0);
+        auto moved = std::move(source);
+        RUVIA_CHECK(moved.values.data() == storage);
+        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), baseline);
         bool allocation_failed = false;
         try {
-            (void)state.parseField("deflate, chunked");
+            source.values.push_back(HttpTransferCoding::kDeflate);
         } catch (const std::bad_alloc&) {
             allocation_failed = true;
         }
-        resource.allow_allocations();
         RUVIA_CHECK(allocation_failed);
-        RUVIA_CHECK_EQ(resource.live_allocations(), baseline);
-        RUVIA_CHECK(!state.unsupported());
-        const auto& old_value = state.value();
-        RUVIA_CHECK(old_value.has_value());
-        if (old_value.has_value()) {
-            RUVIA_CHECK(old_value->finalChunked() == nullptr);
-            const auto* non_chunked = old_value->nonChunked();
-            RUVIA_CHECK(non_chunked != nullptr);
-            if (non_chunked != nullptr) {
-                const auto& codings = non_chunked->transferCodings().values;
-                RUVIA_CHECK_EQ(codings.size(), std::size_t{1});
-                RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
-            }
-        }
+        source_resource.allow_allocations();
+        source.values.push_back(HttpTransferCoding::kDeflate);
 
-        RUVIA_CHECK(state.parseField("deflate, chunked") == HttpTransferEncodingParseStatus::kOk);
-        const auto& retried_value = state.value();
-        RUVIA_CHECK(retried_value.has_value());
-        if (retried_value.has_value() && retried_value->finalChunked() != nullptr) {
-            const auto& codings = retried_value->finalChunked()->transferCodings().values;
-            RUVIA_CHECK_EQ(codings.size(), std::size_t{2});
-            RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
-            RUVIA_CHECK(codings[1] == HttpTransferCoding::kDeflate);
-        } else {
-            RUVIA_CHECK(false);
+        ruvia::HttpTransferCodings target(&target_resource);
+        target_resource.fail_after(0);
+        allocation_failed = false;
+        try {
+            target = std::move(moved);
+        } catch (const std::bad_alloc&) {
+            allocation_failed = true;
         }
+        RUVIA_CHECK(allocation_failed);
+        RUVIA_CHECK(target.empty());
+        RUVIA_CHECK(moved.values.data() == storage);
+        RUVIA_CHECK(moved.values[0] == HttpTransferCoding::kGzip);
+        target_resource.allow_allocations();
+        target = std::move(moved);
+        RUVIA_CHECK(target.values.get_allocator().resource() == &target_resource);
+        RUVIA_CHECK(target.values[0] == HttpTransferCoding::kGzip);
+        RUVIA_CHECK(moved.empty());
+        RUVIA_CHECK(copy.values[0] == HttpTransferCoding::kGzip);
+    }
+    RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(transfer_coding_sequence_same_resource_move_is_allocation_free_and_bounded) {
+    failing_memory_resource resource;
+    {
+        ruvia::HttpTransferCodings source(&resource);
+        ruvia::HttpTransferCodings target(&resource);
+        source.values.push_back(HttpTransferCoding::kGzip);
+        target.values.push_back(HttpTransferCoding::kDeflate);
+        const auto* storage = source.values.data();
+        resource.fail_after(0);
+        target = std::move(source);
+        RUVIA_CHECK(source.empty());
+        RUVIA_CHECK(target.values.data() == storage);
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{1});
+        for (std::size_t count = 1; count < ruvia::kMaxTransferCodings; ++count) {
+            target.values.push_back(HttpTransferCoding::kDeflate);
+        }
+        bool rejected = false;
+        try {
+            target.values.push_back(HttpTransferCoding::kGzip);
+        } catch (const std::length_error&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(target.values.size(), ruvia::kMaxTransferCodings);
+        RUVIA_CHECK(target.values.data() == storage);
+        RUVIA_CHECK(target.values[0] == HttpTransferCoding::kGzip);
+        resource.allow_allocations();
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

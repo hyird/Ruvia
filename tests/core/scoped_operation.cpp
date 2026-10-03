@@ -134,6 +134,38 @@ ruvia::Task<bool> waitThenObserveCancellation(std::pmr::string payload,
     co_return !payload.empty() && stopRequested.load();
 }
 
+// A moved-from result can still borrow its owner (as MSVC's PMR string debug
+// proxy does). Track those borrows without relying on a library's string layout.
+class delivery_borrow final {
+public:
+    explicit delivery_borrow(std::atomic_uint& borrows) noexcept
+        : borrows_(&borrows) {
+        borrows_->fetch_add(1);
+    }
+    delivery_borrow(const delivery_borrow&) = delete;
+    delivery_borrow& operator=(const delivery_borrow&) = delete;
+    delivery_borrow(delivery_borrow&& other) noexcept
+        : delivery_borrow(*other.borrows_) {}
+    delivery_borrow& operator=(delivery_borrow&&) = delete;
+    ~delivery_borrow() {
+        borrows_->fetch_sub(1);
+    }
+
+private:
+    std::atomic_uint* borrows_;
+};
+
+ruvia::Task<delivery_borrow> return_delivery_borrow(std::atomic_uint& borrows, bool fail) {
+    if (fail) {
+        throw std::runtime_error("delivery failed");
+    }
+    co_return delivery_borrow(borrows);
+}
+
+ruvia::Task<delivery_borrow> return_cold_delivery_borrow(delivery_borrow borrow) {
+    co_return std::move(borrow);
+}
+
 struct OwnedResult final {
     explicit OwnedResult(std::pmr::memory_resource* resource)
         : bytes(resource) {}
@@ -532,6 +564,39 @@ RUVIA_TEST(scoped_operation_result_survives_join_after_frame_release) {
     RUVIA_CHECK_EQ(resultResource.inUseAllocations, 0U);
     loops.stop();
     loops.join();
+}
+
+RUVIA_TEST(root_result_publication_retires_delivery_borrows_before_get_returns) {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    loops.start();
+    std::atomic_uint borrows{0};
+    for (unsigned repeat = 0; repeat != 64; ++repeat) {
+        auto root = loop.start(return_delivery_borrow(borrows, false));
+        {
+            auto result = root.get();
+            RUVIA_CHECK_EQ(borrows.load(), 1U);
+        }
+        RUVIA_CHECK_EQ(borrows.load(), 0U);
+        auto failed = loop.start(return_delivery_borrow(borrows, true));
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)failed.get(); }));
+        RUVIA_CHECK_EQ(borrows.load(), 0U);
+    }
+    loops.stop();
+    loops.join();
+}
+
+RUVIA_TEST(root_rejected_launch_retires_cold_input_before_publishing_failure) {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto loop = loops.loop(0);
+    std::atomic_uint borrows{0};
+    RUVIA_CHECK(loop.post([] { throw std::runtime_error("stop launch queue"); }) == ruvia::PostStatus::kAccepted);
+    auto root = loop.start(return_cold_delivery_borrow(delivery_borrow(borrows)));
+    RUVIA_CHECK_EQ(borrows.load(), 1U);
+    loops.start();
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)root.get(); }));
+    RUVIA_CHECK_EQ(borrows.load(), 0U);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] { loops.join(); }));
 }
 
 RUVIA_TEST(scoped_operation_result_move_failure_releases_frame_before_join) {

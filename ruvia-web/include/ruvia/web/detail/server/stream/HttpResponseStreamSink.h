@@ -175,9 +175,11 @@ private:
         state_.ensureBodyAllowed();
 
         if (compression_.active()) {
-            if (compression_.write(chunk) == HttpContentEncodeStep::kFailure) {
+            try {
+                compression_.write(chunk);
+            } catch (...) {
                 state_.markAborted();
-                throw std::runtime_error("HTTP response stream content encoding failed");
+                throw;
             }
             if (compression_.output().empty()) {
                 co_return;
@@ -246,10 +248,11 @@ private:
             co_return;
         }
         if (compression_.active()) {
-            if (compression_.finish() != HttpContentEncodeStep::kFinished) {
+            try {
+                compression_.finish();
+            } catch (...) {
                 state_.markAborted();
-                throw std::runtime_error(
-                    "HTTP response stream content encoding finalization failed");
+                throw;
             }
             co_await writeEncoded(compression_.output());
         }
