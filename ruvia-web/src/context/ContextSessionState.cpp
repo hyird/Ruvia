@@ -69,11 +69,7 @@ void ContextSessionState::set(std::string_view data) {
     if (auto* loadedState = std::get_if<SessionLoaded>(&value_)) {
         auto dataCopy = copy(data);
         auto id = std::move(loadedState->id);
-        value_.template emplace<SessionPersistExisting>(std::move(id), std::move(dataCopy));
-        return;
-    }
-    if (auto* existing = std::get_if<SessionPersistExisting>(&value_)) {
-        existing->data.assign(data);
+        value_.template emplace<SessionRotate>(std::move(id), std::move(dataCopy));
         return;
     }
     if (auto* rotated = std::get_if<SessionRotate>(&value_)) {
@@ -114,11 +110,6 @@ void ContextSessionState::clear() {
         value_.template emplace<SessionClear>(std::move(id));
         return;
     }
-    if (auto* existing = std::get_if<SessionPersistExisting>(&value_)) {
-        std::optional<std::pmr::string> id(std::move(existing->id));
-        value_.template emplace<SessionClear>(std::move(id));
-        return;
-    }
     if (auto* rotated = std::get_if<SessionRotate>(&value_)) {
         std::optional<std::pmr::string> id(std::move(rotated->oldId));
         value_.template emplace<SessionClear>(std::move(id));
@@ -143,10 +134,6 @@ void ContextSessionState::regenerate() {
         regenerateExisting(*loadedState);
         return;
     }
-    if (auto* existing = std::get_if<SessionPersistExisting>(&value_)) {
-        regenerateExisting(*existing);
-        return;
-    }
     if (std::holds_alternative<SessionClear>(value_) ||
         std::holds_alternative<SessionRotate>(value_) ||
         std::holds_alternative<SessionPersistNew>(value_)) {
@@ -163,9 +150,6 @@ std::string_view ContextSessionState::data() const& noexcept {
         return state->data;
     }
     if (const auto* state = std::get_if<SessionPersistNew>(&value_)) {
-        return state->data;
-    }
-    if (const auto* state = std::get_if<SessionPersistExisting>(&value_)) {
         return state->data;
     }
     if (const auto* state = std::get_if<SessionRotate>(&value_)) {

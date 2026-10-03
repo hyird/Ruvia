@@ -27,12 +27,13 @@ class Session final {
 public:
     [[nodiscard]] std::string_view data() const& noexcept;
     std::string_view data() const&& = delete;
+    // Every non-empty write replaces an existing session identity at commit.
+    // Repeated writes in one request publish one new ID; reads keep the ID.
     void set(std::string_view data);
     void clear();
-    // Required on authentication and every privilege change, before publishing
-    // the response. set() changes the blob but intentionally keeps its identity.
-    // Concurrent updates cannot recreate an identifier revoked by clear() or
-    // regenerate(); an expired/revoked update fails with HTTP 409.
+    // Rotate without changing the data, for an authentication or privilege
+    // transition that does not write the session. set() already requests rotation.
+    // Replacing an expired or revoked session fails with HTTP 409.
     void regenerate();
 
 private:
