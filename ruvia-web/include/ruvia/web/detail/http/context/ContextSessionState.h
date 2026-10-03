@@ -29,11 +29,6 @@ struct SessionPersistNew final {
     std::pmr::string data;
 };
 
-struct SessionPersistExisting final {
-    std::pmr::string id;
-    std::pmr::string data;
-};
-
 struct SessionRotate final {
     std::pmr::string oldId;
     std::pmr::string data;
@@ -89,11 +84,6 @@ public:
     }
     [[nodiscard]] const SessionPersistNew* persistNew() const&& = delete;
 
-    [[nodiscard]] const SessionPersistExisting* persistExisting() const& noexcept {
-        return std::get_if<SessionPersistExisting>(&value_);
-    }
-    [[nodiscard]] const SessionPersistExisting* persistExisting() const&& = delete;
-
     [[nodiscard]] const SessionRotate* rotate() const& noexcept {
         return std::get_if<SessionRotate>(&value_);
     }
@@ -118,7 +108,7 @@ private:
     Phase phase_{Phase::kActive};
     std::exception_ptr failure_;
     std::variant<SessionUntouched, SessionUnrecognized, SessionLoaded, SessionPersistNew,
-        SessionPersistExisting, SessionRotate, SessionClear>
+        SessionRotate, SessionClear>
         value_;
 };
 

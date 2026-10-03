@@ -2135,8 +2135,9 @@ ruvia::Task<void> exerciseEarlyProvenanceAndReplayPolicy(
 RUVIA_TEST(http3BufferedDispatchRejectsUntrustedAndUnsafeEarlyRequestsBeforeMiddleware) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker_handle = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
-    Fixture fixture(attachment.loop().handle(), upstream);
+    Fixture fixture(worker_handle, upstream);
     runWorkerTask(attachment, exerciseEarlyProvenanceAndReplayPolicy(fixture, ruvia_ctx));
 }
 

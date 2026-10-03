@@ -148,48 +148,36 @@ Task<void> SessionMiddleware::commit(Context& c) const {
     }
 
     std::string_view data;
-    std::string_view existingId;
-    std::string_view oldIdToDelete;
-    bool mintNewId = false;
-    if (const auto* fresh = state.persistNew()) {
-        data = fresh->data;
-        mintNewId = true;
-    } else if (const auto* existing = state.persistExisting()) {
-        data = existing->data;
-        existingId = existing->id;
-    } else if (const auto* rotated = state.rotate()) {
+    std::string_view old_id;
+    if (const auto* rotated = state.rotate()) {
         data = rotated->data;
-        oldIdToDelete = rotated->oldId;
-        mintNewId = true;
+        old_id = rotated->oldId;
+    } else {
+        data = state.persistNew()->data;
     }
 
-    std::array<char, 64> idBuffer;
-    if (mintNewId) {
-        const auto tokenResult = detail::generateSecureToken(idBuffer);
-        const auto* token = tokenResult.ready();
-        if (token == nullptr) {
-            throw HttpError({.status = ruvia::http_status::kInternalServerError,
-                .code = "secure_random_failed",
-                .message = "secure token generation failed"});
-        }
-        existingId = token->value();
+    std::array<char, 64> id_buffer;
+    const auto token_result = detail::generateSecureToken(id_buffer);
+    const auto* token = token_result.ready();
+    if (token == nullptr) {
+        throw HttpError({.status = ruvia::http_status::kInternalServerError,
+            .code = "secure_random_failed",
+            .message = "secure token generation failed"});
     }
+    const auto new_id = token->value();
 
     // Allocate and validate the cookie before changing Redis. Publication after
     // successful storage is an allocation-free move of the complete header state.
     auto& response = detail::ContextAccess::responseStorage(c);
-    std::optional<HttpResponse> staged;
-    if (mintNewId) {
-        staged.emplace(response.cloneHeadersForTransaction(1));
-        detail::appendSessionCookieHeader(*staged, c.pool(), config_.cookieName, existingId, secure);
-    }
+    auto staged = response.cloneHeadersForTransaction(1);
+    detail::appendSessionCookieHeader(staged, c.pool(), config_.cookieName, new_id, secure);
 
     std::pmr::string key(c.pool());
-    key.append(config_.keyPrefix).append(existingId);
+    key.append(config_.keyPrefix).append(new_id);
     bool applied = false;
-    if (!oldIdToDelete.empty()) {
+    if (!old_id.empty()) {
         std::pmr::string old_key(c.pool());
-        old_key.append(config_.keyPrefix).append(oldIdToDelete);
+        old_key.append(config_.keyPrefix).append(old_id);
         std::array<char, 32> ttl_buffer{};
         const auto [ttl_end, ttl_error] = std::to_chars(ttl_buffer.data(), ttl_buffer.data() + ttl_buffer.size(), config_.ttl.count());
         if (ttl_error != std::errc{}) {
@@ -206,7 +194,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
         applied = result.integer() == 1;
     } else {
         RedisSetOptions options;
-        options.condition = mintNewId ? RedisSetCondition::kIfAbsent : RedisSetCondition::kIfPresent;
+        options.condition = RedisSetCondition::kIfAbsent;
         options.expiration = RedisSetExpiration::expiresAfter(config_.ttl);
         const auto result = co_await c.redis(config_.redisAlias).set(key, data, std::move(options));
         applied = result.applied();
@@ -216,9 +204,7 @@ Task<void> SessionMiddleware::commit(Context& c) const {
             .code = "session_conflict",
             .message = "session expired or was revoked; retry with a new session"});
     }
-    if (staged) {
-        response.commitHeadersFrom(std::move(*staged));
-    }
+    response.commitHeadersFrom(std::move(staged));
 }
 
 }  // namespace ruvia
