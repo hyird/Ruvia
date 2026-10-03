@@ -151,6 +151,42 @@ RUVIA_TEST(transfer_coding_stack_construction_failure_releases_partial_state) {
     }
 }
 
+RUVIA_TEST(transfer_coding_stack_accepts_the_bounded_sequence_and_reclaims_all_stages) {
+    constexpr std::string_view plain = "bounded sequence payload";
+    std::array<HttpTransferCoding, ruvia::kMaxTransferCodings> codings{};
+    std::string wire(plain);
+    for (std::size_t index = 0; index < codings.size(); ++index) {
+        codings[index] = index % 2 == 0 ? HttpTransferCoding::kGzip : HttpTransferCoding::kDeflate;
+        wire = index % 2 == 0 ? gzipCompress(wire) : zlib_deflate_compress(wire);
+    }
+    DecoderMemoryResource resource;
+    {
+        http_transfer_coding_stack_decoder decoder(codings, &resource, ProtocolByteLimit::limited(4096));
+        std::pmr::string output(&resource);
+        RUVIA_CHECK(!appendTransferDecoded(decoder, wire, output).failed);
+        const auto finish = decoder.finish_input();
+        RUVIA_CHECK(finish.complete() != nullptr);
+        RUVIA_CHECK_EQ(std::string_view(output), plain);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(transfer_coding_stack_rejects_invalid_lengths_before_constructing_stages) {
+    DecoderMemoryResource resource;
+    const std::array<HttpTransferCoding, ruvia::kMaxTransferCodings + 1> codings{};
+    for (const auto sequence : {std::span<const HttpTransferCoding>{}, std::span<const HttpTransferCoding>(codings)}) {
+        bool rejected = false;
+        try {
+            http_transfer_coding_stack_decoder decoder(sequence, &resource, ProtocolByteLimit::unlimited());
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
 RUVIA_TEST(transfer_coding_stack_owns_sequence_and_decodes_one_deflate_stage) {
     auto* resource = std::pmr::get_default_resource();
     auto codings = std::array{HttpTransferCoding::kDeflate};

@@ -9,6 +9,7 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
@@ -239,32 +240,47 @@ namespace {
 
 constexpr std::size_t k_transfer_coding_scratch_bytes = 4096;
 
-struct transfer_decoder_deleter final {
-    std::pmr::memory_resource* resource;
-    void operator()(detail::transfer_coding_decoder* decoder) const noexcept {
-        if (decoder != nullptr) {
-            std::pmr::polymorphic_allocator<detail::transfer_coding_decoder>(resource)
-                .delete_object(decoder);
-        }
-    }
-};
-
 struct transfer_coding_stage final {
-    using decoder_ptr = std::unique_ptr<detail::transfer_coding_decoder, transfer_decoder_deleter>;
+    transfer_coding_stage(HttpTransferCoding coding, std::pmr::memory_resource* resource,
+        ProtocolByteLimit decoded_limit)
+        : decoder(coding, resource, decoded_limit) {}
 
-    explicit transfer_coding_stage(decoder_ptr decoder)
-        : decoder(std::move(decoder)) {}
-    transfer_coding_stage(transfer_coding_stage&&) noexcept = default;
-    transfer_coding_stage& operator=(transfer_coding_stage&&) noexcept = default;
-    transfer_coding_stage(const transfer_coding_stage&) = delete;
-    transfer_coding_stage& operator=(const transfer_coding_stage&) = delete;
-
-    decoder_ptr decoder;
-    std::array<char, k_transfer_coding_scratch_bytes> buffer{};
+    detail::transfer_coding_decoder decoder;
     std::size_t begin{0};
     std::size_t end{0};
     bool complete{false};
 };
+
+// Stable, exact-sized stage storage. The constructed prefix is recorded before
+// starting the next stage, so failure at any zlib allocation is handled by RAII.
+struct transfer_stages_deleter final {
+    std::pmr::memory_resource* resource;
+    std::size_t capacity;
+    std::size_t constructed{0};
+    void operator()(transfer_coding_stage* stages) const noexcept {
+        std::destroy_n(stages, constructed);
+        std::pmr::polymorphic_allocator<transfer_coding_stage>(resource)
+            .deallocate(stages, capacity);
+    }
+};
+
+using transfer_stages_owner = std::unique_ptr<transfer_coding_stage, transfer_stages_deleter>;
+
+[[nodiscard]] transfer_stages_owner make_transfer_stages(
+    std::span<const HttpTransferCoding> codings, std::pmr::memory_resource* resource,
+    ProtocolByteLimit decoded_limit) {
+    if (codings.empty() || codings.size() > kMaxTransferCodings) {
+        throw std::invalid_argument("invalid transfer-coding stack length");
+    }
+    std::pmr::polymorphic_allocator<transfer_coding_stage> allocator(resource);
+    transfer_stages_owner owner(allocator.allocate(codings.size()), {resource, codings.size()});
+    for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
+        auto& count = owner.get_deleter().constructed;
+        std::construct_at(owner.get() + count, *coding, resource, decoded_limit);
+        ++count;
+    }
+    return owner;
+}
 
 }  // namespace
 
@@ -272,22 +288,16 @@ struct http_transfer_coding_stack_decoder::impl final {
     impl(std::span<const HttpTransferCoding> codings, std::pmr::memory_resource* resource,
         ProtocolByteLimit decoded_limit)
         : resource(detail::httpPmrResourceOrDefault(resource)),
-          stages(this->resource) {
-        if (codings.empty() || codings.size() > kMaxTransferCodings) {
-            throw std::invalid_argument("invalid transfer-coding stack length");
-        }
-        stages.reserve(codings.size());
-        std::pmr::polymorphic_allocator<detail::transfer_coding_decoder> allocator(this->resource);
-        for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-            auto* decoder = allocator.new_object<detail::transfer_coding_decoder>(
-                *coding, this->resource, decoded_limit);
-            stages.emplace_back(transfer_coding_stage::decoder_ptr(
-                decoder, transfer_decoder_deleter{this->resource}));
-        }
-    }
+          stage_storage(make_transfer_stages(codings, this->resource, decoded_limit)),
+          stages(stage_storage.get(), codings.size()),
+          buffers(codings.size() - 1, this->resource) {}
 
     std::pmr::memory_resource* resource;
-    std::pmr::vector<transfer_coding_stage> stages;
+    transfer_stages_owner stage_storage;
+    std::span<transfer_coding_stage> stages;
+    // Only inter-stage edges own scratch. The final stage writes directly to
+    // the caller's buffer, so a one-coding sequence has no internal scratch.
+    std::pmr::vector<std::array<char, k_transfer_coding_scratch_bytes>> buffers;
     std::optional<HttpTransferCodingDecodeError> failure;
     bool decoder_failed{false};
 };
@@ -336,7 +346,7 @@ HttpTransferCodingDecodeResult http_transfer_coding_stack_decoder::decode(
                 layer_input = input.substr(wire_consumed);
             } else {
                 auto& previous = impl_->stages[index - 1];
-                layer_input = std::string_view(previous.buffer.data() + previous.begin,
+                layer_input = std::string_view(impl_->buffers[index - 1].data() + previous.begin,
                     previous.end - previous.begin);
             }
             if (stage.complete) {
@@ -348,8 +358,8 @@ HttpTransferCodingDecodeResult http_transfer_coding_stack_decoder::decode(
             }
             const auto output = index + 1 == impl_->stages.size()
                                     ? output_buffer
-                                    : std::span<char>(stage.buffer);
-            const auto decoded = stage.decoder->decode(layer_input, output);
+                                    : std::span<char>(impl_->buffers[index]);
+            const auto decoded = stage.decoder.decode(layer_input, output);
             const auto consumed = decoded.consumedBytes();
             if (index == 0) {
                 wire_consumed += consumed;
@@ -421,7 +431,7 @@ HttpTransferCodingDecodeResult http_transfer_coding_stack_decoder::finish_input(
         if (stage.complete) {
             continue;
         }
-        const auto finished = stage.decoder->finish_input();
+        const auto finished = stage.decoder.finish_input();
         if (const auto* protocol_failure = finished.failure()) {
             impl_->failure = protocol_failure->error();
             return HttpTransferCodingDecodeResult(
