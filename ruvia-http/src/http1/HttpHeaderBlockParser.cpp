@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTeFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -151,7 +152,7 @@ namespace {
             }
             break;
         case RequestHeaderKind::kOrigin:
-            if (!isValidHttpOriginFieldValue(value)) {
+            if (!is_valid_http_origin_field_value(value)) {
                 return HttpParseError::kInvalidHeader;
             }
             if (const auto bit = singletonRequestHeaderBit(kind);

@@ -79,6 +79,7 @@ public:
         kWrongWorker,
         kCancelled,
         kFilePayloadUnsupported,
+        peer_field_section_limit,
         kTunnelComplete,
         kOutputComplete,
         kFailed,
@@ -197,9 +198,10 @@ public:
     [[nodiscard]] Task<void> publishResponseBytes(std::span<const char> bytes);
     [[nodiscard]] Task<void> finishResponse();
     [[nodiscard]] bool responseAborted() const noexcept {
-        return cancellationRequested() || tunnelAborted_;
+        return cancellationRequested() || tunnelAborted_ || peer_field_section_rejected_;
     }
     [[nodiscard]] bool responseFieldSectionAllowed(std::size_t decodedSize) const noexcept;
+    [[noreturn]] void reject_peer_field_section();
     void notifyTunnelInput() noexcept;
     [[nodiscard]] Task<HttpStreamReadResult> readTunnel(std::pmr::string& buffer);
     [[nodiscard]] Task<std::optional<HttpDatagramInput>> readDatagramInput();
@@ -285,6 +287,7 @@ private:
     std::size_t streamFrameOffset_{};
     std::pmr::string tunnelDataFrame_;
     std::uint64_t streamPublishedWireBytes_{};
+    bool peer_field_section_rejected_{};
     bool streamOutputActive_{};
     bool tunnelDataPending_{};
     bool tunnelEstablishedPending_{};

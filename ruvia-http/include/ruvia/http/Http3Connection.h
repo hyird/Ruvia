@@ -167,6 +167,8 @@ public:
 
     // Uses peer SETTINGS to encode a QPACK section for any local message or
     // promise. Before SETTINGS, only static/literal representations are used.
+    // All connection-owned encoders enforce the peer's decoded field-section
+    // limit before compression, independently of local encoded-byte budgets.
     // Message helpers validate HTTP semantics; this entry point owns compression.
     [[nodiscard]] std::expected<std::pmr::vector<char>, Http3QpackConnectionError> encodeFieldSection(
         std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields);

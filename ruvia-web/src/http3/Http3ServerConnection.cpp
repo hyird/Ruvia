@@ -1008,6 +1008,15 @@ Task<void> Http3ServerConnection::runRequest(std::uint64_t streamId) {
         }
     }
 
+    if (runStatus == Dispatch::RunStatus::peer_field_section_limit) {
+        removeQueued(entry.slot);
+        (void)enqueueResetIntent(entry.slot);
+        entry.outputTerminal = true;
+        entry.slot.status = RequestStatus::kFailed;
+        notifyActivation();
+        co_return;
+    }
+
     if (runStatus == Dispatch::RunStatus::kTunnelComplete || runStatus == Dispatch::RunStatus::kOutputComplete) {
         if (!entry.outputTerminal || entry.slot.status != RequestStatus::kPublished) {
             entry.outputTerminal = true;

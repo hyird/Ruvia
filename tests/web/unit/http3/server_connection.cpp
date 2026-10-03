@@ -2463,11 +2463,6 @@ ruvia::Task<Connection::TransportIntentToken> createPeerLimitIntent(
     const auto request = routeRequest(connection, inbound, worker,
         {epoch, generation, 0}, "GET", "/first");
     RUVIA_CHECK(request.status == Connection::EventStatus::kDispatched);
-    co_await waitForReady(connection, 1, workerHandle, stopToken);
-    const auto attempt = connection.publishOne(kAllWorkLanes);
-    RUVIA_CHECK(attempt.status == Connection::PublishStatus::kAttempted);
-    RUVIA_CHECK(attempt.publication.status ==
-                Connection::Dispatch::PublishStatus::kPeerLimitRejected);
     const bool taskRetired =
         co_await waitForTaskCount(connection, 0, workerHandle, stopToken);
     requireWatchdogSuccess(ruvia_ctx, taskRetired);
@@ -2524,16 +2519,12 @@ ruvia::Task<void> exercisePeerLimitRejection(Fixture& fixture,
     const auto request = routeRequest(connection, inbound, fixture.worker,
         {kEpoch, kGeneration + 40, 0}, "GET", "/first");
     RUVIA_CHECK(request.status == Connection::EventStatus::kDispatched);
-    co_await waitForReady(connection, 1, worker, fixture.workerStop);
+    requireWatchdogSuccess(ruvia_ctx,
+        co_await waitForTaskCount(connection, 0, worker, fixture.workerStop));
     RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
     const auto allocationCountBeforeIntent = upstream.allocationCount();
     const auto attempt = connection.publishOne(kAllWorkLanes);
-    RUVIA_CHECK(attempt.status == Connection::PublishStatus::kAttempted);
-    RUVIA_CHECK(attempt.publication.status ==
-                Connection::Dispatch::PublishStatus::kPeerLimitRejected);
-    RUVIA_CHECK(attempt.publication.blockReason ==
-                Connection::Dispatch::PublishBlockReason::kNone);
-    RUVIA_CHECK(!attempt.publication.notifyPeer);
+    RUVIA_CHECK(attempt.status == Connection::PublishStatus::kNoReadyRequest);
     RUVIA_CHECK_EQ(connection.requestInfo(0).status, Connection::RequestStatus::kFailed);
     RUVIA_CHECK(!connection.transportCloseRequired());
     RUVIA_CHECK_EQ(connection.activeSessionStreamCount(), std::size_t{0});
@@ -3238,7 +3229,7 @@ RUVIA_TEST(http3ServerConnectionSharesBodyBudgetUntilStoppedLeaseJoins) {
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
-RUVIA_TEST(http3ServerConnectionForwardsPeerLimitPublishRejection) {
+RUVIA_TEST(http3_server_connection_retires_peer_limit_encoding_rejection) {
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
     const auto worker = attachment.loop().handle();

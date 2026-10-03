@@ -19,6 +19,9 @@ enum class Http3ResponseHeadError : std::uint8_t {
     kForbiddenField,
     kUnsupportedStatus,
     kFieldSectionError,
+    // A connection-owned encoder refused the peer's decoded-size limit before
+    // touching QPACK state; this is not an invalid application response.
+    peer_field_section_limit,
 };
 
 struct Http3ResponseFieldSection {

@@ -6,7 +6,9 @@
 #include <vector>
 
 #include "ruvia/http/Http3FieldSection.h"
+#include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3ResponseWriter.h"
+#include "ruvia/http/HttpInterimResponse.h"
 
 #include "test_harness.h"
 
@@ -42,6 +44,67 @@ private:
     }
 };
 }  // namespace
+
+RUVIA_TEST(http3_interim_and_streaming_heads_project_mixed_case_names_in_order) {
+    const std::array headers{
+        ruvia::HttpHeaderView{"X-Long-Mixed-Case-Header", "first"},
+        ruvia::HttpHeaderView{"x-lowercase-header-name", "lower"},
+        ruvia::HttpHeaderView{"X-Long-Mixed-Case-Header", "second"}};
+    const ruvia::HttpInterimResponseHead interim(ruvia::http_status::kEarlyHints, headers);
+    CountingResource interim_resource;
+    {
+        const auto result = ruvia::encodeHttp3InterimResponseHead(interim, {}, &interim_resource);
+        RUVIA_CHECK(result.has_value());
+        if (result) {
+            Fields decoded;
+            RUVIA_CHECK(ruvia::decodeHttp3FieldSection(result->fieldSection, collect, &decoded).has_value());
+            RUVIA_CHECK_EQ(decoded.names.size(), 4U);
+            if (decoded.names.size() == 4) {
+                RUVIA_CHECK_EQ(decoded.names[0], ":status");
+                RUVIA_CHECK_EQ(decoded.values[0], "103");
+                RUVIA_CHECK_EQ(decoded.names[1], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values[1], "first");
+                RUVIA_CHECK_EQ(decoded.names[2], "x-lowercase-header-name");
+                RUVIA_CHECK_EQ(decoded.values[2], "lower");
+                RUVIA_CHECK_EQ(decoded.names[3], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values[3], "second");
+            }
+        }
+    }
+    RUVIA_CHECK(interim_resource.allocations > 0);
+    RUVIA_CHECK_EQ(interim_resource.allocations, interim_resource.deallocations);
+
+    CountingResource streaming_resource;
+    {
+        ruvia::HttpResponse response;
+        response.header("X-Long-Mixed-Case-Header", "first");
+        response.header("x-lowercase-header-name", "lower");
+        response.header("X-Long-Mixed-Case-Header", "second",
+            {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        const auto result = ruvia::encodeHttp3StreamingResponseHead(std::move(response),
+            ruvia::HttpKnownMethod::kGet, ruvia::ResponseStreamKind::kGeneric,
+            ruvia::ResponseTrailerIntent::kNone, {}, &streaming_resource);
+        RUVIA_CHECK(result.has_value());
+        if (result) {
+            Fields decoded;
+            RUVIA_CHECK(ruvia::decodeHttp3FieldSection(result->head.fieldSection, collect, &decoded).has_value());
+            RUVIA_CHECK_EQ(decoded.names.size(), 5U);
+            if (decoded.names.size() == 5) {
+                RUVIA_CHECK_EQ(decoded.names[0], ":status");
+                RUVIA_CHECK_EQ(decoded.values[0], "200");
+                RUVIA_CHECK_EQ(decoded.names[1], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values[1], "first");
+                RUVIA_CHECK_EQ(decoded.names[2], "x-lowercase-header-name");
+                RUVIA_CHECK_EQ(decoded.values[2], "lower");
+                RUVIA_CHECK_EQ(decoded.names[3], "x-long-mixed-case-header");
+                RUVIA_CHECK_EQ(decoded.values[3], "second");
+                RUVIA_CHECK_EQ(decoded.names[4], "date");
+            }
+        }
+    }
+    RUVIA_CHECK(streaming_resource.allocations > 0);
+    RUVIA_CHECK_EQ(streaming_resource.allocations, streaming_resource.deallocations);
+}
 
 RUVIA_TEST(http3_streaming_head_preserves_length_projects_sse_and_trailer_semantics) {
     CountingResource resource;
@@ -119,6 +182,77 @@ RUVIA_TEST(http3_response_writer_emits_canonical_rfc_static_references) {
     RUVIA_CHECK_EQ(result->fieldSection.size(), canonicalWire.size());
     RUVIA_CHECK(std::equal(result->fieldSection.begin(), result->fieldSection.end(),
         canonicalWire.begin(), canonicalWire.end()));
+}
+
+RUVIA_TEST(http3_interim_response_writer_normalizes_null_resource_and_retains_owned_results) {
+    const std::array headers{ruvia::HttpHeaderView{"Link", "</style.css>; rel=preload"}};
+    const ruvia::HttpInterimResponseHead response(ruvia::http_status::kEarlyHints, headers);
+    const auto static_null = ruvia::encodeHttp3InterimResponseHead(response, {}, nullptr);
+    RUVIA_CHECK(static_null.has_value());
+    if (static_null) {
+        Fields decoded;
+        const auto count = ruvia::decodeHttp3FieldSection(static_null->fieldSection, collect, &decoded);
+        RUVIA_CHECK(count.has_value());
+        RUVIA_CHECK_EQ(decoded.names.size(), 2U);
+        if (decoded.names.size() == 2) {
+            RUVIA_CHECK_EQ(decoded.names[0], ":status");
+            RUVIA_CHECK_EQ(decoded.values[0], "103");
+            RUVIA_CHECK_EQ(decoded.names[1], "link");
+            RUVIA_CHECK_EQ(decoded.values[1], "</style.css>; rel=preload");
+        }
+    }
+
+    ruvia::Http3QpackEncoder encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
+    const auto dynamic_null = ruvia::encodeHttp3InterimResponseHead(encoder, 0, response, {}, nullptr);
+    RUVIA_CHECK(dynamic_null.has_value());
+    if (dynamic_null) {
+        Fields decoded;
+        const auto count = ruvia::decodeHttp3FieldSection(dynamic_null->fieldSection, collect, &decoded);
+        RUVIA_CHECK(count.has_value());
+        RUVIA_CHECK_EQ(decoded.names.size(), 2U);
+        if (decoded.names.size() == 2) {
+            RUVIA_CHECK_EQ(decoded.names[0], ":status");
+            RUVIA_CHECK_EQ(decoded.values[0], "103");
+            RUVIA_CHECK_EQ(decoded.names[1], "link");
+            RUVIA_CHECK_EQ(decoded.values[1], "</style.css>; rel=preload");
+        }
+    }
+
+    CountingResource static_resource;
+    {
+        const auto first = ruvia::encodeHttp3InterimResponseHead(response, {}, &static_resource);
+        RUVIA_CHECK(first.has_value());
+        if (!first) {
+            return;
+        }
+        RUVIA_CHECK(first->fieldSection.get_allocator().resource() == &static_resource);
+        const std::vector<char> retained(first->fieldSection.begin(), first->fieldSection.end());
+        const auto second = ruvia::encodeHttp3InterimResponseHead(response, {}, &static_resource);
+        RUVIA_CHECK(second.has_value());
+        RUVIA_CHECK(std::ranges::equal(first->fieldSection, retained));
+        RUVIA_CHECK(static_resource.allocations > static_resource.deallocations);
+    }
+    RUVIA_CHECK_EQ(static_resource.allocations, static_resource.deallocations);
+
+    CountingResource dynamic_resource;
+    {
+        ruvia::Http3QpackEncoder resource_encoder({.maxTableCapacity = 0, .maxBlockedStreams = 0});
+        const auto result = ruvia::encodeHttp3InterimResponseHead(resource_encoder, 0, response, {}, &dynamic_resource);
+        RUVIA_CHECK(result.has_value());
+        if (result) {
+            RUVIA_CHECK(result->fieldSection.get_allocator().resource() == &dynamic_resource);
+            RUVIA_CHECK(dynamic_resource.allocations > dynamic_resource.deallocations);
+        }
+    }
+    RUVIA_CHECK_EQ(dynamic_resource.allocations, dynamic_resource.deallocations);
+
+    const std::array invalid_headers{ruvia::HttpHeaderView{"Connection", "close"}};
+    const ruvia::HttpInterimResponseHead invalid_response(ruvia::http_status::kEarlyHints, invalid_headers);
+    const auto invalid = ruvia::encodeHttp3InterimResponseHead(invalid_response, {}, nullptr);
+    RUVIA_CHECK(!invalid);
+    if (!invalid) {
+        RUVIA_CHECK(invalid.error().kind == ruvia::Http3ResponseHeadError::kForbiddenField);
+    }
 }
 
 RUVIA_TEST(http3_response_head_body_plan_suppresses_head_and_bodyless_statuses) {

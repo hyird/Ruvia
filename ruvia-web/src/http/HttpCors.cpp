@@ -11,7 +11,8 @@
 #include <utility>
 
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/http/HttpCorsFields.h"
+#include "ruvia/http/HttpFieldNameList.h"
+#include "ruvia/http/HttpOrigin.h"
 
 namespace ruvia::detail {
 namespace {
@@ -60,8 +61,10 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
                 header.name(), "Access-Control-Request-Headers")) {
             continue;
         }
-        HttpCorsRequestHeaderNames names(header.value());
+        http_field_name_list names(header.value());
+        bool saw_name = false;
         while (const auto name = names.next()) {
+            saw_name = true;
             if (first) {
                 setResponseHeaderIfMissing(response, "Access-Control-Allow-Headers", *name);
                 first = false;
@@ -70,7 +73,7 @@ void reflectCorsRequestHeaderNames(const HttpRequest& request, HttpResponse& res
                     HttpResponse::HeaderOptions{.mode = ruvia::HttpResponseHeaderMode::kAppend});
             }
         }
-        if (!names.valid()) {
+        if (!saw_name || !names.valid()) {
             throw std::logic_error("validated CORS request header list became invalid");
         }
     }
@@ -106,7 +109,7 @@ void validateCorsConfig(const CorsConfig& config) {
         case CorsOriginMode::kExact:
         case CorsOriginMode::kCredentialedExact:
             if (config.origin.value != "null" &&
-                !::ruvia::isValidHttpSerializedOrigin(config.origin.value)) {
+                !::ruvia::is_valid_http_serialized_origin(config.origin.value)) {
                 throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
             }
             break;

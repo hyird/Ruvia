@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
@@ -49,7 +50,7 @@ struct Http2OutboundRequestHeaderFacts final {
             return false;
         }
         const auto kind = classifyRequestHeader(header.name());
-        if ((kind == RequestHeaderKind::kOrigin && !isValidHttpOriginFieldValue(header.value())) ||
+        if ((kind == RequestHeaderKind::kOrigin && !is_valid_http_origin_field_value(header.value())) ||
             (kind == RequestHeaderKind::kAccessControlRequestMethod &&
                 !isValidHttpCorsRequestMethod(header.value())) ||
             (kind == RequestHeaderKind::kAccessControlRequestHeaders &&

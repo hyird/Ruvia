@@ -186,6 +186,39 @@ struct Http3Connection::Impl final {
               resource),
           transmitQpack(std::in_place, Http3QpackEncoderConfig{.maxTableCapacity = 0, .maxBlockedStreams = 0}, resource) {}
 
+    [[nodiscard]] Http3FieldSectionLimits local_field_limits(Http3FieldSectionLimits requested) const noexcept {
+        requested.maxEncodedBytes = std::min(requested.maxEncodedBytes, limits.maxEncodedFieldSectionBytes);
+        requested.maxDecodedBytes = std::min(requested.maxDecodedBytes, limits.maxFieldSectionSize);
+        requested.maxFields = std::min(requested.maxFields, limits.maxFields);
+        return requested;
+    }
+
+    [[nodiscard]] Http3FieldSectionLimits outbound_field_limits(Http3FieldSectionLimits requested) const noexcept {
+        requested = local_field_limits(requested);
+        // SETTINGS_MAX_FIELD_SECTION_SIZE limits decoded names, values and the
+        // per-field overhead, not compressed QPACK bytes. Before SETTINGS (or
+        // when the setting is absent), only the local budget applies.
+        const auto& settings = control.peerSettings();
+        if (settings && settings->maxFieldSectionSize &&
+            std::cmp_less(*settings->maxFieldSectionSize, requested.maxDecodedBytes)) {
+            requested.maxDecodedBytes = static_cast<std::size_t>(*settings->maxFieldSectionSize);
+        }
+        return requested;
+    }
+
+    template <typename encoded_type>
+    [[nodiscard]] std::expected<encoded_type, Http3ResponseHeadFailure> response_encoding_result(
+        std::expected<encoded_type, Http3ResponseHeadFailure> result, Http3FieldSectionLimits local_limits) const {
+        const auto& settings = control.peerSettings();
+        if (!result && result.error().kind == Http3ResponseHeadError::kFieldSectionError &&
+            result.error().fieldSectionError == Http3FieldSectionError::kFieldListTooLarge &&
+            settings && settings->maxFieldSectionSize &&
+            std::cmp_less_equal(*settings->maxFieldSectionSize, local_limits.maxDecodedBytes)) {
+            result.error().kind = Http3ResponseHeadError::peer_field_section_limit;
+        }
+        return result;
+    }
+
     static void onRequestFrame(void* opaque, Http3StreamFrameEvent frame) {
         auto& request = *static_cast<Request*>(opaque);
         if (request.terminal || request.callbackResult.scope != Http3ConnectionErrorScope::kNone) {
@@ -813,13 +846,19 @@ Http3ConnectionResult Http3Connection::feed(std::uint64_t streamId, std::span<co
 
         auto found = impl.requests.find(streamId);
         if (found == impl.requests.end()) {
+            if (reset) {
+                // A sender can encode dynamic references and publish encoder
+                // instructions before any HEADERS bytes reach this stream.
+                // Cancellation must release those references even though there
+                // is no request/parser node. No stream tombstone is required.
+                if (auto canceled = impl.receiveQpack.cancel(streamId); !canceled) {
+                    impl.failed = connectionError(Http3ConnectionErrorCode::kQpackDecompressionFailed);
+                    return impl.failed;
+                }
+                return {Http3ConnectionStatus::kNeedMoreData};
+            }
             if (impl.localGoaway && streamId >= *impl.localGoaway) {
                 return streamError(Http3ConnectionErrorCode::kRequestRejected);
-            }
-            if (reset) {
-                // The QUIC adapter reports termination once; an already-absent stream
-                // has no request state to notify and needs no connection-lifetime tombstone.
-                return {Http3ConnectionStatus::kNeedMoreData};
             }
             if (impl.requests.size() >= impl.limits.maxActiveStreams) {
                 return streamError(Http3ConnectionErrorCode::kExcessiveLoad);
@@ -1007,8 +1046,8 @@ std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3Connection:
     for (const auto& field : request.headers) {
         fields.push_back({field.name(), field.value(), false});
     }
-    const Http3FieldSectionLimits limits{owner.limits.maxEncodedFieldSectionBytes,
-        owner.limits.maxFieldSectionSize, owner.limits.maxFields};
+    const auto limits = owner.outbound_field_limits({owner.limits.maxEncodedFieldSectionBytes,
+        owner.limits.maxFieldSectionSize, owner.limits.maxFields});
     auto encoded = encodeHttp3ClientRequestHead({.method = request.method, .scheme = request.scheme, .authority = request.authority, .path = request.path, .fields = fields}, limits, resource_);
     if (!encoded) {
         return std::unexpected(Error::kMessageError);
@@ -1040,7 +1079,7 @@ std::expected<std::pmr::vector<char>, Http3QpackConnectionError> Http3Connection
         !(impl_->role == Http3PeerRole::kServer && (streamId & 3) == 3 && streamId <= kHttp3VarIntMax)) {
         return std::unexpected(Http3QpackConnectionError::kInvalidStreamId);
     }
-    return impl_->transmitQpack->encode(streamId, fields);
+    return impl_->transmitQpack->encode(streamId, fields, impl_->outbound_field_limits({}));
 }
 std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> Http3Connection::encodeClientRequestHead(
     std::uint64_t streamId, Http3ClientRequestHeadView view, Http3FieldSectionLimits limits) {
@@ -1049,7 +1088,7 @@ std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> Http3Connec
         return std::unexpected(Http3ClientRequestHeadFailure{Http3ClientRequestHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});
     }
     view.peerEnableConnectProtocol = impl_->control.peerSettings() && impl_->control.peerSettings()->enableConnectProtocol;
-    return encodeHttp3ClientRequestHead(*impl_->transmitQpack, streamId, view, limits, resource_);
+    return encodeHttp3ClientRequestHead(*impl_->transmitQpack, streamId, view, impl_->outbound_field_limits(limits), resource_);
 }
 std::expected<Http3ResponseHead, Http3ResponseHeadFailure> Http3Connection::encodeConnectResponseHead(
     std::uint64_t streamId, const HttpResponse& response, Http3FieldSectionLimits limits) {
@@ -1064,28 +1103,36 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> Http3Connection::enco
         (!isHttp3RequestStreamId(streamId) && ((streamId & 3) != 3 || streamId > kHttp3VarIntMax))) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});
     }
-    return encodeHttp3ResponseHead(*impl_->transmitQpack, streamId, response, plan, limits, resource_);
+    const auto local_limits = impl_->local_field_limits(limits);
+    return impl_->response_encoding_result(
+        encodeHttp3ResponseHead(*impl_->transmitQpack, streamId, response, plan, impl_->outbound_field_limits(local_limits), resource_), local_limits);
 }
 std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> Http3Connection::encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits) {
     if (!impl_ || impl_->feeding || impl_->failed.scope != Http3ConnectionErrorScope::kNone || impl_->role != Http3PeerRole::kServer ||
         (!isHttp3RequestStreamId(streamId) && ((streamId & 3) != 3 || streamId > kHttp3VarIntMax))) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});
     }
-    return encodeHttp3StreamingResponseHead(*impl_->transmitQpack, streamId, std::move(response), method, kind, trailers, limits, resource_);
+    const auto local_limits = impl_->local_field_limits(limits);
+    return impl_->response_encoding_result(
+        encodeHttp3StreamingResponseHead(*impl_->transmitQpack, streamId, std::move(response), method, kind, trailers, impl_->outbound_field_limits(local_limits), resource_), local_limits);
 }
 std::expected<Http3ResponseHead, Http3ResponseHeadFailure> Http3Connection::encodeInterimResponseHead(std::uint64_t streamId, const HttpInterimResponseHead& response, Http3FieldSectionLimits limits) {
     if (!impl_ || impl_->feeding || impl_->failed.scope != Http3ConnectionErrorScope::kNone || impl_->role != Http3PeerRole::kServer ||
         (!isHttp3RequestStreamId(streamId) && ((streamId & 3) != 3 || streamId > kHttp3VarIntMax))) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});
     }
-    return encodeHttp3InterimResponseHead(*impl_->transmitQpack, streamId, response, limits, resource_);
+    const auto local_limits = impl_->local_field_limits(limits);
+    return impl_->response_encoding_result(
+        encodeHttp3InterimResponseHead(*impl_->transmitQpack, streamId, response, impl_->outbound_field_limits(local_limits), resource_), local_limits);
 }
 std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> Http3Connection::encodeResponseTrailers(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits) {
     if (!impl_ || impl_->feeding || impl_->failed.scope != Http3ConnectionErrorScope::kNone || impl_->role != Http3PeerRole::kServer ||
         (!isHttp3RequestStreamId(streamId) && ((streamId & 3) != 3 || streamId > kHttp3VarIntMax))) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});
     }
-    return encodeHttp3ResponseTrailers(*impl_->transmitQpack, streamId, fields, limits, resource_);
+    const auto local_limits = impl_->local_field_limits(limits);
+    return impl_->response_encoding_result(
+        encodeHttp3ResponseTrailers(*impl_->transmitQpack, streamId, fields, impl_->outbound_field_limits(local_limits), resource_), local_limits);
 }
 std::span<const char> Http3Connection::pendingQpackEncoderOutput() const& noexcept {
     return impl_ ? impl_->transmitQpack->pendingEncoderOutput() : std::span<const char>{};

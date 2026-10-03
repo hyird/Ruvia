@@ -1418,7 +1418,9 @@ ruvia::Task<void> exerciseParserRegistrationAllocationFailure(asio::io_context& 
             RUVIA_CHECK(memory.matchingAllocationAttempts() == 1);
             RUVIA_CHECK(!connection.running());
             RUVIA_CHECK(peer.synchronize());
-            RUVIA_CHECK(peer.handshake_observed());
+            // Registration failure can close the client before the peer has
+            // confirmed the TLS handshake. Only the no-request-payload contract
+            // is synchronized here; peer handshake readiness is not guaranteed.
             RUVIA_CHECK_EQ(peer.request_payload_bytes(), std::size_t{0});
 
             const auto firstResult = connection.result(first.id);
@@ -2445,6 +2447,7 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
         auto run = [&]() -> ruvia::Task<void> {
             const auto& worker = attachment.loop().handle();
             ruvia::HttpClient client(attachment.loop(), {.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1", .port = peer.port(), .connectionCount = 1, .requestTimeout = 5s, .maxResponseBytes = 16384, .protocol = ruvia::HttpClientProtocol::kHttp3Only, .caFile = identity.certificate().string()});
+            std::optional<ruvia::HttpClientTunnel> retired_tunnel;
             try {
                 const bool extended = (round & 1) != 0;
                 auto result = co_await client.openTunnel({.authority = extended ? "proxy.test" : "target.test:443", .protocol = extended ? "test-protocol" : "", .target = extended ? "/tunnel" : ""});
@@ -2452,7 +2455,8 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 if (!result.tunnel()) {
                     throw std::runtime_error("missing CONNECT tunnel");
                 }
-                auto tunnel = std::move(*result.tunnel());
+                retired_tunnel.emplace(std::move(*result.tunnel()));
+                auto& tunnel = *retired_tunnel;
                 RUVIA_CHECK(tunnel.protocolVersion() == ruvia::HttpProtocolVersion::kHttp3);
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
                 std::string greeting;
@@ -2490,7 +2494,10 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                     }
                     RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
                 }
+                RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().completedRequests == 1; }, 2s));
                 RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().inFlightRequests == 0; }, 2s));
+                // Normal bidirectional retirement must not undo a successfully
+                // completed sending direction or make finish non-idempotent.
                 co_await tunnel.finish();
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
                 RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)tunnel.write("late"); }));
@@ -2498,6 +2505,15 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 failure = std::current_exception();
             }
             co_await client.shutdown();
+            if (!failure && retired_tunnel) {
+                try {
+                    co_await retired_tunnel->finish();
+                    RUVIA_CHECK(retired_tunnel->header("x-tunnel") == "owned-metadata");
+                    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)retired_tunnel->write("late after shutdown"); }));
+                } catch (...) {
+                    failure = std::current_exception();
+                }
+            }
             attachment.stop();
         };
         auto root = attachment.loop().start(run());

@@ -46,10 +46,13 @@ Task<void> Http3ResponseStreamSink::commit(ResponseTrailerIntent trailers) {
     compression_.prepare(method_, response, kind_);
     auto prepared = publisher_.encodeStreamingResponseHead(std::move(response), method_, kind_, trailers);
     if (!prepared) {
+        if (prepared.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+            publisher_.reject_peer_field_section();
+        }
         throw std::invalid_argument("invalid HTTP/3 streaming response head");
     }
     if (!publisher_.responseFieldSectionAllowed(prepared->head.decodedFieldSectionSize())) {
-        throw std::length_error("HTTP/3 response exceeds peer field section limit");
+        publisher_.reject_peer_field_section();
     }
     data_.emplace(prepared->head.bodyPlan, prepared->head.declaredContentLength);
     compression_.activate(prepared->head.bodyPlan);
@@ -133,10 +136,13 @@ Task<void> Http3ResponseStreamSink::end(std::span<const HttpHeaderView> trailers
         }
         auto encoded = publisher_.encodeResponseTrailers(fields);
         if (!encoded) {
+            if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+                publisher_.reject_peer_field_section();
+            }
             throw std::invalid_argument("invalid HTTP/3 response trailers");
         }
         if (!publisher_.responseFieldSectionAllowed(encoded->decodedFieldSectionSize())) {
-            throw std::length_error("HTTP/3 trailers exceed peer field section limit");
+            publisher_.reject_peer_field_section();
         }
         co_await publisher_.publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection);
     }

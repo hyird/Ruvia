@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/http/HttpCorsFields.h"
+#include "ruvia/http/HttpOrigin.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include "test_harness.h"
@@ -50,50 +50,24 @@ RUVIA_TEST(http_origin_factory_makes_an_invalid_host_unrepresentable) {
 }
 
 RUVIA_TEST(http_serialized_origin_matches_fetch_wire_grammar) {
-    using ruvia::isValidHttpSerializedOrigin;
-
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example.com."));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://sub.example.com.:8443"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://exa_mple.com"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://-example.com"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://example..com"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://."));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("http://127.0.0.1:8080"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[::]"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[::1]"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("https://[0:0:1::1]"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:65535"));
-    RUVIA_CHECK(isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:0"));
-
-    RUVIA_CHECK(!isValidHttpSerializedOrigin(""));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("null"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("HTTPS://example.com"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://EXAMPLE.com"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com/"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://exa%6dple.com"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://123"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://1.2.3"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://127.0.0.1."));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.123"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.0x10"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[v1.future]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::A]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[::0001]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[1:2:3:4:5:6:7::]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[1::0:0:1]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://[0:0:1::1:1:1]"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:0443"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("http://example.com:80"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:443"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("ws://example.com:80"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("wss://example.com:443"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("ftp://example.com:21"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:65536"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:00001"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("custom+scheme://sub-domain.example:99999"));
-    RUVIA_CHECK(!isValidHttpSerializedOrigin("https://example.com:123456"));
+    for (const auto value : {
+             "https://example.com", "https://example.com.", "https://sub.example.com.:8443",
+             "https://exa_mple.com", "https://-example.com", "https://example..com", "https://.",
+             "http://127.0.0.1:8080", "https://[::]", "https://[::1]", "https://[0:0:1::1]",
+             "custom+scheme://sub-domain.example:65535", "custom+scheme://sub-domain.example:0"}) {
+        RUVIA_CHECK(ruvia::is_valid_http_serialized_origin(value));
+    }
+    for (const auto value : {
+             "", "null", "HTTPS://example.com", "https://EXAMPLE.com", "https://example.com/",
+             "https://exa%6dple.com", "https://123", "https://1.2.3", "https://127.0.0.1.",
+             "https://example.123", "https://example.0x10", "https://[v1.future]", "https://[::A]",
+             "https://[::0001]", "https://[1:2:3:4:5:6:7::]", "https://[1::0:0:1]", "https://[0:0:1::1:1:1]",
+             "https://example.com:", "https://example.com:0443", "http://example.com:80",
+             "https://example.com:443", "ws://example.com:80", "wss://example.com:443", "ftp://example.com:21",
+             "https://example.com:65536", "custom+scheme://sub-domain.example:00001",
+             "custom+scheme://sub-domain.example:99999", "https://example.com:123456"}) {
+        RUVIA_CHECK(!ruvia::is_valid_http_serialized_origin(value));
+    }
 }
 
 RUVIA_TEST(http_origin_authority_brackets_ipv6_and_omits_default_port) {
