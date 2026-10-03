@@ -25,6 +25,7 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpDatagram.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpPriority.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/HttpClientPushConfig.h"
 #include "ruvia/web/detail/client/HttpClientRequestStorage.h"
@@ -128,7 +129,10 @@ public:
         std::size_t maxRequests, std::size_t maxResponseBytes,
         std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
         std::optional<std::chrono::milliseconds> writeTimeout,
-        LifecycleNotification lifecycleNotification, Http3QpackConfig qpack = {}, Http3ClientOriginObserver originObserver = {}, Http3ClientPushObserver pushObserver = {});
+        LifecycleNotification lifecycleNotification, Http3QpackConfig qpack = {},
+        Http3ClientOriginObserver originObserver = {}, Http3ClientPushObserver pushObserver = {},
+        ruvia::quic_version initial_version = ruvia::quic_version::v1,
+        bool enable_early_data = false);
     ~Http3ClientConnection();
     Http3ClientConnection(const Http3ClientConnection&) = delete;
     Http3ClientConnection& operator=(const Http3ClientConnection&) = delete;
@@ -172,6 +176,15 @@ public:
     // Stream retirement already completed before terminal publication. Returned storage keeps
     // its worker allocator, whose owner must outlive it, and preserves even an expired deadline.
     [[nodiscard]] std::optional<RejectedRequest> takeRejectedRequest(RequestId id);
+    [[nodiscard]] ruvia::quic_path_migration start_path_migration(
+        const asio::ip::udp::endpoint& local_endpoint);
+    [[nodiscard]] std::optional<ruvia::quic_path_migration> path_migration(
+        std::uint64_t id) const noexcept;
+    [[nodiscard]] std::optional<ruvia::quic_path_migration> active_path_migration() const noexcept;
+    [[nodiscard]] std::uint64_t quic_generation() const noexcept {
+        return quic_generation_;
+    }
+    [[nodiscard]] ruvia::quic_operation_status cancel_path_migration(std::uint64_t id);
     void requestStop() noexcept;
     [[nodiscard]] bool running() const noexcept {
         return running_;
@@ -189,20 +202,28 @@ public:
     [[nodiscard]] std::size_t retainedResultBodyBytes() const noexcept {
         return retainedResultBodyBytes_;
     }
+    [[nodiscard]] std::size_t active_response_streams() const noexcept {
+        return responseEngine_.liveStreamCount();
+    }
 
 private:
+    friend struct http3_client_connection_test_access;
+
     struct Request final {
         Request(RequestId value, Http3ClientRequestWrite&& write, const WorkerHandle& worker,
-            std::pmr::memory_resource* resource, std::optional<TimePoint> absoluteDeadline)
+            std::pmr::memory_resource* resource, std::optional<TimePoint> absoluteDeadline,
+            bool replay_safe)
             : id(value),
               writer(std::move(write)),
               signal(worker),
               response(resource),
-              deadline(absoluteDeadline) {}
+              deadline(absoluteDeadline),
+              replay_safe(replay_safe) {}
         Request(RequestId value, Http3ClientRequestWrite&& write, const WorkerHandle& worker,
             std::pmr::memory_resource* resource, std::optional<TimePoint> absoluteDeadline,
-            HttpClientResponseState& responseState, Http3ClientBodyBudget& bodyBudget)
-            : Request(value, std::move(write), worker, resource, absoluteDeadline) {
+            bool replay_safe, HttpClientResponseState& responseState,
+            Http3ClientBodyBudget& bodyBudget)
+            : Request(value, std::move(write), worker, resource, absoluteDeadline, replay_safe) {
             responseState_ = &responseState;
             delivery.emplace(responseState, &bodyBudget);
         }
@@ -213,6 +234,7 @@ private:
         std::optional<TimePoint> deadline;
         std::optional<TimePoint> writeDeadline;
         std::optional<TimePoint> continueDeadline;
+        std::optional<HttpPriority> pending_priority_update;
         std::size_t waiters{};
         HttpClientResponseState* responseState_{};
         std::optional<Http3ClientResponseDelivery> delivery{};
@@ -220,6 +242,8 @@ private:
         bool responseParserRegistered{};
         bool streamRetired{};
         bool cancelRequested{};
+        bool replay_safe{};
+        bool early_data_eligible{};
     };
     struct Push final {
         RequestId id{};
@@ -259,11 +283,13 @@ private:
         std::optional<TimePoint> deadline, HttpClientResponseState* response);
     [[nodiscard]] Task<void> drive();
     [[nodiscard]] Task<bool> driveEndpoint(const asio::ip::udp::endpoint& peer, TimePoint connectDeadline);
-    [[nodiscard]] bool sweep(bool requestsMayStart);
+    void cache_path_migration() noexcept;
+    [[nodiscard]] bool sweep(bool requestsMayStart, bool early_data_only = false);
     [[nodiscard]] bool receivePeerStreams();
+    [[nodiscard]] bool replay_rejected_early_streams();
     [[nodiscard]] bool receiveRequests();
     [[nodiscard]] bool receiveDatagrams();
-    [[nodiscard]] bool driveRequestWriters();
+    [[nodiscard]] bool driveRequestWriters(bool early_data_only = false);
     [[nodiscard]] bool driveCriticalOutput();
     void finishRequest(Request& request, Outcome outcome);
     void maybeReleaseResponseRequest(Request& request) noexcept;
@@ -282,6 +308,8 @@ private:
     std::pmr::string host_;
     std::pmr::string authority_;
     std::uint16_t port_;
+    ruvia::quic_version initial_version_;
+    bool enable_early_data_{};
     TimePoint::duration connectTimeout_;
     TimePoint::duration idleTimeout_;
     std::optional<TimePoint::duration> writeTimeout_;
@@ -314,6 +342,11 @@ private:
     RequestId nextRequestId_{};
     std::size_t retainedResultBodyBytes_{};
     bool running_{};
+    std::uint64_t quic_generation_{};
+    std::uint64_t next_path_migration_id_{1};
+    std::uint64_t quic_connection_migration_id_{};
+    std::uint64_t quic_path_migration_generation_{};
+    std::optional<ruvia::quic_path_migration> quic_path_migration_{};
     bool starting_{};
     bool stopping_{};
     bool draining_{};

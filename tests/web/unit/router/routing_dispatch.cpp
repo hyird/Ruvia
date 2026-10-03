@@ -165,9 +165,9 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
 
 RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisement) {
     const auto result = dispatchOneToken(
-        RouteHandler(nullptr, &readsRequestBodyHandler), "GET", "/x", "deflate", "encoded");
+        RouteHandler(nullptr, &readsRequestBodyHandler), "GET", "/x", "compress", "encoded");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
-    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
+    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, deflate, br, zstd"));
     RUVIA_CHECK(result.body.contains("unsupported_content_coding"));
 }
 
@@ -227,7 +227,7 @@ RUVIA_TEST(dispatch_preserves_content_coding_advertisement_with_custom_error_han
         &customError, nullptr, "GET", "/x", "compress", "encoded");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
     RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
-    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
+    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, deflate, br, zstd"));
 }
 
 RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {

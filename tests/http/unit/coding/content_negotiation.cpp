@@ -97,7 +97,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         }
         return selected->coding();
     };
-    // Server tie-break prefers br > zstd > gzip at equal q.
+    // Server tie-break prefers br > zstd > gzip > deflate at equal q.
     RUVIA_CHECK(select("gzip, br, zstd") == HttpContentCoding::kBrotli);
     // Explicit q ordering wins over the tie-break.
     RUVIA_CHECK(select("identity;q=0, gzip;q=0.9, br;q=0.1") == HttpContentCoding::kGzip);
@@ -109,6 +109,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // explicit identity preference does.
     RUVIA_CHECK(select("*;q=0.5") == HttpContentCoding::kIdentity);
     RUVIA_CHECK(select("identity;q=0.1, gzip;q=0.5") == HttpContentCoding::kGzip);
+    RUVIA_CHECK(select("identity;q=0.1, deflate;q=0.5") == HttpContentCoding::deflate);
     // Repeating the same coding is equivalent to multiple matching alternatives:
     // the highest qvalue wins, independently of list order.
     RUVIA_CHECK(select("identity;q=0.5, gzip;q=0.9, gzip;q=0.1") == HttpContentCoding::kGzip);

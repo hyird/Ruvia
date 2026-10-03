@@ -10,6 +10,7 @@
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3Settings.h"
 #include "ruvia/http/Http3VarInt.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 #include "test_harness.h"
 
@@ -78,7 +79,7 @@ std::expected<std::size_t, ruvia::Http3ResponseHeadFailure> encode_response(
     response.header("x-repeated", "value");
     if (kind == response_kind::streaming) {
         auto result = connection.encodeStreamingResponseHead(0, std::move(response), ruvia::HttpKnownMethod::kGet,
-            ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone, limits);
+            ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none, limits);
         if (!result) {
             return std::unexpected(result.error());
         }

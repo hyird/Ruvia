@@ -201,7 +201,13 @@ Task<Http3BufferedRequestDispatch::PrepareStatus> Http3BufferedRequestDispatch::
             requestDeadline_->arm(services_.worker(), handlerDeadline);
             deadlineArmed_ = true;
         }
-        requestServices_.emplace(services_.withRequestDeadline(*requestDeadline_).withInterimOutput(interimOutput_).withConnectionAdvertisements(connectionAdvertisements_));
+        const auto& request = lease_->request().request();
+        const bool upstreamDeclaredEarlyData = request.header("early-data").has_value();
+        requestServices_.emplace(services_.withRequestDeadline(*requestDeadline_)
+                .withInterimOutput(interimOutput_)
+                .withConnectionAdvertisements(connectionAdvertisements_)
+                .with_early_data_info({messageId_.received_early_data,
+                    upstreamDeclaredEarlyData}));
         if (tunnelCallbacks_.push != nullptr && !messageId_.pushId) {
             *requestServices_ = requestServices_->withPushOutput(pushOutput_);
         }
@@ -300,8 +306,21 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
 Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runHandlerInner() {
     const auto& request = lease_->request().request();
     const auto& resolution = lease_->resolution();
-    if (const auto* resolved = resolution.resolved();
-        resolved != nullptr && resolved->route().endpoint().webSocket() != nullptr) {
+    const auto* resolved = resolution.resolved();
+    const bool earlyRequestSafe =
+        !messageId_.received_early_data ||
+        ((request.knownMethod() == HttpKnownMethod::kGet ||
+             request.knownMethod() == HttpKnownMethod::kHead) &&
+            request.bodyBytes().empty() && resolved != nullptr &&
+            resolved->route().endpoint().buffered() != nullptr &&
+            resolved->route().endpoint().buffered()->replay_safe());
+    std::optional<HttpResponse> selectedResponse;
+    if (!earlyRequestSafe) {
+        selectedResponse.emplace(HttpResponse::Options{.resource = worker_.resource()});
+        selectedResponse->status(http_status::kTooEarly);
+        selectedResponse->header("content-length", "0");
+    } else if (const auto* route = resolved;
+        route != nullptr && route->route().endpoint().webSocket() != nullptr) {
         co_return co_await runWebSocketHandler();
     }
     const auto codingNegotiation = httpResponseCodingFor(request);
@@ -312,9 +331,9 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
         codingPolicy = HttpResponseCodingPolicy::noAcceptableCoding();
     }
 
-    std::optional<HttpResponse> selectedResponse;
-    const auto* resolved = resolution.resolved();
-    if (resolved != nullptr && resolved->route().endpoint().tunnel() != nullptr) {
+    if (selectedResponse.has_value()) {
+        // Early requests rejected above never enter routing or user middleware.
+    } else if (resolved != nullptr && resolved->route().endpoint().tunnel() != nullptr) {
         selectedResponse = co_await runTunnelHandler();
         if (!selectedResponse.has_value()) {
             co_return cancellationRequested() || tunnelAborted_ ? RunStatus::kCancelled : RunStatus::kTunnelComplete;
@@ -508,14 +527,10 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
     }
     const auto file = *response_->fileBody();
     auto input = co_await runBlocking(*pool, services_.worker(), requestDeadline_->token(),
-        [path = file.toPath(), size = file.size(), offset = file.offset(), length = file.length(), identity = file.identity()]() mutable {
-            auto opened = openResponseFileInput(HttpResponseFileView(path.c_str(), size, offset, length, identity));
+        [path = file.toPath(), size = file.size(), identity = file.identity()]() mutable {
+            auto opened = openResponseFileInput(HttpResponseFileView(path.c_str(), size, 0, size, identity));
             if (!opened) {
                 throw std::runtime_error("HTTP/3 response file could not be opened or changed identity");
-            }
-            opened.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-            if (!opened) {
-                throw std::runtime_error("HTTP/3 response file range could not be opened");
             }
             return opened;
         });
@@ -525,7 +540,7 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
     if (peerLimit && encoded->decodedFieldSectionSize() > *peerLimit) {
         reject_peer_field_section();
     }
-    Http3DataWritePlan data(encoded->bodyPlan, file.length());
+    Http3DataWritePlan data(encoded->bodyPlan, plan.contentLength());
     commitFinalResponse();
     co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection);
     struct ReadResult final {
@@ -533,29 +548,57 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
         std::array<char, 16 * 1024> bytes{};
         std::size_t count{};
     };
-    std::uint64_t remaining = file.length();
-    while (remaining != 0) {
-        auto read = co_await runBlocking(*pool, services_.worker(), requestDeadline_->token(),
-            [source = std::move(input), remaining]() mutable {
-                ReadResult result{std::move(source)};
-                const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(result.bytes.size(), remaining));
-                result.input.read(result.bytes.data(), static_cast<std::streamsize>(count));
-                if (!result.input || result.input.gcount() <= 0) {
-                    throw std::runtime_error("HTTP/3 response file ended before its declared length");
+    for (std::size_t index = 0; index < response_->body_segment_count(); ++index) {
+        const auto segment = response_->body_segment(index);
+        if (!segment.file_) {
+            std::size_t offset = 0;
+            while (offset < segment.bytes_.size()) {
+                const auto count = std::min<std::size_t>(16 * 1024, segment.bytes_.size() - offset);
+                const auto bytes = segment.bytes_.substr(offset, count);
+                const auto chunk = data.planChunk(std::span<const char>(bytes.data(), bytes.size()), false);
+                if (!chunk) {
+                    throw std::length_error("invalid HTTP/3 multipart content length");
                 }
-                result.count = static_cast<std::size_t>(result.input.gcount());
-                return result;
+                co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), chunk->payload);
+                if (!data.commitPayload(bytes.size(), false)) {
+                    std::terminate();
+                }
+                offset += count;
+            }
+            continue;
+        }
+        input = co_await runBlocking(*pool, services_.worker(), requestDeadline_->token(),
+            [source = std::move(input), offset = segment.file_->offset()]() mutable {
+                source.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+                if (!source) {
+                    throw std::runtime_error("HTTP/3 response file range seek failed");
+                }
+                return std::move(source);
             });
-        input = std::move(read.input);
-        const auto chunk = data.planChunk(std::span<const char>(read.bytes.data(), read.count), false);
-        if (!chunk) {
-            throw std::length_error("invalid HTTP/3 file content length");
+        std::uint64_t remaining = segment.file_->length();
+        while (remaining != 0) {
+            auto read = co_await runBlocking(*pool, services_.worker(), requestDeadline_->token(),
+                [source = std::move(input), remaining]() mutable {
+                    ReadResult result{std::move(source)};
+                    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(result.bytes.size(), remaining));
+                    result.input.read(result.bytes.data(), static_cast<std::streamsize>(count));
+                    if (!result.input || result.input.gcount() <= 0) {
+                        throw std::runtime_error("HTTP/3 response file ended before its declared length");
+                    }
+                    result.count = static_cast<std::size_t>(result.input.gcount());
+                    return result;
+                });
+            input = std::move(read.input);
+            const auto chunk = data.planChunk(std::span<const char>(read.bytes.data(), read.count), false);
+            if (!chunk) {
+                throw std::length_error("invalid HTTP/3 file content length");
+            }
+            co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), chunk->payload);
+            if (!data.commitPayload(read.count, false)) {
+                std::terminate();
+            }
+            remaining -= read.count;
         }
-        co_await publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kData), chunk->payload);
-        if (!data.commitPayload(read.count, false)) {
-            std::terminate();
-        }
-        remaining -= read.count;
     }
     const auto matches = co_await runBlocking(*pool, services_.worker(), requestDeadline_->token(),
         [source = std::move(input), identity = file.identity(), size = file.size()]() mutable { return source.matchesSnapshot(identity, size); });

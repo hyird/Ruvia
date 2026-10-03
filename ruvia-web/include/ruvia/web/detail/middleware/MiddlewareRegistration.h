@@ -120,6 +120,15 @@ template <typename MiddlewareT>
 // reason the body limit is: by the time a middleware's handle() runs, the clock
 // it wants to start has already been running.
 template <typename MiddlewareT>
+[[nodiscard]] constexpr bool middleware_replay_safe() noexcept {
+    if constexpr (requires { MiddlewareT::ruvia_replay_safe; }) {
+        return MiddlewareT::ruvia_replay_safe;
+    } else {
+        return false;
+    }
+}
+
+template <typename MiddlewareT>
 [[nodiscard]] constexpr std::int64_t middlewareDeadlineMs() noexcept {
     if constexpr (requires { MiddlewareT::ruviaDeadlineMs; }) {
         return MiddlewareT::ruviaDeadlineMs;
@@ -150,7 +159,7 @@ template <typename MiddlewareT, typename... Args>
         &createMiddleware<MiddlewareT, ArgsT>, &destroyMiddleware<MiddlewareT>, stored,
         middlewareValidatedModelTypeKey<MiddlewareT>(), middlewareUsesRouteRateLimit<MiddlewareT>(),
         middlewareRunsOnUnmatchedRequests<MiddlewareT>(), middlewareRequestBodyLimit<MiddlewareT>(),
-        middlewareDeadlineMs<MiddlewareT>());
+        middlewareDeadlineMs<MiddlewareT>(), middleware_replay_safe<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

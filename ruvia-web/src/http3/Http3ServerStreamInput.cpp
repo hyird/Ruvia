@@ -56,6 +56,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
     if (state == nullptr) {
         return {failure};
     }
+    state->receivedEarlyData = state->receivedEarlyData || id.received_early_data;
     const auto bytes = block.bytes();
     if (state->phase == StreamPhase::kFinished && !bytes.empty()) {
         return finalSizeFailure();
@@ -123,6 +124,8 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
             if (state == nullptr) {
                 return {failure};
             }
+            state->receivedEarlyData = state->receivedEarlyData ||
+                                       control.id.received_early_data;
             if (state->resetPublishedBytes.has_value()) {
                 if (*state->resetPublishedBytes != control.value ||
                     state->resetErrorCode != control.streamResetErrorCode) {
@@ -231,6 +234,8 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptFin(
     if (state == nullptr) {
         return {failure};
     }
+    state->receivedEarlyData = state->receivedEarlyData ||
+                               control.id.received_early_data;
     if (state->resetPublishedBytes.has_value()) {
         return finalSizeFailure();
     }
@@ -406,6 +411,15 @@ void Http3ServerStreamInput::clearQpack(StreamState& state) noexcept {
     }
     state.pendingFin = false;
     std::pmr::string(state.pendingBytes.get_allocator()).swap(state.pendingBytes);
+}
+
+bool Http3ServerStreamInput::receivedEarlyData(std::uint64_t streamId) const noexcept {
+    for (const auto& slot : streams_) {
+        if (slot.occupied && slot.streamId == streamId) {
+            return slot.state.receivedEarlyData;
+        }
+    }
+    return false;
 }
 
 bool Http3ServerStreamInput::canAcceptInput(std::uint64_t streamId) const noexcept {

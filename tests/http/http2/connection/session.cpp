@@ -1,3 +1,4 @@
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 
 #include "http2_connection_fixture.h"
@@ -1083,7 +1084,7 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
     streaming.status(ruvia::http_status::kUpgradeRequired);
     streaming.header("Upgrade", "websocket");
     const auto streamingResult = conn.submitStreamingResponseHead(1, std::move(streaming),
-        ruvia::detail::ResponseStreamKind::kGeneric, ruvia::detail::ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitFailureMessage(streamingResult) ==
                 "invalid HTTP/2 response head message");
     RUVIA_CHECK(conn.pendingOutput().empty());
@@ -1129,8 +1130,8 @@ RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactiona
             streaming.header(name, value);
         }
         const auto streamingResult = conn.submitStreamingResponseHead(1, std::move(streaming),
-            ruvia::detail::ResponseStreamKind::kGeneric,
-            ruvia::detail::ResponseTrailerIntent::kNone);
+            ruvia::http_response_stream_kind::generic,
+            ruvia::http_response_trailer_intent::none);
         RUVIA_CHECK(responseHeadSubmitFailureMessage(streamingResult) ==
                     "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
@@ -1154,7 +1155,7 @@ RUVIA_TEST(http2_connection_streaming_zero_content_length_stays_open_for_finish)
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "0");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     const auto head = conn.pendingOutput();
     const auto headFrame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
     RUVIA_CHECK((headFrame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);

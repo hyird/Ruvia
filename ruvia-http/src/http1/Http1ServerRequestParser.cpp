@@ -59,7 +59,7 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
         return fail(HttpParseError::kHeaderTooLarge);
     }
 
-    ParsedRequestHeaderBlock block;
+    ParsedRequestHeaderBlock block(resource);
     if (const auto error = parseHttpHeaderBlock(buffer, headerBytes, block)) {
         return fail(*error);
     }
@@ -136,7 +136,7 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     const auto hostHeaderIndex = block.hostHeaderIndex;
 
     const auto contentLength = block.contentLength.value();
-    const auto transferEncoding = block.transferEncoding.value();
+    const auto& transferEncoding = block.transferEncoding.value();
     if (transferEncoding.has_value() && contentLength.has_value()) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
@@ -157,6 +157,7 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     const auto* finalChunked =
         transferEncoding.has_value() ? transferEncoding->finalChunked() : nullptr;
     if (transferEncoding.has_value() && finalChunked == nullptr) {
+        state.connectionPlan = state.connectionPlan.requireClose();
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
     if (block.nonEmptyTrailerHeaderPresent && finalChunked == nullptr) {
@@ -167,6 +168,10 @@ void Http1ServerRequestParser::parseRequestHead(std::string_view buffer,
     // as faulty framing; the error path closes the connection after replying.
     if (transferEncoding.has_value() && protocolVersion == HttpProtocolVersion::kHttp10) {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+    if (block.transferEncoding.unsupported()) {
+        state.connectionPlan = state.connectionPlan.requireClose();
+        return fail(HttpParseError::kUnsupportedTransferEncoding);
     }
 
     if (httpRequestContentSemantics(method) == HttpRequestContentSemantics::kContentTypeRequired &&
@@ -236,25 +241,22 @@ void Http1ServerRequestParser::parseMessageBody(
     };
     // headerBytes is captured rather than passed: every call site forwards the
     // same head length, and a parameter of that name would shadow it.
-    const auto needMore = [&state, headerBytes](Http1RequestBodyPlan bodyPlan) noexcept {
+    const auto needMore = [&state, headerBytes]() noexcept {
         // The request views borrow `buffer`. A caller must reparse after growing
         // or moving that buffer, so an incomplete message intentionally exposes
         // no apparently reusable request head.
         HttpRequestAccess::reset(state.request);
         state.progress_ = Http1ServerNeedRequestBody(headerBytes);
-        state.bodyPlan = bodyPlan;
     };
-    const auto needMoreUntil = [&state, headerBytes](Http1RequestBodyPlan bodyPlan,
-                                   std::size_t requiredTotalBytes) noexcept {
+    const auto needMoreUntil = [&state, headerBytes](std::size_t requiredTotalBytes) noexcept {
         // The request views borrow `buffer`. A caller must reparse after growing
         // or moving that buffer, so an incomplete message intentionally exposes
         // no apparently reusable request head.
         HttpRequestAccess::reset(state.request);
         state.progress_ = Http1ServerNeedRequestBody(headerBytes, requiredTotalBytes);
-        state.bodyPlan = bodyPlan;
     };
 
-    const auto bodyPlan = state.bodyPlan;
+    const auto& bodyPlan = state.bodyPlan;
     const auto* chunkedBody = bodyPlan.chunked();
     const auto* knownLengthBody = bodyPlan.knownLength();
     std::size_t messageBytes = 0;
@@ -263,7 +265,7 @@ void Http1ServerRequestParser::parseMessageBody(
         if (const auto* complete = chunked.complete()) {
             messageBytes = headerBytes + complete->consumedBytes();
         } else if (chunked.needMore() != nullptr) {
-            return needMore(bodyPlan);
+            return needMore();
         } else {
             switch (chunked.failure()->error()) {
                 case HttpChunkScanError::kInvalidSize:
@@ -294,7 +296,7 @@ void Http1ServerRequestParser::parseMessageBody(
         return fail(HttpParseError::kBodyTooLarge);
     }
     if (buffer.size() < messageBytes) {
-        return needMoreUntil(bodyPlan, messageBytes);
+        return needMoreUntil(messageBytes);
     }
 
     HttpRequestAccess::setBody(state.request,
@@ -433,7 +435,7 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer,
     const auto wireBody =
         buffer.substr(message->headerBytes(), message->messageBytes() - message->headerBytes());
     return detail::Http1RequestParseResultAccess::parsed(
-        std::move(parsed.request), parsed.bodyPlan, wireBody, message->messageBytes());
+        std::move(parsed.request), std::move(parsed.bodyPlan), wireBody, message->messageBytes());
 }
 
 }  // namespace ruvia

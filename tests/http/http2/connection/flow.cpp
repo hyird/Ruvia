@@ -1,5 +1,6 @@
 #include <new>
 
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
 
 #include "http2_connection_fixture.h"
@@ -1431,7 +1432,7 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(headResult));
     conn.consumeOutput(conn.pendingOutput().size());
 
@@ -1490,7 +1491,7 @@ RUVIA_TEST(http2_connection_queued_terminal_data_closes_stream_after_drain) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(headResult));
     conn.consumeOutput(conn.pendingOutput().size());
 
@@ -1538,7 +1539,7 @@ RUVIA_TEST(http2_connection_submit_data_reserves_output_before_accepting_state) 
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "1024");
     const auto head = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(head));
     conn.consumeOutput(conn.pendingOutput().size());
 
@@ -1569,7 +1570,7 @@ RUVIA_TEST(http2_connection_window_update_drain_is_transactional_on_allocation_f
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5000");
     const auto head = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(head));
     conn.consumeOutput(conn.pendingOutput().size());
 

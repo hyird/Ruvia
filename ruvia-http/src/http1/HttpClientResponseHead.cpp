@@ -62,7 +62,8 @@ namespace {
 }  // namespace
 
 Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
-    std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept {
+    std::string_view headSection, const Http1ClientExchangeState& exchangeState,
+    std::pmr::memory_resource* resource) {
     const auto firstLineEnd = headSection.find("\r\n");
     const auto firstLine =
         firstLineEnd == std::string_view::npos ? headSection : headSection.substr(0, firstLineEnd);
@@ -70,7 +71,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
     if (!statusLine) {
         return std::unexpected(statusLine.error());
     }
-    Http1ClientParsedResponseHead output(*statusLine);
+    Http1ClientParsedResponseHead output(*statusLine, resource);
 
     const auto contentSemantics = httpResponseContentSemantics(
         Http1ClientExchangeStateAccess::method(exchangeState), output.statusCode);
@@ -169,8 +170,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
                     case HttpTransferEncodingParseStatus::kMalformed:
                         return std::unexpected(Http1ClientResponseParseError::kInvalidTransferEncoding);
                     case HttpTransferEncodingParseStatus::kUnsupported:
-                        return std::unexpected(
-                            Http1ClientResponseParseError::kUnsupportedTransferEncoding);
+                        break;
                 }
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
@@ -187,6 +187,9 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
         remaining = remaining.substr(lineEnd + 2);
     }
 
+    if (output.transferEncoding.unsupported()) {
+        return std::unexpected(Http1ClientResponseParseError::kUnsupportedTransferEncoding);
+    }
     if (output.protocolVersion == HttpProtocolVersion::kHttp10 && output.sawTransferEncoding) {
         return std::unexpected(Http1ClientResponseParseError::kTransferEncodingInHttp10);
     }
@@ -194,7 +197,7 @@ Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
         return std::unexpected(Http1ClientResponseParseError::kInvalidConnection);
     }
     if (output.nonEmptyTrailerHeaderPresent) {
-        const auto transferEncoding = output.transferEncoding.value();
+        const auto& transferEncoding = output.transferEncoding.value();
         if (!transferEncoding.has_value() || transferEncoding->finalChunked() == nullptr) {
             return std::unexpected(Http1ClientResponseParseError::kInvalidHeader);
         }

@@ -18,6 +18,7 @@
 #include "ruvia/http/Http3StreamFrames.h"
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 
 namespace ruvia {
@@ -1107,7 +1108,7 @@ std::expected<Http3ResponseHead, Http3ResponseHeadFailure> Http3Connection::enco
     return impl_->response_encoding_result(
         encodeHttp3ResponseHead(*impl_->transmitQpack, streamId, response, plan, impl_->outbound_field_limits(local_limits), resource_), local_limits);
 }
-std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> Http3Connection::encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits) {
+std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> Http3Connection::encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits) {
     if (!impl_ || impl_->feeding || impl_->failed.scope != Http3ConnectionErrorScope::kNone || impl_->role != Http3PeerRole::kServer ||
         (!isHttp3RequestStreamId(streamId) && ((streamId & 3) != 3 || streamId > kHttp3VarIntMax))) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError, Http3FieldSectionError::kInvalidPrefix});

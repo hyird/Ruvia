@@ -15,6 +15,7 @@
 #include "ruvia/http/HttpPriority.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/Http3EarlyDataInfo.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/server/TrustedProxies.h"
@@ -201,6 +202,17 @@ public:
         return connInfo_;
     }
 
+    [[nodiscard]] constexpr http3_early_data_info early_data_info() const noexcept {
+        return early_data_info_;
+    }
+
+    [[nodiscard]] constexpr ContextServices with_early_data_info(
+        http3_early_data_info value) const noexcept {
+        auto services = *this;
+        services.early_data_info_ = value;
+        return services;
+    }
+
     [[nodiscard]] ContextServices withRequestDeadline(const RequestDeadline& value) const noexcept;
     ContextServices withRequestDeadline(RequestDeadline&&) const = delete;
 
@@ -380,6 +392,7 @@ private:
     ContextResponseOutput responseOutput_;
     std::string_view automaticAltSvc_;
     ConnInfo connInfo_;
+    http3_early_data_info early_data_info_{};
     const TrustedProxySet* trustedProxies_{nullptr};
     const RequestDeadline* requestDeadline_{nullptr};
 };

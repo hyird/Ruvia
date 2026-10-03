@@ -17,6 +17,7 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/HttpDatagramInput.h"
@@ -147,7 +148,7 @@ public:
 
     // Both tasks are lazy. The first actual start acquires the request lease;
     // constructing and discarding either cold task changes no session state.
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers) {
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
         return session_.encodeStreamingResponseHead(messageId_.streamId, std::move(response), method, kind, trailers);
     }
     [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {

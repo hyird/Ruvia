@@ -293,7 +293,7 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
     return true;
 }
 
-void HttpResponse::setHeaderStableView(std::string_view key, std::string_view value) {
+void HttpResponse::header_stable_view(std::string_view key, std::string_view value) {
     detail::validateResponseHeaderStorageSize(key.size(), value.size());
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {

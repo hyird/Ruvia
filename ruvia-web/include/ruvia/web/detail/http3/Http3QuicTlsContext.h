@@ -29,6 +29,9 @@ public:
     [[nodiscard]] SSL_CTX* default_context() const noexcept {
         return default_context_;
     }
+    [[nodiscard]] bool early_data_enabled() const noexcept {
+        return early_data_enabled_;
+    }
 
 private:
     struct sni_identity final {
@@ -54,6 +57,7 @@ private:
     std::pmr::vector<context_owner> identity_contexts_;
     std::pmr::vector<sni_identity> sni_identities_;
     SSL_CTX* default_context_{nullptr};
+    bool early_data_enabled_{};
 };
 
 }  // namespace ruvia::detail

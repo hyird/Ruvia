@@ -19,6 +19,7 @@
 #include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/detail/http/SessionAccess.h"
@@ -34,17 +35,17 @@
 namespace {
 
 using ruvia::Context;
+using ruvia::http_response_stream_commit_plan;
+using ruvia::http_response_stream_framing;
+using ruvia::http_response_stream_kind;
+using ruvia::http_response_trailer_intent;
 using ruvia::HttpHeaderView;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 using ruvia::HttpResponseCodingSelection;
 using ruvia::Task;
 using ruvia::detail::ControllerMiddlewareDescriptor;
-using ruvia::detail::ResponseStreamCommitPlan;
 using ruvia::detail::ResponseStreamDispatchResult;
-using ruvia::detail::ResponseStreamFraming;
-using ruvia::detail::ResponseStreamKind;
-using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::RouteStreamHandler;
 
 struct BorrowTestStream final {};
@@ -77,7 +78,7 @@ public:
         return commitPlan_.has_value();
     }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const noexcept {
         return commitPlan_.has_value() ? &*commitPlan_ : nullptr;
     }
 
@@ -87,7 +88,7 @@ public:
 
     Task<void> write(std::string_view chunk) {
         if (!chunk.empty()) {
-            co_await commit(ResponseTrailerIntent::kNone);
+            co_await commit(http_response_trailer_intent::none);
         }
         co_return;
     }
@@ -96,7 +97,7 @@ public:
         if (failUncommittedEnd_ && !commitPlan_.has_value()) {
             throw std::runtime_error("peer aborted before the test sink committed a final head");
         }
-        co_await commit(trailers.empty() ? ResponseTrailerIntent::kNone : ResponseTrailerIntent::kPresent);
+        co_await commit(trailers.empty() ? http_response_trailer_intent::none : http_response_trailer_intent::present);
         co_return;
     }
 
@@ -105,7 +106,7 @@ public:
     }
 
 private:
-    Task<void> commit(ResponseTrailerIntent trailerIntent) {
+    Task<void> commit(http_response_trailer_intent trailerIntent) {
         if (commitPlan_.has_value()) {
             co_return;
         }
@@ -114,13 +115,13 @@ private:
         }
         const auto response = co_await streamingHead_(*context_);
         commitPlan_.emplace(
-            ruvia::planHttpResponseStreamCommit(ResponseStreamFraming::kHttp1Chunked,
+            ruvia::plan_http_response_stream_commit(http_response_stream_framing::http1_chunked,
                 HttpKnownMethod::kGet, response.status(), trailerIntent));
     }
 
     Context* context_{nullptr};
     StreamingHeadThunk streamingHead_{nullptr};
-    std::optional<ResponseStreamCommitPlan> commitPlan_;
+    std::optional<http_response_stream_commit_plan> commitPlan_;
     bool failUncommittedEnd_{false};
 };
 

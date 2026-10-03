@@ -3,6 +3,8 @@
 #include <concepts>
 #include <cstddef>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <memory_resource>
 #include <new>
@@ -28,8 +30,11 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpAcceptEncoding.h"
+#include "ruvia/http/HttpByteRange.h"
 #include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
 #include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
@@ -371,7 +376,7 @@ RUVIA_TEST(http2_stream_head_failure_aborts_precommit_state) {
     auto context = ruvia::detail::ContextAccess::make(
         requestMemory, request, ruvia::test::testContextServices());
 
-    Http2SansIoResponseStreamSink sink(connection, 1, ruvia::detail::ResponseStreamKind::kGeneric,
+    Http2SansIoResponseStreamSink sink(connection, 1, ruvia::http_response_stream_kind::generic,
         writeSignal, streamSignal, &resource, ruvia::HttpKnownMethod::kGet,
         identityResponseCoding(), ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
     sink.bindContext(&context, &invalidStreamingHead);
@@ -437,7 +442,7 @@ RUVIA_TEST(http2_response_stream_empty_end_is_idempotent_after_late_termination)
     auto context = ruvia::detail::ContextAccess::make(
         requestMemory, request, ruvia::test::testContextServices());
 
-    Http2SansIoResponseStreamSink sink(connection, 1, ruvia::detail::ResponseStreamKind::kGeneric,
+    Http2SansIoResponseStreamSink sink(connection, 1, ruvia::http_response_stream_kind::generic,
         writeSignal, streamSignal, &resource, ruvia::HttpKnownMethod::kGet,
         identityResponseCoding(), ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
     sink.bindContext(&context, &okStreamingHead);
@@ -982,6 +987,163 @@ RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allo
     }
 }
 #endif  // !_MSC_VER
+
+RUVIA_TEST(http2BufferedResponseWriterSendsMultipartFileSlicesAndEndsStream) {
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "ruvia-http2-multipart-writer.bin";
+    const std::string content(50000, '2');
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << content;
+    }
+    CountingMemoryResource resource;
+    {
+        auto connection = ruvia::Http2Connection::server({.resource = &resource});
+        handshake(connection);
+        [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
+
+        asio::io_context& io = ruvia::test::newTestIoContext();
+        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+        const auto workerHandle = attachment.loop().handle();
+        ruvia::WorkerSignal writeSignal(workerHandle);
+        Http2SansIoTermination termination;
+        Http2SansIoStreamRuntimeTable table(std::pmr::get_default_resource(), termination);
+        auto& runtime = table.ensureAccepted(1);
+        RUVIA_CHECK(runtime.selectRoute(RouteResolution{}, RequestBodyMode::kBuffered));
+        RUVIA_CHECK(table.beginDispatch(1, workerHandle) != nullptr);
+        ruvia::WorkerMemory worker;
+        Http2BufferedResponseWriter writer(connection, table, worker, writeSignal);
+        const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-19999,30000-49999", content.size());
+        auto multipart = ruvia::make_http_multipart_byte_range_plan(
+            ranges, content.size(), "text/plain", "h2_writer_boundary", {}, &resource);
+        ruvia::HttpResponse response({.resource = &resource});
+        response.status(ruvia::http_status::kPartialContent);
+        response.header("Content-Type", multipart.content_type());
+        response.multipart_file_body(path, content.size(),
+            ruvia::HttpResponseFileIdentity::unchecked(), std::move(multipart));
+        const auto writePlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
+
+        std::optional<ruvia::detail::Http2BufferedResponseWriteResult> result;
+        asio::co_spawn(io, [&]() -> asio::awaitable<void> { result.emplace(co_await ruvia::asAwaitable(writer.write(1, response, writePlan))); }, stopIoOnCompletion(io));
+        io.run();
+        io.restart();
+        RUVIA_CHECK(result.has_value());
+        RUVIA_CHECK(result && result->completed() != nullptr);
+
+        std::pmr::string wire(&resource);
+        connection.takeOutput(wire);
+        ruvia::detail::HpackDecoder decoder({.resource = &resource});
+        std::string body;
+        std::string contentLength;
+        bool sawHeaders = false;
+        bool sawDataEndStream = false;
+        std::size_t offset = 0;
+        while (offset + ruvia::detail::kHttp2FrameHeaderBytes <= wire.size()) {
+            const auto frameHeader = ruvia::detail::http2ParseFrameHeader(
+                std::string_view(wire.data() + offset, ruvia::detail::kHttp2FrameHeaderBytes));
+            offset += ruvia::detail::kHttp2FrameHeaderBytes;
+            RUVIA_CHECK(offset + frameHeader.length <= wire.size());
+            if (offset + frameHeader.length > wire.size()) {
+                break;
+            }
+            const std::string_view payload(wire.data() + offset, frameHeader.length);
+            offset += frameHeader.length;
+            if (frameHeader.streamId != 1) {
+                continue;
+            }
+            if (frameHeader.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kHeaders)) {
+                sawHeaders = true;
+                const auto decoded = decoder.decode(payload, &contentLength,
+                    [](void* target, std::string_view name, std::string_view value) {
+                        if (name == "content-length") {
+                            static_cast<std::string*>(target)->assign(value);
+                        }
+                        return true;
+                    });
+                RUVIA_CHECK(decoded.decoded());
+            } else if (frameHeader.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kData)) {
+                body.append(payload);
+                sawDataEndStream = sawDataEndStream ||
+                                   (frameHeader.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+            }
+        }
+        const std::string expected =
+            "--h2_writer_boundary\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-19999/50000\r\n\r\n" +
+            content.substr(0, 20000) + "\r\n--h2_writer_boundary\r\nContent-Type: text/plain\r\n" +
+            "Content-Range: bytes 30000-49999/50000\r\n\r\n" + content.substr(30000) +
+            "\r\n--h2_writer_boundary--\r\n";
+        RUVIA_CHECK(sawHeaders);
+        RUVIA_CHECK(sawDataEndStream);
+        RUVIA_CHECK_EQ(body, expected);
+        RUVIA_CHECK_EQ(contentLength, std::to_string(expected.size()));
+        attachment.stop();
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
+    fs::remove(path);
+}
+
+RUVIA_TEST(http2BufferedResponseWriterFailsClosedOnMultipartFileIdentityMismatch) {
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "ruvia-http2-multipart-identity.bin";
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "0123456789";
+    }
+    CountingMemoryResource resource;
+    {
+        auto connection = ruvia::Http2Connection::server({.resource = &resource});
+        handshake(connection);
+        [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
+        asio::io_context& io = ruvia::test::newTestIoContext();
+        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+        const auto workerHandle = attachment.loop().handle();
+        ruvia::WorkerSignal writeSignal(workerHandle);
+        Http2SansIoTermination termination;
+        Http2SansIoStreamRuntimeTable table(std::pmr::get_default_resource(), termination);
+        auto& runtime = table.ensureAccepted(1);
+        RUVIA_CHECK(runtime.selectRoute(RouteResolution{}, RequestBodyMode::kBuffered));
+        RUVIA_CHECK(table.beginDispatch(1, workerHandle) != nullptr);
+        ruvia::WorkerMemory worker;
+        Http2BufferedResponseWriter writer(connection, table, worker, writeSignal);
+        const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
+        auto multipart = ruvia::make_http_multipart_byte_range_plan(
+            ranges, 10, "text/plain", "h2_bad_identity", {}, &resource);
+        ruvia::HttpResponse response({.resource = &resource});
+        response.status(ruvia::http_status::kPartialContent);
+        response.header("Content-Type", multipart.content_type());
+        response.multipart_file_body(path, 10, ruvia::HttpResponseFileIdentity::checked({}),
+            std::move(multipart));
+        const auto writePlan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
+        std::optional<ruvia::detail::Http2BufferedResponseWriteResult> result;
+        asio::co_spawn(io, [&]() -> asio::awaitable<void> { result.emplace(co_await ruvia::asAwaitable(writer.write(1, response, writePlan))); }, stopIoOnCompletion(io));
+        io.run();
+        io.restart();
+        RUVIA_CHECK(result && result->failedAfterCommit() != nullptr);
+
+        std::pmr::string wire(&resource);
+        connection.takeOutput(wire);
+        bool sawReset = false;
+        std::size_t offset = 0;
+        while (offset + ruvia::detail::kHttp2FrameHeaderBytes <= wire.size()) {
+            const auto header = ruvia::detail::http2ParseFrameHeader(
+                std::string_view(wire.data() + offset, ruvia::detail::kHttp2FrameHeaderBytes));
+            offset += ruvia::detail::kHttp2FrameHeaderBytes;
+            RUVIA_CHECK(offset + header.length <= wire.size());
+            if (offset + header.length > wire.size()) {
+                break;
+            }
+            if (header.streamId == 1 &&
+                header.type == static_cast<std::uint8_t>(ruvia::Http2FrameType::kRstStream)) {
+                sawReset = true;
+            }
+            offset += header.length;
+        }
+        RUVIA_CHECK(sawReset);
+        attachment.stop();
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
+    fs::remove(path);
+}
 
 RUVIA_TEST(http2_web_route_selection_owns_exact_body_storage) {
     Http2SansIoStreamRuntime bufferedRuntime(1, std::pmr::get_default_resource());

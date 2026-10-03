@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 // Streaming response sink for the sans-I/O HTTP/2 session (ruvia-web).
 //
@@ -49,7 +50,7 @@ namespace ruvia::detail {
 class Http2SansIoResponseStreamSink final {
 public:
     Http2SansIoResponseStreamSink(ruvia::Http2Connection& connection, std::uint32_t streamId,
-        ResponseStreamKind kind, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal,
+        http_response_stream_kind kind, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal,
         Http2DataOutputBudget& outputBudget, std::pmr::memory_resource* resource,
         HttpKnownMethod requestMethod,
         HttpResponseCodingSelection responseCoding,
@@ -64,7 +65,7 @@ public:
           compression_(resource, responseCoding, responseCodingAvailability) {}
 
     Http2SansIoResponseStreamSink(ruvia::Http2Connection& connection, std::uint32_t streamId,
-        ResponseStreamKind kind, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal,
+        http_response_stream_kind kind, WorkerSignal& writeSignal, Http2SansIoStreamSignal& streamSignal,
         std::pmr::memory_resource* resource, HttpKnownMethod requestMethod,
         HttpResponseCodingSelection responseCoding,
         HttpResponseCodingAvailability responseCodingAvailability) noexcept
@@ -80,10 +81,10 @@ public:
         return state_.committed();
     }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
-        return state_.commitPlan();
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
+        return state_.commit_plan();
     }
-    const ResponseStreamCommitPlan* commitPlan() const&& = delete;
+    const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         return state_.aborted() || connection_.streamAborted(streamId_) ||
@@ -104,7 +105,7 @@ public:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit(ResponseTrailerIntent::kNone);
+        co_await commit(http_response_trailer_intent::none);
         if (state_.bodySuppressedComplete()) {
             // Same head-only guard as the HTTP/1 sink: suspend once before the
             // synchronous ResponseStreamHeadOnlyComplete throw so a handler that
@@ -241,7 +242,7 @@ public:
         throwIfTerminated();
 
         const auto trailerSection = validateHttpResponseTrailers(trailers);
-        const auto trailerIntent = httpResponseTrailerIntent(trailerSection);
+        const auto trailerIntent = response_trailer_intent(trailerSection);
         // Preflight through the HTTP-owned result before committing the initial
         // response head. The typed section carries that proof to finishResponse.
         co_await commit(trailerIntent);
@@ -249,7 +250,7 @@ public:
             co_return;
         }
         if (!trailerSection.empty()) {
-            state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+            state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http2_trailing_headers);
         }
         if (compression_.active()) {
             if (compression_.finish() != HttpContentEncodeStep::kFinished) {
@@ -287,11 +288,11 @@ public:
     }
 
 private:
-    Task<void> commit(ResponseTrailerIntent trailerIntent) {
+    Task<void> commit(http_response_trailer_intent trailerIntent) {
         throwIfTerminated();
         if (state_.committed()) {
-            if (trailerIntent == ResponseTrailerIntent::kPresent) {
-                state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+            if (trailerIntent == http_response_trailer_intent::present) {
+                state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http2_trailing_headers);
             }
             co_return;
         }
@@ -342,7 +343,7 @@ private:
 
     ruvia::Http2Connection& connection_;
     std::uint32_t streamId_;
-    ResponseStreamKind kind_;
+    http_response_stream_kind kind_;
     ResponseStreamState state_;
     HttpInterimResponseOutput* interimOutput_{};
     WorkerSignal& writeSignal_;

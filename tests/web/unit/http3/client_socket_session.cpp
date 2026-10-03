@@ -1,18 +1,148 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <future>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <system_error>
+#include <thread>
 
 #include <asio/co_spawn.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 #include <asio/use_future.hpp>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/web/detail/http3/Http3QuicClientSocketSession.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
+#include "http3_quic_udp_pair.h"
 #include "test_harness.h"
+
+namespace ruvia::detail {
+struct Http3QuicClientSocketSessionTestAccess final {
+    static std::size_t rejected_early_stream_capacity(
+        const Http3QuicClientSocketSession& session) noexcept {
+        return session.rejected_early_streams_.capacity();
+    }
+
+    static void close_candidate_socket(Http3QuicClientSocketSession& session) noexcept {
+        if (session.candidate_socket_) {
+            asio::error_code ignored;
+            session.candidate_socket_->close(ignored);
+        }
+    }
+
+    struct scripted_sender final {
+        std::size_t calls{};
+
+        [[nodiscard]] std::size_t operator()(asio::ip::udp::socket&,
+            asio::const_buffer, asio::error_code& error) noexcept {
+            ++calls;
+            error = asio::error::would_block;
+            return 0;
+        }
+    };
+
+    static Http3QuicClientSocketSession::PumpResult pump_with_sender(
+        Http3QuicClientSocketSession& session, scripted_sender& sender) {
+        return session.pump_with_send(sender);
+    }
+
+    static void queue_pending_packet(Http3QuicClientSocketSession& session) noexcept {
+        session.packetBuffer_[0] = std::byte{0};
+        session.pending_packet_size_ = 1;
+        session.pending_candidate_ = false;
+    }
+};
+}  // namespace ruvia::detail
+
+namespace {
+
+template <typename T>
+bool drive_until_ready(asio::io_context& io, std::future<T>& future,
+    std::chrono::steady_clock::time_point deadline) {
+    while (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready &&
+           std::chrono::steady_clock::now() < deadline) {
+        io.restart();
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        const auto maximum_slice = std::chrono::duration_cast<
+            std::chrono::steady_clock::duration>(std::chrono::milliseconds(10));
+        io.run_for(std::min(remaining, maximum_slice));
+    }
+    return future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+}
+
+class quic_test_identity final {
+public:
+    using tls_config = ruvia::detail::HttpServerListenerDefinition::Tls;
+
+    quic_test_identity() {
+        directory_ = std::filesystem::temp_directory_path() /
+                     ("ruvia-quic-migration-" +
+                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        if (!std::filesystem::create_directory(directory_)) {
+            throw std::runtime_error("failed to create QUIC test identity directory");
+        }
+        key_.reset(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1"));
+        certificate_.reset(X509_new());
+        if (!key_ || !certificate_ || X509_set_version(certificate_.get(), 2) != 1 ||
+            ASN1_INTEGER_set(X509_get_serialNumber(certificate_.get()), 1) != 1 ||
+            X509_gmtime_adj(X509_get_notBefore(certificate_.get()), -60) == nullptr ||
+            X509_gmtime_adj(X509_get_notAfter(certificate_.get()), 3600) == nullptr ||
+            X509_set_pubkey(certificate_.get(), key_.get()) != 1) {
+            throw std::runtime_error("failed to create QUIC test certificate");
+        }
+        auto* subject = X509_get_subject_name(certificate_.get());
+        if (subject == nullptr ||
+            X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+                reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) != 1 ||
+            X509_set_issuer_name(certificate_.get(), subject) != 1 ||
+            X509_sign(certificate_.get(), key_.get(), EVP_sha256()) <= 0) {
+            throw std::runtime_error("failed to sign QUIC test certificate");
+        }
+        certificate_path_ = directory_ / "certificate.pem";
+        private_key_path_ = directory_ / "private-key.pem";
+        std::unique_ptr<BIO, decltype(&BIO_free)> certificate_bio(
+            BIO_new_file(certificate_path_.string().c_str(), "w"), BIO_free);
+        std::unique_ptr<BIO, decltype(&BIO_free)> key_bio(
+            BIO_new_file(private_key_path_.string().c_str(), "w"), BIO_free);
+        if (!certificate_bio || !key_bio ||
+            PEM_write_bio_X509(certificate_bio.get(), certificate_.get()) != 1 ||
+            PEM_write_bio_PrivateKey(key_bio.get(), key_.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+            throw std::runtime_error("failed to write QUIC test certificate");
+        }
+    }
+
+    ~quic_test_identity() {
+        std::error_code error;
+        std::filesystem::remove_all(directory_, error);
+    }
+
+    [[nodiscard]] tls_config server_tls_config() const {
+        tls_config config;
+        config.identity.certificateChainFile = certificate_path_.string();
+        config.identity.privateKeyFile = private_key_path_.string();
+        return config;
+    }
+
+private:
+    std::filesystem::path directory_;
+    std::filesystem::path certificate_path_;
+    std::filesystem::path private_key_path_;
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key_{nullptr, EVP_PKEY_free};
+    std::unique_ptr<X509, decltype(&X509_free)> certificate_{nullptr, X509_free};
+};
+
+}  // namespace
 
 RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
 #if OPENSSL_VERSION_NUMBER < 0x30600000L
@@ -23,7 +153,12 @@ RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
     asio::ip::udp::socket peerSocket(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
     http3_quic_client_tls_context tls(ClientTransportConfigView{});
-    Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls);
+    Http3QuicClientSocketSession session(io, peerSocket.local_endpoint(), "localhost", tls,
+        {.qpackMaxTableCapacity = 4096, .qpackBlockedStreams = 16},
+        ruvia::quic_version::v1, false, nullptr);
+    RUVIA_CHECK_EQ(Http3QuicClientSocketSessionTestAccess::
+                       rejected_early_stream_capacity(session),
+        0U);
     RUVIA_CHECK(session.localEndpoint().port() != 0);
     RUVIA_CHECK(session.localEndpoint().address().is_loopback());
     RUVIA_CHECK(session.peerEndpoint() == peerSocket.local_endpoint());
@@ -41,6 +176,177 @@ RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
     session.close();
     RUVIA_CHECK(session.pump().status == Http3QuicClientSocketSession::PumpStatus::kClosed);
     session.close();
+#endif
+}
+
+RUVIA_TEST(http3QuicClientSocketSessionKeepsPollingDuringSendBackpressure) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    using namespace ruvia::detail;
+    asio::io_context io;
+    asio::ip::udp::socket peer(io,
+        asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
+    http3_quic_client_tls_context tls(ClientTransportConfigView{});
+    Http3QuicClientSocketSession session(io, peer.local_endpoint(), "localhost", tls);
+    (void)session.pump();
+    Http3QuicClientSocketSessionTestAccess::scripted_sender sender;
+    Http3QuicClientSocketSessionTestAccess::queue_pending_packet(session);
+    const std::array<char, 1> input{'x'};
+    (void)peer.send_to(asio::buffer(input), session.localEndpoint());
+    const auto tick = Http3QuicClientSocketSessionTestAccess::pump_with_sender(session, sender);
+    RUVIA_CHECK_EQ(sender.calls, 1U);
+    RUVIA_CHECK(tick.outputBackpressured);
+    RUVIA_CHECK(tick.received > 0);
+    RUVIA_CHECK(tick.eventTimeout.has_value());
+    session.close();
+#endif
+}
+
+RUVIA_TEST(http3QuicClientSocketSessionMigratesWithTwoLiveUdpPaths) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    using namespace ruvia::detail;
+    using udp = asio::ip::udp;
+    quic_test_identity identity;
+    ruvia::testing::http3_quic_udp_pair peer(
+        identity.server_tls_config(), ruvia::testing::http3_quic_udp_pair::server_only_t{});
+    asio::io_context io;
+    http3_quic_client_tls_context tls(ClientTransportConfigView{
+        .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification});
+    Http3QuicClientSocketSession session(io, peer.server_endpoint(), "localhost", tls);
+
+    const auto handshake_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (!session.transport().info().confirmed &&
+           std::chrono::steady_clock::now() < handshake_deadline) {
+        (void)session.pump();
+        peer.pump();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RUVIA_CHECK(session.transport().info().confirmed);
+
+    const auto old_endpoint = session.localEndpoint();
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        (void)session.start_path_migration(old_endpoint);
+    }));
+    RUVIA_CHECK(session.localEndpoint() == old_endpoint);
+
+    const auto reserve_endpoint = [&] {
+        udp::socket reservation(io, udp::endpoint(asio::ip::address_v4::loopback(), 0));
+        return reservation.local_endpoint();
+    };
+    const auto candidate_endpoint = reserve_endpoint();
+    const auto migration = session.start_path_migration(candidate_endpoint);
+    RUVIA_CHECK(migration.status == ruvia::quic_migration_status::started);
+    const auto validation_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::optional<ruvia::quic_path_migration> validated;
+    while (std::chrono::steady_clock::now() < validation_deadline) {
+        (void)session.pump();
+        peer.pump();
+        validated = session.path_migration(migration.id);
+        if (!validated || validated->status != ruvia::quic_migration_status::started) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RUVIA_CHECK(validated.has_value());
+    RUVIA_CHECK(validated->status == ruvia::quic_migration_status::validated);
+    RUVIA_CHECK(session.localEndpoint() == candidate_endpoint);
+
+    const auto return_migration = session.start_path_migration(old_endpoint);
+    RUVIA_CHECK(return_migration.status == ruvia::quic_migration_status::started ||
+                return_migration.status == ruvia::quic_migration_status::validated);
+    const auto return_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::optional<ruvia::quic_path_migration> returned;
+    while (std::chrono::steady_clock::now() < return_deadline) {
+        (void)session.pump();
+        peer.pump();
+        returned = session.path_migration(return_migration.id);
+        if (!returned || returned->status != ruvia::quic_migration_status::started) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RUVIA_CHECK(returned.has_value());
+    RUVIA_CHECK(returned->status == ruvia::quic_migration_status::validated);
+    RUVIA_CHECK(session.localEndpoint() == old_endpoint);
+
+    const auto candidate_io_endpoint = reserve_endpoint();
+    const auto candidate_io_migration = session.start_path_migration(candidate_io_endpoint);
+    RUVIA_CHECK(candidate_io_migration.status == ruvia::quic_migration_status::started);
+    RUVIA_CHECK(session.consumeWorkNotification());
+    const auto candidate_activity = session.pump();
+    auto candidate_wait = asio::co_spawn(io,
+        ruvia::asAwaitable(session.waitForActivity(candidate_activity)), asio::use_future);
+    io.restart();
+    RUVIA_CHECK(io.run_one_for(std::chrono::seconds(1)) != 0);
+    RUVIA_CHECK(candidate_wait.wait_for(std::chrono::seconds(0)) == std::future_status::timeout);
+    Http3QuicClientSocketSessionTestAccess::close_candidate_socket(session);
+    const auto candidate_wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    RUVIA_CHECK(drive_until_ready(io, candidate_wait, candidate_wait_deadline));
+    RUVIA_CHECK(candidate_wait.get() ==
+                Http3QuicClientSocketSession::WakeReason::kCandidateFailure);
+    (void)session.pump();
+    peer.pump();
+    const auto candidate_io_failed = session.path_migration(candidate_io_migration.id);
+    RUVIA_CHECK(candidate_io_failed.has_value());
+    RUVIA_CHECK(candidate_io_failed->status == ruvia::quic_migration_status::failed);
+    RUVIA_CHECK(session.localEndpoint() == old_endpoint);
+    RUVIA_CHECK(session.transport().info().state == ruvia::quic_connection_state::ready);
+
+    const auto fallback_endpoint = session.localEndpoint();
+    const auto failing_endpoint = reserve_endpoint();
+    const auto pending_validation_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::optional<ruvia::quic_path_migration> failing;
+    while (std::chrono::steady_clock::now() < pending_validation_deadline) {
+        const auto attempt = session.start_path_migration(failing_endpoint);
+        if (attempt.status == ruvia::quic_migration_status::started ||
+            attempt.status == ruvia::quic_migration_status::validated) {
+            failing = attempt;
+            break;
+        }
+        (void)session.pump();
+        peer.pump(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RUVIA_CHECK(failing.has_value());
+    const auto failure_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    std::optional<ruvia::quic_path_migration> failed;
+    while (failing && std::chrono::steady_clock::now() < failure_deadline) {
+        (void)session.pump();
+        peer.pump(true);
+        failed = session.path_migration(failing->id);
+        if (!failed || failed->status != ruvia::quic_migration_status::started) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    RUVIA_CHECK(failed.has_value());
+    RUVIA_CHECK(failed->status == ruvia::quic_migration_status::failed);
+    RUVIA_CHECK(session.localEndpoint() == fallback_endpoint);
+
+    const auto cancel_endpoint = reserve_endpoint();
+    const auto cancel = session.start_path_migration(cancel_endpoint);
+    RUVIA_CHECK(cancel.status == ruvia::quic_migration_status::started);
+    RUVIA_CHECK(session.consumeWorkNotification());
+    const auto activity = session.pump();
+    auto wait = asio::co_spawn(io, ruvia::asAwaitable(session.waitForActivity(activity)),
+        asio::use_future);
+    io.restart();
+    RUVIA_CHECK(io.run_one_for(std::chrono::seconds(1)) != 0);
+    RUVIA_CHECK(wait.wait_for(std::chrono::seconds(0)) == std::future_status::timeout);
+    RUVIA_CHECK(session.cancel_path_migration(cancel.id) == ruvia::quic_operation_status::accepted);
+    session.close();
+    const auto stop_wait_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    RUVIA_CHECK(drive_until_ready(io, wait, stop_wait_deadline));
+    RUVIA_CHECK(wait.get() == Http3QuicClientSocketSession::WakeReason::kStopped);
+    RUVIA_CHECK_EQ(io.poll(), 0U);
+    RUVIA_CHECK(session.pump().status == Http3QuicClientSocketSession::PumpStatus::kClosed);
+    const auto cancelled = session.path_migration(cancel.id);
+    RUVIA_CHECK(cancelled.has_value());
+    RUVIA_CHECK(cancelled->status == ruvia::quic_migration_status::aborted);
 #endif
 }
 

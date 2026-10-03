@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpRequestContentSemantics.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
@@ -204,8 +205,8 @@ Http2ResponseHeadSubmitResult Http2Connection::submitResponseHead(
 }
 
 Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
-    std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind,
-    ResponseTrailerIntent trailerIntent) {
+    std::uint32_t streamId, HttpResponse head, http_response_stream_kind kind,
+    http_response_trailer_intent trailerIntent) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kClosed);
@@ -220,9 +221,9 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         stream->localSend().headPending() == nullptr || successfulConnect) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidState);
     }
-    auto preparedCommitPlan = httpResponseStreamCommitPlan(ResponseStreamFraming::kHttp2Frames,
+    auto preparedCommitPlan = plan_http_response_stream_commit(http_response_stream_framing::http2_frames,
         stream->requestKnownMethod(), head.status(), trailerIntent);
-    if (!preparedCommitPlan.trailerIntentAllowed()) {
+    if (!preparedCommitPlan.trailer_intent_allowed()) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     const auto controlResult = http2FinalResponseControlPlan(head);
@@ -231,14 +232,14 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     auto streamHead =
-        prepareResponseStreamHead(std::move(head), kind, std::move(preparedCommitPlan));
-    const auto& commitPlan = streamHead.commitPlan();
+        prepare_http_response_stream_head(std::move(head), kind, std::move(preparedCommitPlan));
+    const auto& commitPlan = streamHead.commit_plan();
     // One prepared plan owns both the encoded Content-Length metadata and the
     // local DATA accounting contract. Explicit length is parsed exactly once;
     // absence remains unbounded, while content-forbidden responses never become
     // DATA-open.
     const auto headPlanResult =
-        http2StreamingResponseHeadPlan(commitPlan.bodyPlan(), streamHead.response());
+        http2StreamingResponseHeadPlan(commitPlan.body_plan(), streamHead.response());
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
@@ -247,7 +248,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeFailure(Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     const auto endStream =
-        commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded
+        commitPlan.head_disposition() == http_response_stream_head_disposition::message_ended
             ? Http2EndStream::kEndStream
             : Http2EndStream::kKeepOpen;
     appendResponseHeaderFrames(*stream, std::string_view(stream->localHeaderBlock()), endStream);
@@ -258,7 +259,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     } else {
         stream->beginLocalContentUnbounded();
     }
-    if (commitPlan.headDisposition() == ResponseStreamHeadDisposition::kTrailersOnly) {
+    if (commitPlan.head_disposition() == http_response_stream_head_disposition::trailers_only) {
         (void)stream->beginLocalResponseTrailersOnly();
     } else {
         if (http2EndsStream(endStream)) {

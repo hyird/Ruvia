@@ -29,6 +29,8 @@
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3Settings.h"
+#include "ruvia/http/HttpByteRange.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/HttpUdpTunnel.h"
@@ -70,6 +72,8 @@ struct HandlerState final {
     std::size_t uploadChunks{};
     bool uploadTrailerObserved{};
     std::size_t handlerCalls{};
+    std::size_t replay_safe_middleware_calls{};
+    ruvia::http3_early_data_info early_data_info{};
     ruvia::WorkerSignal* started{};
     bool requestReadCorrectly{};
     bool handlerResumed{};
@@ -96,6 +100,7 @@ struct HandlerState final {
 ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& context) {
     auto& state = *static_cast<HandlerState*>(raw);
     ++state.handlerCalls;
+    state.early_data_info = context.early_data_info();
     if (state.sendInterim) {
         std::string value(512, 'h');
         const std::array headers{ruvia::HttpHeaderView("Link", value)};
@@ -116,6 +121,19 @@ ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& cont
             throw std::runtime_error("buffered handler stopped");
         }
         co_return context.text("unexpectedly resumed");
+    }
+    if (path == "/multipart-file") {
+        ruvia::HttpResponse response({.resource = context.arena()});
+        auto ranges = ruvia::resolve_http_byte_range_set(
+            "bytes=0-19999,30000-", state.responseBody.size());
+        auto plan = ruvia::make_http_multipart_byte_range_plan(
+            ranges, state.responseBody.size(), "text/plain", "h3_test_boundary", {},
+            context.arena());
+        response.status(ruvia::http_status::kPartialContent);
+        response.header("Content-Type", plan.content_type());
+        response.multipart_file_body(state.filePath, state.responseBody.size(),
+            ruvia::HttpResponseFileIdentity::unchecked(), std::move(plan));
+        co_return response;
     }
     if (path == "/file") {
         ruvia::HttpResponse response({.resource = context.arena()});
@@ -269,6 +287,18 @@ ruvia::Task<void> responseStreamHandler(void* raw, ruvia::Context& context) {
     co_await context.stream().end(trailers);
 }
 
+struct ReplaySafeRouteMiddleware final : ruvia::Middleware {
+    static constexpr bool ruvia_replay_safe = true;
+    HandlerState* state{};
+
+    explicit ReplaySafeRouteMiddleware(HandlerState* state)
+        : state(state) {}
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        ++state->replay_safe_middleware_calls;
+        co_await next();
+    }
+};
+
 struct Routes final {
     ruvia::detail::Router router;
     ruvia::detail::RouterImpl& implementation{ruvia::detail::RouterImpl::from(router)};
@@ -299,8 +329,16 @@ struct Routes final {
         add(ruvia::HttpKnownMethod::kGet, "/throw");
         add(ruvia::HttpKnownMethod::kGet, "/suspend");
         add(ruvia::HttpKnownMethod::kGet, "/file");
+        add(ruvia::HttpKnownMethod::kGet, "/multipart-file");
         add(ruvia::HttpKnownMethod::kGet, "/empty-file");
         add(ruvia::HttpKnownMethod::kGet, "/large");
+        const auto replaySafeMiddleware =
+            ruvia::detail::makeMiddlewareDescriptor<ReplaySafeRouteMiddleware>(&handlers);
+        implementation.registerRoute(ruvia::HttpKnownMethod::kGet, routing_test::path("/early-safe"),
+            ruvia::detail::RouteHandler(&handlers, &bufferedHandler),
+            ruvia::detail::RequestBodyMode::kBuffered, {},
+            std::span<const ruvia::detail::ControllerMiddlewareDescriptor>(
+                &replaySafeMiddleware, 1));
         implementation.registerRoute(ruvia::HttpKnownMethod::kPost, routing_test::path("/upload"),
             ruvia::detail::RouteHandler(&handlers, &bufferedHandler), ruvia::detail::RequestBodyMode::kStream, {}, {});
         implementation.registerResponseStreamRoute(ruvia::HttpKnownMethod::kGet, routing_test::path("/stream"),
@@ -395,10 +433,11 @@ struct Fixture final {
 
     [[nodiscard]] Dispatch makeDispatch(std::uint64_t streamId,
         ruvia::detail::ContextServices dispatchServices,
-        ruvia::detail::Http3TunnelCallbacks callbacks = {}) {
+        ruvia::detail::Http3TunnelCallbacks callbacks = {}, bool receivedEarlyData = false) {
         return Dispatch(session, routes.implementation.routeTable(), worker,
             std::move(dispatchServices), options, outbound,
-            {kEpoch, kGeneration, streamId}, scannerEntry, executor, callbacks);
+            {kEpoch, kGeneration, streamId, {}, receivedEarlyData},
+            scannerEntry, executor, callbacks);
     }
 };
 
@@ -570,8 +609,9 @@ void feedTunnelFin(Fixture& fixture, Dispatch& dispatch, std::uint64_t streamId)
 
 void feedRequest(Fixture& fixture, std::uint64_t streamId, std::string_view method,
     std::string_view path, std::string_view body = {},
-    std::span<const ruvia::Http3FieldSectionFieldView> fields = {}) {
-    const MessageId id{kEpoch, kGeneration, streamId};
+    std::span<const ruvia::Http3FieldSectionFieldView> fields = {},
+    bool receivedEarlyData = false) {
+    const MessageId id{kEpoch, kGeneration, streamId, {}, receivedEarlyData};
     const auto wire = requestWire(fixture.worker, method, path, body, fields);
     if (wire.size() > Mailbox::kMaxBlockBytes) {
         throw std::runtime_error("HTTP/3 fixture request exceeds one mailbox block");
@@ -663,6 +703,7 @@ struct DecodedResponse final {
     std::string connectionHeader;
     std::string upgradeHeader;
     std::string websocketAcceptHeader;
+    std::string contentType;
     std::string body;
     std::string completeTrailer;
 };
@@ -677,7 +718,9 @@ void onResponse(void* raw, const ruvia::Http3ClientResponseEvent& event) {
             response.decodedFieldSectionSize = 7 + std::to_string(event.head->status).size() + 32;
             for (const auto& header : event.head->headers) {
                 response.decodedFieldSectionSize += header.name.size() + header.value.size() + 32;
-                if (header.name == "x-dispatch") {
+                if (header.name == "content-type") {
+                    response.contentType = header.value;
+                } else if (header.name == "x-dispatch") {
                     response.dispatchHeader = header.value;
                 } else if (header.name == "x-error-handler") {
                     response.errorHeader = header.value;
@@ -2043,7 +2086,59 @@ ruvia::Task<void> exercisePeerTransportFinWait(Fixture& fixture,
     state.webSocketStarted = nullptr;
 }
 
+ruvia::Task<void> exerciseEarlyProvenanceAndReplayPolicy(
+    Fixture& fixture, ruvia::testing::TestContext& ruvia_ctx) {
+    const std::array earlyHeader{ruvia::Http3FieldSectionFieldView{"early-data", "1"}};
+    feedRequest(fixture, 0, "GET", "/throw", {}, earlyHeader, true);
+    auto rejected = fixture.makeDispatch(0, fixture.services, {}, true);
+    RUVIA_CHECK(co_await rejected.runHandler() == Dispatch::RunStatus::kResponseReady);
+    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{0});
+    RUVIA_CHECK_EQ(fixture.routes.handlers.replay_safe_middleware_calls, std::size_t{0});
+    PublishedWire rejectedWire;
+    publishAndDrain(rejected, fixture, 0, rejectedWire, ruvia_ctx);
+    DecodedResponse rejectedResponse;
+    const auto rejectedResult = decodePublished(rejectedWire,
+        ruvia::HttpKnownMethod::kGet, 0, fixture.worker.resource(), rejectedResponse);
+    RUVIA_CHECK(rejectedResult.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(rejectedResponse.status, std::uint16_t{425});
+    RUVIA_CHECK(rejected.complete());
+
+    feedRequest(fixture, 4, "GET", "/throw", {}, earlyHeader, false);
+    auto spoofed = fixture.makeDispatch(4, fixture.services, {}, false);
+    RUVIA_CHECK(co_await spoofed.runHandler() == Dispatch::RunStatus::kResponseReady);
+    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{1});
+    RUVIA_CHECK(!fixture.routes.handlers.early_data_info.received_from_early_data());
+    RUVIA_CHECK(fixture.routes.handlers.early_data_info.upstream_declared_early_data());
+    PublishedWire spoofedWire;
+    publishAndDrain(spoofed, fixture, 4, spoofedWire, ruvia_ctx);
+    RUVIA_CHECK(spoofed.complete());
+
+    feedRequest(fixture, 8, "GET", "/early-safe", {}, {}, true);
+    auto safe = fixture.makeDispatch(8, fixture.services, {}, true);
+    RUVIA_CHECK(co_await safe.runHandler() == Dispatch::RunStatus::kResponseReady);
+    RUVIA_CHECK_EQ(fixture.routes.handlers.handlerCalls, std::size_t{2});
+    RUVIA_CHECK_EQ(fixture.routes.handlers.replay_safe_middleware_calls, std::size_t{1});
+    RUVIA_CHECK(fixture.routes.handlers.early_data_info.received_from_early_data());
+    RUVIA_CHECK(!fixture.routes.handlers.early_data_info.upstream_declared_early_data());
+    PublishedWire safeWire;
+    publishAndDrain(safe, fixture, 8, safeWire, ruvia_ctx);
+    DecodedResponse safeResponse;
+    const auto safeResult = decodePublished(safeWire,
+        ruvia::HttpKnownMethod::kGet, 8, fixture.worker.resource(), safeResponse);
+    RUVIA_CHECK(safeResult.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+    RUVIA_CHECK_EQ(safeResponse.status, std::uint16_t{200});
+    RUVIA_CHECK(safe.complete());
+}
+
 }  // namespace
+
+RUVIA_TEST(http3BufferedDispatchRejectsUntrustedAndUnsafeEarlyRequestsBeforeMiddleware) {
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    ruvia::test::CountingMemoryResource upstream;
+    Fixture fixture(attachment.loop().handle(), upstream);
+    runWorkerTask(attachment, exerciseEarlyProvenanceAndReplayPolicy(fixture, ruvia_ctx));
+}
 
 RUVIA_TEST(http3BufferedDispatchRoutesBodyAndPublishesBoundedWireResponse) {
     auto& io = ruvia::test::newTestIoContext();
@@ -2522,7 +2617,21 @@ ruvia::Task<void> exerciseAsyncResponse(Fixture& fixture, const ruvia::WorkerHan
         RUVIA_CHECK(dispatch.complete());
         DecodedResponse response;
         RUVIA_CHECK(decodePublished(wire, ruvia::HttpKnownMethod::kGet, streamId, fixture.worker.resource(), response).status == ruvia::Http3ClientResponseStatus::kMessageEnd);
-        RUVIA_CHECK_EQ(response.status, std::uint16_t{200});
+        RUVIA_CHECK_EQ(response.status,
+            path == "/multipart-file" ? std::uint16_t{206} : std::uint16_t{200});
+        if (path == "/multipart-file") {
+            const auto& content = fixture.routes.handlers.responseBody;
+            const auto separator = std::string("\r\n--h3_test_boundary\r\nContent-Type: text/plain\r\n");
+            const std::string expected =
+                "--h3_test_boundary\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-19999/65539\r\n\r\n" +
+                content.substr(0, 20000) + separator +
+                "Content-Range: bytes 30000-65538/65539\r\n\r\n" + content.substr(30000) +
+                "\r\n--h3_test_boundary--\r\n";
+            RUVIA_CHECK_EQ(response.body, expected);
+            RUVIA_CHECK_EQ(response.contentLength.value_or(0), expected.size());
+            RUVIA_CHECK(response.contentType.starts_with(
+                "multipart/byteranges; boundary=h3_test_boundary"));
+        }
         if (fixture.routes.handlers.sendInterim) {
             RUVIA_CHECK_EQ(response.interimHeads, std::size_t{1});
             RUVIA_CHECK_EQ(response.finalHeads, std::size_t{1});
@@ -2531,7 +2640,7 @@ ruvia::Task<void> exerciseAsyncResponse(Fixture& fixture, const ruvia::WorkerHan
         if (path == "/stream") {
             RUVIA_CHECK_EQ(response.body, fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody + fixture.routes.handlers.responseBody);
             RUVIA_CHECK_EQ(response.completeTrailer, "yes");
-        } else {
+        } else if (path != "/multipart-file") {
             RUVIA_CHECK_EQ(response.body, fixture.routes.handlers.responseBody);
         }
         RUVIA_CHECK(backpressured);
@@ -2610,6 +2719,38 @@ RUVIA_TEST(http3_oversized_trailers_reject_only_the_partial_response_stream) {
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(http3MultipartFileResponsePublishesExactBodyLengthAndFinUnderBackpressure) {
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("ruvia-h3-multipart-" + std::to_string(
+                                                   std::chrono::steady_clock::now().time_since_epoch().count()));
+    {
+        std::ofstream output(path, std::ios::binary);
+        output << std::string(65539, '2');
+    }
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    const auto worker = attachment.loop().handle();
+    ruvia::test::CountingMemoryResource upstream;
+    ruvia::BlockingPool pool({.threadCount = 1, .queueCapacity = 8});
+    {
+        Fixture fixture(worker, upstream);
+        fixture.executor = attachment.loop().executor();
+        fixture.options.blockingPool = &pool;
+        fixture.routes.handlers.filePath = path;
+        fixture.routes.handlers.responseBody.assign(65539, '2');
+        auto exercise = [&]() -> ruvia::Task<void> {
+            co_await exerciseAsyncResponse(fixture, worker, 0, "/multipart-file", false, ruvia_ctx);
+            co_await exerciseAsyncResponse(fixture, worker, 4, "/multipart-file", true, ruvia_ctx);
+        };
+        runWorkerTask(attachment, exercise());
+    }
+    pool.stop();
+    pool.join();
+    std::filesystem::remove(path);
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
 RUVIA_TEST(http3ResponseFileReadsBoundedBlocksOffWorkerAndPublishesFin) {

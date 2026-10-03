@@ -225,7 +225,8 @@ RUVIA_TEST(quic_v1_initial_secrets_use_rfc_salt_and_client_server_labels) {
     auto provider = make_provider(state);
     const auto dcid = as_bytes("8394c8f03e515708");
     {
-        auto secrets = ruvia::detail::derive_quic_v1_initial_secrets(provider, &resource, dcid);
+        auto secrets = ruvia::detail::derive_quic_initial_secrets(provider, &resource,
+            ruvia::quic_version::v1, dcid);
         RUVIA_CHECK_EQ(secrets.client.view().size(), std::size_t{32});
         RUVIA_CHECK_EQ(secrets.server.view().size(), std::size_t{32});
         RUVIA_CHECK(std::ranges::all_of(secrets.client.view(), [](std::byte value) { return value == std::byte{0x21}; }));
@@ -248,7 +249,7 @@ RUVIA_TEST(quic_traffic_key_derivation_owns_material_and_erases_it_after_move) {
     std::array<std::byte, 32> traffic_secret{};
     {
         auto keys = ruvia::detail::derive_quic_packet_keys(provider, &resource,
-            ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            ruvia::quic_version::v1, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
             ruvia::quic_crypto_direction::write, traffic_secret);
         auto moved = std::move(keys);
         RUVIA_CHECK_EQ(moved.traffic_secret().size(), std::size_t{32});
@@ -276,7 +277,7 @@ RUVIA_TEST(quic_key_update_derives_new_secret_without_replacing_header_protectio
     std::array<std::byte, 32> traffic_secret{};
     {
         auto updated = ruvia::detail::update_quic_packet_keys(provider, &resource,
-            ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            ruvia::quic_version::v1, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
             ruvia::quic_crypto_direction::read, traffic_secret);
         RUVIA_CHECK_EQ(updated.traffic_secret().size(), std::size_t{32});
         RUVIA_CHECK_EQ(updated.iv().size(), std::size_t{12});
@@ -298,7 +299,7 @@ RUVIA_TEST(quic_packet_key_factory_failure_releases_prior_key_and_secret_storage
     std::array<std::byte, 32> traffic_secret{};
     RUVIA_CHECK(ruvia::testing::throwsOn([&] {
         (void)ruvia::detail::derive_quic_packet_keys(provider, &resource,
-            ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            ruvia::quic_version::v1, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
             ruvia::quic_crypto_direction::write, traffic_secret);
     }));
     RUVIA_CHECK_EQ(state.destroyed_keys, std::size_t{1});
@@ -310,7 +311,8 @@ RUVIA_TEST(quic_v1_retry_integrity_uses_fixed_aes_key_nonce_and_pseudo_packet_aa
     provider_state state;
     auto provider = make_provider(state);
     const auto pseudo_packet = as_bytes("retry pseudo-packet");
-    const auto tag = ruvia::detail::quic_v1_retry_integrity_tag(provider, pseudo_packet);
+    const auto tag = ruvia::detail::quic_retry_integrity_tag(
+        provider, ruvia::quic_version::v1, pseudo_packet);
     // RFC 9001 Section 5.8 fixed bytes; this controlled provider checks parameter plumbing,
     // not the AES-GCM tag against an independent cryptographic vector.
     const auto expected_key = as_bytes("\xbe\x0c\x69\x0b\x9f\x66\x57\x5a\x1d\x76\x6b\x54\xe3\x68\xc8\x4e");
@@ -321,6 +323,44 @@ RUVIA_TEST(quic_v1_retry_integrity_uses_fixed_aes_key_nonce_and_pseudo_packet_aa
     RUVIA_CHECK_EQ(state.last_aad, pseudo_packet);
     RUVIA_CHECK(std::ranges::all_of(tag, [](std::byte value) { return value == std::byte{0x5e}; }));
     RUVIA_CHECK_EQ(state.destroyed_keys, std::size_t{1});
+}
+
+RUVIA_TEST(quic_v2_initial_retry_and_key_update_use_rfc9369_parameters) {
+    provider_state state;
+    counting_resource resource;
+    auto provider = make_provider(state);
+    const auto dcid = as_bytes("8394c8f03e515708");
+    {
+        auto secrets = ruvia::detail::derive_quic_initial_secrets(provider, &resource,
+            ruvia::quic_version::v2, dcid);
+        const auto salt = as_bytes(std::string_view(
+            "\x0d\xed\xe3\xde\xf7\x00\xa6\xdb\x81\x93\x81\xbe\x6e\x26\x9d\xcb\xf9\xbd\x2e\xd9", 20));
+        RUVIA_CHECK_EQ(state.extracted_salt, salt);
+    }
+    state.expand_infos.clear();
+    std::array<std::byte, 32> traffic_secret{};
+    {
+        auto keys = ruvia::detail::derive_quic_packet_keys(provider, &resource,
+            ruvia::quic_version::v2, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            ruvia::quic_crypto_direction::write, traffic_secret);
+        RUVIA_CHECK_EQ(state.expand_infos[0], hkdf_info(16, "quicv2 key"));
+        RUVIA_CHECK_EQ(state.expand_infos[1], hkdf_info(12, "quicv2 iv"));
+        RUVIA_CHECK_EQ(state.expand_infos[2], hkdf_info(16, "quicv2 hp"));
+    }
+    const auto pseudo_packet = as_bytes("retry pseudo-packet");
+    (void)ruvia::detail::quic_retry_integrity_tag(provider, ruvia::quic_version::v2, pseudo_packet);
+    const auto expected_key = as_bytes("\x8f\xb4\xb0\x1b\x56\xac\x48\xe2\x60\xfb\xcb\xce\xad\x7c\xcc\x92");
+    const auto expected_nonce = as_bytes("\xd8\x69\x69\xbc\x2d\x7c\x6d\x99\x90\xef\xb0\x4a");
+    RUVIA_CHECK_EQ(state.factory_keys.back(), expected_key);
+    RUVIA_CHECK_EQ(state.last_nonce, expected_nonce);
+    state.expand_infos.clear();
+    {
+        auto updated = ruvia::detail::update_quic_packet_keys(provider, &resource,
+            ruvia::quic_version::v2, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            ruvia::quic_crypto_direction::read, traffic_secret);
+        RUVIA_CHECK_EQ(state.expand_infos[0], hkdf_info(32, "quicv2 ku"));
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
 }
 
 }  // namespace

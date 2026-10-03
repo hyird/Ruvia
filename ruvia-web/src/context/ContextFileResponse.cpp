@@ -17,6 +17,7 @@
 #include "ruvia/http/HttpRepresentationResponsePlan.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
 #include "ruvia/web/detail/http/static/StaticFileMetadata.h"
 #include "ruvia/web/detail/http/static/StaticFileVariant.h"
@@ -75,6 +76,11 @@ public:
 
     void setFullBody(HttpResponse& response, std::uint64_t size) {
         setBody(response, size, 0, size);
+    }
+
+    void set_multipart_body(HttpResponse& response, std::uint64_t size,
+        http_multipart_byte_range_plan&& plan) {
+        response.multipart_file_body(takePath(), size, identity_, std::move(plan));
     }
 
 private:
@@ -145,6 +151,25 @@ public:
     void setFullBody(
         HttpResponse& response, std::pmr::memory_resource* resource, std::uint64_t size) {
         setBody(response, resource, size, 0, size);
+    }
+
+    void set_multipart_body(HttpResponse& response, std::pmr::memory_resource* resource,
+        std::uint64_t size, http_multipart_byte_range_plan&& plan) {
+        if (auto* path = std::get_if<FileResponsePath>(&value_)) {
+            path->set_multipart_body(response, size, std::move(plan));
+            return;
+        }
+        const auto source = std::get<std::string_view>(value_);
+        std::pmr::string body(resource);
+        for (const auto& segment : plan.segments()) {
+            if (segment.kind == http_multipart_byte_range_plan::segment_kind::file) {
+                body.append(source.substr(static_cast<std::size_t>(segment.file_offset),
+                    static_cast<std::size_t>(segment.file_length)));
+            } else {
+                body.append(plan.metadata().substr(segment.metadata_offset, segment.metadata_length));
+            }
+        }
+        response.ownedBody(std::move(body));
     }
 
 private:
@@ -286,6 +311,34 @@ template <typename ApplyResponseState>
         applyFileResponseState(response, statusCode);
         return response;
     };
+    auto make_multipart_response = [&](const http_byte_range_set& ranges) {
+        std::array<char, 48> boundary_token{};
+        const auto token_result = detail::generateSecureToken(boundary_token);
+        const auto* token = token_result.ready();
+        if (token == nullptr) {
+            throw std::runtime_error("secure multipart boundary generation failed");
+        }
+        std::pmr::string boundary(token->value(), context.arena());
+        HttpResponse response({.resource = context.arena()});
+        addFileHeaders(response);
+        applyFileResponseState(response, http_status::kPartialContent);
+        const auto media_type = response.header("Content-Type");
+        const auto selected_media_type = media_type.value_or(source.body.guessedContentType());
+        const auto content_encoding = source.contentCoding == HttpContentCoding::kIdentity
+                                          ? std::string_view{}
+                                          : httpContentCodingToken(source.contentCoding);
+        auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source.size,
+            selected_media_type, boundary, content_encoding, context.arena());
+
+        // The outer representation is multipart, not the encoded file bytes.
+        // Carry the selected representation's coding on each part instead.
+        response.header("Content-Type", multipart_plan.content_type());
+        response.removeHeader("Content-Range");
+        response.removeHeader("Content-Encoding");
+        response.removeHeader("Content-Length");
+        source.body.set_multipart_body(response, context.arena(), source.size, std::move(multipart_plan));
+        return response;
+    };
 
     if (request.knownMethod() == HttpKnownMethod::kHead) {
         validateIndexedFileForBodylessResponse();
@@ -299,7 +352,7 @@ template <typename ApplyResponseState>
         },
         HttpRepresentationResponseOptions{
             .normalStatus = normalStatus,
-            .rangePolicy = honorRangeRequests ? HttpRangeRequestPolicy::kHonorSingleByteRange
+            .rangePolicy = honorRangeRequests ? HttpRangeRequestPolicy::honor_byte_ranges
                                               : HttpRangeRequestPolicy::kIgnore,
         });
     if (plan.preconditionFailed()) {
@@ -318,6 +371,9 @@ template <typename ApplyResponseState>
         addFileHeaders(response);
         applyFileResponseState(response, plan.status());
         return response;
+    }
+    if (const auto* ranges = plan.multipart_ranges()) {
+        return make_multipart_response(*ranges);
     }
     if (const auto* range = plan.partial()) {
         HttpResponse response({.resource = context.arena()});

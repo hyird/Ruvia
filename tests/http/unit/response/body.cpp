@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory_resource>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +18,25 @@
 #include "test_harness.h"
 
 namespace {
+
+class SwitchableFailingResource final : public std::pmr::memory_resource {
+public:
+    bool fail{};
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (fail) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 using ruvia::HttpResponse;
 using ruvia::detail::HttpResponseBody;
@@ -228,6 +248,27 @@ RUVIA_TEST(response_file_body_move_preserves_owned_path_and_identity) {
         RUVIA_CHECK_EQ(file->length(), std::uint64_t{9});
         RUVIA_CHECK(file->identity() == identity);
     }
+}
+
+RUVIA_TEST(multipart_body_allocation_failure_preserves_previous_body) {
+    SwitchableFailingResource responseResource;
+    HttpResponse response({.resource = &responseResource});
+    response.body("preserved");
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
+    auto plan = ruvia::make_http_multipart_byte_range_plan(
+        ranges, 10, "text/plain", "allocation_test", {}, std::pmr::new_delete_resource());
+
+    responseResource.fail = true;
+    bool threw = false;
+    try {
+        response.multipart_file_body("multipart-response-fixture.bin", 10,
+            ruvia::HttpResponseFileIdentity::unchecked(), std::move(plan));
+    } catch (const std::bad_alloc&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    RUVIA_CHECK_EQ(response.bodyBytes(), std::string_view("preserved"));
+    RUVIA_CHECK(!response.has_multipart_file_body());
 }
 
 RUVIA_TEST(response_body_move_preserves_active_alternative) {

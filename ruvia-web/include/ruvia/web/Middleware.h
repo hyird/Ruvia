@@ -13,6 +13,9 @@ struct MiddlewareScopeOptions final {
 // use<T>() call site needs Controller.h, Testing.h, or
 // detail/middleware/MiddlewareRegistration.h. This header stays free of
 // Context so App.h does not pull it in.
+// A middleware may declare `static constexpr bool ruvia_replay_safe = true;`.
+// Putting that middleware in a route macro's middleware list explicitly opts
+// the route's handler and declared middleware chain into HTTP/3 0-RTT replay.
 
 class Middleware {
 protected:

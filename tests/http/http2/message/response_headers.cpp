@@ -513,7 +513,7 @@ RUVIA_TEST(http2_response_headers_reject_connection_specific_fields_before_hpack
 RUVIA_TEST(http2_response_headers_reject_leading_and_trailing_value_whitespace_before_hpack) {
     for (const auto value : {" value", "value ", "\tvalue", "value\t"}) {
         HttpResponse response({.resource = std::pmr::get_default_resource()});
-        ruvia::detail::setResponseHeaderStableView(response, "X-Test", value);
+        response.header_stable_view("X-Test", value);
 
         Collector headers;
         RUVIA_CHECK(!decodeResponseHeaders(response, headers));
@@ -529,7 +529,7 @@ RUVIA_TEST(http2_response_headers_reject_malformed_name_and_value_before_hpack) 
 
     for (const auto& [name, value] : fields) {
         HttpResponse response({.resource = std::pmr::get_default_resource()});
-        ruvia::detail::setResponseHeaderStableView(response, name, value);
+        response.header_stable_view(name, value);
 
         Collector headers;
         RUVIA_CHECK(!decodeResponseHeaders(response, headers));

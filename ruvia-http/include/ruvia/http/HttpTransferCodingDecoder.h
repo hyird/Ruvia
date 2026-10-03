@@ -25,6 +25,7 @@ public:
 private:
     friend class HttpTransferCodingDecodeResult;
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecodeNeedInput(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
@@ -43,6 +44,7 @@ public:
 private:
     friend class HttpTransferCodingDecodeResult;
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     constexpr HttpTransferCodingDecodeOutputView(std::size_t consumedBytes, std::string_view bytes) noexcept
         : consumedBytes_(consumedBytes),
           bytes_(bytes) {}
@@ -59,6 +61,7 @@ public:
 private:
     friend class HttpTransferCodingDecodeResult;
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecodeComplete(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
@@ -76,6 +79,7 @@ public:
 private:
     friend class HttpTransferCodingDecodeResult;
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     constexpr HttpTransferCodingDecodeFailure(std::size_t consumedBytes, HttpTransferCodingDecodeError error) noexcept
         : consumedBytes_(consumedBytes),
           error_(error) {}
@@ -92,6 +96,7 @@ public:
 private:
     friend class HttpTransferCodingDecodeResult;
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecoderFailure(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
     std::size_t consumedBytes_;
@@ -125,6 +130,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecoder;
+    friend class http_transfer_coding_stack_decoder;
     using Value = std::variant<HttpTransferCodingDecodeNeedInput, HttpTransferCodingDecodeOutputView, HttpTransferCodingDecodeComplete, HttpTransferCodingDecodeFailure, HttpTransferCodingDecoderFailure>;
     template <typename Result>
     explicit HttpTransferCodingDecodeResult(Result result) noexcept
@@ -136,7 +142,25 @@ private:
 // borrow the caller's scratch storage. Consume each view before reusing it.
 // Keep the decoder at a stable address and its PMR resource alive until
 // destruction. Drain output with decode({}, scratch) before requesting more
-// input; finishInput() commits framing EOF after all input/output is drained.
+// input; finish_input() commits framing EOF after all input/output is drained.
+// Decodes a protocol-order coding sequence in reverse with bounded per-layer
+// scratch. Each output view borrows the caller's output buffer.
+class http_transfer_coding_stack_decoder final {
+public:
+    http_transfer_coding_stack_decoder(std::span<const HttpTransferCoding> codings,
+        std::pmr::memory_resource* resource, ProtocolByteLimit decoded_limit);
+    ~http_transfer_coding_stack_decoder();
+    http_transfer_coding_stack_decoder(const http_transfer_coding_stack_decoder&) = delete;
+    http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
+    [[nodiscard]] HttpTransferCodingDecodeResult decode(
+        std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] HttpTransferCodingDecodeResult finish_input() noexcept;
+
+private:
+    struct impl;
+    impl* impl_{nullptr};
+};
+
 class HttpTransferCodingDecoder final {
 public:
     HttpTransferCodingDecoder(HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit decodedLimit);

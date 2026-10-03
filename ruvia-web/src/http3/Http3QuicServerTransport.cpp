@@ -35,7 +35,7 @@ ruvia::quic_server_admit_result http3_quic_server_transport::admit_initial(
     std::string_view server_name) {
     auto session = ruvia::detail::makePmrObject<tls_session>(resource_,
         tls_context_.default_context(), ruvia::quic_role::server, h3_alpn,
-        server_name, resource_);
+        server_name, resource_, nullptr, tls_context_.early_data_enabled());
     const auto admitted = server_->admit_initial(offer, session->driver_view(), now);
     if (admitted.status != ruvia::quic_operation_status::accepted) {
         return admitted;

@@ -1,5 +1,6 @@
 #include <array>
 
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 
 #include "http2_connection_fixture.h"
@@ -199,7 +200,7 @@ RUVIA_TEST(http2_connection_rejects_every_data_submission_after_local_end_stream
     ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
 
     std::uint64_t state = 0x4ae7'196d'25f0'83bcULL;
@@ -330,7 +331,7 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "8");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
     RUVIA_CHECK(
         conn.submitData(1, "12345", Http2EndStream::kKeepOpen) == Http2DataSubmitStatus::kQueued);
@@ -375,8 +376,8 @@ RUVIA_TEST(http2_connection_reset_aborts_queued_data_state) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(std::uint32_t{1},
-        std::move(response), ruvia::detail::ResponseStreamKind::kGeneric,
-        ResponseTrailerIntent::kNone)));
+        std::move(response), ruvia::http_response_stream_kind::generic,
+        http_response_trailer_intent::none)));
     RUVIA_CHECK(conn.submitData(1, "reset", Http2EndStream::kKeepOpen) ==
                 Http2DataSubmitStatus::kQueued);
     RUVIA_CHECK(conn.dataQueueState(1) == ruvia::Http2DataQueueState::kQueued);

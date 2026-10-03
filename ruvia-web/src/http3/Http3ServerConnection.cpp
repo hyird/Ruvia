@@ -129,7 +129,9 @@ struct Http3ServerConnection::RequestEntry final {
           streamId(streamIdValue),
           dispatch(ownerValue.session_, ownerValue.routes_, ownerValue.worker_,
               ownerValue.services_, ownerValue.options_, ownerValue.outbound_,
-              {ownerValue.epoch_, ownerValue.connectionGeneration_, streamId, slotValue.pushId},
+              {ownerValue.epoch_, ownerValue.connectionGeneration_, streamId, slotValue.pushId,
+                  ownerValue.input_.receivedEarlyData(streamId)},
+
               scannerEntry, ownerValue.executor_,
               {.context = &ownerValue,
                   .attachScanner = &Http3ServerConnection::attachTunnelScannerThunk,

@@ -34,6 +34,35 @@ std::optional<HttpResponseFileView> HttpResponse::fileBody() const& noexcept {
     return detail::responseBody(*this).file();
 }
 
+bool HttpResponse::has_multipart_file_body() const noexcept {
+    return detail::responseBody(*this).multipart_body() != nullptr;
+}
+
+std::size_t HttpResponse::body_segment_count() const noexcept {
+    const auto& body = detail::responseBody(*this);
+    if (const auto* multipart = body.multipart_body()) {
+        return multipart->segment_count();
+    }
+    return body.size() == 0 ? 0 : 1;
+}
+
+http_response_body_segment_view HttpResponse::body_segment(std::size_t index) const& {
+    const auto& body = detail::responseBody(*this);
+    if (const auto* multipart = body.multipart_body()) {
+        if (index >= multipart->segment_count()) {
+            throw std::out_of_range("response body segment index is out of range");
+        }
+        return multipart->segment(index);
+    }
+    if (index != 0) {
+        throw std::out_of_range("response body segment index is out of range");
+    }
+    if (const auto file = body.file()) {
+        return {.file_ = file};
+    }
+    return {.bytes_ = body.bytes()};
+}
+
 std::uint64_t HttpResponseBodyPlan::bufferedRepresentationLength(const HttpResponse& response) const noexcept {
     if (!statusAllowsBody() || contentSemantics() == HttpResponseContentSemantics::kConnectTunnel) {
         return 0;
@@ -164,6 +193,10 @@ HttpResponse HttpResponse::cloneForTransaction() const {
     } else if (const auto* const borrowedFile = body_.borrowedFile()) {
         clone.body_.setBorrowedFile(borrowedFile->nativePathCStr(), borrowedFile->size(),
             borrowedFile->offset(), borrowedFile->length(), borrowedFile->identity());
+    } else if (const auto* const multipart = body_.multipart_body()) {
+        clone.body_.set_multipart(clone.resource(),
+            multipart->file().toPath(), multipart->file_size(),
+            multipart->identity(), multipart->plan().clone(clone.resource()));
     }
 
     return clone;
@@ -459,6 +492,11 @@ void HttpResponse::materializeBody() {
 void HttpResponse::fileBody(std::filesystem::path file, std::uint64_t size,
     std::uint64_t offset, std::uint64_t length, HttpResponseFileIdentity identity) {
     setFileBody(std::move(file), size, offset, length, identity);
+}
+
+void HttpResponse::multipart_file_body(std::filesystem::path file, std::uint64_t size,
+    HttpResponseFileIdentity identity, http_multipart_byte_range_plan&& plan) {
+    body_.set_multipart(resource(), file, size, identity, std::move(plan));
 }
 
 void HttpResponse::contentRange(

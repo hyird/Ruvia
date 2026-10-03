@@ -22,6 +22,15 @@ inline constexpr std::array<std::byte, 12> quic_v1_retry_integrity_nonce{
     std::byte{0x46}, std::byte{0x15}, std::byte{0x99}, std::byte{0xd3}, std::byte{0x5d},
     std::byte{0x63}, std::byte{0x2b}, std::byte{0xf2}, std::byte{0x23}, std::byte{0x98},
     std::byte{0x25}, std::byte{0xbb}};
+inline constexpr std::array<std::byte, 16> quic_v2_retry_integrity_key{
+    std::byte{0x8f}, std::byte{0xb4}, std::byte{0xb0}, std::byte{0x1b}, std::byte{0x56},
+    std::byte{0xac}, std::byte{0x48}, std::byte{0xe2}, std::byte{0x60}, std::byte{0xfb},
+    std::byte{0xcb}, std::byte{0xce}, std::byte{0xad}, std::byte{0x7c}, std::byte{0xcc},
+    std::byte{0x92}};
+inline constexpr std::array<std::byte, 12> quic_v2_retry_integrity_nonce{
+    std::byte{0xd8}, std::byte{0x69}, std::byte{0x69}, std::byte{0xbc}, std::byte{0x2d},
+    std::byte{0x7c}, std::byte{0x6d}, std::byte{0x99}, std::byte{0x90}, std::byte{0xef},
+    std::byte{0xb0}, std::byte{0x4a}};
 
 struct quic_cipher_suite_parameters {
     std::size_t hash_size{};
@@ -69,8 +78,9 @@ struct quic_initial_secrets final {
 };
 
 // RFC 9001 v1 Initial secrets derived from the Initial DCID.
-quic_initial_secrets derive_quic_v1_initial_secrets(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, std::span<const std::byte> initial_destination_connection_id);
+quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provider,
+    std::pmr::memory_resource* resource, quic_version version,
+    std::span<const std::byte> initial_destination_connection_id);
 
 // Encodes the complete TLS 1.3 HKDF-Expand-Label info and expands into caller-owned output.
 void hkdf_expand_label(quic_crypto_provider_view provider, quic_cipher_suite suite,
@@ -109,7 +119,7 @@ private:
 
 // Derives quic key/iv/hp from a TLS traffic secret. No keys or contexts are created per packet.
 quic_packet_keys derive_quic_packet_keys(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, quic_cipher_suite suite,
+    std::pmr::memory_resource* resource, quic_version version, quic_cipher_suite suite,
     quic_crypto_direction direction, std::span<const std::byte> traffic_secret);
 
 class quic_updated_packet_keys final {
@@ -140,11 +150,11 @@ private:
 
 // RFC 9001 key update derives quic ku + quic key + quic iv. Header protection is unchanged.
 quic_updated_packet_keys update_quic_packet_keys(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, quic_cipher_suite suite,
+    std::pmr::memory_resource* resource, quic_version version, quic_cipher_suite suite,
     quic_crypto_direction direction, std::span<const std::byte> current_traffic_secret);
 
 // Computes the RFC 9001 v1 Retry integrity tag over caller's pseudo-packet.
-std::array<std::byte, 16> quic_v1_retry_integrity_tag(
-    quic_crypto_provider_view provider, std::span<const std::byte> retry_pseudo_packet);
+std::array<std::byte, 16> quic_retry_integrity_tag(quic_crypto_provider_view provider,
+    quic_version version, std::span<const std::byte> retry_pseudo_packet);
 
 }  // namespace ruvia::detail

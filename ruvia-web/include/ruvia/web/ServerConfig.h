@@ -121,6 +121,9 @@ struct TlsConfig final {
     std::filesystem::path privateKeyFile{};
     std::string privateKeyPassword{};
     TlsClientCertificateConfig clientCertificates{};
+    // Disabled by default. Early requests still require an explicit replay-safe
+    // route and remain subject to OpenSSL's built-in anti-replay protection.
+    bool http3_early_data{false};
     std::vector<TlsSniConfig> sni{};
 };
 

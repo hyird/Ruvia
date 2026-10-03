@@ -7,6 +7,7 @@
 
 #include "ruvia/http/Http1ClientResponseBodyDecoder.h"
 
+#include "content_decoding_fixture.h"
 #include "http_client_response_fixture.h"
 
 using http_client_response_test::parseHead;
@@ -467,6 +468,32 @@ RUVIA_TEST(http1_response_body_decoder_fixed_length_eof_is_incomplete) {
     const auto failure = decoder.finishInput({}, scratch);
     RUVIA_CHECK(failure.protocolFailure() != nullptr);
     RUVIA_CHECK(failure.protocolFailure()->error() == ruvia::Http1ClientResponseBodyError::kIncompleteBody);
+}
+
+RUVIA_TEST(http1_response_body_decoder_decodes_transfer_coding_stack_in_reverse_order) {
+    constexpr std::string_view plain = "HTTP/1 transfer coding stack";
+    const auto wire = zlib_deflate_compress(gzipCompress(plain));
+    const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate");
+    ruvia::Http1ClientResponseBodyDecoder decoder(head.plan(), std::pmr::get_default_resource());
+    std::array<char, 1> scratch{};
+    std::string output;
+    std::string_view input(wire);
+    bool complete = false;
+    for (std::size_t count = 0; count < 1024 && !complete; ++count) {
+        const auto result = decoder.finishInput(input, scratch);
+        input.remove_prefix(result.consumedBytes());
+        if (const auto* decoded = result.output()) {
+            output.append(decoded->bytes());
+        }
+        if (result.protocolFailure() != nullptr || result.decoderFailure() != nullptr) {
+            RUVIA_CHECK(false);
+            return;
+        }
+        complete = result.complete() != nullptr;
+    }
+    RUVIA_CHECK(complete);
+    RUVIA_CHECK(input.empty());
+    RUVIA_CHECK_EQ(output, std::string(plain));
 }
 
 RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wire_input) {

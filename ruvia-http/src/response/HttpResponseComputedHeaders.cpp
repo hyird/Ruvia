@@ -113,11 +113,11 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask,
 
 }  // namespace
 
-void HttpResponse::setAllowHeader(
-    std::uint32_t methodMask, std::span<const std::string_view> extensionMethods) {
+void HttpResponse::allow_methods(
+    std::uint32_t method_mask, std::span<const std::string_view> extension_methods) {
     auto& header = prepareHeaderValueStorage(
-        "Allow", allowHeaderValueSize(methodMask, extensionMethods), detail::kResponseHeaderAllow);
-    writeAllowHeaderValue(header, methodMask, extensionMethods);
+        "Allow", allowHeaderValueSize(method_mask, extension_methods), detail::kResponseHeaderAllow);
+    writeAllowHeaderValue(header, method_mask, extension_methods);
 }
 
 void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size) {

@@ -551,6 +551,23 @@ ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openTunnel(const HttpC
     return detail::makeScopedOperation(operationScope(), pool_->openTunnel(std::move(request), config, options_));
 }
 
+quic_path_migration HttpClientHandle::start_quic_path_migration(
+    const asio::ip::udp::endpoint& local_endpoint) const {
+    requireActive();
+    return pool_->start_quic_path_migration(local_endpoint);
+}
+
+std::optional<quic_path_migration> HttpClientHandle::path_migration(
+    std::uint64_t id) const {
+    requireActive();
+    return pool_->path_migration(id);
+}
+
+quic_operation_status HttpClientHandle::cancel_quic_path_migration(std::uint64_t id) const {
+    requireActive();
+    return pool_->cancel_quic_path_migration(id);
+}
+
 HttpClientStats HttpClientHandle::stats() const {
     requireActive();
     return pool_->stats();

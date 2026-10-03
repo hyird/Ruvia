@@ -9,6 +9,7 @@
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3ResponseWriter.h"
 #include "ruvia/http/HttpInterimResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 #include "test_harness.h"
 
@@ -82,8 +83,8 @@ RUVIA_TEST(http3_interim_and_streaming_heads_project_mixed_case_names_in_order) 
         response.header("X-Long-Mixed-Case-Header", "second",
             {.mode = ruvia::HttpResponseHeaderMode::kAppend});
         const auto result = ruvia::encodeHttp3StreamingResponseHead(std::move(response),
-            ruvia::HttpKnownMethod::kGet, ruvia::ResponseStreamKind::kGeneric,
-            ruvia::ResponseTrailerIntent::kNone, {}, &streaming_resource);
+            ruvia::HttpKnownMethod::kGet, ruvia::http_response_stream_kind::generic,
+            ruvia::http_response_trailer_intent::none, {}, &streaming_resource);
         RUVIA_CHECK(result.has_value());
         if (result) {
             Fields decoded;
@@ -112,12 +113,12 @@ RUVIA_TEST(http3_streaming_head_preserves_length_projects_sse_and_trailer_semant
         ruvia::HttpResponse response({.resource = &resource});
         response.header("Content-Length", "17");
         auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kGet,
-            ruvia::ResponseStreamKind::kSse, ruvia::ResponseTrailerIntent::kPresent, {}, &resource);
+            ruvia::http_response_stream_kind::sse, ruvia::http_response_trailer_intent::present, {}, &resource);
         RUVIA_CHECK(head.has_value());
         if (head) {
             RUVIA_CHECK_EQ(head->head.declaredContentLength.value_or(0), 17U);
-            RUVIA_CHECK(head->commitPlan.headDisposition() == ruvia::ResponseStreamHeadDisposition::kBodyOpen);
-            RUVIA_CHECK(head->commitPlan.trailerFraming() == ruvia::ResponseStreamTrailerFraming::kHttp3TrailingHeaders);
+            RUVIA_CHECK(head->commit_plan.head_disposition() == ruvia::http_response_stream_head_disposition::body_open);
+            RUVIA_CHECK(head->commit_plan.trailer_framing() == ruvia::http_response_stream_trailer_framing::http3_trailing_headers);
             Fields fields;
             RUVIA_CHECK(ruvia::decodeHttp3FieldSection(head->head.fieldSection, collect, &fields).has_value());
             RUVIA_CHECK(std::ranges::find(fields.values, "text/event-stream") != fields.values.end());
@@ -131,16 +132,16 @@ RUVIA_TEST(http3_streaming_head_preserves_length_projects_sse_and_trailer_semant
         ruvia::HttpResponse response;
         response.status(status);
         const auto head = ruvia::encodeHttp3StreamingResponseHead(std::move(response), ruvia::HttpKnownMethod::kHead,
-            ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+            ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
         RUVIA_CHECK(head.has_value());
         if (head) {
-            RUVIA_CHECK(head->commitPlan.headDisposition() == ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+            RUVIA_CHECK(head->commit_plan.head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
         }
     }
     ruvia::HttpResponse forbidden;
     forbidden.status(ruvia::http_status::kNoContent);
     RUVIA_CHECK(!ruvia::encodeHttp3StreamingResponseHead(std::move(forbidden), ruvia::HttpKnownMethod::kGet,
-        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kPresent));
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::present));
 }
 
 RUVIA_TEST(http3_response_head_encodes_status_and_fields_for_qpack_decode) {

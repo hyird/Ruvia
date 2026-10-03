@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -18,7 +19,7 @@ namespace ruvia {
 
 // Uses the parser's classified header descriptors without rescanning wire names.
 [[nodiscard]] HttpContentCodingFieldResult requestContentCoding(
-    const HttpRequest& request) noexcept;
+    const HttpRequest& request, std::pmr::memory_resource* resource);
 
 class HttpRequestContentDecodeProtocolFailure final {
 public:
@@ -85,7 +86,7 @@ public:
 
 private:
     friend HttpRequestContentDecodeResult decodeHttpRequestContent(
-        HttpContentCoding, std::string_view, HttpContentDecodeOptions);
+        std::span<const HttpContentCoding>, std::string_view, HttpContentDecodeOptions);
 
     using Value = std::variant<HttpDecodedContent, HttpRequestContentDecodeProtocolFailure,
         HttpRequestContentDecoderFailure>;
@@ -108,8 +109,9 @@ private:
 };
 
 [[nodiscard]] inline HttpRequestContentDecodeResult decodeHttpRequestContent(
-    HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options) {
-    auto result = decodeHttpContent(coding, input, options);
+    std::span<const HttpContentCoding> codings, std::string_view input,
+    HttpContentDecodeOptions options) {
+    auto result = decodeHttpContent(codings, input, options);
     if (auto* decoded = result.decoded()) {
         return HttpRequestContentDecodeResult(std::move(*decoded));
     }

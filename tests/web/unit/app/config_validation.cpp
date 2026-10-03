@@ -569,11 +569,19 @@ RUVIA_TEST(http3_client_config_requires_https_and_bounded_response_storage) {
     RUVIA_CHECK(!throwsInvalid(
         [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
 
+    config.http3_early_data = true;
+    RUVIA_CHECK(!throwsInvalid(
+        [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+    config.protocol = ruvia::HttpClientProtocol::kNegotiate;
     config.scheme = ruvia::HttpScheme::kHttp;
+    RUVIA_CHECK(throwsInvalid(
+        [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
+    config.protocol = ruvia::HttpClientProtocol::kHttp3Only;
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
 
     config.scheme = ruvia::HttpScheme::kHttps;
+    config.http3_early_data = false;
     config.maxResponseBytes = std::size_t{64} * 1024 * 1024 + 1;
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));

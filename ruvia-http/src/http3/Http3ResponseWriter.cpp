@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
@@ -411,16 +412,16 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimR
 
 static std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits,
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits,
     std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
-    const auto plan = planHttpResponseStreamCommit(ResponseStreamFraming::kHttp3Frames, method, response.status(), trailers);
+    const auto plan = plan_http_response_stream_commit(http_response_stream_framing::http3_frames, method, response.status(), trailers);
     if (response.status().isInformational()) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus});
     }
-    if (!plan.trailerIntentAllowed()) {
+    if (!plan.trailer_intent_allowed()) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
     }
-    auto prepared = prepareHttpResponseStreamHead(std::move(response), kind, plan);
+    auto prepared = prepare_http_response_stream_head(std::move(response), kind, plan);
     auto* memory = resource != nullptr ? resource : std::pmr::get_default_resource();
     std::size_t lowercase_bytes = 0;
     for (const auto& header : prepared.response().headers()) {
@@ -449,11 +450,11 @@ encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method,
 }
 
 std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeHttp3StreamingResponseHead(HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeStreamingResponseHead(std::move(response), method, kind, trailers, limits, resource, nullptr, 0);
 }
 std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeHttp3StreamingResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeStreamingResponseHead(std::move(response), method, kind, trailers, limits, resource, &encoder, streamId);
 }
 std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,

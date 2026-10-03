@@ -31,6 +31,12 @@ public:
 
     HttpClientRequestStorage& appendHeader(std::string_view name, std::string_view value);
     HttpClientRequestStorage& setBody(std::string_view body);
+    void set_replay_safe(bool replay_safe) noexcept {
+        replay_safe_ = replay_safe;
+    }
+    [[nodiscard]] bool replay_safe() const noexcept {
+        return replay_safe_;
+    }
 
     void setTunnel(std::string_view authority, std::string_view protocol);
     void bindTunnel(HttpClientTunnelState& tunnel) noexcept {
@@ -93,6 +99,7 @@ private:
     bool isTunnel_{};
     HttpClientTunnelState* tunnel_{};
     bool hasBody_{false};
+    bool replay_safe_{};
     HttpClientUploadState* upload_{};
 };
 

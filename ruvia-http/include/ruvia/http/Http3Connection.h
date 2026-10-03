@@ -22,6 +22,7 @@
 #include "ruvia/http/HttpPriority.h"
 #include "ruvia/http/HttpPush.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 namespace ruvia {
 
@@ -179,7 +180,7 @@ public:
     [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId,
         const HttpResponse& response, HttpBufferedResponseWritePlan plan, Http3FieldSectionLimits limits = {});
     [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId,
-        HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits = {});
+        HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits = {});
     [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId,
         const HttpInterimResponseHead& response, Http3FieldSectionLimits limits = {});
     [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::uint64_t streamId,

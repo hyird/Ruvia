@@ -15,18 +15,12 @@ namespace {
 
 class error_queue_scope final {
 public:
-    error_queue_scope() noexcept
-        : marked_(ERR_peek_error() != 0 && ERR_set_mark() == 1) {}
-    ~error_queue_scope() noexcept {
-        if (marked_) {
-            ERR_pop_to_mark();
-        } else {
-            ERR_clear_error();
-        }
+    error_queue_scope() noexcept {
+        ERR_clear_error();
     }
-
-private:
-    bool marked_;
+    ~error_queue_scope() noexcept {
+        ERR_clear_error();
+    }
 };
 
 quic_encryption_level encryption_level(std::uint32_t level) {
@@ -35,8 +29,9 @@ quic_encryption_level encryption_level(std::uint32_t level) {
             return quic_encryption_level::handshake;
         case OSSL_RECORD_PROTECTION_LEVEL_APPLICATION:
             return quic_encryption_level::application;
-        case OSSL_RECORD_PROTECTION_LEVEL_NONE:
         case OSSL_RECORD_PROTECTION_LEVEL_EARLY:
+            return quic_encryption_level::early_data;
+        case OSSL_RECORD_PROTECTION_LEVEL_NONE:
         default:
             throw std::invalid_argument("unsupported OpenSSL QUIC encryption level");
     }
@@ -93,7 +88,8 @@ const OSSL_DISPATCH callbacks[]{
 
 openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role role,
     std::span<const unsigned char> alpn, std::string_view peer_host,
-    std::pmr::memory_resource* resource)
+    std::pmr::memory_resource* resource, SSL_SESSION* resumption_session,
+    bool enable_early_data)
     : role_(role),
       resource_(resource ? resource : std::pmr::get_default_resource()),
       peer_host_(peer_host, resource_),
@@ -125,13 +121,32 @@ openssl_quic_tls_session::openssl_quic_tls_session(SSL_CTX* context, quic_role r
     } else {
         SSL_set_accept_state(ssl_.get());
     }
+    // Session callbacks are context-wide; recover the owner through this SSL's stable ex_data.
+    if (role_ == quic_role::client) {
+        const int index = session_owner_index();
+        if (index < 0 || SSL_set_ex_data(ssl_.get(), index, this) != 1) {
+            throw std::runtime_error("failed to bind QUIC TLS session owner");
+        }
+        SSL_CTX_set_session_cache_mode(context, SSL_SESS_CACHE_CLIENT);
+        SSL_CTX_sess_set_new_cb(context, new_session_callback);
+    }
     // OpenSSL snapshots the SSL role when the callback table is installed.
     if (SSL_set_quic_tls_cbs(ssl_.get(), callbacks, this) != 1) {
         throw std::runtime_error("failed to install OpenSSL QUIC TLS callbacks");
     }
+    if (resumption_session && SSL_set_session(ssl_.get(), resumption_session) != 1) {
+        throw std::runtime_error("failed to install QUIC TLS resumption session");
+    }
+    if (enable_early_data && role_ == quic_role::client &&
+        (resumption_session == nullptr || SSL_SESSION_get_max_early_data(resumption_session) == 0)) {
+        throw std::invalid_argument("client QUIC early data requires a ticket with an early-data allowance");
+    }
+    if (enable_early_data && role_ == quic_role::server && resumption_session != nullptr) {
+        throw std::invalid_argument("server QUIC early data uses the received ClientHello ticket");
+    }
     // This API requires QUIC TLS callbacks to have initialized the QUIC TLS state.
-    if (SSL_set_quic_tls_early_data_enabled(ssl_.get(), 0) != 1) {
-        throw std::runtime_error("failed to disable QUIC TLS early data");
+    if (SSL_set_quic_tls_early_data_enabled(ssl_.get(), enable_early_data ? 1 : 0) != 1) {
+        throw std::runtime_error("failed to configure QUIC TLS early data");
     }
 }
 
@@ -182,15 +197,25 @@ quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handsh
 
         std::array<unsigned char, 1> post_handshake{};
         std::size_t read{};
+        ERR_clear_error();
         const int result = handshake.completed()
                                ? SSL_read_ex(ssl_.get(), post_handshake.data(), post_handshake.size(), &read)
                                : SSL_do_handshake(ssl_.get());
+        const int error = result == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl_.get(), result);
         if (callback_failed_) {
             handshake.fail(callback_alert_);
             return {quic_tls_progress::failed, callback_alert_};
         }
         if (result == 1) {
             if (!handshake.completed()) {
+                if (!SSL_is_init_finished(ssl_.get())) {
+                    return {quic_tls_progress::progress, quic_tls_alert::internal_error};
+                }
+                const int early_status = SSL_get_early_data_status(ssl_.get());
+                if (early_status == SSL_EARLY_DATA_ACCEPTED ||
+                    early_status == SSL_EARLY_DATA_REJECTED) {
+                    handshake.complete_early_data(early_status == SSL_EARLY_DATA_ACCEPTED);
+                }
                 const unsigned char* alpn{};
                 unsigned int alpn_size{};
                 SSL_get0_alpn_selected(ssl_.get(), &alpn, &alpn_size);
@@ -205,7 +230,6 @@ quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handsh
             return {quic_tls_progress::progress, quic_tls_alert::internal_error};
         }
 
-        const int error = SSL_get_error(ssl_.get(), result);
         if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
             return {quic_tls_progress::need_input, quic_tls_alert::internal_error};
         }
@@ -215,6 +239,50 @@ quic_tls_drive_result openssl_quic_tls_session::drive(quic_tls_handshake& handsh
         const auto failure = callback_failed_ ? callback_alert_ : quic_tls_alert::internal_error;
         handshake.fail(failure);
         return {quic_tls_progress::failed, failure};
+    }
+}
+
+std::unique_ptr<SSL_SESSION, openssl_quic_tls_session::session_deleter>
+openssl_quic_tls_session::take_resumption_session() noexcept {
+    return std::move(pending_session_);
+}
+
+void openssl_quic_tls_session::session_deleter::operator()(SSL_SESSION* session) const noexcept {
+    SSL_SESSION_free(session);
+}
+
+int openssl_quic_tls_session::session_owner_index() noexcept {
+    static const int index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    return index;
+}
+
+int openssl_quic_tls_session::new_session_callback(SSL* ssl, SSL_SESSION* session) noexcept {
+    const int index = session_owner_index();
+    auto* const owner = index < 0
+                            ? nullptr
+                            : static_cast<openssl_quic_tls_session*>(SSL_get_ex_data(ssl, index));
+    if (owner) {
+        owner->capture_resumption_session(session);
+    }
+    return 0;
+}
+
+void openssl_quic_tls_session::capture_resumption_session(SSL_SESSION* session) noexcept {
+    if (!session || SSL_SESSION_is_resumable(session) != 1) {
+        return;
+    }
+    const unsigned char* ticket{};
+    std::size_t ticket_size{};
+    SSL_SESSION_get0_ticket(session, &ticket, &ticket_size);
+    if (!ticket || ticket_size == 0 || ticket_size > 16 * 1024) {
+        return;
+    }
+    SSL_SESSION* const snapshot = SSL_SESSION_dup(session);
+    if (snapshot) {
+        pending_session_.reset(snapshot);
+    } else {
+        // Do not let a best-effort cache snapshot change SSL_get_error classification.
+        ERR_clear_error();
     }
 }
 

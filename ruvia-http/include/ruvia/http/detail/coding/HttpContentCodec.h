@@ -28,12 +28,16 @@ namespace ruvia::detail {
 
 [[nodiscard]] HttpContentDecodeResult decodeGzipContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
+[[nodiscard]] HttpContentDecodeResult decode_deflate_content(
+    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
 [[nodiscard]] HttpContentDecodeResult decodeBrotliContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
 [[nodiscard]] HttpContentDecodeResult decodeZstdContent(
     std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource);
 
 [[nodiscard]] HttpContentEncodeResult encodeGzipContent(
+    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
+[[nodiscard]] HttpContentEncodeResult encode_deflate_content(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);
 [[nodiscard]] HttpContentEncodeResult encodeBrotliContent(
     std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource);

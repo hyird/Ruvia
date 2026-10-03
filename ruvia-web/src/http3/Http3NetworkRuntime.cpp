@@ -1240,8 +1240,10 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
         }
 
         Http3StreamMailbox::DataReservation reservation;
+        stream.receivedEarlyData = stream.receivedEarlyData ||
+                                   quic.stream_info(stream.id).received_early_data;
         const Http3StreamMessageId messageId{connection.identity.epoch,
-            connection.identity.connectionGeneration, stream.id};
+            connection.identity.connectionGeneration, stream.id, {}, stream.receivedEarlyData};
         const auto reserved = worker.requestMailbox.reserveData(messageId, reservation);
         if (reserved == Http3StreamMailbox::ReservationResult::kFull ||
             reserved == Http3StreamMailbox::ReservationResult::kNoBlock) {

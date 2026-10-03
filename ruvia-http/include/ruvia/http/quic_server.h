@@ -9,6 +9,7 @@
 namespace ruvia {
 
 struct quic_server_config {
+    // Preferred version for compatible version negotiation; incoming offer versions are retained per connection.
     quic_version version{quic_version::v1};
     quic_transport_parameters local_transport_parameters{};
     quic_limits limits{};

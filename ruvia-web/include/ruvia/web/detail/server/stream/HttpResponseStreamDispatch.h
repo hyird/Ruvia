@@ -259,11 +259,11 @@ private:
 
 template <typename Sink>
 [[nodiscard]] HttpStatusCode committedResponseStreamStatus(const Sink& sink) {
-    const auto* plan = sink.commitPlan();
+    const auto* plan = sink.commit_plan();
     if (plan == nullptr) {
         throw std::logic_error("response stream has no committed protocol plan");
     }
-    return plan->responseStatus();
+    return plan->response_status();
 }
 
 // Drives a response-stream route over an already-constructed sink. peerAborted

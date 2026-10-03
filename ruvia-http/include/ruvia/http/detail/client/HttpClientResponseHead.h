@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <expected>
+#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/http/Http1ClientExchangeState.h"
@@ -26,9 +27,11 @@ struct Http1ClientParsedStatusLine final {
 };
 
 struct Http1ClientParsedResponseHead final {
-    explicit Http1ClientParsedResponseHead(const Http1ClientParsedStatusLine& statusLine) noexcept
+    explicit Http1ClientParsedResponseHead(const Http1ClientParsedStatusLine& statusLine,
+        std::pmr::memory_resource* resource)
         : statusCode(statusLine.statusCode),
-          protocolVersion(statusLine.protocolVersion) {}
+          protocolVersion(statusLine.protocolVersion),
+          transferEncoding(resource) {}
 
     std::array<HttpHeaderView, kMaxHttpHeaderFields> headers;
     std::size_t headerCount{0};
@@ -53,11 +56,12 @@ using Http1ClientResponsePlanningResult =
 
 // Parse the status line and header fields of one complete head section.
 [[nodiscard]] Http1ClientResponseHeadParseResult parseHttp1ClientResponseHeadFields(
-    std::string_view headSection, const Http1ClientExchangeState& exchangeState) noexcept;
+    std::string_view headSection, const Http1ClientExchangeState& exchangeState,
+    std::pmr::memory_resource* resource);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const Http1ClientExchangeState& exchangeState, const Http1ClientParsedResponseHead& response,
-    Http1ClientRequestContentPhase requestContentPhase) noexcept;
+    Http1ClientRequestContentPhase requestContentPhase);
 
 }  // namespace ruvia::detail
