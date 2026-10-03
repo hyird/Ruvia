@@ -1,7 +1,5 @@
 #pragma once
 
-#include <zlib.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -16,6 +14,10 @@
 
 namespace ruvia {
 
+namespace detail {
+class transfer_coding_decoder;
+}
+
 class HttpTransferCodingDecodeNeedInput final {
 public:
     [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
@@ -24,7 +26,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecodeResult;
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecodeNeedInput(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
@@ -43,7 +45,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecodeResult;
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     constexpr HttpTransferCodingDecodeOutputView(std::size_t consumedBytes, std::string_view bytes) noexcept
         : consumedBytes_(consumedBytes),
@@ -60,7 +62,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecodeResult;
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecodeComplete(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
@@ -78,7 +80,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecodeResult;
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     constexpr HttpTransferCodingDecodeFailure(std::size_t consumedBytes, HttpTransferCodingDecodeError error) noexcept
         : consumedBytes_(consumedBytes),
@@ -95,7 +97,7 @@ public:
 
 private:
     friend class HttpTransferCodingDecodeResult;
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     explicit constexpr HttpTransferCodingDecoderFailure(std::size_t consumedBytes) noexcept
         : consumedBytes_(consumedBytes) {}
@@ -129,7 +131,7 @@ public:
     const HttpTransferCodingDecoderFailure* decoderFailure() const&& = delete;
 
 private:
-    friend class HttpTransferCodingDecoder;
+    friend class detail::transfer_coding_decoder;
     friend class http_transfer_coding_stack_decoder;
     using Value = std::variant<HttpTransferCodingDecodeNeedInput, HttpTransferCodingDecodeOutputView, HttpTransferCodingDecodeComplete, HttpTransferCodingDecodeFailure, HttpTransferCodingDecoderFailure>;
     template <typename Result>
@@ -138,13 +140,15 @@ private:
     Value value_;
 };
 
-// Role-neutral incremental decoder. Input is never retained; output views
-// borrow the caller's scratch storage. Consume each view before reusing it.
-// Keep the decoder at a stable address and its PMR resource alive until
-// destruction. Drain output with decode({}, scratch) before requesting more
-// input; finish_input() commits framing EOF after all input/output is drained.
-// Decodes a protocol-order coding sequence in reverse with bounded per-layer
-// scratch. Each output view borrows the caller's output buffer.
+// The sole transfer-decoding entry point for one or more codings. Copies the
+// protocol-order sequence during construction and decodes it in reverse.
+// Input is never retained; output views borrow the caller's scratch storage.
+// Consume each view before reusing it. Keep the decoder at a stable address and
+// its PMR resource alive until destruction. Drain output with decode({}, scratch)
+// before requesting more input; finish_input() commits framing EOF only after
+// all input/output is drained. Each layer enforces decoded_limit independently.
+// decode/finish_input return typed failures because incremental drivers must
+// retain the exact wire consumption even when a layer fails; failure is terminal.
 class http_transfer_coding_stack_decoder final {
 public:
     http_transfer_coding_stack_decoder(std::span<const HttpTransferCoding> codings,
@@ -152,6 +156,8 @@ public:
     ~http_transfer_coding_stack_decoder();
     http_transfer_coding_stack_decoder(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;
+    http_transfer_coding_stack_decoder(http_transfer_coding_stack_decoder&&) = delete;
+    http_transfer_coding_stack_decoder& operator=(http_transfer_coding_stack_decoder&&) = delete;
     [[nodiscard]] HttpTransferCodingDecodeResult decode(
         std::string_view input, std::span<char> output) noexcept;
     [[nodiscard]] HttpTransferCodingDecodeResult finish_input() noexcept;
@@ -159,44 +165,6 @@ public:
 private:
     struct impl;
     impl* impl_{nullptr};
-};
-
-class HttpTransferCodingDecoder final {
-public:
-    HttpTransferCodingDecoder(HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit decodedLimit);
-    ~HttpTransferCodingDecoder();
-    HttpTransferCodingDecoder(const HttpTransferCodingDecoder&) = delete;
-    HttpTransferCodingDecoder& operator=(const HttpTransferCodingDecoder&) = delete;
-    HttpTransferCodingDecoder(HttpTransferCodingDecoder&&) = delete;
-    HttpTransferCodingDecoder& operator=(HttpTransferCodingDecoder&&) = delete;
-    [[nodiscard]] HttpTransferCodingDecodeResult decode(std::string_view input, std::span<char> output) noexcept;
-    [[nodiscard]] HttpTransferCodingDecodeResult finishInput() noexcept;
-
-private:
-    struct InflateStep {
-        std::size_t consumed{0};
-        std::size_t produced{0};
-        int status{Z_OK};
-    };
-    struct Active final {};
-    struct GzipMemberBoundary final {};
-    struct Complete final {};
-    struct DecoderFailed final {};
-    using State = std::variant<Active, GzipMemberBoundary, Complete, HttpTransferCodingDecodeError, DecoderFailed>;
-    [[nodiscard]] InflateStep inflateStep(std::string_view input, std::span<char> output) noexcept;
-    [[nodiscard]] static HttpTransferCodingDecodeResult needInput(std::size_t consumed) noexcept;
-    [[nodiscard]] static HttpTransferCodingDecodeResult output(std::size_t consumed, std::string_view bytes) noexcept;
-    [[nodiscard]] static HttpTransferCodingDecodeResult complete(std::size_t consumed) noexcept;
-    [[nodiscard]] HttpTransferCodingDecodeResult fail(std::size_t consumed, HttpTransferCodingDecodeError error) noexcept;
-    [[nodiscard]] HttpTransferCodingDecodeResult failDecoder(std::size_t consumed) noexcept;
-    static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
-    static void zfreeThunk(voidpf opaque, voidpf address) noexcept;
-    z_stream stream_{};
-    State state_{Active{}};
-    std::pmr::memory_resource* resource_{nullptr};
-    ProtocolByteLimit bodyLimit_;
-    std::size_t decodedBytes_{0};
-    HttpTransferCoding coding_;
 };
 
 }  // namespace ruvia

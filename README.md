@@ -2788,11 +2788,18 @@ request's key, offered subprotocols, and permessage-deflate parameters.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
 
-`HttpTransferCodingDecoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
-provides incremental transfer decoding with caller-owned input and output storage.
-Its typed failures report invalid encoding or a decoded-size limit violation,
+`http_transfer_coding_stack_decoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
+is the single incremental transfer-decoding entry point for one or more codings.
+Pass the coding sequence in protocol order (for example,
+`std::array{HttpTransferCoding::kGzip}`); construction copies it and decoding
+runs in reverse order. Input is not retained and output borrows caller-owned
+scratch storage. Drain output before calling `finish_input()` at framing EOF.
+Each layer enforces the decoded-size budget; all decoder state uses the supplied
+PMR resource, which must outlive the decoder. Its typed terminal failures retain
+wire consumption and report invalid encoding or a decoded-size limit violation,
 not request-specific HTTP statuses. Request drivers use the HTTP request-body
 error mapping; response drivers retain their own response error contract.
+The single-coding zlib stage is private; there is no separate public decoder.
 
 `Http1ChunkedBodyDecoder` from `<ruvia/http/Http1ChunkedBodyDecoder.h>`
 provides zero-copy chunk framing. Its aggregate configuration selects payload

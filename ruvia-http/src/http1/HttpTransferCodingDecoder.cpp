@@ -1,10 +1,13 @@
 #include "ruvia/http/HttpTransferCodingDecoder.h"
 
+#include <zlib.h>
+
 #include <algorithm>
 #include <array>
 #include <limits>
 #include <memory>
 #include <new>
+#include <optional>
 #include <stdexcept>
 
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
@@ -12,26 +15,66 @@
 
 namespace ruvia {
 
-HttpTransferCodingDecoder::HttpTransferCodingDecoder(
-    HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit bodyLimit)
+namespace detail {
+
+// One zlib stage is an implementation detail of the coding sequence, not a
+// second public decoder. Its address must stay fixed for zlib's opaque pointer.
+class transfer_coding_decoder final {
+public:
+    transfer_coding_decoder(HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit decoded_limit);
+    ~transfer_coding_decoder();
+    transfer_coding_decoder(const transfer_coding_decoder&) = delete;
+    transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
+    [[nodiscard]] HttpTransferCodingDecodeResult decode(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] HttpTransferCodingDecodeResult finish_input() noexcept;
+
+private:
+    struct inflate_step_result {
+        std::size_t consumed{0};
+        std::size_t produced{0};
+        int status{Z_OK};
+    };
+    struct active final {};
+    struct gzip_member_boundary final {};
+    struct completed final {};
+    struct decoder_failed final {};
+    using state = std::variant<active, gzip_member_boundary, completed, HttpTransferCodingDecodeError, decoder_failed>;
+    [[nodiscard]] inflate_step_result inflate_step(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] static HttpTransferCodingDecodeResult need_input(std::size_t consumed) noexcept;
+    [[nodiscard]] static HttpTransferCodingDecodeResult output(std::size_t consumed, std::string_view bytes) noexcept;
+    [[nodiscard]] static HttpTransferCodingDecodeResult complete(std::size_t consumed) noexcept;
+    [[nodiscard]] HttpTransferCodingDecodeResult fail(std::size_t consumed, HttpTransferCodingDecodeError error) noexcept;
+    [[nodiscard]] HttpTransferCodingDecodeResult fail_decoder(std::size_t consumed) noexcept;
+    static voidpf zalloc_thunk(voidpf opaque, uInt items, uInt size) noexcept;
+    static void zfree_thunk(voidpf opaque, voidpf address) noexcept;
+    z_stream stream_{};
+    state state_{active{}};
+    std::pmr::memory_resource* resource_;
+    ProtocolByteLimit body_limit_;
+    std::size_t decoded_bytes_{0};
+    HttpTransferCoding coding_;
+};
+
+transfer_coding_decoder::transfer_coding_decoder(
+    HttpTransferCoding coding, std::pmr::memory_resource* resource, ProtocolByteLimit decoded_limit)
     : resource_(detail::httpPmrResourceOrDefault(resource)),
-      bodyLimit_(bodyLimit),
+      body_limit_(decoded_limit),
       coding_(coding) {
-    int windowBits = 0;
+    int window_bits = 0;
     switch (coding) {
         case HttpTransferCoding::kGzip:
-            windowBits = 15 + 16;
+            window_bits = 15 + 16;
             break;
         case HttpTransferCoding::kDeflate:
-            windowBits = 15;
+            window_bits = 15;
             break;
         default:
             throw std::invalid_argument("unsupported HTTP transfer coding");
     }
-    stream_.zalloc = &HttpTransferCodingDecoder::zallocThunk;
-    stream_.zfree = &HttpTransferCodingDecoder::zfreeThunk;
+    stream_.zalloc = &transfer_coding_decoder::zalloc_thunk;
+    stream_.zfree = &transfer_coding_decoder::zfree_thunk;
     stream_.opaque = this;
-    const int rc = inflateInit2(&stream_, windowBits);
+    const int rc = inflateInit2(&stream_, window_bits);
     if (rc == Z_MEM_ERROR) {
         throw std::bad_alloc();
     }
@@ -40,46 +83,46 @@ HttpTransferCodingDecoder::HttpTransferCodingDecoder(
     }
 }
 
-HttpTransferCodingDecoder::~HttpTransferCodingDecoder() {
+transfer_coding_decoder::~transfer_coding_decoder() {
     (void)inflateEnd(&stream_);
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::decode(
+HttpTransferCodingDecodeResult transfer_coding_decoder::decode(
     std::string_view input, std::span<char> output_buffer) noexcept {
-    if (std::holds_alternative<DecoderFailed>(state_)) {
+    if (std::holds_alternative<decoder_failed>(state_)) {
         return HttpTransferCodingDecodeResult(HttpTransferCodingDecoderFailure(0));
     }
     if (const auto* failure = std::get_if<HttpTransferCodingDecodeError>(&state_)) {
         return fail(0, *failure);
     }
-    if (std::holds_alternative<Complete>(state_)) {
+    if (std::holds_alternative<completed>(state_)) {
         return input.empty() ? complete(0) : fail(0, HttpTransferCodingDecodeError::kInvalidContent);
     }
     if (output_buffer.empty()) {
-        return failDecoder(0);
+        return fail_decoder(0);
     }
 
     std::size_t consumed = 0;
     std::size_t produced = 0;
     for (;;) {
-        if (std::holds_alternative<GzipMemberBoundary>(state_)) {
+        if (std::holds_alternative<gzip_member_boundary>(state_)) {
             if (consumed == input.size()) {
                 return produced != 0
                            ? output(consumed, std::string_view(output_buffer.data(), produced))
-                           : needInput(consumed);
+                           : need_input(consumed);
             }
             if (inflateReset(&stream_) != Z_OK) {
-                return failDecoder(consumed);
+                return fail_decoder(consumed);
             }
-            state_.emplace<Active>();
+            state_.emplace<active>();
         }
 
-        const auto step = inflateStep(input.substr(consumed), output_buffer.subspan(produced));
+        const auto step = inflate_step(input.substr(consumed), output_buffer.subspan(produced));
         consumed += step.consumed;
-        if (bodyLimit_.additionExceeds(decodedBytes_, step.produced)) {
+        if (body_limit_.additionExceeds(decoded_bytes_, step.produced)) {
             return fail(consumed, HttpTransferCodingDecodeError::kDecodedSizeExceeded);
         }
-        decodedBytes_ += step.produced;
+        decoded_bytes_ += step.produced;
         produced += step.produced;
 
         if (step.status == Z_STREAM_END) {
@@ -87,7 +130,7 @@ HttpTransferCodingDecodeResult HttpTransferCodingDecoder::decode(
                 if (consumed != input.size()) {
                     return fail(consumed, HttpTransferCodingDecodeError::kInvalidContent);
                 }
-                state_.emplace<Complete>();
+                state_.emplace<completed>();
                 return produced != 0
                            ? output(consumed, std::string_view(output_buffer.data(), produced))
                            : complete(consumed);
@@ -96,8 +139,8 @@ HttpTransferCodingDecodeResult HttpTransferCodingDecoder::decode(
             // RFC 1952 gzip data is a series of members. A member boundary is
             // not the end of the transfer coding: another member can arrive in
             // the same HTTP chunk or in a later one. Only framing EOF, reported
-            // through finishInput(), commits this boundary as complete.
-            state_.emplace<GzipMemberBoundary>();
+            // through finish_input(), commits this boundary as complete.
+            state_.emplace<gzip_member_boundary>();
             if (produced == output_buffer.size()) {
                 return output(consumed, std::string_view(output_buffer.data(), produced));
             }
@@ -108,7 +151,7 @@ HttpTransferCodingDecodeResult HttpTransferCodingDecoder::decode(
             if (step.status == Z_DATA_ERROR || step.status == Z_NEED_DICT) {
                 return fail(consumed, HttpTransferCodingDecodeError::kInvalidContent);
             }
-            return failDecoder(consumed);
+            return fail_decoder(consumed);
         }
 
         if (produced != 0) {
@@ -117,17 +160,17 @@ HttpTransferCodingDecodeResult HttpTransferCodingDecoder::decode(
         if (consumed != input.size()) {
             return fail(consumed, HttpTransferCodingDecodeError::kInvalidContent);
         }
-        return needInput(consumed);
+        return need_input(consumed);
     }
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::finishInput() noexcept {
-    if (std::holds_alternative<DecoderFailed>(state_)) {
+HttpTransferCodingDecodeResult transfer_coding_decoder::finish_input() noexcept {
+    if (std::holds_alternative<decoder_failed>(state_)) {
         return HttpTransferCodingDecodeResult(HttpTransferCodingDecoderFailure(0));
     }
-    if (std::holds_alternative<Complete>(state_) ||
-        std::holds_alternative<GzipMemberBoundary>(state_)) {
-        state_.emplace<Complete>();
+    if (std::holds_alternative<completed>(state_) ||
+        std::holds_alternative<gzip_member_boundary>(state_)) {
+        state_.emplace<completed>();
         return complete(0);
     }
     if (const auto* failure = std::get_if<HttpTransferCodingDecodeError>(&state_)) {
@@ -136,59 +179,61 @@ HttpTransferCodingDecodeResult HttpTransferCodingDecoder::finishInput() noexcept
     return fail(0, HttpTransferCodingDecodeError::kInvalidContent);
 }
 
-HttpTransferCodingDecoder::InflateStep HttpTransferCodingDecoder::inflateStep(
+transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_step(
     std::string_view input, std::span<char> output) noexcept {
-    const auto inputBytes = std::min<std::size_t>(input.size(), (std::numeric_limits<uInt>::max)());
+    const auto input_bytes = std::min<std::size_t>(input.size(), (std::numeric_limits<uInt>::max)());
     stream_.next_in =
-        inputBytes == 0 ? Z_NULL : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
-    stream_.avail_in = static_cast<uInt>(inputBytes);
-    const auto outputBytes =
+        input_bytes == 0 ? Z_NULL : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
+    stream_.avail_in = static_cast<uInt>(input_bytes);
+    const auto output_bytes =
         std::min<std::size_t>(output.size(), (std::numeric_limits<uInt>::max)());
     stream_.next_out = reinterpret_cast<Bytef*>(output.data());
-    stream_.avail_out = static_cast<uInt>(outputBytes);
+    stream_.avail_out = static_cast<uInt>(output_bytes);
 
     const auto status = inflate(&stream_, Z_NO_FLUSH);
-    const auto consumed = inputBytes - stream_.avail_in;
-    const auto produced = outputBytes - stream_.avail_out;
+    const auto consumed = input_bytes - stream_.avail_in;
+    const auto produced = output_bytes - stream_.avail_out;
     stream_.next_in = Z_NULL;
     stream_.avail_in = 0;
     stream_.next_out = Z_NULL;
     stream_.avail_out = 0;
-    return InflateStep{consumed, produced, status};
+    return inflate_step_result{consumed, produced, status};
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::needInput(std::size_t consumed) noexcept {
+HttpTransferCodingDecodeResult transfer_coding_decoder::need_input(std::size_t consumed) noexcept {
     return HttpTransferCodingDecodeResult(HttpTransferCodingDecodeNeedInput(consumed));
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::output(
+HttpTransferCodingDecodeResult transfer_coding_decoder::output(
     std::size_t consumed, std::string_view bytes) noexcept {
     return HttpTransferCodingDecodeResult(HttpTransferCodingDecodeOutputView(consumed, bytes));
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::complete(std::size_t consumed) noexcept {
+HttpTransferCodingDecodeResult transfer_coding_decoder::complete(std::size_t consumed) noexcept {
     return HttpTransferCodingDecodeResult(HttpTransferCodingDecodeComplete(consumed));
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::fail(
+HttpTransferCodingDecodeResult transfer_coding_decoder::fail(
     std::size_t consumed, HttpTransferCodingDecodeError error) noexcept {
     state_.emplace<HttpTransferCodingDecodeError>(error);
     return HttpTransferCodingDecodeResult(HttpTransferCodingDecodeFailure(consumed, error));
 }
 
-HttpTransferCodingDecodeResult HttpTransferCodingDecoder::failDecoder(std::size_t consumed) noexcept {
-    state_.emplace<DecoderFailed>();
+HttpTransferCodingDecodeResult transfer_coding_decoder::fail_decoder(std::size_t consumed) noexcept {
+    state_.emplace<decoder_failed>();
     return HttpTransferCodingDecodeResult(HttpTransferCodingDecoderFailure(consumed));
 }
 
-voidpf HttpTransferCodingDecoder::zallocThunk(voidpf opaque, uInt items, uInt size) noexcept {
-    auto* self = static_cast<HttpTransferCodingDecoder*>(opaque);
+voidpf transfer_coding_decoder::zalloc_thunk(voidpf opaque, uInt items, uInt size) noexcept {
+    auto* self = static_cast<transfer_coding_decoder*>(opaque);
     return self == nullptr ? nullptr : detail::zlibPmrAllocate(self->resource_, items, size);
 }
 
-void HttpTransferCodingDecoder::zfreeThunk(voidpf, voidpf address) noexcept {
+void transfer_coding_decoder::zfree_thunk(voidpf, voidpf address) noexcept {
     detail::zlibPmrFree(address);
 }
+
+}  // namespace detail
 
 namespace {
 
@@ -196,16 +241,16 @@ constexpr std::size_t k_transfer_coding_scratch_bytes = 4096;
 
 struct transfer_decoder_deleter final {
     std::pmr::memory_resource* resource;
-    void operator()(HttpTransferCodingDecoder* decoder) const noexcept {
+    void operator()(detail::transfer_coding_decoder* decoder) const noexcept {
         if (decoder != nullptr) {
-            std::pmr::polymorphic_allocator<HttpTransferCodingDecoder>(resource)
+            std::pmr::polymorphic_allocator<detail::transfer_coding_decoder>(resource)
                 .delete_object(decoder);
         }
     }
 };
 
 struct transfer_coding_stage final {
-    using decoder_ptr = std::unique_ptr<HttpTransferCodingDecoder, transfer_decoder_deleter>;
+    using decoder_ptr = std::unique_ptr<detail::transfer_coding_decoder, transfer_decoder_deleter>;
 
     explicit transfer_coding_stage(decoder_ptr decoder)
         : decoder(std::move(decoder)) {}
@@ -232,9 +277,9 @@ struct http_transfer_coding_stack_decoder::impl final {
             throw std::invalid_argument("invalid transfer-coding stack length");
         }
         stages.reserve(codings.size());
-        std::pmr::polymorphic_allocator<HttpTransferCodingDecoder> allocator(this->resource);
+        std::pmr::polymorphic_allocator<detail::transfer_coding_decoder> allocator(this->resource);
         for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-            auto* decoder = allocator.new_object<HttpTransferCodingDecoder>(
+            auto* decoder = allocator.new_object<detail::transfer_coding_decoder>(
                 *coding, this->resource, decoded_limit);
             stages.emplace_back(transfer_coding_stage::decoder_ptr(
                 decoder, transfer_decoder_deleter{this->resource}));
@@ -376,7 +421,7 @@ HttpTransferCodingDecodeResult http_transfer_coding_stack_decoder::finish_input(
         if (stage.complete) {
             continue;
         }
-        const auto finished = stage.decoder->finishInput();
+        const auto finished = stage.decoder->finish_input();
         if (const auto* protocol_failure = finished.failure()) {
             impl_->failure = protocol_failure->error();
             return HttpTransferCodingDecodeResult(

@@ -103,6 +103,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 
 - 示例和测试按 target、协议层级归档。core 单测平铺。
 - 复用根 build 和现有配置。不无故清缓存或全量重编译。
+- 编译必须使用 `-j$(nproc)`，按可用 CPU 核心数并行构建。
 - 不修改父项目配置。Windows 使用 MSVC 和静态依赖/runtime。
 - 只保留功能单测。不保留历史缺陷、结构或安装/API guard。
 - 不新增长期 integration、conformance、benchmark 或 probe。
