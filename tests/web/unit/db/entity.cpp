@@ -307,6 +307,50 @@ RUVIA_TEST(db_entity_string_vector_assignment_normalizes_equivalent_resource_all
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
+RUVIA_TEST(db_entity_reset_owned_containers_preserves_value_on_allocation_failure) {
+    using owned_container_entity = ruvia::DbEntity<"owned_containers",
+        ruvia::DbColumn<"text", std::pmr::string>,
+        ruvia::DbColumn<"values", std::pmr::vector<std::pmr::string>>>;
+    for (const bool text : {false, true}) {
+        ruvia::test::CountingMemoryResource upstream;
+        equivalent_memory_resource target(&upstream);
+        {
+            owned_container_entity entity(&target);
+            entity.set<"text">(std::string(200, 'a'));
+            std::pmr::vector<std::pmr::string> values(&upstream);
+            values.emplace_back(240, 'b');
+            entity.set<"values">(values);
+            bool failed = false;
+            target.reject_allocations();
+            try {
+                if (text) {
+                    entity.reset<"text">();
+                } else {
+                    entity.reset<"values">();
+                }
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            target.reject_allocations(false);
+            if (failed) {
+                RUVIA_CHECK(entity.isSet<"text">());
+                RUVIA_CHECK(entity.isSet<"values">());
+                RUVIA_CHECK_EQ(entity.get<"text">(), std::string_view(std::string(200, 'a')));
+                RUVIA_CHECK_EQ(entity.get<"values">().size(), std::size_t{1});
+                RUVIA_CHECK_EQ(entity.get<"values">()[0], std::string_view(std::string(240, 'b')));
+                RUVIA_CHECK(entity.get<"text">().get_allocator().resource() == &target);
+                RUVIA_CHECK(entity.get<"values">().get_allocator().resource() == &target);
+                RUVIA_CHECK(entity.get<"values">()[0].get_allocator().resource() == &target);
+            } else {
+                // Implementations without debug proxies can clear without allocating.
+                RUVIA_CHECK(text ? !entity.isSet<"text">() : !entity.isSet<"values">());
+            }
+        }
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
+    }
+}
+
 RUVIA_TEST(db_entity_rows_mapping_owns_field_storage) {
     auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
     auto& names = ruvia::detail::DbResultAccess::columnNames(rows);

@@ -5,10 +5,10 @@
 #include <deque>
 #include <exception>
 #include <limits>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 
 #include "ruvia/http/Http3Qpack.h"
@@ -54,6 +54,11 @@ struct Entry {
         : name(n, r),
           value(v, r),
           absolute(index) {}
+    Entry(Entry&& other)
+        : name(std::move(other.name), other.name.get_allocator()),
+          value(std::move(other.value), other.value.get_allocator()),
+          absolute(other.absolute),
+          references(other.references) {}
     std::size_t size() const noexcept {
         return name.size() + value.size() + 32;
     }
@@ -139,14 +144,16 @@ struct Http3QpackDecoder::Impl {
     Http3QpackDecoderConfig config;
     Table table;
     std::pmr::vector<char> input, output;
-    std::pmr::unordered_map<std::uint64_t, std::uint64_t> blocked;
+    // Hash storage allocates debug proxies inside a noexcept constructor on
+    // MSVC. Ordered maps propagate initialization failures to their caller.
+    std::pmr::map<std::uint64_t, std::uint64_t> blocked;
     std::optional<Error> failure;
     bool decoding{false};
     Impl(Http3QpackDecoderConfig c, std::pmr::memory_resource* r)
         : config(c),
           table(r),
-          input(r),
-          output(r),
+          input(0, r),
+          output(0, r),
           blocked(r) {}
     std::expected<bool, Error> instruction() {
         if (input.empty()) {
@@ -199,7 +206,8 @@ struct Http3QpackDecoder::Impl {
                 return false;
             }
             offset = index->encodedBytes;
-            std::pmr::string name(input.get_allocator().resource()), value(input.get_allocator().resource());
+            std::pmr::string name(0, '\0', input.get_allocator().resource());
+            std::pmr::string value(0, '\0', input.get_allocator().resource());
             if (first & 0x80) {
                 if (first & 0x40) {
                     auto e = http3QpackStaticEntry(index->value);
@@ -361,7 +369,8 @@ std::expected<Http3QpackDecodeResult, Error> Http3QpackDecoder::decode(std::uint
     std::size_t offset = encoded->encodedBytes + delta->encodedBytes, count = 0, total = 0;
     bool callbackStopped = false;
     std::uint64_t highest = 0;
-    std::pmr::string name(resource_), value(resource_);
+    std::pmr::string name(0, '\0', resource_);
+    std::pmr::string value(0, '\0', resource_);
     auto dynamic = [&](std::uint64_t index, bool post) -> const Entry* {
         if ((post && index > kHttp3VarIntMax - base) || (!post && index >= base)) {
             return nullptr;
@@ -488,22 +497,22 @@ struct Http3QpackEncoder::Impl {
     struct Section {
         std::uint64_t required;
         std::pmr::vector<std::uint64_t> references;
-        Section(std::uint64_t ric, std::pmr::vector<std::uint64_t> refs)
+        Section(std::uint64_t ric, std::pmr::vector<std::uint64_t>&& refs)
             : required(ric),
-              references(std::move(refs)) {}
+              references(std::move(refs), refs.get_allocator()) {}
     };
     Http3QpackEncoderConfig config;
     Table table;
     std::pmr::vector<char> input, output;
-    std::pmr::unordered_map<std::uint64_t, std::pmr::deque<Section>> sections;
+    std::pmr::map<std::uint64_t, std::pmr::deque<Section>> sections;
     std::uint64_t received{0};
     std::size_t outstandingSections{0};
     std::optional<Error> failure;
     Impl(Http3QpackEncoderConfig c, std::pmr::memory_resource* r)
         : config(c),
           table(r),
-          input(r),
-          output(r),
+          input(0, r),
+          output(0, r),
           sections(r) {
         table.capacity = c.tableCapacity.value_or(c.maxTableCapacity);
         table.evictableBefore = 0;
@@ -572,8 +581,10 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
     bool alreadyBlocked = existing != s.sections.end() && std::any_of(existing->second.begin(), existing->second.end(), [&](const auto& section) { return section.required > s.received; });
     const bool mayReference = s.outstandingSections < s.config.maxOutstandingSections;
     bool mayBlock = mayReference && (alreadyBlocked || s.blockedCount() < s.config.maxBlockedStreams);
-    std::pmr::vector<char> body(resource_);
-    std::pmr::vector<std::uint64_t> references(resource_);
+    // Empty containers can allocate debug proxies. Size constructors let those
+    // failures propagate through the guard and latch the terminal QPACK error.
+    std::pmr::vector<char> body(0, resource_);
+    std::pmr::vector<std::uint64_t> references(0, resource_);
     std::uint64_t required = 0;
     for (const auto& f : fields) {
         if (!mayReference || f.neverIndexed || staticIndex(f.name, f.value)) {
@@ -606,7 +617,7 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         references.push_back(selected->absolute);
         ++selected->references;
     }
-    std::pmr::vector<char> output(output_resource);
+    std::pmr::vector<char> output(0, output_resource);
     integer(output, 8, 0, required ? required % (2 * (s.config.maxTableCapacity / 32)) + 1 : 0);
     integer(output, 7, required ? 0x80 : 0, required ? required - 1 : 0);
     output.insert(output.end(), body.begin(), body.end());
@@ -620,7 +631,7 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         s.sections[streamId].emplace_back(required, std::move(references));
         ++s.outstandingSections;
     }
-    return output;
+    return std::expected<std::pmr::vector<char>, Error>(std::in_place, std::move(output), output.get_allocator());
 }
 std::expected<void, Error> Http3QpackEncoder::consumeDecoder(std::span<const char> bytes, bool fin) {
     auto& s = *impl_;

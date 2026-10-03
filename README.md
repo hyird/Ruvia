@@ -2602,12 +2602,25 @@ WebSocket handshake. Once submission begins, `set()`, `clear()`, and `regenerate
 throw `std::logic_error`; `data()` remains readable for the request or WebSocket
 session lifetime. Modify WebSocket sessions in middleware before `next()`.
 Storage failure prevents publication of a new session cookie.
-Call `regenerate()` after successful login or any privilege change, before
-publishing the response; `set()` alone updates data under the current identity.
-Logout deletes the old ID. Updates and rotation atomically require that a loaded
-ID still exists, so a concurrent request cannot recreate an ID already revoked
-by logout or rotation. A stale writer receives 409 and publishes no session
-cookie; do not retry its old authenticated state under a new ID.
+Every non-empty `set()` publishes a new session ID at commit, even when the data
+is unchanged. Replacing a loaded session atomically revokes its old ID.
+Writing authenticated state therefore revokes the ID used before login.
+Repeated writes in one request publish one new ID. Read-only requests keep their
+ID. Empty data clears the session. Call `regenerate()` when authentication or
+permissions change without writing session data. All mutations must precede
+response publication.
+
+After validating credentials, writing the authenticated data is enough:
+
+```cpp
+auto session = c.session();
+session.set(authenticated_session_data);
+```
+
+Logout deletes the old ID. Rotation requires the loaded ID to still exist.
+Concurrent mutations cannot recreate a revoked ID. A stale writer receives 409
+and publishes no session cookie. Do not retry its old authenticated state under
+a new ID.
 
 ### Strict integer conversion
 

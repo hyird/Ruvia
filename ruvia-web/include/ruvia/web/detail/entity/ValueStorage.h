@@ -33,8 +33,12 @@ struct entity_value_slot {
     static T make_value(std::pmr::memory_resource* resource) {
         if constexpr (std::is_same_v<T, String>) {
             return String(ModelOptions{.resource = resource});
-        } else if constexpr (std::is_same_v<T, std::pmr::string> || IsPmrVector<T>::value) {
-            return T(resource);
+        } else if constexpr (std::is_same_v<T, std::pmr::string>) {
+            // MSVC Debug allocates iterator proxies even for empty containers.
+            // Use constructors that can propagate an allocation failure.
+            return T(0, '\0', resource);
+        } else if constexpr (IsPmrVector<T>::value) {
+            return T(0, resource);
         } else {
             return T{};
         }
@@ -43,9 +47,15 @@ struct entity_value_slot {
         // Even an empty container can allocate (for example, a debug iterator
         // proxy). Keep the current value alive until that construction succeeds.
         auto empty = make_value(resource_);
-        static_assert(std::is_nothrow_move_constructible_v<T>);
-        value.~T();
-        std::construct_at(&value, std::move(empty));
+        if constexpr (std::is_same_v<T, std::pmr::string> || IsPmrVector<T>::value) {
+            // Both containers use the same resource. Swapping avoids debug
+            // proxy allocation inside an otherwise noexcept move constructor.
+            value.swap(empty);
+        } else {
+            static_assert(std::is_nothrow_move_constructible_v<T>);
+            value.~T();
+            std::construct_at(&value, std::move(empty));
+        }
     }
     std::pmr::memory_resource* resource_{nullptr};
     state_type state{state_type::unset};
@@ -102,7 +112,7 @@ void assignEntityValue(T& out, V&& value, std::pmr::memory_resource* resource) {
         if constexpr (std::is_arithmetic_v<Element>) {
             out = std::forward<V>(value);
         } else if constexpr (std::is_same_v<Element, std::pmr::string>) {
-            T owned(resource);
+            auto owned = entity_value_slot<T>::make_value(resource);
             owned.reserve(value.size());
             for (auto& item : value) {
                 if constexpr (std::is_lvalue_reference_v<V>) {
@@ -113,7 +123,7 @@ void assignEntityValue(T& out, V&& value, std::pmr::memory_resource* resource) {
             }
             out = std::move(owned);
         } else {
-            T owned(resource);
+            auto owned = entity_value_slot<T>::make_value(resource);
             owned.reserve(value.size());
             for (const auto& item : value) {
                 auto element = entity_value_slot<Element>::make_value(resource);
