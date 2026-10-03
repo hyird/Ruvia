@@ -122,10 +122,11 @@ public:
             std::size_t offset = 0;
             while (offset < chunk.size()) {
                 const auto count = std::min(kInputChunkBytes, chunk.size() - offset);
-                if (compression_.write(chunk.substr(offset, count)) ==
-                    HttpContentEncodeStep::kFailure) {
+                try {
+                    compression_.write(chunk.substr(offset, count));
+                } catch (...) {
                     state_.markAborted();
-                    throw std::runtime_error("HTTP/2 response stream content encoding failed");
+                    throw;
                 }
                 if (!compression_.output().empty()) {
                     co_await writeEncoded(compression_.output());
@@ -253,10 +254,11 @@ public:
             state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http2_trailing_headers);
         }
         if (compression_.active()) {
-            if (compression_.finish() != HttpContentEncodeStep::kFinished) {
+            try {
+                compression_.finish();
+            } catch (...) {
                 state_.markAborted();
-                throw std::runtime_error(
-                    "HTTP/2 response stream content encoding finalization failed");
+                throw;
             }
             co_await writeEncoded(compression_.output());
         }

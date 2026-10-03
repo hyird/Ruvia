@@ -128,19 +128,79 @@ RUVIA_TEST(transfer_coding_stack_rejects_truncated_inner_stream) {
 }
 
 RUVIA_TEST(transfer_coding_stack_construction_failure_releases_partial_state) {
-    DecoderMemoryResource memory;
     constexpr std::array codings{HttpTransferCoding::kGzip, HttpTransferCoding::kDeflate};
-    memory.rejectAfter(3);
-    bool failed = false;
-    try {
-        ruvia::http_transfer_coding_stack_decoder decoder(
-            codings, &memory, ProtocolByteLimit::unlimited());
-    } catch (const std::bad_alloc&) {
-        failed = true;
+    DecoderMemoryResource baseline;
+    {
+        http_transfer_coding_stack_decoder decoder(
+            codings, &baseline, ProtocolByteLimit::unlimited());
     }
-    memory.rejectAllocations(false);
-    RUVIA_CHECK(failed);
-    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(baseline.liveAllocations(), std::size_t{0});
+    for (std::size_t index = 0; index < baseline.allocationCount(); ++index) {
+        DecoderMemoryResource memory;
+        memory.rejectAfter(index);
+        bool failed = false;
+        try {
+            http_transfer_coding_stack_decoder decoder(
+                codings, &memory, ProtocolByteLimit::unlimited());
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+    }
+}
+
+RUVIA_TEST(transfer_coding_stack_accepts_the_bounded_sequence_and_reclaims_all_stages) {
+    constexpr std::string_view plain = "bounded sequence payload";
+    std::array<HttpTransferCoding, ruvia::kMaxTransferCodings> codings{};
+    std::string wire(plain);
+    for (std::size_t index = 0; index < codings.size(); ++index) {
+        codings[index] = index % 2 == 0 ? HttpTransferCoding::kGzip : HttpTransferCoding::kDeflate;
+        wire = index % 2 == 0 ? gzipCompress(wire) : zlib_deflate_compress(wire);
+    }
+    DecoderMemoryResource resource;
+    {
+        http_transfer_coding_stack_decoder decoder(codings, &resource, ProtocolByteLimit::limited(4096));
+        std::pmr::string output(&resource);
+        RUVIA_CHECK(!appendTransferDecoded(decoder, wire, output).failed);
+        const auto finish = decoder.finish_input();
+        RUVIA_CHECK(finish.complete() != nullptr);
+        RUVIA_CHECK_EQ(std::string_view(output), plain);
+    }
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(transfer_coding_stack_rejects_invalid_lengths_before_constructing_stages) {
+    DecoderMemoryResource resource;
+    const std::array<HttpTransferCoding, ruvia::kMaxTransferCodings + 1> codings{};
+    for (const auto sequence : {std::span<const HttpTransferCoding>{}, std::span<const HttpTransferCoding>(codings)}) {
+        bool rejected = false;
+        try {
+            http_transfer_coding_stack_decoder decoder(sequence, &resource, ProtocolByteLimit::unlimited());
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(transfer_coding_stack_owns_sequence_and_decodes_one_deflate_stage) {
+    auto* resource = std::pmr::get_default_resource();
+    auto codings = std::array{HttpTransferCoding::kDeflate};
+    http_transfer_coding_stack_decoder decoder(codings, resource, ProtocolByteLimit::limited(1024));
+    codings[0] = HttpTransferCoding::kGzip;
+    const auto wire = zlib_deflate_compress("one deflate stage");
+    std::pmr::string output(resource);
+    RUVIA_CHECK(!appendTransferDecoded(decoder, wire, output).failed);
+    const auto finish = decoder.finish_input();
+    RUVIA_CHECK(finish.complete() != nullptr);
+    RUVIA_CHECK_EQ(output, "one deflate stage");
+    std::array<char, 1> scratch{};
+    const auto replay = decoder.decode({}, scratch);
+    RUVIA_CHECK(replay.complete() != nullptr);
 }
 
 RUVIA_TEST(transfer_coding_stack_applies_decoded_limit_to_each_layer) {
@@ -208,14 +268,14 @@ RUVIA_TEST(transfer_coding_stack_rejects_intermediate_limit_when_final_layer_fit
 
 RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     auto* resource = std::pmr::get_default_resource();
-    HttpTransferCodingDecoder decoder(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1u << 20));
+    http_transfer_coding_stack_decoder decoder(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1u << 20));
 
     const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
     RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).failed);
-    const auto finishResult = decoder.finishInput();
+    const auto finishResult = decoder.finish_input();
     RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
@@ -227,21 +287,21 @@ RUVIA_TEST(transfer_coding_decoder_gzip_decodes_every_rfc1952_member) {
     RUVIA_CHECK(!first.empty());
     RUVIA_CHECK(!second.empty());
 
-    HttpTransferCodingDecoder contiguous(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder contiguous(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     std::pmr::string contiguousOutput(resource);
     RUVIA_CHECK(!appendTransferDecoded(contiguous, first + second, contiguousOutput).failed);
-    const auto contiguousFinish = contiguous.finishInput();
+    const auto contiguousFinish = contiguous.finish_input();
     RUVIA_CHECK(contiguousFinish.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(contiguousOutput.data(), contiguousOutput.size()),
         std::string_view("first-second"));
 
-    HttpTransferCodingDecoder fragmented(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder fragmented(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     std::pmr::string fragmentedOutput(resource);
     RUVIA_CHECK(!appendTransferDecoded(fragmented, first, fragmentedOutput).failed);
     RUVIA_CHECK(!appendTransferDecoded(fragmented, second, fragmentedOutput).failed);
-    const auto fragmentedFinish = fragmented.finishInput();
+    const auto fragmentedFinish = fragmented.finish_input();
     RUVIA_CHECK(fragmentedFinish.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(fragmentedOutput.data(), fragmentedOutput.size()),
         std::string_view("first-second"));
@@ -270,8 +330,8 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
 
     auto* resource = std::pmr::get_default_resource();
     Http1ChunkedBodyDecoder chunks({.bodyLimit = ProtocolByteLimit::limited(1u << 20)});
-    HttpTransferCodingDecoder transfer(
-        chunkedBody->transferCodings().values[0], resource, ProtocolByteLimit::limited(1u << 20));
+    http_transfer_coding_stack_decoder transfer(
+        chunkedBody->transferCodings().values, resource, ProtocolByteLimit::limited(1u << 20));
     std::pmr::string output(resource);
     std::string_view pending(wireBody);
     bool complete = false;
@@ -289,7 +349,7 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         pending.remove_prefix(result.consumedBytes());
     }
     RUVIA_CHECK(complete);
-    const auto finishResult = transfer.finishInput();
+    const auto finishResult = transfer.finish_input();
     RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
@@ -298,8 +358,8 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     auto* resource = std::pmr::get_default_resource();
     // A 1 MiB body compresses to a tiny gzip; the decoder must abort the
     // expansion once it passes the small cap, not stage the whole megabyte.
-    HttpTransferCodingDecoder decoder(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder decoder(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
 
     const std::string big(1u << 20, 'a');
     const std::string gz = gzipCompress(big);
@@ -308,7 +368,7 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     RUVIA_CHECK(error.failed);
     RUVIA_CHECK(error.protocolError.has_value());
     RUVIA_CHECK_EQ(error.protocolError->status(), ruvia::http_status::kContentTooLarge);
-    const auto finish = decoder.finishInput();
+    const auto finish = decoder.finish_input();
     RUVIA_CHECK(finish.failure() != nullptr);
     if (finish.failure() != nullptr) {
         RUVIA_CHECK(finish.failure()->error() ==
@@ -321,7 +381,7 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
 RUVIA_TEST(transfer_coding_decoder_rebinds_caller_storage_between_steps) {
     const std::string plain(4096, 'a');
     std::string input = gzipCompress(plain);
-    HttpTransferCodingDecoder decoder(HttpTransferCoding::kGzip,
+    http_transfer_coding_stack_decoder decoder(std::array{HttpTransferCoding::kGzip},
         std::pmr::get_default_resource(), ProtocolByteLimit::limited(plain.size()));
     std::array<std::array<char, 7>, 2> windows{};
     std::string decoded;
@@ -349,7 +409,7 @@ RUVIA_TEST(transfer_coding_decoder_rebinds_caller_storage_between_steps) {
     }
     RUVIA_CHECK(drained);
     RUVIA_CHECK(input.empty());
-    const auto finish = decoder.finishInput();
+    const auto finish = decoder.finish_input();
     RUVIA_CHECK(finish.complete() != nullptr);
     RUVIA_CHECK_EQ(decoded, plain);
 }
@@ -359,7 +419,7 @@ RUVIA_TEST(transfer_coding_decoder_reclaims_allocations_after_constructor_and_de
     memory.rejectAllocations(true);
     bool constructorFailed = false;
     try {
-        HttpTransferCodingDecoder decoder(HttpTransferCoding::kGzip, &memory,
+        http_transfer_coding_stack_decoder decoder(std::array{HttpTransferCoding::kGzip}, &memory,
             ProtocolByteLimit::unlimited());
     } catch (const std::bad_alloc&) {
         constructorFailed = true;
@@ -369,7 +429,7 @@ RUVIA_TEST(transfer_coding_decoder_reclaims_allocations_after_constructor_and_de
 
     memory.rejectAllocations(false);
     {
-        HttpTransferCodingDecoder decoder(HttpTransferCoding::kGzip, &memory,
+        http_transfer_coding_stack_decoder decoder(std::array{HttpTransferCoding::kGzip}, &memory,
             ProtocolByteLimit::unlimited());
         RUVIA_CHECK(memory.liveAllocations() != 0);
         memory.rejectAllocations(true);
@@ -381,7 +441,7 @@ RUVIA_TEST(transfer_coding_decoder_reclaims_allocations_after_constructor_and_de
         const auto replay = decoder.decode({}, output);
         RUVIA_CHECK(replay.decoderFailure() != nullptr);
         RUVIA_CHECK_EQ(replay.consumedBytes(), std::size_t{0});
-        const auto finish = decoder.finishInput();
+        const auto finish = decoder.finish_input();
         RUVIA_CHECK(finish.decoderFailure() != nullptr);
         RUVIA_CHECK_EQ(finish.consumedBytes(), std::size_t{0});
     }
@@ -392,7 +452,7 @@ RUVIA_TEST(transfer_coding_decoder_reclaims_allocations_after_constructor_and_de
 RUVIA_TEST(transfer_coding_decoder_rejects_unsupported_coding) {
     bool rejected = false;
     try {
-        HttpTransferCodingDecoder decoder(static_cast<HttpTransferCoding>(255),
+        http_transfer_coding_stack_decoder decoder(std::array{static_cast<HttpTransferCoding>(255)},
             std::pmr::get_default_resource(), ProtocolByteLimit::unlimited());
     } catch (const std::invalid_argument&) {
         rejected = true;
@@ -404,8 +464,8 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
     auto* resource = std::pmr::get_default_resource();
     std::array<char, std::size_t{8} * 1024> window{};
 
-    HttpTransferCodingDecoder invalid(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder invalid(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     const auto invalidResult = invalid.decode("not-gzip", window);
     RUVIA_CHECK(invalidResult.failure() != nullptr);
     RUVIA_CHECK(invalidResult.decoderFailure() == nullptr);
@@ -416,11 +476,11 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
 
     std::string truncated = gzipCompress("truncated");
     truncated.resize(truncated.size() - 4);
-    HttpTransferCodingDecoder incomplete(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder incomplete(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     std::pmr::string ignored(resource);
     RUVIA_CHECK(!appendTransferDecoded(incomplete, truncated, ignored).failed);
-    const auto incompleteFinish = incomplete.finishInput();
+    const auto incompleteFinish = incomplete.finish_input();
     RUVIA_CHECK(incompleteFinish.failure() != nullptr);
     if (incompleteFinish.failure() != nullptr) {
         RUVIA_CHECK(incompleteFinish.failure()->error() ==
@@ -428,31 +488,31 @@ RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
         RUVIA_CHECK(ruvia::httpRequestTransferCodingError(incompleteFinish.failure()->error()).status() ==
                     ruvia::http_status::kBadRequest);
     }
-    const auto repeatedFinish = incomplete.finishInput();
+    const auto repeatedFinish = incomplete.finish_input();
     RUVIA_CHECK(repeatedFinish.failure() != nullptr);
     if (repeatedFinish.failure() != nullptr) {
         RUVIA_CHECK(repeatedFinish.failure()->error() ==
                     ruvia::HttpTransferCodingDecodeError::kInvalidContent);
     }
 
-    HttpTransferCodingDecoder internalFailure(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder internalFailure(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     const auto decoderFailure = internalFailure.decode("input", {});
     RUVIA_CHECK(decoderFailure.failure() == nullptr);
     RUVIA_CHECK(decoderFailure.decoderFailure() != nullptr);
-    const auto repeatedDecoderFailure = internalFailure.finishInput();
+    const auto repeatedDecoderFailure = internalFailure.finish_input();
     RUVIA_CHECK(repeatedDecoderFailure.failure() == nullptr);
     RUVIA_CHECK(repeatedDecoderFailure.decoderFailure() != nullptr);
 
     std::string trailing = gzipCompress("complete");
     trailing.push_back('x');
-    HttpTransferCodingDecoder extra(
-        HttpTransferCoding::kGzip, resource, ProtocolByteLimit::limited(1024));
+    http_transfer_coding_stack_decoder extra(
+        std::array{HttpTransferCoding::kGzip}, resource, ProtocolByteLimit::limited(1024));
     const auto trailingError = appendTransferDecoded(extra, trailing, ignored);
     // A short prefix of another member can remain ambiguous until framing EOF.
     // It must not make the first valid member terminal, but EOF must reject it.
     RUVIA_CHECK(!trailingError.failed);
-    const auto trailingFinish = extra.finishInput();
+    const auto trailingFinish = extra.finish_input();
     RUVIA_CHECK(trailingFinish.failure() != nullptr);
     if (const auto* failure = trailingFinish.failure()) {
         RUVIA_CHECK(failure->error() == ruvia::HttpTransferCodingDecodeError::kInvalidContent);
