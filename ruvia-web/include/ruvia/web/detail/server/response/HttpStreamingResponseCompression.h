@@ -101,48 +101,37 @@ public:
         state_.emplace<Failed>();
     }
 
-    [[nodiscard]] HttpContentEncodeStep write(std::string_view input) {
-        if (std::holds_alternative<Failed>(state_)) {
-            encodedChunk_.clear();
-            return HttpContentEncodeStep::kFailure;
-        }
-        if (std::holds_alternative<Finished>(state_)) {
-            encodedChunk_.clear();
-            return HttpContentEncodeStep::kFailure;
-        }
+    void write(std::string_view input) {
         auto* activeState = std::get_if<Active>(&state_);
         if (activeState == nullptr) {
+            encodedChunk_.clear();
             throw std::logic_error("streaming response encoder is not active");
         }
         encodedChunk_.clear();
-        const auto result = activeState->encoder.write(input, encodedChunk_, true);
-        if (result == HttpContentEncodeStep::kFailure) {
-            state_.emplace<Failed>();
+        try {
+            activeState->encoder.write(input, encodedChunk_, true);
+        } catch (...) {
+            abort();
+            throw;
         }
-        return result;
     }
 
-    [[nodiscard]] HttpContentEncodeStep finish() {
-        if (std::holds_alternative<Failed>(state_)) {
-            encodedChunk_.clear();
-            return HttpContentEncodeStep::kFailure;
-        }
+    void finish() {
+        encodedChunk_.clear();
         if (std::holds_alternative<Finished>(state_)) {
-            encodedChunk_.clear();
-            return HttpContentEncodeStep::kFinished;
+            return;
         }
         auto* activeState = std::get_if<Active>(&state_);
         if (activeState == nullptr) {
             throw std::logic_error("streaming response encoder is not active");
         }
-        encodedChunk_.clear();
-        const auto result = activeState->encoder.finish(encodedChunk_);
-        if (result == HttpContentEncodeStep::kFinished) {
+        try {
+            activeState->encoder.finish(encodedChunk_);
             state_.emplace<Finished>();
-        } else if (result == HttpContentEncodeStep::kFailure) {
-            state_.emplace<Failed>();
+        } catch (...) {
+            abort();
+            throw;
         }
-        return result;
     }
 
     [[nodiscard]] std::string_view output() const& noexcept {
@@ -162,7 +151,7 @@ private:
         Active(HttpContentCoding coding, std::pmr::memory_resource* resource)
             : encoder(coding, resource) {}
 
-        HttpContentEncoder encoder;
+        http_content_encoder encoder;
     };
 
     using State = std::variant<Unprepared, Identity, Pending, Suppressed, Finished, Failed, Active>;

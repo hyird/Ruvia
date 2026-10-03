@@ -2788,6 +2788,18 @@ request's key, offered subprotocols, and permessage-deflate parameters.
 The caller supplies the transport and drives `Http1ClientResponseParser`;
 handshake acceptance is required before exchanging WebSocket frames.
 
+`http_content_encoder` from `<ruvia/http/HttpContentEncoder.h>` incrementally
+encodes representations into caller-owned PMR output. Each synchronous `write()`
+consumes its entire input; `finish()` appends the final bytes and is idempotent.
+The encoder does not retain input or output, and output survives its destruction.
+Keep the encoder at a stable address and its resource alive through destruction.
+Codec failures throw `http_content_encoder_error`; allocation exceptions retain
+their original type when a codec returns through its C API. Brotli builds that
+exit on internal out-of-memory conditions cannot be recovered by this boundary.
+A failure is terminal: later calls throw `std::logic_error`, as do writes after
+successful finish. HTTP/1, HTTP/2, and HTTP/3 stream sinks share this error
+contract and abort the response stream without replacing the original exception.
+
 `http_transfer_coding_stack_decoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
 is the single incremental transfer-decoding entry point for one or more codings.
 Pass the coding sequence in protocol order (for example,
