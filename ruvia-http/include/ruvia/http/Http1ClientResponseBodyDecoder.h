@@ -195,7 +195,7 @@ private:
     using Terminal = std::variant<Complete, ProtocolFailure, DecoderFailure>;
     Framing framing_;
     Http1ClosePolicy persistence_{Http1ClosePolicy::kCloseAfterResponse};
-    std::optional<HttpTransferCodingDecoder> transfer_;
+    std::optional<http_transfer_coding_stack_decoder> transfer_;
     std::optional<HttpResponseChunkedBodyDecoder> chunked_;
     std::optional<Terminal> terminal_;
     std::size_t remaining_{0};

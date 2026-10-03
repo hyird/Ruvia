@@ -172,7 +172,8 @@ RUVIA_TEST(http3ServerStreamInputDefersFinAcrossIndependentMailboxLanesAndInterl
     const auto secondCut = second.size() / 3;
     RUVIA_CHECK(firstCut > 0 && secondCut > 0);
 
-    RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, std::string_view(first).substr(0, firstCut)));
+    RUVIA_CHECK(queueData(fixture,
+        {kEpoch, kGeneration, 0, {}, true}, std::string_view(first).substr(0, firstCut)));
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 4}, std::string_view(second).substr(0, secondCut)));
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, std::string_view(first).substr(firstCut, firstCut)));
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 4}, std::string_view(second).substr(secondCut, secondCut)));
@@ -197,6 +198,8 @@ RUVIA_TEST(http3ServerStreamInputDefersFinAcrossIndependentMailboxLanesAndInterl
     RUVIA_CHECK(statuses[4] == Input::Status::kFinished && statuses[5] == Input::Status::kFinished);
     RUVIA_CHECK(bodyMatches(fixture.session, 0, "alpha"));
     RUVIA_CHECK(bodyMatches(fixture.session, 4, "bravo"));
+    RUVIA_CHECK(fixture.input.receivedEarlyData(0));
+    RUVIA_CHECK(!fixture.input.receivedEarlyData(4));
     RUVIA_CHECK(fixture.input.trackedStreamCount() == 2);
     RUVIA_CHECK_EQ(fixture.input.observedRequestStreamCount(), std::size_t{2});
     RUVIA_CHECK_EQ(fixture.input.activeRequestStreamCount(), std::size_t{0});

@@ -3,6 +3,7 @@
 #include <limits>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -15,7 +16,6 @@ namespace {
 
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
-using ruvia::detail::setResponseAllowHeader;
 using ruvia::detail::setResponseContentRange;
 using ruvia::detail::setResponseContentRangeUnsatisfied;
 
@@ -83,13 +83,19 @@ RUVIA_TEST(allow_header_lists_methods_in_canonical_order) {
     // The Allow header (405/OPTIONS) lists the mask's methods in method-enum
     // order, comma-separated.
     auto many = makeResponse();
-    setResponseAllowHeader(many, methodBit(HttpKnownMethod::kGet) |
-                                     methodBit(HttpKnownMethod::kPost) |
-                                     methodBit(HttpKnownMethod::kHead));
+    many.allow_methods(methodBit(HttpKnownMethod::kGet) |
+                       methodBit(HttpKnownMethod::kPost) |
+                       methodBit(HttpKnownMethod::kHead));
     RUVIA_CHECK_EQ(many.header("Allow").value_or(""), std::string_view("GET, POST, HEAD"));
 
     // A single method has no separator.
     auto one = makeResponse();
-    setResponseAllowHeader(one, methodBit(HttpKnownMethod::kDelete));
+    one.allow_methods(methodBit(HttpKnownMethod::kDelete));
     RUVIA_CHECK_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
+
+    std::string extension = "PROPFIND";
+    const std::string_view extension_methods[]{extension};
+    one.allow_methods(methodBit(HttpKnownMethod::kGet), extension_methods);
+    extension.assign("CHANGED!");
+    RUVIA_CHECK_EQ(one.header("Allow").value_or(""), std::string_view("GET, PROPFIND"));
 }

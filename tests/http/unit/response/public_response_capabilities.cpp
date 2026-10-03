@@ -6,6 +6,7 @@
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/HttpSetCookiePlan.h"
 
 #include "test_harness.h"
@@ -72,11 +73,11 @@ RUVIA_TEST(response_public_server_plans_preserve_head_representation_length) {
     RUVIA_CHECK(!writePlan.sendBody());
     RUVIA_CHECK(writePlan.matchesResponse(response));
 
-    const auto streamPlan = ruvia::planHttpResponseStreamCommit(
-        ruvia::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kHead,
-        response.status(), ruvia::ResponseTrailerIntent::kNone);
-    RUVIA_CHECK(streamPlan.bodyPlan().bodySuppressed());
-    RUVIA_CHECK_EQ(streamPlan.headDisposition(), ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+    const auto streamPlan = ruvia::plan_http_response_stream_commit(
+        ruvia::http_response_stream_framing::http2_frames, ruvia::HttpKnownMethod::kHead,
+        response.status(), ruvia::http_response_trailer_intent::none);
+    RUVIA_CHECK(streamPlan.body_plan().bodySuppressed());
+    RUVIA_CHECK_EQ(streamPlan.head_disposition(), ruvia::http_response_stream_head_disposition::message_ended);
 }
 
 RUVIA_TEST(response_public_trailer_validation_returns_borrowed_section) {
@@ -85,7 +86,7 @@ RUVIA_TEST(response_public_trailer_validation_returns_borrowed_section) {
     const auto section = ruvia::validateHttpResponseTrailers(trailers);
     RUVIA_CHECK(!section.empty());
     RUVIA_CHECK_EQ(section.fields().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(ruvia::httpResponseTrailerIntent(section), ruvia::ResponseTrailerIntent::kPresent);
+    RUVIA_CHECK_EQ(ruvia::response_trailer_intent(section), ruvia::http_response_trailer_intent::present);
 
     const std::array invalidTrailers{ruvia::HttpHeaderView{"Content-Type", "text/plain"}};
     bool rejected = false;

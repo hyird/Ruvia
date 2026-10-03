@@ -14,6 +14,7 @@
 #include "ruvia/http/HttpDatagram.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequestTrailers.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/server/inbound_buffer_resource.h"
@@ -166,7 +167,7 @@ public:
     [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponseHead(std::uint64_t streamId, const HttpResponse& response, HttpBufferedResponseWritePlan plan) {
         return connection_.encodeResponseHead(streamId, response, plan);
     }
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers) {
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(std::uint64_t streamId, HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
         return connection_.encodeStreamingResponseHead(streamId, std::move(response), method, kind, trailers);
     }
     [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(std::uint64_t streamId, const HttpInterimResponseHead& response) {

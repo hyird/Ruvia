@@ -1,3 +1,5 @@
+#include <array>
+
 #include "ruvia/web/BodyLimit.h"
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/Deadline.h"
@@ -7,6 +9,19 @@
 // Routing: registering routes and matching a request to one.
 
 using TestRouteRateLimit = ruvia::RateLimit<1, 1000>;
+
+struct ReplaySafeContractMiddleware final : ruvia::Middleware {
+    static constexpr bool ruvia_replay_safe = true;
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        co_await next();
+    }
+};
+
+struct ReplayUnsafeContractMiddleware final : ruvia::Middleware {
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        co_await next();
+    }
+};
 
 RUVIA_TEST(route_lists_preserve_all_entries) {
     const ruvia::detail::RuviaPathList paths("/0", "/1", "/2", "/3", "/4", "/5", "/6", "/7", "/8", "/9");
@@ -37,6 +52,44 @@ RUVIA_TEST(compiled_route_plan_is_shared_across_worker_bindings) {
     RUVIA_CHECK(dynamicResolution.resolved() != nullptr);
     RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().size(), std::size_t{1});
     RUVIA_CHECK_EQ(dynamicResolution.resolved()->match().values()[0], std::string_view("42"));
+}
+
+RUVIA_TEST(compiled_route_plan_binds_replay_safe_route_contract) {
+    const auto safeMiddleware =
+        ruvia::detail::makeMiddlewareDescriptor<ReplaySafeContractMiddleware>();
+    const auto unsafeMiddleware =
+        ruvia::detail::makeMiddlewareDescriptor<ReplayUnsafeContractMiddleware>();
+    const std::array mixedMiddlewares{safeMiddleware, unsafeMiddleware};
+    ruvia::detail::Router firstRouter;
+    auto& first = ruvia::detail::RouterImpl::from(firstRouter);
+    first.registerRoute(HttpKnownMethod::kGet, path("/safe"),
+        RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, {},
+        std::span(&safeMiddleware, std::size_t{1}));
+    first.registerRoute(HttpKnownMethod::kGet, path("/default"),
+        RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, {}, {});
+    first.registerRoute(HttpKnownMethod::kGet, path("/mixed"),
+        RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, {},
+        std::span(mixedMiddlewares));
+    first.finalize();
+    const auto safe = first.routeTable().resolve(HttpKnownMethod::kGet, "/safe");
+    const auto ordinary = first.routeTable().resolve(HttpKnownMethod::kGet, "/default");
+    const auto mixed = first.routeTable().resolve(HttpKnownMethod::kGet, "/mixed");
+    RUVIA_CHECK(safe.resolved()->route().endpoint().buffered()->replay_safe());
+    RUVIA_CHECK(!ordinary.resolved()->route().endpoint().buffered()->replay_safe());
+    RUVIA_CHECK(!mixed.resolved()->route().endpoint().buffered()->replay_safe());
+    auto plan = first.releaseCompiledPlan();
+
+    ruvia::detail::Router differentRouter;
+    auto& different = ruvia::detail::RouterImpl::from(differentRouter);
+    different.registerRoute(HttpKnownMethod::kGet, path("/safe"),
+        RouteHandler(nullptr, &dummyHandler), RequestBodyMode::kBuffered, {}, {});
+    bool rejected = false;
+    try {
+        different.finalize(plan.get());
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(compiled_route_plan_rejects_a_different_worker_route_shape) {

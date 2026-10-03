@@ -28,6 +28,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
@@ -786,8 +787,8 @@ public:
     // not generated automatically; an explicit value, when present, constrains
     // the total submitted DATA bytes.
     [[nodiscard]] Http2StreamingResponseHeadSubmitResult submitStreamingResponseHead(
-        std::uint32_t streamId, HttpResponse response, ResponseStreamKind kind,
-        ResponseTrailerIntent trailerIntent);
+        std::uint32_t streamId, HttpResponse response, http_response_stream_kind kind,
+        http_response_trailer_intent trailerIntent);
     // Convenience form for generic streaming responses without trailers.
     [[nodiscard]] Http2SubmitStatus submitStreamingResponseHead(
         std::uint32_t streamId, HttpResponse response);

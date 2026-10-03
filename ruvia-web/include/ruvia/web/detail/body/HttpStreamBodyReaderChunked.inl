@@ -42,8 +42,8 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readCh
 }
 
 template <typename Stream>
-Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTransferDecodedChunked() {
-    if (transferDecoder_ == nullptr) {
+Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::read_transfer_decoded_chunked() {
+    if (transfer_decoder_ == nullptr) {
         auto chunk = co_await readChunked();
         if (!chunk) {
             markFinished();
@@ -51,8 +51,8 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
         co_return chunk;
     }
 
-    if (transferOutput_.empty()) {
-        ::ruvia::resizePmrStringForOverwrite(transferOutput_, kHttpBodyBufferBytes);
+    if (transfer_output_.empty()) {
+        ::ruvia::resizePmrStringForOverwrite(transfer_output_, kHttpBodyBufferBytes);
     }
 
     // Keep the borrowed encoded chunk until the decoder reports its consumed
@@ -60,8 +60,8 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
     // compaction cannot invalidate decoder input across application reads.
     for (;;) {
         const auto result =
-            transferDecoder_->decode(transferInput_, std::span<char>(transferOutput_));
-        transferInput_.remove_prefix(std::min(transferInput_.size(), result.consumedBytes()));
+            transfer_decoder_->decode(transfer_input_, std::span<char>(transfer_output_));
+        transfer_input_.remove_prefix(std::min(transfer_input_.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {
             co_return ::ruvia::asBytes(output->bytes());
         }
@@ -77,11 +77,11 @@ Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::readTr
 
         auto chunk = co_await readChunked();
         if (!chunk) {
-            requireCompleteTransferCoding(*transferDecoder_);
+            require_complete_transfer_coding(*transfer_decoder_);
             markFinished();
             co_return std::nullopt;
         }
-        transferInput_ = ::ruvia::asChars(*chunk);
+        transfer_input_ = ::ruvia::asChars(*chunk);
     }
 }
 

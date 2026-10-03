@@ -63,17 +63,17 @@ private:
     Task<std::string_view> readKnownLengthAll(std::pmr::string& body, std::size_t contentLength);
     Task<std::optional<std::span<const std::byte>>> readKnownLength(std::size_t contentLength);
     Task<std::optional<std::span<const std::byte>>> readChunked();
-    Task<std::optional<std::span<const std::byte>>> readTransferDecodedChunked();
-    void decodeTransferAppend(std::string_view input, std::pmr::string& target);
+    Task<std::optional<std::span<const std::byte>>> read_transfer_decoded_chunked();
+    void decode_transfer_append(std::string_view input, std::pmr::string& target);
     [[nodiscard]] bool exceedsLimit(std::size_t bytes) const noexcept;
     void markFinished() noexcept;
 
     Stream& stream_;
     std::pmr::string buffer_;
-    std::pmr::string transferOutput_;
-    std::unique_ptr<HttpTransferCodingDecoder, PmrObjectDeleter<HttpTransferCodingDecoder>>
-        transferDecoder_;
-    std::string_view transferInput_;
+    std::pmr::string transfer_output_;
+    std::unique_ptr<http_transfer_coding_stack_decoder, PmrObjectDeleter<http_transfer_coding_stack_decoder>>
+        transfer_decoder_;
+    std::string_view transfer_input_;
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;
     ProtocolByteLimit bodyLimit_;

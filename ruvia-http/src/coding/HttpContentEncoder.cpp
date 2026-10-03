@@ -53,6 +53,7 @@ namespace {
 void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& impl) noexcept {
     switch (coding) {
         case HttpContentCoding::kGzip:
+        case HttpContentCoding::deflate:
             if (impl.gzip.state != nullptr) {
                 (void)deflateEnd(&impl.gzip);
             }
@@ -78,10 +79,12 @@ void destroyEncoderState(HttpContentCoding coding, HttpContentEncoder::Impl& imp
         case HttpContentCoding::kIdentity:
             return true;
         case HttpContentCoding::kGzip:
+        case HttpContentCoding::deflate:
             impl.gzip.zalloc = &gzipAllocate;
             impl.gzip.zfree = &gzipFree;
             impl.gzip.opaque = resource;
-            return deflateInit2(&impl.gzip, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8,
+            return deflateInit2(&impl.gzip, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                       coding == HttpContentCoding::kGzip ? 15 + 16 : 15, 8,
                        Z_DEFAULT_STRATEGY) == Z_OK;
         case HttpContentCoding::kBrotli:
             impl.brotli = BrotliEncoderCreateInstance(&detail::pmrCodecAllocate, &detail::pmrCodecFree, resource);
@@ -277,6 +280,7 @@ HttpContentEncodeStep HttpContentEncoder::write(
     HttpContentEncodeStep result = HttpContentEncodeStep::kFailure;
     switch (coding_) {
         case HttpContentCoding::kGzip:
+        case HttpContentCoding::deflate:
             result = encodeGzip(*impl_, input, output, flush);
             break;
         case HttpContentCoding::kBrotli:
@@ -309,6 +313,7 @@ HttpContentEncodeStep HttpContentEncoder::finish(std::pmr::string& output) {
     HttpContentEncodeStep result = HttpContentEncodeStep::kFailure;
     switch (coding_) {
         case HttpContentCoding::kGzip:
+        case HttpContentCoding::deflate:
             result = finishGzip(*impl_, output);
             break;
         case HttpContentCoding::kBrotli:

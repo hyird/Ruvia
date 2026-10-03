@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http3/Http3ClientConnection.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <stdexcept>
@@ -127,7 +128,8 @@ Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerH
     std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
     std::optional<std::chrono::milliseconds> writeTimeout)
     : Http3ClientConnection(io, worker, poolTasks, tls, origin, connectTimeout, resource,
-          maxRequests, maxResponseBytes, idleTimeout, receiveBodyBudget, writeTimeout, {}) {}
+          maxRequests, maxResponseBytes, idleTimeout, receiveBodyBudget, writeTimeout, {}, {},
+          {}, {}, ruvia::quic_version::v1, false) {}
 
 Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerHandle& worker,
     TaskScope& poolTasks, http3_quic_client_tls_context& tls, HttpOriginView origin,
@@ -135,7 +137,9 @@ Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerH
     std::pmr::memory_resource* resource, std::size_t maxRequests, std::size_t maxResponseBytes,
     std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
     std::optional<std::chrono::milliseconds> writeTimeout,
-    LifecycleNotification lifecycleNotification, Http3QpackConfig qpack, Http3ClientOriginObserver originObserver, Http3ClientPushObserver pushObserver)
+    LifecycleNotification lifecycleNotification, Http3QpackConfig qpack,
+    Http3ClientOriginObserver originObserver, Http3ClientPushObserver pushObserver,
+    ruvia::quic_version initial_version, bool enable_early_data)
     : ownerThread_(std::this_thread::get_id()),
       io_(io),
       worker_(worker),
@@ -145,6 +149,8 @@ Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerH
       host_(origin.host(), resource_),
       authority_(makeHttpOriginAuthority(origin, resource_)),
       port_(origin.port()),
+      initial_version_(initial_version),
+      enable_early_data_(enable_early_data),
       connectTimeout_(checkedTimeout(connectTimeout)),
       idleTimeout_(checkedTimeout(idleTimeout)),
       writeTimeout_(checkedTimeout(writeTimeout)),
@@ -335,6 +341,10 @@ Http3ClientConnection::Submission Http3ClientConnection::submitImpl(
         return {.outcome = Outcome::kInvalidRequest};
     }
     const auto method = classifyHttpMethod(request.method());
+    const bool replay_safe = request.replay_safe();
+    const bool early_data_eligible = replay_safe && !request.isTunnel() &&
+                                     request.upload() == nullptr && !HttpClientRequestStorageAccess::hasBody(request) &&
+                                     (method == HttpKnownMethod::kGet || method == HttpKnownMethod::kHead);
     auto owned = Http3ClientRequestWrite::create(
         std::move(request), "https", authority_, resource_);
     if (!owned) {
@@ -342,10 +352,13 @@ Http3ClientConnection::Submission Http3ClientConnection::submitImpl(
     }
     const RequestId id = ++nextRequestId_;
     if (response == nullptr) {
-        requests_.emplace_back(id, std::move(*owned), worker_, resource_, deadline);
+        requests_.emplace_back(id, std::move(*owned), worker_, resource_, deadline, replay_safe);
+        requests_.back().early_data_eligible = early_data_eligible;
     } else {
         requests_.emplace_back(
-            id, std::move(*owned), worker_, resource_, deadline, *response, *receiveBodyBudget_);
+            id, std::move(*owned), worker_, resource_, deadline, replay_safe, *response,
+            *receiveBodyBudget_);
+        requests_.back().early_data_eligible = early_data_eligible;
         response->retainReference();
         response->requestMethod = method;
         response->transport = HttpClientResponseTransport::kHttp3;
@@ -404,6 +417,12 @@ bool Http3ClientConnection::reprioritize(RequestId id, HttpPriority priority) {
     if (stopping_ || terminal_ || request == requests_.end() ||
         request->response.outcome != Outcome::kPending || !request->writer.streamId()) {
         return false;
+    }
+    if (session_ && session_->transport().info().state !=
+                        ruvia::quic_connection_state::ready) {
+        request->pending_priority_update = priority;
+        wakeReceiveDriver();
+        return true;
     }
     if (!responseEngine_.queuePriorityUpdate(*request->writer.streamId(), priority)) {
         return false;
@@ -669,6 +688,80 @@ void Http3ClientConnection::consumerReleased(RequestId id) noexcept {
         }
     }
     maybeReleaseResponseRequest(request);
+}
+
+ruvia::quic_path_migration Http3ClientConnection::start_path_migration(
+    const asio::ip::udp::endpoint& local_endpoint) {
+    requireOwnerThread();
+    if (stopping_ || !session_ || !running_) {
+        return {.status = ruvia::quic_migration_status::rejected};
+    }
+    auto migration = session_->start_path_migration(local_endpoint);
+    if (migration.status == ruvia::quic_migration_status::started ||
+        migration.status == ruvia::quic_migration_status::validated) {
+        quic_connection_migration_id_ = migration.id;
+        quic_path_migration_generation_ = quic_generation_;
+        auto id = next_path_migration_id_++;
+        if (id == 0) {
+            id = next_path_migration_id_++;
+        }
+        migration.id = id;
+        quic_path_migration_ = migration;
+    }
+    return migration;
+}
+
+std::optional<ruvia::quic_path_migration> Http3ClientConnection::path_migration(
+    std::uint64_t id) const noexcept {
+    if (!quic_path_migration_ || quic_path_migration_->id != id) {
+        return std::nullopt;
+    }
+    if (session_ && quic_path_migration_generation_ == quic_generation_) {
+        if (const auto migration = session_->path_migration(quic_connection_migration_id_)) {
+            auto result = *migration;
+            result.id = id;
+            return result;
+        }
+    }
+    return quic_path_migration_;
+}
+
+std::optional<ruvia::quic_path_migration> Http3ClientConnection::active_path_migration() const noexcept {
+    if (quic_path_migration_ && session_ &&
+        quic_path_migration_generation_ == quic_generation_) {
+        if (const auto migration = session_->path_migration(quic_connection_migration_id_)) {
+            auto result = *migration;
+            result.id = quic_path_migration_->id;
+            return result;
+        }
+    }
+    return quic_path_migration_;
+}
+
+ruvia::quic_operation_status Http3ClientConnection::cancel_path_migration(std::uint64_t id) {
+    requireOwnerThread();
+    if (!session_ || !quic_path_migration_ || quic_path_migration_->id != id) {
+        return ruvia::quic_operation_status::retired;
+    }
+    const auto status = session_->cancel_path_migration(quic_connection_migration_id_);
+    if (status == ruvia::quic_operation_status::accepted) {
+        requestStop();
+    }
+    return status;
+}
+
+void Http3ClientConnection::cache_path_migration() noexcept {
+    if (!session_ || !quic_path_migration_ ||
+        quic_path_migration_generation_ != quic_generation_) {
+        return;
+    }
+    if (const auto migration = session_->path_migration(quic_connection_migration_id_)) {
+        quic_path_migration_->status = migration->status;
+        quic_path_migration_->local_address = migration->local_address;
+    }
+    if (quic_path_migration_->status == ruvia::quic_migration_status::started) {
+        quic_path_migration_->status = ruvia::quic_migration_status::aborted;
+    }
 }
 
 void Http3ClientConnection::requestStop() noexcept {
@@ -1041,6 +1134,7 @@ Task<void> Http3ClientConnection::drive() {
         failure = stopping_ ? Outcome::kCancelled : terminalFailure_;
     }
     if (session_) {
+        cache_path_migration();
         session_->requestStop();
         session_->close();
         session_.reset();
@@ -1067,13 +1161,18 @@ Task<void> Http3ClientConnection::drive() {
 
 Task<bool> Http3ClientConnection::driveEndpoint(
     const asio::ip::udp::endpoint& peer, TimePoint connectDeadline) {
-    session_ = makePmrObject<Http3QuicClientSocketSession>(resource_, io_, peer, host_, tls_, responseEngine_.localSettings());
+    session_ = makePmrObject<Http3QuicClientSocketSession>(resource_, io_, peer, host_, tls_,
+        responseEngine_.localSettings(), initial_version_, enable_early_data_, resource_);
+    if (++quic_generation_ == 0) {
+        ++quic_generation_;
+    }
     bool hadHttp3 = false;
     std::optional<TimePoint> idleDeadline;
     std::size_t consecutiveWorkTicks = 0;
     while (!stopping_) {
         (void)session_->consumeWorkNotification();
         const auto tick = session_->pump();
+        const bool rejected_early_streams = replay_rejected_early_streams();
         if (tick.status == Http3QuicClientSocketSession::PumpStatus::kFatal ||
             tick.status == Http3QuicClientSocketSession::PumpStatus::kClosed) {
             break;
@@ -1091,7 +1190,14 @@ Task<bool> Http3ClientConnection::driveEndpoint(
         if (now >= connectDeadline && !ready) {
             break;
         }
-        const bool protocolProgress = ready && sweep(tick.criticalStreamsReady);
+        const bool early = !ready && session_->early_data_enabled() &&
+                           session_->transport().info().early_data ==
+                               ruvia::quic_early_data_state::available;
+        const bool protocolProgress = rejected_early_streams ||
+                                      ((ready || early) && sweep(tick.criticalStreamsReady, early));
+        if (responseEngine_.peerSettings()) {
+            session_->remember_resumption_ticket(responseEngine_.peerSettings());
+        }
         bool active = false;
         for (const auto& request : requests_) {
             active |= request.response.outcome == Outcome::kPending;
@@ -1139,12 +1245,13 @@ Task<bool> Http3ClientConnection::driveEndpoint(
         // worker. Re-evaluate pending requests at the top of the loop before
         // committing idle retirement; a newly admitted request clears it.
     }
+    cache_path_migration();
     session_->requestStop();
     session_->close();
     co_return !hadHttp3 && !stopping_;
 }
 
-bool Http3ClientConnection::sweep(bool requestsMayStart) {
+bool Http3ClientConnection::sweep(bool requestsMayStart, bool early_data_only) {
     bool progress = false;
     const auto now = Clock::now();
     for (auto& request : requests_) {
@@ -1192,8 +1299,10 @@ bool Http3ClientConnection::sweep(bool requestsMayStart) {
     progress |= sweepPushes();
     progress |= flushPushControl();
     if (requestsMayStart) {
-        progress |= driveRequestWriters();
-        progress |= driveCriticalOutput();
+        progress |= driveRequestWriters(early_data_only);
+        if (!early_data_only) {
+            progress |= driveCriticalOutput();
+        }
     }
     return progress;
 }
@@ -1280,6 +1389,54 @@ bool Http3ClientConnection::receiveDatagrams() {
                    state->tunnel->datagrams.size() < ruvia::quic_limits{}.max_datagrams) {
             state->tunnel->datagrams.emplace_back(bytes.data(), bytes.size());
             state->dataSignal.notify();
+        }
+    }
+    return progress;
+}
+
+bool Http3ClientConnection::replay_rejected_early_streams() {
+    std::array<std::uint64_t, 32> rejected{};
+    bool progress = false;
+    while (true) {
+        const auto count = session_->take_rejected_early_streams(rejected);
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto stream_id = rejected[index];
+            const auto request = std::find_if(requests_.begin(), requests_.end(),
+                [stream_id](const Request& candidate) {
+                    return candidate.writer.streamId() == stream_id;
+                });
+            if (request == requests_.end() || request->response.outcome != Outcome::kPending) {
+                continue;
+            }
+            const bool response_started = request->responseState_ != nullptr &&
+                                          request->responseState_->http3ResponseStarted;
+            if (!request->early_data_eligible || response_started ||
+                !request->responseParserRegistered ||
+                !responseEngine_.cancelRequest(stream_id)) {
+                throw std::runtime_error("HTTP/3 rejected an ineligible or committed 0-RTT request");
+            }
+            receiver_.retire(stream_id);
+            if (!responseEngine_.release(stream_id)) {
+                throw std::logic_error("HTTP/3 rejected 0-RTT response state could not be retired");
+            }
+            request->responseParserRegistered = false;
+            request->streamRetired = true;
+            request->writeDeadline.reset();
+            if (request->cancelRequested) {
+                finishRequest(*request, Outcome::kCancelled);
+                progress = true;
+                continue;
+            }
+            if (!request->writer.replay_after_rejected_early_stream(
+                    "https", authority_, resource_)) {
+                finishRequest(*request, Outcome::kTransportError);
+            } else {
+                request->streamRetired = false;
+            }
+            progress = true;
+        }
+        if (count < rejected.size()) {
+            break;
         }
     }
     return progress;
@@ -1531,11 +1688,27 @@ bool Http3ClientConnection::driveCriticalOutput() {
     return progress;
 }
 
-bool Http3ClientConnection::driveRequestWriters() {
+bool Http3ClientConnection::driveRequestWriters(bool early_data_only) {
     bool progress = false;
     auto& quic = session_->transport();
     for (auto& request : requests_) {
-        if (request.response.outcome != Outcome::kPending || request.writer.finished()) {
+        if (request.response.outcome != Outcome::kPending ||
+            (early_data_only && !request.early_data_eligible)) {
+            continue;
+        }
+        // Response priority remains meaningful after the request FIN. In
+        // particular, an accepted 0-RTT writer can already be finished when its
+        // deferred control output becomes eligible at handshake completion.
+        if (!early_data_only && request.pending_priority_update &&
+            request.responseParserRegistered && request.writer.streamId()) {
+            if (!responseEngine_.queuePriorityUpdate(
+                    *request.writer.streamId(), *request.pending_priority_update)) {
+                throw std::runtime_error("HTTP/3 request priority update could not be queued");
+            }
+            request.pending_priority_update.reset();
+            progress = true;
+        }
+        if (request.writer.finished()) {
             continue;
         }
         if (draining_ && !request.writer.streamId()) {

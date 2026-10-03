@@ -1,4 +1,9 @@
+#include <array>
+#include <string>
+
 #include "ruvia/core/AsioTask.h"
+#include "ruvia/http/HttpContentCodec.h"
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 #include "context_body_decoding_fixture.h"
@@ -38,6 +43,34 @@ RUVIA_TEST(context_request_cold_operation_rejects_after_request_scope_closes) {
     io.run();
     future.get();
     RUVIA_CHECK(rejected);
+}
+
+RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
+    ruvia::WorkerMemory worker;
+    ruvia::detail::inbound_buffer_resource budget(worker.resource(), 64 * 1024);
+    constexpr std::array codings{ruvia::HttpContentCoding::kGzip,
+        ruvia::HttpContentCoding::deflate};
+    const std::string plain(8192, 'm');
+    auto encoded = ruvia::encodeHttpContent(codings, plain, {.maxEncodedBytes = plain.size()});
+    RUVIA_CHECK(encoded.encoded() != nullptr);
+    if (encoded.encoded() == nullptr) {
+        return;
+    }
+    {
+        ruvia::RequestMemory memory(worker);
+        const ruvia::HttpHeaderView headers[]{{"Content-Encoding", "gzip, deflate"}};
+        auto [request, error] = ruvia::makeParsedHttpRequest("POST", "/", headers,
+            ruvia::asBytes(encoded.encoded()->bytes()), memory.resource());
+        RUVIA_CHECK(!error);
+        auto context = ruvia::detail::ContextAccess::make(memory, request,
+            ruvia::test::testContextServices().with_inbound_buffer_pool(budget));
+        asio::io_context io(1);
+        auto result = asio::co_spawn(io, ruvia::asAwaitable(readContextText(context)), asio::use_future);
+        io.run();
+        RUVIA_CHECK_EQ(result.get(), plain);
+        RUVIA_CHECK(budget.used() >= plain.size());
+    }
+    RUVIA_CHECK_EQ(budget.used(), std::size_t{0});
 }
 
 RUVIA_TEST(decoded_request_body_reserves_live_inbound_memory_until_context_destruction) {

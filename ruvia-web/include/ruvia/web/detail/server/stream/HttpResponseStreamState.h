@@ -7,6 +7,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 namespace ruvia {
 
@@ -31,7 +32,7 @@ public:
 class ResponseStreamState final {
 public:
     [[nodiscard]] bool committed() const noexcept {
-        return commitPlan() != nullptr;
+        return commit_plan() != nullptr;
     }
 
     [[nodiscard]] bool ended() const noexcept {
@@ -53,11 +54,11 @@ public:
         if (!ended()) {
             return false;
         }
-        const auto* plan = commitPlan();
-        return plan != nullptr && plan->bodyPlan().bodySuppressed();
+        const auto* plan = commit_plan();
+        return plan != nullptr && plan->body_plan().bodySuppressed();
     }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
         if (const auto* value = std::get_if<BodyOpen>(&state_)) {
             return &value->plan;
         }
@@ -72,7 +73,7 @@ public:
         }
         return nullptr;
     }
-    const ResponseStreamCommitPlan* commitPlan() const&& = delete;
+    const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
     using StreamingHeadThunk = Task<HttpResponse> (*)(Context&);
 
@@ -103,18 +104,18 @@ public:
         return bound->streamingHead(*bound->context);
     }
 
-    void markCommitted(ResponseStreamCommitPlan plan) {
+    void markCommitted(http_response_stream_commit_plan plan) {
         if (committed() || aborted()) {
             throw std::logic_error("response stream is already committed");
         }
-        switch (plan.headDisposition()) {
-            case ResponseStreamHeadDisposition::kBodyOpen:
+        switch (plan.head_disposition()) {
+            case http_response_stream_head_disposition::body_open:
                 state_.emplace<BodyOpen>(plan);
                 break;
-            case ResponseStreamHeadDisposition::kTrailersOnly:
+            case http_response_stream_head_disposition::trailers_only:
                 state_.emplace<TrailersOnly>(plan);
                 break;
-            case ResponseStreamHeadDisposition::kMessageEnded:
+            case http_response_stream_head_disposition::message_ended:
                 state_.emplace<Ended>(plan);
                 break;
         }
@@ -166,8 +167,8 @@ public:
             // directly, so the handler's first write arrives here. Writing
             // the body a GET would have is correct handler behavior, not a
             // sequencing bug -- signal head-only completion instead.
-            const auto* plan = commitPlan();
-            if (plan != nullptr && plan->bodyPlan().bodySuppressed()) {
+            const auto* plan = commit_plan();
+            if (plan != nullptr && plan->body_plan().bodySuppressed()) {
                 throw ResponseStreamHeadOnlyComplete();
             }
             throw std::logic_error("response stream is already ended");
@@ -177,15 +178,15 @@ public:
         }
     }
 
-    void ensureTrailersAllowed(ResponseStreamTrailerFraming requiredFraming) const {
+    void ensureTrailersAllowed(http_response_stream_trailer_framing requiredFraming) const {
         if (aborted()) {
             throw std::logic_error("response stream is aborted");
         }
         if (ended()) {
             throw std::logic_error("response stream is already ended");
         }
-        const auto* plan = commitPlan();
-        if (plan == nullptr || plan->trailerFraming() != requiredFraming) {
+        const auto* plan = commit_plan();
+        if (plan == nullptr || plan->trailer_framing() != requiredFraming) {
             throw std::logic_error("response framing does not support trailers");
         }
     }
@@ -205,33 +206,33 @@ private:
     };
 
     struct BodyOpen final {
-        explicit BodyOpen(ResponseStreamCommitPlan commitPlan) noexcept
+        explicit BodyOpen(http_response_stream_commit_plan commitPlan) noexcept
             : plan(commitPlan) {}
 
-        ResponseStreamCommitPlan plan;
+        http_response_stream_commit_plan plan;
     };
 
     struct TrailersOnly final {
-        explicit TrailersOnly(ResponseStreamCommitPlan commitPlan) noexcept
+        explicit TrailersOnly(http_response_stream_commit_plan commitPlan) noexcept
             : plan(commitPlan) {}
 
-        ResponseStreamCommitPlan plan;
+        http_response_stream_commit_plan plan;
     };
 
     struct Ended final {
-        explicit Ended(ResponseStreamCommitPlan commitPlan) noexcept
+        explicit Ended(http_response_stream_commit_plan commitPlan) noexcept
             : plan(commitPlan) {}
 
-        ResponseStreamCommitPlan plan;
+        http_response_stream_commit_plan plan;
     };
 
     struct AbortedBeforeCommit final {};
 
     struct AbortedAfterCommit final {
-        explicit AbortedAfterCommit(ResponseStreamCommitPlan commitPlan) noexcept
+        explicit AbortedAfterCommit(http_response_stream_commit_plan commitPlan) noexcept
             : plan(commitPlan) {}
 
-        ResponseStreamCommitPlan plan;
+        http_response_stream_commit_plan plan;
     };
 
     using State = std::variant<Unbound, Bound, Detached, BodyOpen, TrailersOnly, Ended,

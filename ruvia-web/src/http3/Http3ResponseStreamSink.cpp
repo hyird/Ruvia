@@ -7,11 +7,12 @@
 #include <vector>
 
 #include "ruvia/http/Http3Frames.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/http3/Http3BufferedRequestDispatch.h"
 
 namespace ruvia::detail {
 Http3ResponseStreamSink::Http3ResponseStreamSink(Http3BufferedRequestDispatch& publisher,
-    const WorkerHandle& worker, HttpKnownMethod method, ResponseStreamKind kind,
+    const WorkerHandle& worker, HttpKnownMethod method, http_response_stream_kind kind,
     std::pmr::memory_resource* resource, HttpResponseCodingSelection coding,
     HttpResponseCodingAvailability availability)
     : publisher_(publisher),
@@ -33,11 +34,11 @@ Task<TimerSleepResult> Http3ResponseStreamSink::sleep(std::chrono::milliseconds 
     requireActive();
     co_return co_await sleepFor(worker_, duration, stop);
 }
-Task<void> Http3ResponseStreamSink::commit(ResponseTrailerIntent trailers) {
+Task<void> Http3ResponseStreamSink::commit(http_response_trailer_intent trailers) {
     requireActive();
     if (state_.committed()) {
-        if (trailers == ResponseTrailerIntent::kPresent) {
-            state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp3TrailingHeaders);
+        if (trailers == http_response_trailer_intent::present) {
+            state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http3_trailing_headers);
         }
         co_return;
     }
@@ -46,19 +47,22 @@ Task<void> Http3ResponseStreamSink::commit(ResponseTrailerIntent trailers) {
     compression_.prepare(method_, response, kind_);
     auto prepared = publisher_.encodeStreamingResponseHead(std::move(response), method_, kind_, trailers);
     if (!prepared) {
+        if (prepared.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+            publisher_.reject_peer_field_section();
+        }
         throw std::invalid_argument("invalid HTTP/3 streaming response head");
     }
     if (!publisher_.responseFieldSectionAllowed(prepared->head.decodedFieldSectionSize())) {
-        throw std::length_error("HTTP/3 response exceeds peer field section limit");
+        publisher_.reject_peer_field_section();
     }
     data_.emplace(prepared->head.bodyPlan, prepared->head.declaredContentLength);
     compression_.activate(prepared->head.bodyPlan);
     // A handoff can accept a prefix before cancellation. Mark commitment before
     // entering that operation so recovery never emits a second response head.
     publisher_.commitFinalResponse();
-    state_.markCommitted(prepared->commitPlan);
+    state_.markCommitted(prepared->commit_plan);
     co_await publisher_.publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), prepared->head.fieldSection);
-    if (prepared->commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded) {
+    if (prepared->commit_plan.head_disposition() == http_response_stream_head_disposition::message_ended) {
         co_await publisher_.finishResponse();
     }
 }
@@ -83,7 +87,7 @@ Task<void> Http3ResponseStreamSink::write(std::string_view bytes) {
     if (bytes.empty()) {
         co_return;
     }
-    co_await commit(ResponseTrailerIntent::kNone);
+    co_await commit(http_response_trailer_intent::none);
     if (state_.bodySuppressedComplete()) {
         co_await sleepFor(worker_, std::chrono::steady_clock::duration(1));
     }
@@ -111,7 +115,7 @@ Task<void> Http3ResponseStreamSink::end(std::span<const HttpHeaderView> trailers
     }
     requireActive();
     const auto section = validateHttpResponseTrailers(trailers);
-    co_await commit(httpResponseTrailerIntent(section));
+    co_await commit(response_trailer_intent(section));
     if (state_.ended()) {
         co_return;
     }
@@ -126,17 +130,20 @@ Task<void> Http3ResponseStreamSink::end(std::span<const HttpHeaderView> trailers
         throw std::length_error("HTTP/3 response content length incomplete");
     }
     if (!trailers.empty()) {
-        state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp3TrailingHeaders);
+        state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http3_trailing_headers);
         std::pmr::vector<Http3FieldSectionFieldView> fields(resource_);
         for (const auto& field : trailers) {
             fields.push_back({field.name(), field.value(), false});
         }
         auto encoded = publisher_.encodeResponseTrailers(fields);
         if (!encoded) {
+            if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
+                publisher_.reject_peer_field_section();
+            }
             throw std::invalid_argument("invalid HTTP/3 response trailers");
         }
         if (!publisher_.responseFieldSectionAllowed(encoded->decodedFieldSectionSize())) {
-            throw std::length_error("HTTP/3 trailers exceed peer field section limit");
+            publisher_.reject_peer_field_section();
         }
         co_await publisher_.publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), encoded->fieldSection);
     }

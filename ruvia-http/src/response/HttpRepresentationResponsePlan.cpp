@@ -30,6 +30,11 @@ const HttpRepresentationResponsePlan::Partial* HttpRepresentationResponsePlan::p
     return std::get_if<Partial>(&value_);
 }
 
+const HttpRepresentationResponsePlan::multipart*
+HttpRepresentationResponsePlan::multipart_ranges() const& noexcept {
+    return std::get_if<multipart>(&value_);
+}
+
 HttpStatusCode HttpRepresentationResponsePlan::status() const noexcept {
     if (const auto* outcome = full()) {
         return outcome->status;
@@ -51,7 +56,7 @@ HttpRepresentationResponsePlan planHttpRepresentationResponse(
     HttpRepresentationResponseOptions options) {
     switch (options.rangePolicy) {
         case HttpRangeRequestPolicy::kIgnore:
-        case HttpRangeRequestPolicy::kHonorSingleByteRange:
+        case HttpRangeRequestPolicy::honor_byte_ranges:
             break;
         default:
             throw std::invalid_argument("unknown HTTP range request policy");
@@ -93,7 +98,7 @@ HttpRepresentationResponsePlan planHttpRepresentationResponse(
 
     if (options.normalStatus != http_status::kOk ||
         request.knownMethod() != HttpKnownMethod::kGet ||
-        options.rangePolicy != HttpRangeRequestPolicy::kHonorSingleByteRange || headers.range.empty()) {
+        options.rangePolicy != HttpRangeRequestPolicy::honor_byte_ranges || headers.range.empty()) {
         return makeFull();
     }
 
@@ -102,14 +107,17 @@ HttpRepresentationResponsePlan planHttpRepresentationResponse(
         return makeFull();
     }
 
-    const auto range = resolveHttpByteRange(headers.range, representation.length);
-    if (range.ignored() != nullptr) {
+    const auto ranges = resolve_http_byte_range_set(headers.range, representation.length);
+    if (ranges.ignored()) {
         return makeFull();
     }
-    if (range.unsatisfiable() != nullptr) {
-        return HttpRepresentationResponsePlan(*range.unsatisfiable());
+    if (ranges.unsatisfiable()) {
+        return HttpRepresentationResponsePlan(ranges.unsatisfiable_outcome());
     }
-    return HttpRepresentationResponsePlan(*range.resolved());
+    if (ranges.size() == 1) {
+        return HttpRepresentationResponsePlan(ranges.resolved_range(0));
+    }
+    return HttpRepresentationResponsePlan(ranges);
 }
 
 }  // namespace ruvia

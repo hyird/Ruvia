@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <exception>
 #include <memory>
@@ -562,12 +563,14 @@ RUVIA_TEST(client_response_decoder_allocations_share_the_receive_budget) {
         ruvia::HttpClientResultBudgetConfig{.max_in_flight_bytes = 128 * 1024});
     auto domain = ruvia::detail::HttpClientResponseMemoryDomain::create(worker.handle, budget);
     const std::string plain(256 * 1024, 'a');
-    auto encoded = ruvia::encodeHttpContent(ruvia::HttpContentCoding::kGzip, plain, {.maxEncodedBytes = 4096});
+    constexpr std::array codings{ruvia::HttpContentCoding::kGzip, ruvia::HttpContentCoding::deflate};
+    auto encoded = ruvia::encodeHttpContent(codings, plain, {.maxEncodedBytes = 4096});
     RUVIA_CHECK(encoded.encoded() != nullptr);
     runOperation(worker, io, [&]() -> ruvia::Task<void> {
         ruvia::detail::HttpClientResponseState state(worker.handle, domain->resource());
         state.responseBodyPlan = ruvia::planHttpResponseBody(ruvia::HttpKnownMethod::kGet, ruvia::http_status::kOk);
-        state.headers.push_back(ruvia::HttpHeader::copyOf("Content-Encoding", "gzip", state.resource));
+        state.headers.push_back(
+            ruvia::HttpHeader::copyOf("Content-Encoding", "gzip, deflate", state.resource));
         state.pending.assign(encoded.encoded()->bytes());
         ruvia::detail::configureHttpClientResponseDecoding(state);
         bool limited = false;

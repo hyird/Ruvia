@@ -1,12 +1,16 @@
 #include <ctime>
+#include <limits>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRepresentationResponsePlan.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 
 #include "test_harness.h"
 
@@ -76,7 +80,7 @@ RUVIA_TEST(representation_response_plan_only_evaluates_conditions_for_eligible_r
     auto created = request("GET");
     add(created, RequestKnownHeader::kRange, "bytes=1-2");
     const auto createdPlan = ruvia::planHttpRepresentationResponse(
-        created, kRepresentation, {.normalStatus = ruvia::http_status::kCreated, .rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange});
+        created, kRepresentation, {.normalStatus = ruvia::http_status::kCreated, .rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
     RUVIA_CHECK(createdPlan.full() != nullptr);
     RUVIA_CHECK_EQ(createdPlan.status(), ruvia::http_status::kCreated);
 }
@@ -84,7 +88,7 @@ RUVIA_TEST(representation_response_plan_only_evaluates_conditions_for_eligible_r
 RUVIA_TEST(representation_response_plan_resolves_supported_range_outcomes) {
     const auto options = ruvia::HttpRepresentationResponseOptions{
         .normalStatus = ruvia::http_status::kOk,
-        .rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange};
+        .rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges};
     auto partialReq = request("GET");
     add(partialReq, RequestKnownHeader::kRange, "bytes=2-4");
     const auto partial = ruvia::planHttpRepresentationResponse(partialReq, kRepresentation, options);
@@ -106,11 +110,19 @@ RUVIA_TEST(representation_response_plan_resolves_supported_range_outcomes) {
     const auto disabled = ruvia::planHttpRepresentationResponse(partialReq, kRepresentation);
     RUVIA_CHECK(disabled.full() != nullptr);
 
-    for (const auto range : {"items=1-2", "bytes=1-2,4-5", "bytes=garbage", "bytes=", ""}) {
+    for (const auto range : {"items=1-2", "bytes=garbage", "bytes=", ""}) {
         auto req = request("GET");
         add(req, RequestKnownHeader::kRange, range);
         const auto plan = ruvia::planHttpRepresentationResponse(req, kRepresentation, options);
         RUVIA_CHECK(plan.full() != nullptr);
+    }
+    auto multiReq = request("GET");
+    add(multiReq, RequestKnownHeader::kRange, "bytes=1-2,4-5");
+    const auto multi = ruvia::planHttpRepresentationResponse(multiReq, kRepresentation, options);
+    RUVIA_CHECK(multi.multipart_ranges() != nullptr);
+    RUVIA_CHECK_EQ(multi.status(), ruvia::http_status::kPartialContent);
+    if (const auto* ranges = multi.multipart_ranges()) {
+        RUVIA_CHECK_EQ(ranges->size(), std::size_t{2});
     }
 }
 
@@ -153,7 +165,7 @@ RUVIA_TEST(representation_response_plan_obeys_method_precondition_and_presence_p
     add(failedFirst, RequestKnownHeader::kIfNoneMatch, R"("v1")");
     add(failedFirst, RequestKnownHeader::kRange, "bytes=2-4");
     const auto failedFirstPlan = ruvia::planHttpRepresentationResponse(failedFirst, kRepresentation,
-        {.rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange});
+        {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
     RUVIA_CHECK(failedFirstPlan.preconditionFailed() != nullptr);
     RUVIA_CHECK_EQ(failedFirstPlan.status(), ruvia::http_status::kPreconditionFailed);
 }
@@ -172,7 +184,7 @@ RUVIA_TEST(representation_response_plan_uses_last_modified_only_when_present_and
 
     const auto rangeOptions = ruvia::HttpRepresentationResponseOptions{
         .normalStatus = ruvia::http_status::kOk,
-        .rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange};
+        .rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges};
     for (const auto ifRange : {R"("v1")", "Sun, 06 Nov 1994 08:49:37 GMT"}) {
         auto req = request("GET");
         add(req, RequestKnownHeader::kRange, "bytes=1-2");
@@ -212,7 +224,7 @@ RUVIA_TEST(representation_response_plan_checks_existing_representation_wildcards
         add(req, RequestKnownHeader::kIfNoneMatch, "*");
         add(req, RequestKnownHeader::kRange, "bytes=2-4");
         const auto plan = ruvia::planHttpRepresentationResponse(req,
-            {.length = 10}, {.rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange});
+            {.length = 10}, {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
         if (std::string_view(method) == "GET" || std::string_view(method) == "HEAD") {
             RUVIA_CHECK(plan.notModified() != nullptr);
             RUVIA_CHECK_EQ(plan.status(), ruvia::http_status::kNotModified);
@@ -226,7 +238,7 @@ RUVIA_TEST(representation_response_plan_checks_existing_representation_wildcards
         auto req = request(method);
         add(req, RequestKnownHeader::kRange, "bytes=2-4");
         const auto plan = ruvia::planHttpRepresentationResponse(req, kRepresentation,
-            {.rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange});
+            {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
         RUVIA_CHECK(plan.full() != nullptr);
     }
     auto created = request("GET");
@@ -272,7 +284,7 @@ RUVIA_TEST(representation_response_plan_keeps_resolved_values_after_input_lifeti
         add(req, RequestKnownHeader::kRange, range);
         add(req, RequestKnownHeader::kIfRange, etag);
         auto result = ruvia::planHttpRepresentationResponse(req,
-            {.length = 10, .etag = etag}, {.rangePolicy = ruvia::HttpRangeRequestPolicy::kHonorSingleByteRange});
+            {.length = 10, .etag = etag}, {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
         range.assign(range.size(), 'x');
         etag.assign(etag.size(), 'x');
         return result;
@@ -283,6 +295,80 @@ RUVIA_TEST(representation_response_plan_keeps_resolved_values_after_input_lifeti
         RUVIA_CHECK_EQ(range->offset(), std::uint64_t{2});
         RUVIA_CHECK_EQ(range->length(), std::uint64_t{3});
     }
+}
+
+RUVIA_TEST(multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-2,7-9", 10);
+    std::string media_type = "text/plain";
+    std::string boundary = "unit_boundary_42";
+    auto plan = ruvia::make_http_multipart_byte_range_plan(
+        ranges, 10, media_type, boundary, {}, &resource);
+    media_type.assign(media_type.size(), 'x');
+    boundary.assign(boundary.size(), 'y');
+
+    RUVIA_CHECK_EQ(plan.content_type(), "multipart/byteranges; boundary=unit_boundary_42");
+    RUVIA_CHECK_EQ(plan.segments().size(), std::size_t{7});
+    RUVIA_CHECK(plan.segments()[1].kind ==
+                ruvia::http_multipart_byte_range_plan::segment_kind::file);
+    RUVIA_CHECK_EQ(plan.segments()[1].file_offset, std::uint64_t{0});
+    RUVIA_CHECK_EQ(plan.segments()[1].file_length, std::uint64_t{3});
+    RUVIA_CHECK(plan.metadata().find("Content-Type: text/plain") != std::string_view::npos);
+    RUVIA_CHECK(plan.metadata().find("Content-Range: bytes 7-9/10") != std::string_view::npos);
+    std::uint64_t content_length = 0;
+    for (const auto& segment : plan.segments()) {
+        content_length += segment.kind == ruvia::http_multipart_byte_range_plan::segment_kind::file
+                              ? segment.file_length
+                              : segment.metadata_length;
+    }
+    RUVIA_CHECK_EQ(plan.content_length(), content_length);
+    RUVIA_CHECK(plan.metadata().ends_with("--\r\n"));
+}
+
+RUVIA_TEST(multipart_range_plan_is_move_only_and_quotes_boundary_parameters) {
+    static_assert(!std::is_copy_constructible_v<ruvia::http_multipart_byte_range_plan>);
+    static_assert(!std::is_copy_assignable_v<ruvia::http_multipart_byte_range_plan>);
+    std::pmr::monotonic_buffer_resource resource;
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
+    auto plan = ruvia::make_http_multipart_byte_range_plan(
+        ranges, 10, "text/plain", "range boundary", "gzip", &resource);
+    RUVIA_CHECK_EQ(plan.content_type(), "multipart/byteranges; boundary=\"range boundary\"");
+    RUVIA_CHECK(plan.metadata().find("Content-Encoding: gzip") != std::string_view::npos);
+    RUVIA_CHECK(plan.metadata().find("Content-Range: bytes 8-9/10") <
+                plan.metadata().find("Content-Range: bytes 0-1/10"));
+    auto clone = plan.clone(std::pmr::new_delete_resource());
+    RUVIA_CHECK_EQ(clone.content_type(), plan.content_type());
+    RUVIA_CHECK_EQ(clone.metadata(), plan.metadata());
+}
+
+RUVIA_TEST(multipart_range_plan_rejects_invalid_media_type) {
+    std::pmr::monotonic_buffer_resource resource;
+    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
+    bool threw = false;
+    try {
+        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(
+            ranges, 10, "text/plain\r\nX-Evil: yes", "valid_boundary", {}, &resource));
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(multipart_range_plan_rejects_content_length_overflow) {
+    auto ranges = ruvia::resolve_http_byte_range_set(
+        "bytes=0-9223372036854775806,9223372036854775808-18446744073709551614",
+        (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(ranges.size(), std::size_t{2});
+    std::pmr::monotonic_buffer_resource resource;
+    bool threw = false;
+    try {
+        static_cast<void>(ruvia::make_http_multipart_byte_range_plan(
+            ranges, (std::numeric_limits<std::uint64_t>::max)(), "application/octet-stream",
+            "overflow_check", {}, &resource));
+    } catch (const std::length_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(representation_response_plan_rejects_unknown_policy) {

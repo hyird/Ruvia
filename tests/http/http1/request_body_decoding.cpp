@@ -1,3 +1,5 @@
+#include <array>
+
 #include "ruvia/http/Http1RequestParser.h"
 
 #include "content_decoding_fixture.h"
@@ -90,7 +92,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
         compressedChunked.expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
     RUVIA_CHECK(compressedExpectationPlan.sendContinue() != nullptr);
     if (chunkedBody != nullptr) {
-        RUVIA_CHECK_EQ(chunkedBody->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK_EQ(chunkedBody->transferCodings().values.size(), std::size_t{1});
     }
 }
 
@@ -191,22 +193,25 @@ RUVIA_TEST(request_body_zstd_rejects_bytes_after_the_last_frame) {
 RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
     auto* resource = std::pmr::get_default_resource();
 
+    constexpr std::array gzip{HttpContentCoding::kGzip};
+    constexpr std::array identity{HttpContentCoding::kIdentity};
+    constexpr std::array invalidCoding{static_cast<HttpContentCoding>(255)};
     const auto invalid = decodeHttpRequestContent(
-        HttpContentCoding::kGzip, "not-gzip", {.maxDecodedBytes = 1024, .resource = resource});
+        gzip, "not-gzip", {.maxDecodedBytes = 1024, .resource = resource});
     RUVIA_CHECK(invalid.protocolFailure() != nullptr);
     RUVIA_CHECK(invalid.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(
         invalid.protocolFailure()->protocolError().status(), ruvia::http_status::kBadRequest);
 
     const auto oversized = decodeHttpRequestContent(
-        HttpContentCoding::kIdentity, "too large", {.maxDecodedBytes = 4, .resource = resource});
+        identity, "too large", {.maxDecodedBytes = 4, .resource = resource});
     RUVIA_CHECK(oversized.protocolFailure() != nullptr);
     RUVIA_CHECK(oversized.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(oversized.protocolFailure()->protocolError().status(),
         ruvia::http_status::kContentTooLarge);
 
     const auto unsupported = decodeHttpRequestContent(
-        static_cast<HttpContentCoding>(255), {}, {.maxDecodedBytes = 1024, .resource = resource});
+        invalidCoding, {}, {.maxDecodedBytes = 1024, .resource = resource});
     RUVIA_CHECK(unsupported.protocolFailure() != nullptr);
     RUVIA_CHECK(unsupported.decoderFailure() == nullptr);
     RUVIA_CHECK_EQ(unsupported.protocolFailure()->protocolError().status(),

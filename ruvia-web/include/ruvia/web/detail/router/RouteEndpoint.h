@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/WebSocketSubprotocolSet.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/HttpTunnelRouteConfig.h"
@@ -40,15 +41,22 @@ public:
         return requestBodyMode_;
     }
 
+    [[nodiscard]] bool replay_safe() const noexcept {
+        return replay_safe_;
+    }
+
 private:
     friend class RouteEndpoint;
 
-    BufferedRouteEndpoint(RouteHandler handler, RequestBodyMode requestBodyMode) noexcept
+    BufferedRouteEndpoint(RouteHandler handler, RequestBodyMode requestBodyMode,
+        bool replay_safe) noexcept
         : handler_(handler),
-          requestBodyMode_(requestBodyMode) {}
+          requestBodyMode_(requestBodyMode),
+          replay_safe_(replay_safe) {}
 
     RouteHandler handler_;
     RequestBodyMode requestBodyMode_;
+    bool replay_safe_{};
 };
 
 class ResponseStreamRouteEndpoint final {
@@ -57,19 +65,19 @@ public:
         return handler_;
     }
 
-    [[nodiscard]] ResponseStreamKind kind() const noexcept {
+    [[nodiscard]] http_response_stream_kind kind() const noexcept {
         return kind_;
     }
 
 private:
     friend class RouteEndpoint;
 
-    ResponseStreamRouteEndpoint(RouteStreamHandler handler, ResponseStreamKind kind) noexcept
+    ResponseStreamRouteEndpoint(RouteStreamHandler handler, http_response_stream_kind kind) noexcept
         : handler_(handler),
           kind_(kind) {}
 
     RouteStreamHandler handler_;
-    ResponseStreamKind kind_;
+    http_response_stream_kind kind_;
 };
 
 class TunnelRouteEndpoint final {
@@ -151,7 +159,7 @@ public:
     RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
     [[nodiscard]] static RouteEndpoint buffered(
-        RouteHandler handler, RequestBodyMode requestBodyMode) {
+        RouteHandler handler, RequestBodyMode requestBodyMode, bool replay_safe = false) {
         if (!handler.valid()) {
             throw std::invalid_argument("route handler must not be empty");
         }
@@ -159,15 +167,15 @@ public:
             requestBodyMode != RequestBodyMode::kStream) {
             throw std::invalid_argument("invalid route request-body mode");
         }
-        return RouteEndpoint(BufferedRouteEndpoint(handler, requestBodyMode));
+        return RouteEndpoint(BufferedRouteEndpoint(handler, requestBodyMode, replay_safe));
     }
 
     [[nodiscard]] static RouteEndpoint responseStream(
-        RouteStreamHandler handler, ResponseStreamKind kind) {
+        RouteStreamHandler handler, http_response_stream_kind kind) {
         if (!handler.valid()) {
             throw std::invalid_argument("route stream handler must not be empty");
         }
-        if (kind != ResponseStreamKind::kGeneric && kind != ResponseStreamKind::kSse) {
+        if (kind != http_response_stream_kind::generic && kind != http_response_stream_kind::sse) {
             throw std::invalid_argument("invalid response-stream kind");
         }
         return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
@@ -229,7 +237,8 @@ public:
             return RouteEndpoint::tunnel(resource, endpoint->handler(), endpoint->protocol(), endpoint->config());
         }
         if (const auto* endpoint = buffered()) {
-            return RouteEndpoint::buffered(endpoint->handler(), endpoint->requestBodyMode());
+            return RouteEndpoint::buffered(
+                endpoint->handler(), endpoint->requestBodyMode(), endpoint->replay_safe());
         }
         if (const auto* endpoint = responseStream()) {
             return RouteEndpoint::responseStream(endpoint->handler(), endpoint->kind());

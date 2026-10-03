@@ -3,6 +3,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <string_view>
 
 namespace ruvia {
 
@@ -79,6 +81,13 @@ private:
     std::uint64_t offset_;
     std::uint64_t length_;
     HttpResponseFileIdentity identity_;
+};
+
+// A borrowed view of one response-body segment. Any bytes and file path remain
+// valid only while the owning HttpResponse is alive and unmodified.
+struct http_response_body_segment_view final {
+    std::string_view bytes_{};
+    std::optional<HttpResponseFileView> file_{};
 };
 
 }  // namespace ruvia

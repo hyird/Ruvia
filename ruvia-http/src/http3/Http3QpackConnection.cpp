@@ -543,7 +543,7 @@ Http3QpackEncoder::Http3QpackEncoder(Http3QpackEncoderConfig config, std::pmr::m
 Http3QpackEncoder::~Http3QpackEncoder() {
     std::pmr::polymorphic_allocator<Impl>(resource_).delete_object(impl_);
 }
-std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits) {
+std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields, Http3FieldSectionLimits limits, std::pmr::memory_resource* result_resource) {
     auto& s = *impl_;
     if (s.failure) {
         return std::unexpected(*s.failure);
@@ -567,6 +567,7 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         total += 32 + f.name.size() + f.value.size();
     }
     FailureGuard exceptionGuard{s.failure, Error::kDecoderStreamError};
+    auto* output_resource = result_resource ? result_resource : resource_;
     auto existing = s.sections.find(streamId);
     bool alreadyBlocked = existing != s.sections.end() && std::any_of(existing->second.begin(), existing->second.end(), [&](const auto& section) { return section.required > s.received; });
     const bool mayReference = s.outstandingSections < s.config.maxOutstandingSections;
@@ -605,7 +606,7 @@ std::expected<std::pmr::vector<char>, Error> Http3QpackEncoder::encode(std::uint
         references.push_back(selected->absolute);
         ++selected->references;
     }
-    std::pmr::vector<char> output(resource_);
+    std::pmr::vector<char> output(output_resource);
     integer(output, 8, 0, required ? required % (2 * (s.config.maxTableCapacity / 32)) + 1 : 0);
     integer(output, 7, required ? 0x80 : 0, required ? required - 1 : 0);
     output.insert(output.end(), body.begin(), body.end());

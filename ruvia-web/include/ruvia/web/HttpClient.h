@@ -56,6 +56,13 @@ public:
     [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView& request, HttpClientTunnelConfig config = {}) const&;
     ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView&, HttpClientTunnelConfig = {}) const&& = delete;
     [[nodiscard]] HttpClientStats stats() const;
+    // QUIC migration is owner-loop-only. The candidate socket is retained by
+    // its connection until validation terminates; abort closes that connection.
+    [[nodiscard]] quic_path_migration start_quic_path_migration(
+        const asio::ip::udp::endpoint& local_endpoint) const;
+    [[nodiscard]] std::optional<quic_path_migration> path_migration(
+        std::uint64_t id) const;
+    [[nodiscard]] quic_operation_status cancel_quic_path_migration(std::uint64_t id) const;
     [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() const&;
     [[nodiscard]] std::optional<HttpClientPush> nextPush() const&;
     std::optional<HttpClientPush> nextPush() const&& = delete;

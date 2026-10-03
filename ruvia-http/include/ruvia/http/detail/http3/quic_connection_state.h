@@ -80,6 +80,8 @@ public:
         bool writable{};
         bool receive_fin{};
         bool receive_end_observed{};
+        bool received_early_data{};
+        bool early_data_candidate{};
         bool send_fin{};
         bool fin_submitted{};
         bool send_reset{};
@@ -98,7 +100,8 @@ public:
 
     explicit quic_connection_state(quic_connection_config config,
         quic_crypto_provider_view crypto, quic_tls_driver_view tls_driver,
-        std::pmr::memory_resource* resource, quic_timestamp now);
+        std::pmr::memory_resource* resource, quic_timestamp now,
+        std::span<const std::byte> early_transport_parameters = {});
     quic_connection_state(const quic_connection_state&) = delete;
     quic_connection_state& operator=(const quic_connection_state&) = delete;
     quic_connection_state(quic_connection_state&&) = delete;
@@ -117,12 +120,20 @@ public:
     void rethrow_failure() const;
     void retire() noexcept;
     quic_connection_info info() const noexcept;
+    quic_path_migration start_path_migration(const quic_address& local_address,
+        ngtcp2_tstamp now);
+    std::optional<quic_path_migration> path_migration(std::uint64_t id) const noexcept;
+    quic_operation_status cancel_path_migration(std::uint64_t id);
+    quic_operation_status fail_path_migration(std::uint64_t id) noexcept;
+    void on_path_validation(const ngtcp2_path& path,
+        ngtcp2_path_validation_result result) noexcept;
     void complete_tls(quic_tls_info_view info);
     void fail_tls(quic_tls_alert alert) noexcept;
     bool failed() const noexcept;
     quic_tls_handshake& tls_handshake() noexcept;
 
     quic_connection_config config_;
+    quic_version negotiated_version_;
     quic_crypto_provider_view crypto_;
     quic_tls_driver_view tls_driver_;
     quic_cid_registry_view server_cid_registry_{};
@@ -134,8 +145,14 @@ public:
     ngtcp2_conn* connection_{};
     ngtcp2_mem ngtcp_memory_{};
     ngtcp2_path_storage path_{};
+    ngtcp2_path_storage migration_path_{};
+    std::optional<quic_path_migration> migration_{};
+    quic_address current_local_address_{};
+    bool migration_validation_pending_{};
+    std::uint64_t next_migration_id_{1};
 
-    std::array<std::pmr::list<crypto_record>, 3> inbound_crypto_;
+    std::array<std::pmr::list<crypto_record>, 4> inbound_crypto_;
+    std::pmr::vector<std::byte> early_transport_parameters_;
     std::size_t retained_crypto_bytes_{};
     std::size_t leased_crypto_bytes_{};
     crypto_record* leased_record_{};
@@ -144,6 +161,7 @@ public:
 
     std::pmr::vector<std::byte> local_transport_parameters_;
     std::pmr::unordered_map<std::uint64_t, stream_state> streams_;
+    std::pmr::vector<std::uint64_t> rejected_early_streams_;
     std::pmr::deque<datagram> received_datagrams_;
     std::pmr::deque<datagram> send_datagrams_;
     std::pmr::string close_reason_;
@@ -160,10 +178,14 @@ public:
     std::exception_ptr latched_failure_{};
     bool tls_handshake_complete_{};
     bool tls_handshake_notified_{};
+    bool early_transport_parameters_set_{};
+    bool early_data_key_installed_{};
+    bool tls_drive_started_{};
+    quic_early_data_state early_data_state_{quic_early_data_state::unavailable};
     bool tls_driver_active_{};
     bool tls_driver_retiring_{};
     bool tls_driver_retired_{};
-    bool retry_aead_installed_{};
+    std::optional<quic_version> retry_aead_version_{};
     bool quic_handshake_complete_{};
     bool confirmed_{};
     bool close_reason_latched_{};

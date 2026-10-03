@@ -5,11 +5,14 @@
 #include <optional>
 #include <string_view>
 
+#include <asio/ip/udp.hpp>
+
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpClientTunnelRequestView.h"
 #include "ruvia/http/HttpConnectUdp.h"
+#include "ruvia/http/quic_types.h"
 #include "ruvia/web/HttpClientAdvertisement.h"
 #include "ruvia/web/HttpClientExchange.h"
 #include "ruvia/web/HttpClientPush.h"
@@ -43,6 +46,11 @@ public:
     // and HTTP/1 Upgrade fields are driver-owned. Use acceptedTunnel.udp().
     [[nodiscard]] ScopedOperation<HttpClientTunnelResult> openUdpTunnel(const HttpClientUdpTunnelRequestView& request, HttpClientTunnelConfig config = {}) const;
     [[nodiscard]] HttpClientStats stats() const;
+    [[nodiscard]] quic_path_migration start_quic_path_migration(
+        const asio::ip::udp::endpoint& local_endpoint) const;
+    [[nodiscard]] std::optional<quic_path_migration> path_migration(
+        std::uint64_t id) const;
+    [[nodiscard]] quic_operation_status cancel_quic_path_migration(std::uint64_t id) const;
     [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() const;
     [[nodiscard]] std::optional<HttpClientPush> nextPush() const;
     [[nodiscard]] std::string_view host() const&;

@@ -16,16 +16,11 @@ namespace ruvia {
 
 namespace {
 
-void setAllowHeader(HttpResponse& response, std::uint32_t methodMask,
-    std::span<const std::string_view> extensionMethods = {}) {
-    detail::setResponseAllowHeader(response, methodMask, extensionMethods);
-}
-
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask,
     std::span<const std::string_view> extensionMethods = {}) {
     HttpResponse response({.resource = memory.resource()});
     response.status(ruvia::http_status::kNoContent);
-    setAllowHeader(response, methodMask, extensionMethods);
+    response.allow_methods(methodMask, extensionMethods);
     return response;
 }
 
@@ -174,7 +169,7 @@ Task<HttpResponse> detail::RouteTable::dispatchRequest(const HttpRequest& reques
             if (error) {
                 auto response = co_await handleError(request, memory, *error, services);
                 if (allowedMethods != 0 || !extensionMethods.empty()) {
-                    setAllowHeader(response, allowedMethods, extensionMethods);
+                    response.allow_methods(allowedMethods, extensionMethods);
                 }
                 co_return std::move(response);
             }

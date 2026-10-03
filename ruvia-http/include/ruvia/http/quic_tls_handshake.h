@@ -75,6 +75,9 @@ public:
     std::span<const std::byte> local_transport_parameters() const noexcept;
     // TLS sends the peer extension bytes to HTTP for decoding and protocol validation.
     void submit_peer_transport_parameters(std::span<const std::byte> encoded_parameters);
+    // Records the TLS decision once the handshake finishes. Client rejection rolls ngtcp2's
+    // 0-RTT stream state back; retransmission remains the HTTP connection owner's duty.
+    void complete_early_data(bool accepted);
     // Copies negotiated metadata; info() borrows it until connection retirement.
     void complete(quic_tls_info_view info);
     void fail(quic_tls_alert alert) noexcept;

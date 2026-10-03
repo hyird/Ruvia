@@ -63,6 +63,58 @@ void receive(void* context, const ruvia::Http3ConnectionEvent& event) {
 }
 }  // namespace
 
+RUVIA_TEST(http3ClientRequestDriverRebuildsRejectedEarlyRequestOnFreshStream) {
+    std::pmr::unsynchronized_pool_resource pool;
+    ruvia::detail::HttpClientRequestStorage storage("GET", "/safe", &pool);
+    auto created = ruvia::detail::Http3ClientRequestWrite::create(
+        std::move(storage), "https", "example.com", &pool);
+    RUVIA_CHECK(created.has_value());
+    if (!created) {
+        return;
+    }
+    Driver driver(std::move(*created));
+    std::array<std::string, 2> wires;
+    std::size_t attempt{};
+    std::size_t registrations{};
+    auto open = [&] {
+        return ruvia::quic_stream_open_result{
+            .status = ruvia::quic_operation_status::accepted,
+            .stream_id = attempt == 0 ? 0U : 4U};
+    };
+    auto register_response = [&](std::uint64_t id, ruvia::HttpKnownMethod method) {
+        RUVIA_CHECK_EQ(id, attempt == 0 ? 0U : 4U);
+        RUVIA_CHECK(method == ruvia::HttpKnownMethod::kGet);
+        ++registrations;
+        return true;
+    };
+    auto write = [&](std::uint64_t, std::span<const char> bytes) {
+        wires[attempt].append(bytes.data(), bytes.size());
+        return ruvia::quic_stream_write_result{
+            .status = ruvia::quic_operation_status::accepted, .accepted = bytes.size()};
+    };
+    auto finish = [](std::uint64_t) { return ruvia::quic_operation_status::accepted; };
+    for (int i = 0; i < 8 && !driver.finished(); ++i) {
+        RUVIA_CHECK(driver.drive(open, register_response, write, finish) != Driver::Result::kFatal);
+    }
+    RUVIA_CHECK(driver.finished());
+    RUVIA_CHECK_EQ(registrations, 1U);
+    RUVIA_CHECK(driver.replay_after_rejected_early_stream("https", "example.com", &pool));
+    attempt = 1;
+    for (int i = 0; i < 8 && !driver.finished(); ++i) {
+        RUVIA_CHECK(driver.drive(open, register_response, write, finish) != Driver::Result::kFatal);
+    }
+    RUVIA_CHECK(driver.finished());
+    RUVIA_CHECK_EQ(driver.streamId(), std::optional<Driver::StreamId>{4});
+    RUVIA_CHECK_EQ(registrations, 2U);
+    RUVIA_CHECK(!wires[0].empty() && wires[0] == wires[1]);
+    ruvia::Http3Connection peer(ruvia::Http3PeerRole::kServer, &pool);
+    Received received;
+    RUVIA_CHECK(peer.feed(4, wires[1], true, false, receive, &received).status ==
+                ruvia::Http3ConnectionStatus::kMessageEnd);
+    RUVIA_CHECK(received.method == "GET" && received.path == "/safe");
+    RUVIA_CHECK_EQ(received.finished, 1);
+}
+
 RUVIA_TEST(http3ClientRequestDriverRetriesExactWantBytesAndFinishesAfterPayload) {
     std::pmr::unsynchronized_pool_resource pool;
     auto created = makeRequest(&pool);

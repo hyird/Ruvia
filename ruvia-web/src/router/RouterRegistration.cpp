@@ -1,3 +1,4 @@
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 
@@ -28,11 +29,19 @@ detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resour
     }
 }
 
+namespace {
+[[nodiscard]] bool declared_replay_safe(
+    std::span<const detail::ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const detail::ControllerMiddlewareDescriptor> routeMiddlewares) noexcept;
+}
+
 void detail::RouterImpl::registerRoute(HttpKnownMethod method, std::pmr::string path,
     RouteHandler handler, RequestBodyMode bodyMode,
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
-    registerEndpoint(method, std::move(path), RouteEndpoint::buffered(handler, bodyMode),
+    registerEndpoint(method, std::move(path),
+        RouteEndpoint::buffered(handler, bodyMode,
+            declared_replay_safe(controllerMiddlewares, routeMiddlewares)),
         controllerMiddlewares, routeMiddlewares);
 }
 
@@ -41,7 +50,7 @@ void detail::RouterImpl::registerResponseStreamRoute(HttpKnownMethod method, std
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
     registerEndpoint(method, std::move(path),
-        RouteEndpoint::responseStream(handler, ResponseStreamKind::kGeneric), controllerMiddlewares,
+        RouteEndpoint::responseStream(handler, http_response_stream_kind::generic), controllerMiddlewares,
         routeMiddlewares);
 }
 
@@ -50,7 +59,7 @@ void detail::RouterImpl::registerSseRoute(HttpKnownMethod method, std::pmr::stri
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
     registerEndpoint(method, std::move(path),
-        RouteEndpoint::responseStream(handler, ResponseStreamKind::kSse), controllerMiddlewares,
+        RouteEndpoint::responseStream(handler, http_response_stream_kind::sse), controllerMiddlewares,
         routeMiddlewares);
 }
 
@@ -76,6 +85,20 @@ namespace {
 // The tightest ceiling any of the route's middlewares declared. Several may:
 // a controller-wide one and a route-specific one, and the stricter must win
 // rather than the last registered.
+[[nodiscard]] bool declared_replay_safe(
+    std::span<const detail::ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const detail::ControllerMiddlewareDescriptor> routeMiddlewares) noexcept {
+    if (controllerMiddlewares.empty() && routeMiddlewares.empty()) {
+        return false;
+    }
+    const auto all_declared = [](std::span<const detail::ControllerMiddlewareDescriptor> values) noexcept {
+        return std::ranges::all_of(values, [](const auto& value) {
+            return value.replay_safe();
+        });
+    };
+    return all_declared(controllerMiddlewares) && all_declared(routeMiddlewares);
+}
+
 [[nodiscard]] std::size_t declaredRequestBodyLimit(
     std::span<const detail::ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const detail::ControllerMiddlewareDescriptor> routeMiddlewares) noexcept {
@@ -155,7 +178,9 @@ void detail::RouterImpl::registerExtensionMethodRoute(std::string_view methodTok
             "extension route method is a known method; register it with its typed route macro");
     }
     registerEndpointWithToken(HttpKnownMethod::kUnknown, methodToken, std::move(path),
-        RouteEndpoint::buffered(handler, bodyMode), controllerMiddlewares, routeMiddlewares);
+        RouteEndpoint::buffered(handler, bodyMode,
+            declared_replay_safe(controllerMiddlewares, routeMiddlewares)),
+        controllerMiddlewares, routeMiddlewares);
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {

@@ -51,6 +51,7 @@ RUVIA_TEST(client_request_storage_same_resource_preserves_owned_storage) {
     const std::string value(300, 'v');
     HttpClientRequestStorage request("POST", target, &resource);
     request.appendHeader("X-Test", value).setBody(body);
+    request.set_replay_safe(true);
     const auto* targetData = request.target().data();
     const auto* bodyData = request.body().data();
     std::pmr::vector<ruvia::HttpHeaderView> originalHeaders;
@@ -65,6 +66,7 @@ RUVIA_TEST(client_request_storage_same_resource_preserves_owned_storage) {
     std::pmr::vector<ruvia::HttpHeaderView> headers;
     const auto view = HttpClientRequestStorageAccess::view(transferred, headers);
     RUVIA_CHECK(view.method.view() == "POST");
+    RUVIA_CHECK(view.replay_safe);
     RUVIA_CHECK(view.headers.size() == 1);
     RUVIA_CHECK(view.headers[0].name() == "x-test");
     RUVIA_CHECK(view.headers[0].value() == value);
@@ -87,6 +89,7 @@ RUVIA_TEST(client_request_storage_transfer_outlives_source_resource) {
             {
                 HttpClientRequestStorage request(method, target, &source);
                 request.appendHeader(name, value).setBody(body);
+                request.set_replay_safe(true);
                 transferred.emplace(std::move(request).intoResource(&destination));
             }
             RUVIA_CHECK(source.liveAllocations() == 0);
@@ -94,6 +97,7 @@ RUVIA_TEST(client_request_storage_transfer_outlives_source_resource) {
         std::pmr::vector<ruvia::HttpHeaderView> headers;
         const auto view = HttpClientRequestStorageAccess::view(*transferred, headers);
         RUVIA_CHECK(view.method.view() == method);
+        RUVIA_CHECK(view.replay_safe);
         RUVIA_CHECK(view.target.view() == target);
         RUVIA_CHECK(view.headers.size() == 1);
         RUVIA_CHECK(view.headers[0].name() == std::string(80, 'h'));

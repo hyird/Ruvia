@@ -431,11 +431,12 @@ RUVIA_TEST(quic_server_emits_one_shot_version_negotiation_with_reversed_cids) {
         reinterpret_cast<const std::uint8_t*>(packet.data() + 15)));
     RUVIA_CHECK(std::equal(decoded.scid, decoded.scid + decoded.scidlen,
         reinterpret_cast<const std::uint8_t*>(packet.data() + 6)));
-    RUVIA_CHECK_EQ(written.size, std::size_t{27});
-    RUVIA_CHECK_EQ(output[23], std::byte{0});
-    RUVIA_CHECK_EQ(output[24], std::byte{0});
-    RUVIA_CHECK_EQ(output[25], std::byte{0});
-    RUVIA_CHECK_EQ(output[26], std::byte{1});
+    RUVIA_CHECK_EQ(written.size, std::size_t{31});
+    constexpr std::array<std::byte, 8> advertised_versions{
+        std::byte{0}, std::byte{0}, std::byte{0}, std::byte{1},
+        std::byte{0x6b}, std::byte{0x33}, std::byte{0x43}, std::byte{0xcf}};
+    RUVIA_CHECK(std::equal(advertised_versions.begin(), advertised_versions.end(),
+        output.begin() + 23));
 
     bool rejected_repeat{};
     try {

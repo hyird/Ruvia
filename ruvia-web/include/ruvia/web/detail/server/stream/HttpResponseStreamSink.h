@@ -23,6 +23,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponseHeadBuffer.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
@@ -36,7 +37,7 @@ template <typename Stream, typename ScannerEntry>
 class ResponseStreamSink final {
 public:
     ResponseStreamSink(Stream& stream, WorkerMemory& memory, HttpResponseHeadBuffer& head,
-        ScannerEntry& scannerEntry, const WorkerHandle& worker, ResponseStreamKind kind,
+        ScannerEntry& scannerEntry, const WorkerHandle& worker, http_response_stream_kind kind,
         Http1ResponseStreamPlan plan, HttpResponseCodingSelection responseCoding,
         HttpResponseCodingAvailability responseCodingAvailability) noexcept
         : stream_(stream),
@@ -50,17 +51,17 @@ public:
           compression_(memory.resource(), responseCoding, responseCodingAvailability) {}
 
     ResponseStreamSink(Stream&, WorkerMemory&, HttpResponseHeadBuffer&, ScannerEntry&, WorkerHandle&&,
-        ResponseStreamKind, Http1ResponseStreamPlan, HttpResponseCodingSelection,
+        http_response_stream_kind, Http1ResponseStreamPlan, HttpResponseCodingSelection,
         HttpResponseCodingAvailability) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
     }
 
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
-        return state_.commitPlan();
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
+        return state_.commit_plan();
     }
-    const ResponseStreamCommitPlan* commitPlan() const&& = delete;
+    const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         return state_.aborted();
@@ -93,10 +94,10 @@ private:
         state_.releaseContext();
     }
 
-    Task<void> commit(ResponseTrailerIntent trailerIntent) {
+    Task<void> commit(http_response_trailer_intent trailerIntent) {
         if (state_.committed()) {
-            if (trailerIntent == ResponseTrailerIntent::kPresent) {
-                state_.ensureTrailersAllowed(ResponseStreamTrailerFraming::kHttp1Chunked);
+            if (trailerIntent == http_response_trailer_intent::present) {
+                state_.ensureTrailersAllowed(http_response_stream_trailer_framing::http1_chunked);
             }
             co_return;
         }
@@ -115,12 +116,7 @@ private:
                     "HTTP/1 stream preparation returned no terminal alternative");
             }
             auto streamHead = std::move(*prepared);
-            if (trailerIntent == ResponseTrailerIntent::kPresent &&
-                streamHead.commitPlan().trailerFraming() !=
-                    ResponseStreamTrailerFraming::kHttp1Chunked) {
-                throw std::logic_error("response framing does not support trailers");
-            }
-            compression_.activate(streamHead.commitPlan().bodyPlan());
+            compression_.activate(streamHead.commit_plan().body_plan());
 
             head_.reset();
             appendHttp1ResponseHead(streamHead.response(), head_, streamHead.responseHeadPlan());
@@ -130,7 +126,7 @@ private:
             if (interimOutput_ != nullptr) {
                 interimOutput_->commitFinal();
             }
-            state_.markCommitted(streamHead.commitPlan());
+            state_.markCommitted(streamHead.commit_plan());
         } catch (...) {
             // Representation metadata and protocol framing are one pre-wire
             // transaction. Once either side has failed, no handler retry may
@@ -165,7 +161,7 @@ private:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit(ResponseTrailerIntent::kNone);
+        co_await commit(http_response_trailer_intent::none);
         if (state_.bodySuppressedComplete()) {
             // ensureBodyAllowed() is about to throw ResponseStreamHeadOnlyComplete
             // synchronously (commit() returned without suspending on an already
@@ -198,7 +194,7 @@ private:
             co_return;
         }
 
-        if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
+        if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
             const auto writeCompletion = co_await ruvia::asyncAsio([this, chunk](auto handler) mutable {
@@ -237,7 +233,7 @@ private:
 
         const auto trailerResult = validatedResponseTrailerSection(trailers);
         const auto& trailerSection = *trailerResult.section();
-        const auto trailerIntent = httpResponseTrailerIntent(trailerSection);
+        const auto trailerIntent = response_trailer_intent(trailerSection);
         if (!trailerSection.empty()) {
             ::ruvia::clearPmrStringRetainingSmall(trailers_);
             appendHttp1ResponseTrailers(trailers_, trailerSection);
@@ -257,7 +253,7 @@ private:
             }
             co_await writeEncoded(compression_.output());
         }
-        if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
+        if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No last-chunk terminator: the connection close delimits the body.
             state_.markEnded();
             co_return;
@@ -286,7 +282,7 @@ private:
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
     const WorkerHandle& worker_;
-    ResponseStreamKind kind_;
+    http_response_stream_kind kind_;
     Http1ResponseStreamPlan plan_;
     Http1RequestConnectionPlan connectionPlan_;
     HttpStreamingResponseCompression compression_;

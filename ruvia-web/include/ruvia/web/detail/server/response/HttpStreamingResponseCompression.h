@@ -12,6 +12,7 @@
 #include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpContentEncoder.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 
@@ -36,16 +37,16 @@ public:
     // Applies the representation headers before the protocol-owned stream head
     // is committed. A forbidden identity fallback is rejected here, while the
     // encoder itself is delayed until activate() has a final body plan.
-    void prepare(HttpKnownMethod requestMethod, HttpResponse& response, ResponseStreamKind kind) {
+    void prepare(HttpKnownMethod requestMethod, HttpResponse& response, http_response_stream_kind kind) {
         if (!std::holds_alternative<Unprepared>(state_)) {
             throw std::logic_error("streaming response compression is already prepared");
         }
         HttpResponseCompressionSource source;
         switch (kind) {
-            case ResponseStreamKind::kGeneric:
+            case http_response_stream_kind::generic:
                 source = HttpResponseCompressionSource::kStream;
                 break;
-            case ResponseStreamKind::kSse:
+            case http_response_stream_kind::sse:
                 source = HttpResponseCompressionSource::kSse;
                 break;
             default:

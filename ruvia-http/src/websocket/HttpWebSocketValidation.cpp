@@ -129,7 +129,7 @@ HttpProtocolError WebSocketHandshakeFailure::protocolError() const noexcept {
 
 void WebSocketHandshakeFailure::applyRequiredResponseHeaders(HttpResponse& response) const {
     if (kind_ == Kind::kUnsupportedVersion) {
-        detail::setResponseHeaderStableView(response, "Sec-WebSocket-Version", "13");
+        response.header_stable_view("Sec-WebSocket-Version", "13");
     }
 }
 

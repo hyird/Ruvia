@@ -44,6 +44,7 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
 #include "ruvia/web/HttpClientTypes.h"
@@ -539,8 +540,8 @@ private:
             }
         } else {
             const auto submitted = connection.submitStreamingResponseHead(requestStream,
-                std::move(response), ruvia::ResponseStreamKind::kGeneric,
-                ruvia::ResponseTrailerIntent::kPresent);
+                std::move(response), ruvia::http_response_stream_kind::generic,
+                ruvia::http_response_trailer_intent::present);
             if (submitted.submitted() == nullptr) {
                 throw std::runtime_error("HTTP/2 peer could not submit response headers");
             }

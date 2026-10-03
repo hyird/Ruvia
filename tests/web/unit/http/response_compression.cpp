@@ -20,6 +20,7 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/response/HttpResponseCompression.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
@@ -74,6 +75,9 @@ private:
             break;
         case HttpContentCoding::kGzip:
             qualities.update("gzip");
+            break;
+        case HttpContentCoding::deflate:
+            qualities.update("deflate");
             break;
         case HttpContentCoding::kBrotli:
             qualities.update("br");
@@ -334,7 +338,7 @@ RUVIA_TEST(streaming_compression_selects_unknown_length_representation) {
         std::pmr::get_default_resource(), selection,
         ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
     compression.prepare(
-        HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
+        HttpKnownMethod::kGet, response, ruvia::http_response_stream_kind::generic);
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     RUVIA_CHECK(!response.header("Content-Length").has_value());
     RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"stream-v1\""));
@@ -344,8 +348,8 @@ RUVIA_TEST(streaming_compression_selects_unknown_length_representation) {
 
 RUVIA_TEST(streaming_identity_representation_preserves_negotiated_variance) {
     for (const auto method : {HttpKnownMethod::kGet, HttpKnownMethod::kHead}) {
-        for (const auto kind : {ruvia::detail::ResponseStreamKind::kGeneric,
-                 ruvia::detail::ResponseStreamKind::kSse}) {
+        for (const auto kind : {ruvia::http_response_stream_kind::generic,
+                 ruvia::http_response_stream_kind::sse}) {
             auto response = responseWithBody(kCompressibleBody);
             response.header("Vary", "Origin");
             response.header("ETag", "\"identity-v1\"");
@@ -416,7 +420,7 @@ RUVIA_TEST(streaming_compression_owns_one_typed_encoder_lifecycle) {
         selection, ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
 
     compression.prepare(
-        HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
+        HttpKnownMethod::kGet, response, ruvia::http_response_stream_kind::generic);
     RUVIA_CHECK(!compression.active());
     compression.activate(
         ruvia::planHttpResponseBody(HttpKnownMethod::kGet, response.status()));
@@ -450,7 +454,7 @@ RUVIA_TEST(streaming_compression_failure_is_terminal) {
     ruvia::detail::HttpStreamingResponseCompression compression(&resource, gzipResponseCoding(),
         ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
     compression.prepare(
-        HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
+        HttpKnownMethod::kGet, response, ruvia::http_response_stream_kind::generic);
     compression.activate(
         ruvia::planHttpResponseBody(HttpKnownMethod::kGet, response.status()));
     RUVIA_CHECK(compression.active());
@@ -469,7 +473,7 @@ RUVIA_TEST(streaming_compression_precommit_abort_is_terminal) {
         gzipResponseCoding(),
         ruvia::detail::HttpResponseCodingAvailability::kIdentityAndCompression);
     compression.prepare(
-        HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
+        HttpKnownMethod::kGet, response, ruvia::http_response_stream_kind::generic);
     compression.abort();
 
     RUVIA_CHECK(!compression.active());
@@ -495,7 +499,7 @@ RUVIA_TEST(streaming_compression_respects_encoder_availability_at_representation
     bool rejected = false;
     try {
         compression.prepare(
-            HttpKnownMethod::kGet, response, ruvia::detail::ResponseStreamKind::kGeneric);
+            HttpKnownMethod::kGet, response, ruvia::http_response_stream_kind::generic);
     } catch (const ruvia::HttpError& error) {
         rejected = error.info().status() == ruvia::http_status::kNotAcceptable;
     }
@@ -512,7 +516,7 @@ RUVIA_TEST(streaming_compression_respects_encoder_availability_at_representation
             std::pmr::get_default_resource(), *selected,
             ruvia::detail::HttpResponseCodingAvailability::kIdentityOnly);
         identityFallback.prepare(
-            HttpKnownMethod::kGet, identityAllowed, ruvia::detail::ResponseStreamKind::kGeneric);
+            HttpKnownMethod::kGet, identityAllowed, ruvia::http_response_stream_kind::generic);
         identityFallback.activate(
             ruvia::planHttpResponseBody(HttpKnownMethod::kGet, identityAllowed.status()));
         RUVIA_CHECK(!identityFallback.active());
@@ -723,7 +727,7 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     resource.failAllocations(true);
     bool rejected = false;
     try {
-        ruvia::detail::replaceResponseBodyWithContentEncoding(response, std::move(encoded), "gzip");
+        response.replaceBodyWithContentEncoding(std::move(encoded), "gzip");
     } catch (const std::bad_alloc&) {
         rejected = true;
     }
@@ -742,8 +746,7 @@ RUVIA_TEST(encoded_response_commit_is_transactional_on_header_allocation_failure
     resource.failAllocations(true);
     rejected = false;
     try {
-        ruvia::detail::replaceResponseBodyWithContentEncoding(
-            withEtag, std::move(encodedWithEtag), "gzip");
+        withEtag.replaceBodyWithContentEncoding(std::move(encodedWithEtag), "gzip");
     } catch (const std::bad_alloc&) {
         rejected = true;
     }
@@ -942,7 +945,7 @@ RUVIA_TEST(preencoded_response_must_be_acceptable_to_client) {
         bool rejected = false;
         try {
             streamCompression.prepare(
-                HttpKnownMethod::kGet, streaming, ruvia::detail::ResponseStreamKind::kGeneric);
+                HttpKnownMethod::kGet, streaming, ruvia::http_response_stream_kind::generic);
         } catch (const ruvia::HttpError& streamError) {
             rejected = streamError.info().status() == ruvia::http_status::kNotAcceptable;
         }
@@ -956,7 +959,7 @@ RUVIA_TEST(preencoded_response_must_be_acceptable_to_client) {
         bool stackedRejected = false;
         try {
             stackedCompression.prepare(HttpKnownMethod::kGet, stackedStreaming,
-                ruvia::detail::ResponseStreamKind::kGeneric);
+                ruvia::http_response_stream_kind::generic);
         } catch (const ruvia::HttpError& stackedStreamError) {
             stackedRejected =
                 stackedStreamError.info().status() == ruvia::http_status::kNotAcceptable;
@@ -981,7 +984,7 @@ RUVIA_TEST(preencoded_response_must_be_acceptable_to_client) {
             bool identityRejected = false;
             try {
                 identityCompression.prepare(HttpKnownMethod::kGet, identityStreaming,
-                    ruvia::detail::ResponseStreamKind::kGeneric);
+                    ruvia::http_response_stream_kind::generic);
             } catch (const ruvia::HttpError& identityError) {
                 identityRejected =
                     identityError.info().status() == ruvia::http_status::kNotAcceptable;

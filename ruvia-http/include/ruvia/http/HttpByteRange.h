@@ -1,42 +1,28 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <limits>
-#include <optional>
 #include <string_view>
 #include <system_error>
-#include <variant>
 
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpFieldWhitespace.h"
 
 namespace ruvia {
 
-class HttpByteRangeResolution;
-
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue, std::uint64_t representationLength) noexcept;
-
-class HttpByteRangeIgnored final {
-private:
-    friend class HttpByteRangeResolution;
-
-    constexpr HttpByteRangeIgnored() noexcept = default;
-};
-
 class HttpByteRangeUnsatisfiable final {
 private:
-    friend class HttpByteRangeResolution;
+    friend class http_byte_range_set;
 
     constexpr HttpByteRangeUnsatisfiable() noexcept = default;
 };
 
-// A single byte range already resolved against the selected representation.
-// Only this resolution alternative owns file/body slicing coordinates.
+// A byte range already resolved against the selected representation.
 class HttpResolvedByteRange final {
 public:
     [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
@@ -48,7 +34,7 @@ public:
     }
 
 private:
-    friend class HttpByteRangeResolution;
+    friend class http_byte_range_set;
 
     constexpr HttpResolvedByteRange(std::uint64_t offset, std::uint64_t length) noexcept
         : offset_(offset),
@@ -62,146 +48,180 @@ private:
     std::uint64_t length_;
 };
 
-// A Range field has exactly one material outcome for a server that supports one
-// byte range: ignore the field, emit 416, or serve one resolved nonempty slice.
-// No status can be paired with default offset/length coordinates.
-class HttpByteRangeResolution final {
+// Bounded, allocation-free result for a byte-range set. The limit protects
+// request planning and multipart framing from adversarial range counts.
+class http_byte_range_set final {
 public:
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const& noexcept {
-        return std::get_if<HttpByteRangeIgnored>(&value_);
-    }
-    [[nodiscard]] constexpr const HttpByteRangeIgnored* ignored() const&& = delete;
+    static constexpr std::size_t capacity = 16;
 
-    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable* unsatisfiable() const& noexcept {
-        return std::get_if<HttpByteRangeUnsatisfiable>(&value_);
-    }
-    [[nodiscard]] constexpr const HttpByteRangeUnsatisfiable* unsatisfiable() const&& = delete;
+    struct range final {
+        std::uint64_t offset_{};
+        std::uint64_t length_{};
+    };
 
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const& noexcept {
-        return std::get_if<HttpResolvedByteRange>(&value_);
+    [[nodiscard]] constexpr bool ignored() const noexcept {
+        return ignored_;
     }
-    [[nodiscard]] constexpr const HttpResolvedByteRange* resolved() const&& = delete;
+    [[nodiscard]] constexpr bool unsatisfiable() const noexcept {
+        return !ignored_ && count_ == 0;
+    }
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return count_;
+    }
+    [[nodiscard]] constexpr const range& operator[](std::size_t index) const noexcept {
+        return ranges_[index];
+    }
+    [[nodiscard]] constexpr HttpResolvedByteRange resolved_range(std::size_t index) const noexcept {
+        return HttpResolvedByteRange(ranges_[index].offset_, ranges_[index].length_);
+    }
+    [[nodiscard]] constexpr HttpByteRangeUnsatisfiable unsatisfiable_outcome() const noexcept {
+        return HttpByteRangeUnsatisfiable{};
+    }
 
 private:
-    friend HttpByteRangeResolution resolveHttpByteRange(std::string_view, std::uint64_t) noexcept;
+    friend http_byte_range_set resolve_http_byte_range_set(std::string_view, std::uint64_t) noexcept;
 
-    using Value =
-        std::variant<HttpByteRangeIgnored, HttpByteRangeUnsatisfiable, HttpResolvedByteRange>;
-
-    template <typename Alternative>
-    explicit constexpr HttpByteRangeResolution(Alternative alternative) noexcept
-        : value_(alternative) {}
-
-    [[nodiscard]] static constexpr HttpByteRangeResolution makeIgnored() noexcept {
-        return HttpByteRangeResolution(HttpByteRangeIgnored());
-    }
-
-    [[nodiscard]] static constexpr HttpByteRangeResolution makeUnsatisfiable() noexcept {
-        return HttpByteRangeResolution(HttpByteRangeUnsatisfiable());
-    }
-
-    [[nodiscard]] static constexpr HttpByteRangeResolution makeResolved(
-        std::uint64_t offset, std::uint64_t length) noexcept {
-        return HttpByteRangeResolution(HttpResolvedByteRange(offset, length));
-    }
-
-    Value value_;
+    std::array<range, capacity> ranges_{};
+    std::size_t count_{};
+    bool ignored_{true};
 };
 
-[[nodiscard]] inline HttpByteRangeResolution resolveHttpByteRange(
-    std::string_view fieldValue, std::uint64_t representationLength) noexcept {
-    fieldValue = httpTrimOws(fieldValue);
-
+[[nodiscard]] inline http_byte_range_set resolve_http_byte_range_set(
+    std::string_view field_value, std::uint64_t representation_length) noexcept {
+    http_byte_range_set result;
+    field_value = httpTrimOws(field_value);
     constexpr std::string_view unit = "bytes";
-    constexpr std::size_t separatorOffset = unit.size();
-    if (fieldValue.size() <= separatorOffset + 1 || fieldValue[separatorOffset] != '=' ||
-        !httpAsciiEqualsIgnoreCase(fieldValue.substr(0, separatorOffset), unit)) {
-        return HttpByteRangeResolution::makeIgnored();
+    if (field_value.size() <= unit.size() || field_value[unit.size()] != '=' ||
+        !httpAsciiEqualsIgnoreCase(field_value.substr(0, unit.size()), unit)) {
+        return result;
+    }
+    if (representation_length == 0) {
+        return result;
     }
 
-    // RFC 9110 Section 14.2 explicitly permits ignoring Range when the selected
-    // representation has no content. This avoids manufacturing a zero-length
-    // 206 range, for which no valid byte Content-Range can be generated.
-    if (representationLength == 0) {
-        return HttpByteRangeResolution::makeIgnored();
-    }
-
-    const auto parseDecimal = [](std::string_view value) noexcept -> std::optional<std::uint64_t> {
-        if (value.empty()) {
-            return std::nullopt;
+    const auto parse_number = [](std::string_view digits, std::uint64_t& value) noexcept {
+        if (digits.empty()) {
+            return false;
         }
-        std::uint64_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
-        if (ptr != value.data() + value.size()) {
-            return std::nullopt;
+        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
+        if (end != digits.data() + digits.size()) {
+            return false;
         }
-        if (ec == std::errc::result_out_of_range) {
-            // The representation length itself is uint64_t. Saturating larger,
-            // syntactically valid numerals preserves every relevant comparison:
-            // huge starts are unsatisfiable; huge ends/suffixes clamp to the end.
-            return (std::numeric_limits<std::uint64_t>::max)();
+        if (error == std::errc::result_out_of_range) {
+            value = (std::numeric_limits<std::uint64_t>::max)();
+            return true;
         }
-        return ec == std::errc{} ? std::optional<std::uint64_t>(parsed) : std::nullopt;
+        return error == std::errc{};
     };
-
-    auto spec = httpTrimOws(fieldValue.substr(separatorOffset + 1));
-    // RFC 9110 erratum 7306 restores the OWS that is shown by the normative
-    // examples after '=' but was accidentally omitted from the published ABNF.
-    // Trim both ends here so direct callers and HTTP parsers apply the same
-    // field-value OWS policy.
-    // This helper deliberately resolves one range. A valid range set requiring
-    // multipart/byteranges is ignored as an unsupported server capability.
-    if (spec.contains(',')) {
-        return HttpByteRangeResolution::makeIgnored();
+    auto specs = httpTrimOws(field_value.substr(unit.size() + 1));
+    if (specs.empty()) {
+        return result;
     }
-
-    const auto dash = spec.find('-');
-    if (dash == std::string_view::npos) {
-        return HttpByteRangeResolution::makeIgnored();
-    }
-
-    const auto first = spec.substr(0, dash);
-    const auto last = spec.substr(dash + 1);
-    const auto decimalLess = [](std::string_view left, std::string_view right) noexcept {
-        while (left.size() > 1 && left.front() == '0') {
-            left.remove_prefix(1);
+    result.ignored_ = false;
+    std::size_t empty_members = 0;
+    bool saw_range_spec = false;
+    for (;;) {
+        const auto comma = specs.find(',');
+        auto spec = httpTrimOws(specs.substr(0, comma));
+        const bool has_more = comma != std::string_view::npos;
+        specs = has_more ? specs.substr(comma + 1) : std::string_view{};
+        if (spec.empty()) {
+            // RFC 9110 list recipients tolerate empty members; bound the work
+            // while accepting more than the five elements RFC 9110 recommends.
+            if (++empty_members > 32) {
+                return http_byte_range_set{};
+            }
+            if (!has_more) {
+                break;
+            }
+            continue;
         }
-        while (right.size() > 1 && right.front() == '0') {
-            right.remove_prefix(1);
+        saw_range_spec = true;
+        if (result.count_ == http_byte_range_set::capacity) {
+            return http_byte_range_set{};
         }
-        return left.size() != right.size() ? left.size() < right.size() : left < right;
-    };
-    if (first.empty()) {
-        const auto suffix = parseDecimal(last);
-        if (!suffix) {
-            return HttpByteRangeResolution::makeIgnored();
+        const auto dash = spec.find('-');
+        if (dash == std::string_view::npos || spec.find('-', dash + 1) != std::string_view::npos) {
+            return http_byte_range_set{};
         }
-        if (*suffix == 0) {
-            return HttpByteRangeResolution::makeUnsatisfiable();
+        const auto first = spec.substr(0, dash);
+        const auto last = spec.substr(dash + 1);
+        std::uint64_t start{};
+        std::uint64_t end{};
+        if (first.empty()) {
+            std::uint64_t suffix{};
+            if (!parse_number(last, suffix)) {
+                return http_byte_range_set{};
+            }
+            if (suffix == 0) {
+                continue;
+            }
+            const auto length = std::min(suffix, representation_length);
+            const auto resolved = http_byte_range_set::range{representation_length - length, length};
+            if (result.count_ != 0) {
+                auto& previous = result.ranges_[result.count_ - 1];
+                const auto previous_end = previous.offset_ + previous.length_;
+                if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
+                    previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
+                                       previous.offset_;
+                    if (!has_more) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            result.ranges_[result.count_++] = resolved;
+            if (!has_more) {
+                break;
+            }
+            continue;
         }
-        const auto length = std::min(*suffix, representationLength);
-        return HttpByteRangeResolution::makeResolved(representationLength - length, length);
-    }
-
-    const auto start = parseDecimal(first);
-    if (!start) {
-        return HttpByteRangeResolution::makeIgnored();
-    }
-    std::uint64_t end = 0;
-    if (!last.empty()) {
-        const auto parsedEnd = parseDecimal(last);
-        if (!parsedEnd || decimalLess(last, first)) {
-            return HttpByteRangeResolution::makeIgnored();
+        if (!parse_number(first, start) || (!last.empty() && !parse_number(last, end))) {
+            return http_byte_range_set{};
         }
-        end = *parsedEnd;
+        if (!last.empty()) {
+            auto normalized_first = first;
+            auto normalized_last = last;
+            while (normalized_first.size() > 1 && normalized_first.front() == '0') {
+                normalized_first.remove_prefix(1);
+            }
+            while (normalized_last.size() > 1 && normalized_last.front() == '0') {
+                normalized_last.remove_prefix(1);
+            }
+            if (normalized_first.size() > normalized_last.size() ||
+                (normalized_first.size() == normalized_last.size() && normalized_first > normalized_last)) {
+                return http_byte_range_set{};
+            }
+        }
+        if (start >= representation_length) {
+            continue;
+        }
+        const auto clamped_end = last.empty() ? representation_length - 1
+                                              : std::min(end, representation_length - 1);
+        const http_byte_range_set::range resolved{start, clamped_end - start + 1};
+        // Preserve received part order (RFC 9110 §14.1.2). Coalesce only
+        // ascending adjacent/overlapping neighbors; never reorder disjoint parts.
+        if (result.count_ != 0) {
+            auto& previous = result.ranges_[result.count_ - 1];
+            const auto previous_end = previous.offset_ + previous.length_;
+            if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
+                previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
+                                   previous.offset_;
+                if (!has_more) {
+                    break;
+                }
+                continue;
+            }
+        }
+        result.ranges_[result.count_++] = resolved;
+        if (!has_more) {
+            break;
+        }
     }
-
-    if (*start >= representationLength) {
-        return HttpByteRangeResolution::makeUnsatisfiable();
+    if (result.count_ == 0 && !saw_range_spec) {
+        return http_byte_range_set{};
     }
-    const auto clampedEnd =
-        last.empty() ? representationLength - 1 : std::min(end, representationLength - 1);
-    return HttpByteRangeResolution::makeResolved(*start, clampedEnd - *start + 1);
+    return result;
 }
 
 }  // namespace ruvia

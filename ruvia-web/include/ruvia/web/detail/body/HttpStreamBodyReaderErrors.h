@@ -23,15 +23,15 @@ namespace ruvia::detail {
     throw std::runtime_error("transfer-coding decoder failure");
 }
 
-inline void requireCompleteTransferCoding(HttpTransferCodingDecoder& decoder) {
-    const auto finishResult = decoder.finishInput();
-    if (finishResult.complete() != nullptr) {
+inline void require_complete_transfer_coding(http_transfer_coding_stack_decoder& decoder) {
+    const auto finish_result = decoder.finish_input();
+    if (finish_result.complete() != nullptr) {
         return;
     }
-    if (const auto* failure = finishResult.failure()) {
+    if (const auto* failure = finish_result.failure()) {
         throwTransferCodingProtocolFailure(*failure);
     }
-    if (finishResult.decoderFailure() != nullptr) {
+    if (finish_result.decoderFailure() != nullptr) {
         throwHttpTransferCodingDecoderFailure();
     }
     throw std::logic_error("unexpected transfer-coding finish result");

@@ -9,11 +9,25 @@
 namespace ruvia::detail {
 namespace {
 
-constexpr std::array<std::byte, 20> initial_salt{
+constexpr std::array<std::byte, 20> v1_initial_salt{
     std::byte{0x38}, std::byte{0x76}, std::byte{0x2c}, std::byte{0xf7}, std::byte{0xf5},
     std::byte{0x59}, std::byte{0x34}, std::byte{0xb3}, std::byte{0x4d}, std::byte{0x17},
     std::byte{0x9a}, std::byte{0xe6}, std::byte{0xa4}, std::byte{0xc8}, std::byte{0x0c},
     std::byte{0xad}, std::byte{0xcc}, std::byte{0xbb}, std::byte{0x7f}, std::byte{0x0a}};
+constexpr std::array<std::byte, 20> v2_initial_salt{
+    std::byte{0x0d}, std::byte{0xed}, std::byte{0xe3}, std::byte{0xde}, std::byte{0xf7},
+    std::byte{0x00}, std::byte{0xa6}, std::byte{0xdb}, std::byte{0x81}, std::byte{0x93},
+    std::byte{0x81}, std::byte{0xbe}, std::byte{0x6e}, std::byte{0x26}, std::byte{0x9d},
+    std::byte{0xcb}, std::byte{0xf9}, std::byte{0xbd}, std::byte{0x2e}, std::byte{0xd9}};
+std::string_view version_label(quic_version version, std::string_view v1, std::string_view v2) {
+    switch (version) {
+        case quic_version::v1:
+            return v1;
+        case quic_version::v2:
+            return v2;
+    }
+    throw std::invalid_argument("unsupported QUIC version");
+}
 class erase_guard final {
 public:
     erase_guard(quic_crypto_provider_view provider, std::span<std::byte> bytes) noexcept
@@ -119,8 +133,9 @@ quic_initial_secrets::quic_initial_secrets(quic_secret client_secret,
     : client(std::move(client_secret)),
       server(std::move(server_secret)) {}
 
-quic_initial_secrets derive_quic_v1_initial_secrets(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, std::span<const std::byte> initial_destination_connection_id) {
+quic_initial_secrets derive_quic_initial_secrets(quic_crypto_provider_view provider,
+    std::pmr::memory_resource* resource, quic_version version,
+    std::span<const std::byte> initial_destination_connection_id) {
     validate_owner(provider, resource);
     if (initial_destination_connection_id.size() > quic_max_connection_id_size) {
         throw std::invalid_argument("QUIC Initial destination connection ID exceeds 20 bytes");
@@ -128,7 +143,12 @@ quic_initial_secrets derive_quic_v1_initial_secrets(quic_crypto_provider_view pr
     constexpr auto suite = quic_cipher_suite::aes_128_gcm_sha256;
     std::array<std::byte, 32> initial_secret{};
     erase_guard initial_secret_guard(provider, initial_secret);
-    provider.hkdf_extract(provider.context, suite, initial_salt,
+    const auto salt = version == quic_version::v1
+                          ? std::span<const std::byte>(v1_initial_salt)
+                      : version == quic_version::v2
+                          ? std::span<const std::byte>(v2_initial_salt)
+                          : throw std::invalid_argument("unsupported QUIC version");
+    provider.hkdf_extract(provider.context, suite, salt,
         initial_destination_connection_id, initial_secret);
 
     std::array<std::byte, 32> client_secret{};
@@ -216,7 +236,7 @@ const quic_header_protection_key& quic_packet_keys::header_protection() const no
 }
 
 quic_packet_keys derive_quic_packet_keys(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, quic_cipher_suite suite,
+    std::pmr::memory_resource* resource, quic_version version, quic_cipher_suite suite,
     quic_crypto_direction direction, std::span<const std::byte> traffic_secret) {
     validate_owner(provider, resource);
     const auto parameters = quic_cipher_suite_parameters_for(suite);
@@ -227,13 +247,16 @@ quic_packet_keys derive_quic_packet_keys(quic_crypto_provider_view provider,
     quic_secret owned_secret(provider, resource, traffic_secret);
     auto key_bytes = make_bytes(resource, parameters.key_size);
     erase_guard key_guard(provider, key_bytes);
-    derive_label(provider, suite, traffic_secret, "quic key", key_bytes);
+    derive_label(provider, suite, traffic_secret,
+        version_label(version, "quic key", "quicv2 key"), key_bytes);
     auto iv = make_bytes(resource, parameters.iv_size);
     erase_guard iv_guard(provider, iv);
-    derive_label(provider, suite, traffic_secret, "quic iv", iv);
+    derive_label(provider, suite, traffic_secret,
+        version_label(version, "quic iv", "quicv2 iv"), iv);
     auto hp_bytes = make_bytes(resource, parameters.key_size);
     erase_guard hp_guard(provider, hp_bytes);
-    derive_label(provider, suite, traffic_secret, "quic hp", hp_bytes);
+    derive_label(provider, suite, traffic_secret,
+        version_label(version, "quic hp", "quicv2 hp"), hp_bytes);
 
     auto aead = provider.create_aead_key(provider.context, suite, direction, key_bytes);
     auto hp = provider.create_header_protection_key(provider.context, suite, hp_bytes);
@@ -276,7 +299,7 @@ const quic_aead_key& quic_updated_packet_keys::aead() const noexcept {
 }
 
 quic_updated_packet_keys update_quic_packet_keys(quic_crypto_provider_view provider,
-    std::pmr::memory_resource* resource, quic_cipher_suite suite,
+    std::pmr::memory_resource* resource, quic_version version, quic_cipher_suite suite,
     quic_crypto_direction direction, std::span<const std::byte> current_traffic_secret) {
     validate_owner(provider, resource);
     const auto parameters = quic_cipher_suite_parameters_for(suite);
@@ -286,15 +309,18 @@ quic_updated_packet_keys update_quic_packet_keys(quic_crypto_provider_view provi
 
     auto updated_secret_bytes = make_bytes(resource, parameters.hash_size);
     erase_guard updated_secret_guard(provider, updated_secret_bytes);
-    derive_label(provider, suite, current_traffic_secret, "quic ku", updated_secret_bytes);
+    derive_label(provider, suite, current_traffic_secret,
+        version_label(version, "quic ku", "quicv2 ku"), updated_secret_bytes);
     quic_secret owned_secret(provider, resource, updated_secret_bytes);
 
     auto key_bytes = make_bytes(resource, parameters.key_size);
     erase_guard key_guard(provider, key_bytes);
-    derive_label(provider, suite, updated_secret_bytes, "quic key", key_bytes);
+    derive_label(provider, suite, updated_secret_bytes,
+        version_label(version, "quic key", "quicv2 key"), key_bytes);
     auto iv = make_bytes(resource, parameters.iv_size);
     erase_guard iv_guard(provider, iv);
-    derive_label(provider, suite, updated_secret_bytes, "quic iv", iv);
+    derive_label(provider, suite, updated_secret_bytes,
+        version_label(version, "quic iv", "quicv2 iv"), iv);
 
     auto aead = provider.create_aead_key(provider.context, suite, direction, key_bytes);
     iv_guard.release();
@@ -303,14 +329,21 @@ quic_updated_packet_keys update_quic_packet_keys(quic_crypto_provider_view provi
     return result;
 }
 
-std::array<std::byte, 16> quic_v1_retry_integrity_tag(
-    quic_crypto_provider_view provider, std::span<const std::byte> retry_pseudo_packet) {
+std::array<std::byte, 16> quic_retry_integrity_tag(quic_crypto_provider_view provider,
+    quic_version version, std::span<const std::byte> retry_pseudo_packet) {
     provider.validate();
+    const auto key_bytes = version == quic_version::v1
+                               ? std::span<const std::byte>(quic_v1_retry_integrity_key)
+                           : version == quic_version::v2
+                               ? std::span<const std::byte>(quic_v2_retry_integrity_key)
+                               : throw std::invalid_argument("unsupported QUIC version");
+    const auto nonce = version == quic_version::v1
+                           ? std::span<const std::byte, 12>(quic_v1_retry_integrity_nonce)
+                           : std::span<const std::byte, 12>(quic_v2_retry_integrity_nonce);
     auto key = provider.create_aead_key(provider.context,
-        quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write,
-        quic_v1_retry_integrity_key);
+        quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write, key_bytes);
     std::array<std::byte, 16> tag{};
-    key.seal(quic_v1_retry_integrity_nonce, retry_pseudo_packet, {}, tag);
+    key.seal(nonce, retry_pseudo_packet, {}, tag);
     return tag;
 }
 

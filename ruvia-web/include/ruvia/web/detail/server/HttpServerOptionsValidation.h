@@ -93,6 +93,9 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
 
 inline void validateHttpServerTlsOptions(const HttpServerListenerDefinition::Tls& tls) {
     validateHttpServerTlsIdentity(tls.identity);
+    if (tls.http3_early_data && tls.clientCertificates.has_value()) {
+        throw std::invalid_argument("HTTP/3 early data is unavailable with TLS client certificates");
+    }
     if (tls.clientCertificates.has_value()) {
         switch (tls.clientCertificates->requirement) {
             case TlsClientCertificateRequirement::kOptional:

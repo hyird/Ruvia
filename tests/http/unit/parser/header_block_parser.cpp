@@ -9,6 +9,7 @@
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 namespace {
@@ -28,6 +29,7 @@ struct Parsed final {
     std::optional<HttpParseError> error;
     bool hasHost;
     bool sawChunked;
+    bool transfer_coding_unsupported;
     bool hasContentLength;
     std::size_t contentLength;
     std::size_t transferCodingCount;
@@ -51,8 +53,10 @@ Parsed parse(std::string_view head) {
     } else if (nonChunked != nullptr) {
         transferCodings = nonChunked->transferCodings();
     }
-    return {error, block.hostHeaderIndex >= 0, finalChunked != nullptr, contentLength.has_value(),
-        contentLength.value_or(0), transferCodings.count, transferCodings.values[0],
+    return {error, block.hostHeaderIndex >= 0, finalChunked != nullptr,
+        block.transferEncoding.unsupported(), contentLength.has_value(),
+        contentLength.value_or(0), transferCodings.values.size(),
+        transferCodings.empty() ? HttpTransferCoding::kGzip : transferCodings.values[0],
         block.teHeaderPresent};
 }
 
@@ -68,6 +72,51 @@ RUVIA_TEST(content_length_field_updates_are_transactional) {
     RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
 }
 
+RUVIA_TEST(transfer_encoding_state_recovers_after_value_publication_allocation_failure) {
+    failing_memory_resource resource;
+    {
+        HttpTransferEncodingState state(&resource);
+        RUVIA_CHECK(state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+        const auto baseline = resource.live_allocations();
+        resource.fail_after(2);
+        bool allocation_failed = false;
+        try {
+            (void)state.parseField("deflate, chunked");
+        } catch (const std::bad_alloc&) {
+            allocation_failed = true;
+        }
+        resource.allow_allocations();
+        RUVIA_CHECK(allocation_failed);
+        RUVIA_CHECK_EQ(resource.live_allocations(), baseline);
+        RUVIA_CHECK(!state.unsupported());
+        const auto& old_value = state.value();
+        RUVIA_CHECK(old_value.has_value());
+        if (old_value.has_value()) {
+            RUVIA_CHECK(old_value->finalChunked() == nullptr);
+            const auto* non_chunked = old_value->nonChunked();
+            RUVIA_CHECK(non_chunked != nullptr);
+            if (non_chunked != nullptr) {
+                const auto& codings = non_chunked->transferCodings().values;
+                RUVIA_CHECK_EQ(codings.size(), std::size_t{1});
+                RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
+            }
+        }
+
+        RUVIA_CHECK(state.parseField("deflate, chunked") == HttpTransferEncodingParseStatus::kOk);
+        const auto& retried_value = state.value();
+        RUVIA_CHECK(retried_value.has_value());
+        if (retried_value.has_value() && retried_value->finalChunked() != nullptr) {
+            const auto& codings = retried_value->finalChunked()->transferCodings().values;
+            RUVIA_CHECK_EQ(codings.size(), std::size_t{2});
+            RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
+            RUVIA_CHECK(codings[1] == HttpTransferCoding::kDeflate);
+        } else {
+            RUVIA_CHECK(false);
+        }
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
 RUVIA_TEST(transfer_encoding_field_updates_are_transactional_and_discriminated) {
     HttpTransferEncodingState state;
     RUVIA_CHECK(!state.value().has_value());
@@ -78,7 +127,7 @@ RUVIA_TEST(transfer_encoding_field_updates_are_transactional_and_discriminated) 
     RUVIA_CHECK(value->nonChunked() != nullptr);
     RUVIA_CHECK(value->finalChunked() == nullptr);
     if (const auto* nonChunked = value->nonChunked()) {
-        RUVIA_CHECK_EQ(nonChunked->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK_EQ(nonChunked->transferCodings().values.size(), std::size_t{1});
         RUVIA_CHECK(nonChunked->transferCodings().values[0] == HttpTransferCoding::kGzip);
     }
 
@@ -96,12 +145,16 @@ RUVIA_TEST(transfer_encoding_field_updates_are_transactional_and_discriminated) 
     RUVIA_CHECK(value->nonChunked() != nullptr);
     RUVIA_CHECK(value->finalChunked() == nullptr);
 
-    RUVIA_CHECK(state.parseField("chunked") == HttpTransferEncodingParseStatus::kOk);
-    value = state.value();
+    // Unsupported state is sticky across later fields, so verify a valid
+    // final-chunked update on a separate state without unknown codings.
+    HttpTransferEncodingState finalState;
+    RUVIA_CHECK(finalState.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+    RUVIA_CHECK(finalState.parseField("chunked") == HttpTransferEncodingParseStatus::kOk);
+    value = finalState.value();
     RUVIA_CHECK(value->nonChunked() == nullptr);
     RUVIA_CHECK(value->finalChunked() != nullptr);
     if (const auto* finalChunked = value->finalChunked()) {
-        RUVIA_CHECK_EQ(finalChunked->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK_EQ(finalChunked->transferCodings().values.size(), std::size_t{1});
     }
 }
 
@@ -425,23 +478,66 @@ RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n"
                       "Transfer-Encoding: chunked\r\n\r\n")
                     .error == HttpParseError::kInvalidTransferEncoding);
-    // An unknown coding is unsupported.
-    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus\r\n\r\n").error ==
-                HttpParseError::kUnsupportedTransferEncoding);
-    RUVIA_CHECK(
-        parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus; level=1\r\n\r\n").error ==
-        HttpParseError::kUnsupportedTransferEncoding);
+    // Unknown codings remain recorded for request-level framing precedence.
+    const auto unknown =
+        parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus\r\n\r\n");
+    RUVIA_CHECK(!unknown.error.has_value());
+    RUVIA_CHECK(unknown.transfer_coding_unsupported);
+    const auto parameterized_unknown = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: bogus; level=1\r\n\r\n");
+    RUVIA_CHECK(!parameterized_unknown.error.has_value());
+    RUVIA_CHECK(parameterized_unknown.transfer_coding_unsupported);
     // Invalid transfer-coding grammar is a malformed request, not an unknown
     // extension that merits 501.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: g@zip\r\n\r\n").error ==
                 HttpParseError::kInvalidTransferEncoding);
-    // More than one non-chunked coding exceeds the single-coding limit.
-    RUVIA_CHECK(
-        parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, deflate, chunked\r\n\r\n")
-            .error == HttpParseError::kUnsupportedTransferEncoding);
+    // Multiple supported codings before final chunked framing preserve order.
+    const auto stacked = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, deflate, chunked\r\n\r\n");
+    RUVIA_CHECK(!stacked.error.has_value());
+    RUVIA_CHECK(stacked.sawChunked);
+    RUVIA_CHECK_EQ(stacked.transferCodingCount, std::size_t{2});
+    RUVIA_CHECK(stacked.firstTransferCoding == HttpTransferCoding::kGzip);
     // Empty transfer-coding list items are malformed in this framing-sensitive header.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,chunked\r\n\r\n").error ==
                 HttpParseError::kInvalidTransferEncoding);
+}
+
+RUVIA_TEST(transfer_encoding_fields_preserve_duplicate_order) {
+    HttpTransferEncodingState state;
+    RUVIA_CHECK(state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+    RUVIA_CHECK(state.parseField("gzip, deflate, chunked") == HttpTransferEncodingParseStatus::kOk);
+    const auto& value = state.value();
+    RUVIA_CHECK(value.has_value());
+    if (value.has_value() && value->finalChunked() != nullptr) {
+        const auto& codings = value->finalChunked()->transferCodings().values;
+        RUVIA_CHECK_EQ(codings.size(), std::size_t{3});
+        RUVIA_CHECK(codings[0] == HttpTransferCoding::kGzip);
+        RUVIA_CHECK(codings[1] == HttpTransferCoding::kGzip);
+        RUVIA_CHECK(codings[2] == HttpTransferCoding::kDeflate);
+    }
+}
+
+RUVIA_TEST(transfer_encoding_layer_limit_is_bounded_and_field_update_is_transactional) {
+    HttpTransferEncodingState state;
+    for (std::size_t index = 0; index < ruvia::kMaxTransferCodings; ++index) {
+        RUVIA_CHECK(state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+    }
+    RUVIA_CHECK(state.parseField("gzip, chunked,") == HttpTransferEncodingParseStatus::kMalformed);
+    const auto& value = state.value();
+    RUVIA_CHECK(value.has_value());
+    if (value.has_value() && value->nonChunked() != nullptr) {
+        RUVIA_CHECK_EQ(value->nonChunked()->transferCodings().values.size(),
+            ruvia::kMaxTransferCodings);
+    }
+}
+
+RUVIA_TEST(transfer_encoding_unknown_then_malformed_across_fields_is_malformed) {
+    const auto result = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Transfer-Encoding: unknown; level=1\r\n"
+        "Transfer-Encoding: deflate, chunked, gzip\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
 }
 
 RUVIA_TEST(header_block_content_length_edge_cases) {

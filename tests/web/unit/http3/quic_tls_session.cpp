@@ -16,6 +16,7 @@
 #include <openssl/x509v3.h>
 
 #include "ruvia/http/quic_connection.h"
+#include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
 #include "ruvia/web/detail/http3/openssl_quic_crypto_provider.h"
 #include "ruvia/web/detail/http3/openssl_quic_tls_session.h"
 
@@ -596,6 +597,10 @@ certificate_owner make_certificate(EVP_PKEY* key) {
     return certificate;
 }
 
+int allow_early_data(SSL*, void* argument) noexcept {
+    return *static_cast<const bool*>(argument) ? 1 : 0;
+}
+
 int select_h3_alpn(SSL*, const unsigned char** output, unsigned char* output_length,
     const unsigned char* input, unsigned int input_length, void* argument) noexcept {
     const auto expected = *static_cast<const std::string_view*>(argument);
@@ -643,6 +648,32 @@ bool read_quic_varint(std::span<const std::byte> bytes, std::size_t& offset,
         value = (value << 8) | std::to_integer<std::uint8_t>(bytes[offset++]);
     }
     return true;
+}
+
+bool has_version_information(std::span<const std::byte> parameters,
+    std::uint32_t chosen_version) noexcept {
+    std::size_t offset{};
+    while (offset < parameters.size()) {
+        std::uint64_t identifier{};
+        std::uint64_t length{};
+        if (!read_quic_varint(parameters, offset, identifier) ||
+            !read_quic_varint(parameters, offset, length) || length > parameters.size() - offset) {
+            return false;
+        }
+        const auto value = parameters.subspan(offset, static_cast<std::size_t>(length));
+        if (identifier == 0x11) {
+            if (value.size() < 4 || (value.size() - 4) % 4 != 0) {
+                return false;
+            }
+            const auto encoded = (std::uint32_t(std::to_integer<std::uint8_t>(value[0])) << 24) |
+                                 (std::uint32_t(std::to_integer<std::uint8_t>(value[1])) << 16) |
+                                 (std::uint32_t(std::to_integer<std::uint8_t>(value[2])) << 8) |
+                                 std::uint32_t(std::to_integer<std::uint8_t>(value[3]));
+            return encoded == chosen_version;
+        }
+        offset += static_cast<std::size_t>(length);
+    }
+    return false;
 }
 
 bool initial_has_destination_and_token(std::span<const std::byte> packet,
@@ -694,6 +725,7 @@ struct packet_pair final {
     ruvia::quic_connection_id client_source_id{connection_id({1, 2, 3, 4, 5, 6, 7, 8})};
     ruvia::quic_connection_id server_source_id{connection_id({0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88})};
     std::string_view server_alpn_{"h3"};
+    bool server_accept_early_data{};
     std::size_t crypto_live_bytes{};
     std::size_t crypto_live_allocations{};
     bool datagrams_enabled{};
@@ -706,11 +738,30 @@ struct packet_pair final {
         bool enable_datagrams = false, std::string_view client_host = "localhost",
         bool offer_alpn = true, bool invalid_local_parameters = false,
         bool empty_client_source_id = false, bool retain_server_record = false,
-        bool advertise_server_datagrams = true)
+        bool advertise_server_datagrams = true,
+        ruvia::quic_version version = ruvia::quic_version::v1,
+        ruvia::quic_version server_preferred_version = ruvia::quic_version::v1,
+        bool allow_active_migration = false, SSL_CTX* reused_client_context = nullptr,
+        SSL_CTX* reused_server_context = nullptr, SSL_SESSION* resumption_session = nullptr,
+        std::span<const std::byte> early_transport_parameters = {},
+        bool enable_early_data = false, bool advertise_early_data = false,
+        bool enable_server_early_data = false)
         : datagrams_enabled(enable_datagrams) {
         crypto_live_bytes = resource.live_bytes;
         crypto_live_allocations = resource.allocations - resource.deallocations;
         server_alpn_ = server_alpn;
+        if (reused_client_context) {
+            if (SSL_CTX_up_ref(reused_client_context) != 1) {
+                throw std::runtime_error("failed to retain client QUIC TLS context");
+            }
+            client_context.reset(reused_client_context);
+        }
+        if (reused_server_context) {
+            if (SSL_CTX_up_ref(reused_server_context) != 1) {
+                throw std::runtime_error("failed to retain server QUIC TLS context");
+            }
+            server_context.reset(reused_server_context);
+        }
         if (!client_context || !server_context) {
             throw std::runtime_error("failed to create QUIC test TLS contexts");
         }
@@ -730,27 +781,40 @@ struct packet_pair final {
             throw std::runtime_error("failed to generate QUIC test certificate key");
         }
         auto certificate = make_certificate(key.get());
-        if (SSL_CTX_use_certificate(server_context.get(), certificate.get()) != 1 ||
-            SSL_CTX_use_PrivateKey(server_context.get(), key.get()) != 1 ||
-            SSL_CTX_check_private_key(server_context.get()) != 1) {
+        if (!reused_server_context &&
+            (SSL_CTX_use_certificate(server_context.get(), certificate.get()) != 1 ||
+                SSL_CTX_use_PrivateKey(server_context.get(), key.get()) != 1 ||
+                SSL_CTX_check_private_key(server_context.get()) != 1)) {
             throw std::runtime_error("failed to install QUIC test certificate");
         }
-        if (trust_server && X509_STORE_add_cert(SSL_CTX_get_cert_store(client_context.get()),
-                                certificate.get()) != 1) {
+        if (!reused_client_context && trust_server &&
+            X509_STORE_add_cert(SSL_CTX_get_cert_store(client_context.get()), certificate.get()) != 1) {
             throw std::runtime_error("failed to trust QUIC test certificate");
         }
-        SSL_CTX_set_num_tickets(server_context.get(), 2);
-        SSL_CTX_set_alpn_select_cb(server_context.get(), select_h3_alpn, &server_alpn_);
+        if (!reused_server_context) {
+            SSL_CTX_set_num_tickets(server_context.get(), 2);
+            SSL_CTX_set_alpn_select_cb(server_context.get(), select_h3_alpn, &server_alpn_);
+            SSL_CTX_set_allow_early_data_cb(server_context.get(), allow_early_data,
+                &server_accept_early_data);
+        }
+        if (advertise_early_data &&
+            (SSL_CTX_set_max_early_data(server_context.get(), 16384) != 1 ||
+                SSL_CTX_set_recv_max_early_data(server_context.get(), 16384) != 1)) {
+            throw std::runtime_error("failed to configure test server early-data allowance");
+        }
 
         constexpr std::array<unsigned char, 3> alpn{2, 'h', '3'};
         client_tls.emplace(client_context.get(), ruvia::quic_role::client,
             offer_alpn ? std::span<const unsigned char>(alpn) : std::span<const unsigned char>{},
-            client_host, &resource);
+            client_host, &resource, resumption_session, enable_early_data);
         server_tls.emplace(server_context.get(), ruvia::quic_role::server,
-            std::span<const unsigned char>{}, std::string_view{}, &resource);
+            std::span<const unsigned char>{}, std::string_view{}, &resource, nullptr,
+            enable_server_early_data);
 
         ruvia::quic_connection_config client_config;
         client_config.role = ruvia::quic_role::client;
+        client_config.version = version;
+        client_config.preferred_version = version;
         client_config.local_address = client_address;
         client_config.peer_address = server_address;
         client_config.destination_connection_id = initial_destination_id;
@@ -761,15 +825,18 @@ struct packet_pair final {
             client_config.local_transport_parameters.max_datagram_frame_size = 1200;
         }
         client.emplace(client_config, observed.view(0), client_tls->driver_view(),
-            &resource, now);
+            &resource, now, early_transport_parameters);
 
         ruvia::quic_connection_config server_config;
         server_config.role = ruvia::quic_role::server;
+        server_config.version = version;
+        server_config.preferred_version = server_preferred_version;
         server_config.local_address = server_address;
         server_config.peer_address = client_address;
         server_config.destination_connection_id = client_config.source_connection_id.value();
         server_config.source_connection_id = server_source_id;
         server_config.original_destination_connection_id = initial_destination_id;
+        server_config.local_transport_parameters.disable_active_migration = !allow_active_migration;
         if (datagrams_enabled && advertise_server_datagrams) {
             server_config.local_transport_parameters.max_datagram_frame_size = 1200;
         }
@@ -812,8 +879,8 @@ struct packet_pair final {
         if (packet.size != 0) {
             const ruvia::quic_datagram_view input{
                 .bytes = std::span<const std::byte>(datagram).first(packet.size),
-                .local = server_address,
-                .peer = client_address,
+                .local = packet.peer,
+                .peer = packet.local,
             };
             try {
                 (void)server->receive(input, now);
@@ -836,8 +903,8 @@ struct packet_pair final {
         if (packet.size != 0) {
             const ruvia::quic_datagram_view input{
                 .bytes = std::span<const std::byte>(datagram).first(packet.size),
-                .local = client_address,
-                .peer = server_address,
+                .local = packet.peer,
+                .peer = packet.local,
             };
             try {
                 (void)client->receive(input, now);
@@ -1691,4 +1758,321 @@ RUVIA_TEST(openssl_quic_public_packet_pair_negotiates_and_bounds_datagrams) {
     }
     pair.retire_connections();
     RUVIA_CHECK(pair.resources_released());
+}
+
+RUVIA_TEST(openssl_quic_v2_retry_vector_is_accepted_through_public_packet_path) {
+    packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, true, false, true, ruvia::quic_version::v2, ruvia::quic_version::v2);
+    const auto initial = pair.client->write_packet(pair.datagram, pair.now);
+    RUVIA_CHECK(initial.size != 0);
+    auto retry = hex_bytes(
+        "cf6b3343cf0008f067a5502a4262b5746f6b656ec8646ce8bfe33952d955543665dcc7b6");
+    auto invalid_retry = retry;
+    invalid_retry.back() ^= std::byte{1};
+    const ruvia::quic_datagram_view invalid_input{
+        .bytes = invalid_retry,
+        .local = pair.client_address,
+        .peer = pair.server_address,
+    };
+    (void)pair.client->receive(invalid_input, pair.now);
+    RUVIA_CHECK(pair.client->info().negotiated_version == ruvia::quic_version::v2);
+    RUVIA_CHECK(pair.client->info().state == ruvia::quic_connection_state::connecting);
+    const ruvia::quic_datagram_view input{
+        .bytes = retry,
+        .local = pair.client_address,
+        .peer = pair.server_address,
+    };
+    const auto received = pair.client->receive(input, pair.now);
+    RUVIA_CHECK(received == ruvia::quic_operation_status::accepted ||
+                received == ruvia::quic_operation_status::need_input);
+    const auto retried_initial = pair.client->write_packet(pair.datagram, pair.now);
+    RUVIA_CHECK(retried_initial.size != 0);
+    pair.retire_connections();
+    RUVIA_CHECK(pair.resources_released());
+}
+
+RUVIA_TEST(openssl_quic_client_migration_validates_candidate_and_keeps_connection_live) {
+    packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, false, false, true, ruvia::quic_version::v1, ruvia::quic_version::v1, true);
+    RUVIA_CHECK(pair.drive_until_terminal());
+    const auto candidate = address(43002);
+    RUVIA_CHECK(pair.server->start_path_migration(address(43004)).status ==
+                ruvia::quic_migration_status::rejected);
+    const auto migration = pair.client->start_path_migration(candidate);
+    RUVIA_CHECK(migration.status == ruvia::quic_migration_status::started);
+    RUVIA_CHECK(pair.client->start_path_migration(address(43003)).status ==
+                ruvia::quic_migration_status::rejected);
+    for (std::size_t attempt = 0; attempt < 1000; ++attempt) {
+        (void)pair.transfer_client_to_server();
+        (void)pair.transfer_server_to_client();
+        pair.now += std::chrono::milliseconds(1);
+        const auto current = pair.client->path_migration(migration.id);
+        if (!current || current->status != ruvia::quic_migration_status::started) {
+            break;
+        }
+    }
+    const auto completed = pair.client->path_migration(migration.id);
+    RUVIA_CHECK(completed.has_value());
+    RUVIA_CHECK(completed->status == ruvia::quic_migration_status::validated);
+    RUVIA_CHECK(pair.client->info().local_address.port == candidate.port);
+
+    const auto stream = pair.client->open_stream(false);
+    RUVIA_CHECK(stream.status == ruvia::quic_operation_status::accepted);
+    const std::array payload{std::byte{'m'}, std::byte{'o'}, std::byte{'v'}, std::byte{'e'}};
+    RUVIA_CHECK(pair.client->write_stream(stream.stream_id, payload, true).status ==
+                ruvia::quic_operation_status::accepted);
+    std::array<std::byte, 8> received{};
+    bool got_payload = false;
+    for (std::size_t attempt = 0; attempt < 128 && !got_payload; ++attempt) {
+        (void)pair.transfer_client_to_server();
+        (void)pair.transfer_server_to_client();
+        pair.now += std::chrono::milliseconds(1);
+        (void)pair.server->accept_streams();
+        const auto result = pair.server->read_stream(stream.stream_id, received);
+        got_payload = result.status == ruvia::quic_stream_read_status::data &&
+                      result.size == payload.size();
+    }
+    RUVIA_CHECK(got_payload);
+    RUVIA_CHECK(std::equal(payload.begin(), payload.end(), received.begin()));
+
+    const auto previous_local = pair.client->info().local_address;
+    const auto failed_migration = pair.client->start_path_migration(address(43003));
+    RUVIA_CHECK(failed_migration.status == ruvia::quic_migration_status::started);
+    for (std::size_t attempt = 0; attempt < 4000; ++attempt) {
+        (void)pair.transfer_client_to_server();
+        (void)pair.server->write_packet(pair.datagram, pair.now);
+        pair.now += std::chrono::milliseconds(1);
+        (void)pair.client->handle_expiry(pair.now);
+        (void)pair.server->handle_expiry(pair.now);
+        const auto current = pair.client->path_migration(failed_migration.id);
+        if (!current || current->status != ruvia::quic_migration_status::started) {
+            break;
+        }
+    }
+    const auto failed = pair.client->path_migration(failed_migration.id);
+    RUVIA_CHECK(failed.has_value());
+    RUVIA_CHECK(failed->status == ruvia::quic_migration_status::failed);
+    RUVIA_CHECK(pair.client->info().local_address.port == previous_local.port);
+    pair.retire_connections();
+    RUVIA_CHECK(pair.resources_released());
+}
+
+RUVIA_TEST(openssl_quic_ticket_resumption_sends_and_processes_a_real_early_stream_before_finished) {
+    packet_pair first("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, false, false, true, ruvia::quic_version::v1,
+        ruvia::quic_version::v1, false, nullptr, nullptr, nullptr, {}, false, true, true);
+    RUVIA_CHECK(first.drive_until_terminal());
+    RUVIA_CHECK(!first.client->tls_handshake().failed());
+    RUVIA_CHECK(!first.server->tls_handshake().failed());
+    RUVIA_CHECK(first.client->info().quic_handshake_complete);
+    RUVIA_CHECK(first.server->info().quic_handshake_complete);
+    for (std::size_t attempt = 0; attempt < 128 &&
+                                  (!first.client->info().tls_handshake_complete ||
+                                      !first.server->info().tls_handshake_complete);
+        ++attempt) {
+        (void)first.transfer_client_to_server();
+        (void)first.transfer_server_to_client();
+        first.now += std::chrono::milliseconds(1);
+    }
+    RUVIA_CHECK(first.client->info().tls_handshake_complete);
+    RUVIA_CHECK(first.server->info().tls_handshake_complete);
+
+    std::array<std::byte, 4096> encoded_parameters{};
+    const auto parameter_size = first.client->encode_early_transport_parameters(encoded_parameters);
+    for (std::size_t attempt = 0; attempt < 128; ++attempt) {
+        (void)first.transfer_server_to_client();
+        (void)first.transfer_client_to_server();
+        first.now += std::chrono::milliseconds(1);
+    }
+    auto ticket = first.client_tls->take_resumption_session();
+    RUVIA_CHECK(ticket != nullptr);
+    RUVIA_CHECK(SSL_SESSION_is_resumable(ticket.get()) == 1);
+    RUVIA_CHECK(SSL_SESSION_get_max_early_data(ticket.get()) != 0);
+    counting_resource ticket_resource;
+    ruvia::detail::http3_quic_client_tls_context tls_context({}, &ticket_resource);
+    constexpr ruvia::Http3Settings remembered_settings{};
+    tls_context.remember_ticket(ticket.get(), "localhost.", ruvia::quic_version::v1,
+        std::span<const std::byte>(encoded_parameters).first(parameter_size), remembered_settings);
+    ruvia::detail::http3_quic_client_tls_context wrong_host_context({});
+    wrong_host_context.remember_ticket(ticket.get(), "localhost", ruvia::quic_version::v1,
+        std::span<const std::byte>(encoded_parameters).first(parameter_size), remembered_settings);
+    RUVIA_CHECK(!wrong_host_context.take_ticket("otherhost", ruvia::quic_version::v1).has_value());
+    ruvia::detail::http3_quic_client_tls_context wrong_version_context({});
+    wrong_version_context.remember_ticket(ticket.get(), "localhost", ruvia::quic_version::v1,
+        std::span<const std::byte>(encoded_parameters).first(parameter_size), remembered_settings);
+    RUVIA_CHECK(!wrong_version_context.take_ticket("localhost", ruvia::quic_version::v2).has_value());
+    auto lease = tls_context.take_ticket("localhost", ruvia::quic_version::v1);
+    RUVIA_CHECK(lease.has_value());
+    RUVIA_CHECK(lease->settings.has_value());
+    RUVIA_CHECK(!tls_context.take_ticket("localhost", ruvia::quic_version::v1).has_value());
+    first.server_accept_early_data = true;
+
+    packet_pair resumed("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, false, false, true, ruvia::quic_version::v1,
+        ruvia::quic_version::v1, false, first.client_context.get(), first.server_context.get(),
+        lease->session.get(), std::span<const std::byte>(encoded_parameters).first(parameter_size),
+        true, false, true);
+    const auto opened = resumed.client->open_stream(false);
+    RUVIA_CHECK(opened.status == ruvia::quic_operation_status::accepted);
+    constexpr std::array payload{std::byte{'e'}, std::byte{'a'}, std::byte{'r'},
+        std::byte{'l'}, std::byte{'y'}};
+    const auto write = resumed.client->write_stream(opened.stream_id, payload, true);
+    RUVIA_CHECK(write.status == ruvia::quic_operation_status::accepted);
+    RUVIA_CHECK(write.accepted == payload.size());
+
+    std::array<std::byte, 16> received{};
+    bool processed_before_finished{};
+    for (std::size_t attempt = 0; attempt < 128 && !processed_before_finished; ++attempt) {
+        (void)resumed.transfer_client_to_server();
+        (void)resumed.transfer_server_to_client();
+        resumed.now += std::chrono::milliseconds(1);
+        const auto accepted = resumed.server->accept_streams();
+        const bool stream_known = std::ranges::any_of(
+            std::span(accepted.streams).first(accepted.size), [&](const auto& stream) {
+                return stream.stream_id == opened.stream_id;
+            });
+        if (!stream_known) {
+            continue;
+        }
+        const auto result = resumed.server->read_stream(opened.stream_id, received);
+        processed_before_finished = result.status == ruvia::quic_stream_read_status::data &&
+                                    result.size == payload.size();
+        if (processed_before_finished) {
+            RUVIA_CHECK(!SSL_is_init_finished(resumed.client_tls->native_handle()));
+            RUVIA_CHECK(!SSL_is_init_finished(resumed.server_tls->native_handle()));
+            RUVIA_CHECK(std::equal(payload.begin(), payload.end(), received.begin()));
+        }
+    }
+    RUVIA_CHECK(processed_before_finished);
+    RUVIA_CHECK(resumed.drive_until_terminal());
+    RUVIA_CHECK(SSL_session_reused(resumed.client_tls->native_handle()) == 1);
+    RUVIA_CHECK(resumed.client->info().early_data == ruvia::quic_early_data_state::accepted);
+    RUVIA_CHECK(resumed.server->info().early_data == ruvia::quic_early_data_state::accepted);
+    resumed.retire_connections();
+    first.retire_connections();
+    lease.reset();
+    RUVIA_CHECK(ticket_resource.allocations == ticket_resource.deallocations);
+}
+
+RUVIA_TEST(openssl_quic_ticket_resumption_rejects_early_stream_without_exposing_it) {
+    packet_pair first("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, false, false, true, ruvia::quic_version::v1,
+        ruvia::quic_version::v1, false, nullptr, nullptr, nullptr, {}, false, true, true);
+    RUVIA_CHECK(first.drive_until_terminal());
+    for (std::size_t attempt = 0; attempt < 128; ++attempt) {
+        (void)first.transfer_server_to_client();
+        (void)first.transfer_client_to_server();
+        first.now += std::chrono::milliseconds(1);
+    }
+    auto ticket = first.client_tls->take_resumption_session();
+    RUVIA_CHECK(ticket != nullptr);
+    std::array<std::byte, 4096> encoded_parameters{};
+    const auto parameter_size = first.client->encode_early_transport_parameters(encoded_parameters);
+
+    packet_pair resumed("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+        false, false, false, true, ruvia::quic_version::v1,
+        ruvia::quic_version::v1, false, first.client_context.get(), first.server_context.get(),
+        ticket.get(), std::span<const std::byte>(encoded_parameters).first(parameter_size),
+        true, false, true);
+    const auto opened = resumed.client->open_stream(false);
+    RUVIA_CHECK(opened.status == ruvia::quic_operation_status::accepted);
+    constexpr std::array payload{std::byte{'n'}, std::byte{'o'}, std::byte{'p'}, std::byte{'e'}};
+    RUVIA_CHECK(resumed.client->write_stream(opened.stream_id, payload, true).accepted == payload.size());
+    RUVIA_CHECK(resumed.drive_until_terminal());
+    RUVIA_CHECK(resumed.client->info().tls_handshake_complete);
+    RUVIA_CHECK(SSL_session_reused(resumed.client_tls->native_handle()) == 1);
+    RUVIA_CHECK(resumed.client->info().early_data == ruvia::quic_early_data_state::rejected);
+    RUVIA_CHECK(resumed.server->info().early_data == ruvia::quic_early_data_state::rejected);
+    const auto streams = resumed.server->accept_streams();
+    RUVIA_CHECK(std::ranges::none_of(std::span(streams.streams).first(streams.size),
+        [&](const auto& stream) { return stream.stream_id == opened.stream_id; }));
+    resumed.retire_connections();
+    first.retire_connections();
+}
+
+RUVIA_TEST(openssl_quic_v1_and_v2_complete_tls_handshakes_and_compatible_v2_negotiation) {
+    {
+        packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+            false, false, false, true, ruvia::quic_version::v1, ruvia::quic_version::v1);
+        RUVIA_CHECK(pair.drive_until_terminal());
+        RUVIA_CHECK(pair.client->info().confirmed);
+        RUVIA_CHECK(pair.server->info().confirmed);
+        RUVIA_CHECK(pair.client->info().negotiated_version == ruvia::quic_version::v1);
+        RUVIA_CHECK(pair.server->info().negotiated_version == ruvia::quic_version::v1);
+        pair.retire_connections();
+        RUVIA_CHECK(pair.resources_released());
+    }
+    {
+        packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+            false, false, false, true, ruvia::quic_version::v2, ruvia::quic_version::v2);
+        RUVIA_CHECK(pair.drive_until_terminal());
+        RUVIA_CHECK(pair.client->info().confirmed);
+        RUVIA_CHECK(pair.server->info().confirmed);
+        RUVIA_CHECK(pair.client->info().negotiated_version == ruvia::quic_version::v2);
+        RUVIA_CHECK(pair.server->info().negotiated_version == ruvia::quic_version::v2);
+        RUVIA_CHECK(has_version_information(
+            pair.client->tls_handshake().local_transport_parameters(), 0x6b3343cf));
+        RUVIA_CHECK(has_version_information(
+            pair.server->tls_handshake().local_transport_parameters(), 0x6b3343cf));
+        const auto initial_salt = hex_bytes("0dede3def700a6db819381be6e269dcbf9bd2ed9");
+        const auto expected_initial_secret = hex_bytes(
+            "2062e8b3cd8d52092614b8071d0aa1fb7c2e3ac193f78b280e72d8f5751f6aba");
+        const auto expected_client_secret = hex_bytes(
+            "14ec9d6eb9fd7af83bf5a668bc17a7e283766aade7ecd0891f70f9ff7f4bf47b");
+        const auto expected_server_secret = hex_bytes(
+            "0263db1782731bf4588e7e4d93b7463907cb8cd8200b5da55a8bd488eafc37c1");
+        RUVIA_CHECK(contains_extract(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            initial_salt, pair.initial_destination_id.view(), expected_initial_secret));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_initial_secret, "client in", 32, expected_client_secret));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_initial_secret, "server in", 32, expected_server_secret));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_client_secret, "quicv2 key", 16, hex_bytes("8b1a0bc121284290a29e0971b5cd045d")));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_client_secret, "quicv2 iv", 12, hex_bytes("91f73e2351d8fa91660e909f")));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_client_secret, "quicv2 hp", 16, hex_bytes("45b95e15235d6f45a6b19cbcb0294ba9")));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_server_secret, "quicv2 key", 16, hex_bytes("82db637861d55e1d011f19ea71d5d2a7")));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_server_secret, "quicv2 iv", 12, hex_bytes("dd13c276499c0249d3310652")));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            expected_server_secret, "quicv2 hp", 16, hex_bytes("edf6d05c83121201b436e16877593c3a")));
+        pair.retire_connections();
+        RUVIA_CHECK(pair.resources_released());
+    }
+    {
+        packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+            false, false, false, true, ruvia::quic_version::v1, ruvia::quic_version::v2);
+        RUVIA_CHECK(pair.drive_until_terminal());
+        RUVIA_CHECK(pair.client->info().confirmed);
+        RUVIA_CHECK(pair.server->info().confirmed);
+        RUVIA_CHECK(pair.client->info().negotiated_version == ruvia::quic_version::v2);
+        RUVIA_CHECK(pair.server->info().negotiated_version == ruvia::quic_version::v2);
+        RUVIA_CHECK(has_version_information(
+            pair.client->tls_handshake().local_transport_parameters(), 0x00000001));
+        RUVIA_CHECK(has_version_information(
+            pair.server->tls_handshake().local_transport_parameters(), 0x6b3343cf));
+        RUVIA_CHECK(contains_expand(pair.observed, ruvia::quic_cipher_suite::aes_128_gcm_sha256,
+            hex_bytes("14ec9d6eb9fd7af83bf5a668bc17a7e283766aade7ecd0891f70f9ff7f4bf47b"),
+            "quicv2 key", 16, hex_bytes("8b1a0bc121284290a29e0971b5cd045d")));
+        pair.retire_connections();
+        RUVIA_CHECK(pair.resources_released());
+    }
+    {
+        packet_pair pair("TLS_AES_128_GCM_SHA256", "h3", true, false, "localhost", true,
+            false, false, false, true, ruvia::quic_version::v2, ruvia::quic_version::v1);
+        RUVIA_CHECK(pair.drive_until_terminal());
+        RUVIA_CHECK(pair.client->info().confirmed);
+        RUVIA_CHECK(pair.server->info().confirmed);
+        RUVIA_CHECK(pair.client->info().negotiated_version == ruvia::quic_version::v1);
+        RUVIA_CHECK(pair.server->info().negotiated_version == ruvia::quic_version::v1);
+        RUVIA_CHECK(has_version_information(
+            pair.client->tls_handshake().local_transport_parameters(), 0x6b3343cf));
+        RUVIA_CHECK(has_version_information(
+            pair.server->tls_handshake().local_transport_parameters(), 0x00000001));
+        pair.retire_connections();
+        RUVIA_CHECK(pair.resources_released());
+    }
 }

@@ -83,7 +83,15 @@ private:
 
 // Dynamic references are pinned until peer acknowledgment/cancellation. When
 // capacity, blocked-stream allowance, or eviction safety prevents insertion,
-// encoding falls back to valid static/literal representations.
+// encoding falls back to valid static/literal representations. A kLimit result
+// is recoverable; encoding may already have inserted entries and queued valid
+// encoder-stream instructions, so the caller must continue draining pending
+// encoder output. An exception propagates and latches kDecoderStreamError as a
+// terminal connection failure. After an exception, do not send any remaining
+// pending encoder output or retry/recreate the encoder on the same connection.
+// The returned field-section vector uses result_resource (or the encoder's
+// resource when null); that resource must outlive the returned vector. An
+// exception, including result allocation failure, leaves the encoder terminal.
 class Http3QpackEncoder final {
 public:
     Http3QpackEncoder(Http3QpackEncoderConfig config,
@@ -93,7 +101,7 @@ public:
     Http3QpackEncoder& operator=(const Http3QpackEncoder&) = delete;
     [[nodiscard]] std::expected<std::pmr::vector<char>, Http3QpackConnectionError> encode(
         std::uint64_t streamId, std::span<const Http3FieldSectionFieldView> fields,
-        Http3FieldSectionLimits limits = {});
+        Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* result_resource = nullptr);
     [[nodiscard]] std::expected<void, Http3QpackConnectionError> consumeDecoder(
         std::span<const char> bytes, bool fin = false);
     [[nodiscard]] std::span<const char> pendingEncoderOutput() const& noexcept;

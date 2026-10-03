@@ -11,6 +11,7 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
@@ -183,7 +184,7 @@ RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
 RUVIA_TEST(http1_response_head_validates_trailer_field_names) {
     const auto rejects = [&ruvia_ctx](std::string_view value) {
         HttpResponse response({.resource = std::pmr::new_delete_resource()});
-        ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
+        response.header_stable_view("Trailer", value);
         RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
     };
 
@@ -315,8 +316,8 @@ RUVIA_TEST(http1_stream_prepare_preserves_typed_final_commit_failure) {
     response.status(ruvia::http_status::kUpgradeRequired);
 
     const auto result = ruvia::detail::prepareHttp1ResponseStreamHead(std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, streamPlan,
-        ruvia::detail::ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, streamPlan,
+        ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(result.prepared() == nullptr);
     RUVIA_CHECK(result.failure() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(result.failure()->exception().what()),
@@ -482,7 +483,7 @@ RUVIA_TEST(http1_consumed_request_body_can_commit_a_reusable_known_length_stream
         parsed, ruvia::Http1ClosePolicy::kAllowReuse);
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
     const auto preparedResult = ruvia::detail::prepareHttp1KnownLengthResponseStreamHead(
-        std::move(response), 5, ruvia::detail::ResponseStreamKind::kGeneric, streamPlan);
+        std::move(response), 5, ruvia::http_response_stream_kind::generic, streamPlan);
     const auto* prepared = preparedResult.prepared();
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
@@ -493,8 +494,8 @@ RUVIA_TEST(http1_consumed_request_body_can_commit_a_reusable_known_length_stream
     RUVIA_CHECK_EQ(
         prepared->responseHeadPlan().knownLengthStream()->contentLength(), std::uint64_t{5});
     RUVIA_CHECK(prepared->responseHeadPlan().chunkedStream() == nullptr);
-    RUVIA_CHECK(prepared->commitPlan().framing() ==
-                ruvia::detail::ResponseStreamFraming::kHttp1KnownLength);
+    RUVIA_CHECK(prepared->commit_plan().framing() ==
+                ruvia::http_response_stream_framing::http1_known_length);
 }
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
@@ -621,17 +622,16 @@ RUVIA_TEST(response_head_rejects_oversized_field_section) {
 
 RUVIA_TEST(response_head_rejects_malformed_header_name_and_value) {
     HttpResponse badName({.resource = std::pmr::new_delete_resource()});
-    ruvia::detail::setResponseHeaderStableView(badName, "Bad Name", "value");
+    badName.header_stable_view("Bad Name", "value");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badName); }));
 
     HttpResponse badValue({.resource = std::pmr::new_delete_resource()});
-    ruvia::detail::setResponseHeaderStableView(
-        badValue, "X-Test", std::string_view("bad\r\nvalue", 10));
+    badValue.header_stable_view("X-Test", std::string_view("bad\r\nvalue", 10));
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(badValue); }));
 }
 
 RUVIA_TEST(response_head_rejects_request_only_te_field) {
     HttpResponse response({.resource = std::pmr::new_delete_resource()});
-    ruvia::detail::setResponseHeaderStableView(response, "TE", "trailers");
+    response.header_stable_view("TE", "trailers");
     RUVIA_CHECK(throwsInvalid([&] { (void)emitBufferedHead(response); }));
 }

@@ -129,7 +129,9 @@ struct Http3ServerConnection::RequestEntry final {
           streamId(streamIdValue),
           dispatch(ownerValue.session_, ownerValue.routes_, ownerValue.worker_,
               ownerValue.services_, ownerValue.options_, ownerValue.outbound_,
-              {ownerValue.epoch_, ownerValue.connectionGeneration_, streamId, slotValue.pushId},
+              {ownerValue.epoch_, ownerValue.connectionGeneration_, streamId, slotValue.pushId,
+                  ownerValue.input_.receivedEarlyData(streamId)},
+
               scannerEntry, ownerValue.executor_,
               {.context = &ownerValue,
                   .attachScanner = &Http3ServerConnection::attachTunnelScannerThunk,
@@ -1006,6 +1008,15 @@ Task<void> Http3ServerConnection::runRequest(std::uint64_t streamId) {
                     Http3ConnectionErrorCode::kInternalError);
                 break;
         }
+    }
+
+    if (runStatus == Dispatch::RunStatus::peer_field_section_limit) {
+        removeQueued(entry.slot);
+        (void)enqueueResetIntent(entry.slot);
+        entry.outputTerminal = true;
+        entry.slot.status = RequestStatus::kFailed;
+        notifyActivation();
+        co_return;
     }
 
     if (runStatus == Dispatch::RunStatus::kTunnelComplete || runStatus == Dispatch::RunStatus::kOutputComplete) {

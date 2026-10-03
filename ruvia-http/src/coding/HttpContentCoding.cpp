@@ -3,7 +3,6 @@
 #include <memory_resource>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpResponse.h"
@@ -25,6 +24,8 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
             return "zstd";
         case HttpContentCoding::kGzip:
             return "gzip";
+        case HttpContentCoding::deflate:
+            return "deflate";
         case HttpContentCoding::kIdentity:
             return "identity";
     }
@@ -35,8 +36,8 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
 
 namespace ruvia::detail {
 
-void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
-    if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
+void HttpContentCodingFieldParser::update(std::string_view value) {
+    if (invalid_) {
         return;
     }
     std::size_t begin = 0;
@@ -46,28 +47,34 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
             begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
         if (token.empty()) {
             if (role_ == HttpFieldListRole::kSender) {
-                state_.template emplace<HttpInvalidContentCodingField>();
+                invalid_ = true;
                 return;
             }
         } else if (!isValidHttpHeaderName(token)) {
-            state_.template emplace<HttpInvalidContentCodingField>();
+            invalid_ = true;
             return;
-        } else if (auto* supported = std::get_if<Supported>(&state_)) {
-            ++supported->codingCount;
-            if (supported->codingCount > 1) {
-                state_.template emplace<HttpUnsupportedContentCoding>();
-            } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
-                supported->coding = HttpContentCoding::kIdentity;
+        } else {
+            HttpContentCoding coding = HttpContentCoding::kIdentity;
+            if (httpAsciiEqualsIgnoreCase(token, "identity")) {
+                coding = HttpContentCoding::kIdentity;
             } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
                        httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
-                supported->coding = HttpContentCoding::kGzip;
+                coding = HttpContentCoding::kGzip;
+            } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
+                coding = HttpContentCoding::deflate;
             } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-                supported->coding = HttpContentCoding::kBrotli;
+                coding = HttpContentCoding::kBrotli;
             } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-                supported->coding = HttpContentCoding::kZstd;
+                coding = HttpContentCoding::kZstd;
             } else {
-                state_.template emplace<HttpUnsupportedContentCoding>();
+                unsupported_ = true;
+                if (comma == std::string_view::npos) {
+                    break;
+                }
+                begin = comma + 1;
+                continue;
             }
+            codings_.push_back(coding);
         }
         if (comma == std::string_view::npos) {
             break;
@@ -76,41 +83,55 @@ void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
     }
 }
 
-HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
-    if (std::get_if<HttpInvalidContentCodingField>(&state_) != nullptr) {
+HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() && {
+    if (invalid_) {
         return HttpContentCodingFieldResultAccess::invalid();
     }
-    if (std::get_if<HttpUnsupportedContentCoding>(&state_) != nullptr) {
+    if (unsupported_) {
         return HttpContentCodingFieldResultAccess::unsupported();
     }
-    return HttpContentCodingFieldResultAccess::coding(std::get<Supported>(state_).coding);
+    return HttpContentCodingFieldResultAccess::coding(std::move(codings_));
 }
 
 bool isValidHttpContentEncodingFieldValue(std::string_view value, HttpFieldListRole role) noexcept {
-    HttpContentCodingFieldParser parser(role);
-    parser.update(value);
-    const auto result = parser.finish();
-    return result.invalid() == nullptr;
+    std::size_t begin = 0;
+    while (begin <= value.size()) {
+        const auto comma = value.find(',', begin);
+        const auto token = httpTrimOws(value.substr(
+            begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
+        if (token.empty() && role == HttpFieldListRole::kSender) {
+            return false;
+        }
+        if (!token.empty() && !isValidHttpHeaderName(token)) {
+            return false;
+        }
+        if (comma == std::string_view::npos) {
+            return true;
+        }
+        begin = comma + 1;
+    }
+    return true;
 }
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
 
-HttpContentCodingFieldResult parseHttpContentCoding(std::string_view value) noexcept {
-    detail::HttpContentCodingFieldParser parser;
+HttpContentCodingFieldResult parseHttpContentCoding(
+    std::string_view value, std::pmr::memory_resource* resource) {
+    detail::HttpContentCodingFieldParser parser(detail::HttpFieldListRole::kRecipient, resource);
     parser.update(value);
-    return parser.finish();
+    return std::move(parser).finish();
 }
 
 HttpContentCodingFieldResult parseHttpContentCodingHeaders(
-    std::span<const HttpHeader> headers) noexcept {
-    return detail::httpContentCodingFromHeaders(headers);
+    std::span<const HttpHeader> headers, std::pmr::memory_resource* resource) {
+    return detail::httpContentCodingFromHeaders(headers, resource);
 }
 
 HttpContentCodingFieldResult parseHttpContentCodingHeaders(
-    const HttpResponseHeaders& headers) noexcept {
-    return detail::httpContentCodingFromHeaders(headers);
+    const HttpResponseHeaders& headers, std::pmr::memory_resource* resource) {
+    return detail::httpContentCodingFromHeaders(headers, resource);
 }
 
 HttpContentDecodeResult decodeHttpContent(
@@ -118,6 +139,8 @@ HttpContentDecodeResult decodeHttpContent(
     switch (coding) {
         case HttpContentCoding::kGzip:
             return detail::decodeGzipContent(input, options.maxDecodedBytes, options.resource);
+        case HttpContentCoding::deflate:
+            return detail::decode_deflate_content(input, options.maxDecodedBytes, options.resource);
         case HttpContentCoding::kBrotli:
             return detail::decodeBrotliContent(input, options.maxDecodedBytes, options.resource);
         case HttpContentCoding::kZstd:
@@ -143,6 +166,8 @@ HttpContentEncodeResult encodeHttpContent(
             return detail::encodeZstdContent(input, options.maxEncodedBytes, options.resource);
         case HttpContentCoding::kGzip:
             return detail::encodeGzipContent(input, options.maxEncodedBytes, options.resource);
+        case HttpContentCoding::deflate:
+            return detail::encode_deflate_content(input, options.maxEncodedBytes, options.resource);
         case HttpContentCoding::kIdentity:
             if (input.size() > options.maxEncodedBytes) {
                 return detail::HttpContentEncodeResultAccess::failure(
@@ -152,6 +177,56 @@ HttpContentEncodeResult encodeHttpContent(
                 input, detail::httpPmrResourceOrDefault(options.resource)));
     }
     return detail::HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
+}
+
+HttpContentEncodeResult encodeHttpContent(std::span<const HttpContentCoding> codings,
+    std::string_view input, HttpContentEncodeOptions options) {
+    auto* const resource = detail::httpPmrResourceOrDefault(options.resource);
+    if (codings.empty()) {
+        if (input.size() > options.maxEncodedBytes) {
+            return detail::HttpContentEncodeResultAccess::failure(
+                HttpContentEncodeError::kEncodedSizeExceeded);
+        }
+        return detail::HttpContentEncodeResultAccess::encoded(std::pmr::string(input, resource));
+    }
+
+    std::pmr::string current(resource);
+    std::string_view source = input;
+    for (const auto coding : codings) {
+        auto encoded = encodeHttpContent(coding, source, options);
+        auto* content = encoded.encoded();
+        if (content == nullptr) {
+            return detail::HttpContentEncodeResultAccess::failure(encoded.failure()->error());
+        }
+        current = std::move(*content).takeBytes();
+        source = current;
+    }
+    return detail::HttpContentEncodeResultAccess::encoded(std::move(current));
+}
+
+HttpContentDecodeResult decodeHttpContent(std::span<const HttpContentCoding> codings,
+    std::string_view input, HttpContentDecodeOptions options) {
+    auto* const resource = detail::httpPmrResourceOrDefault(options.resource);
+    if (codings.empty()) {
+        if (input.size() > options.maxDecodedBytes) {
+            return detail::HttpContentDecodeResultAccess::failure(
+                HttpContentDecodeError::kDecodedSizeExceeded);
+        }
+        return detail::HttpContentDecodeResultAccess::decoded(std::pmr::string(input, resource));
+    }
+
+    std::pmr::string current(resource);
+    std::string_view source = input;
+    for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
+        auto decoded = decodeHttpContent(*coding, source, options);
+        auto* content = decoded.decoded();
+        if (content == nullptr) {
+            return detail::HttpContentDecodeResultAccess::failure(decoded.failure()->error());
+        }
+        current = std::move(*content).takeBytes();
+        source = current;
+    }
+    return detail::HttpContentDecodeResultAccess::decoded(std::move(current));
 }
 
 }  // namespace ruvia

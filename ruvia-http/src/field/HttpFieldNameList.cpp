@@ -1,16 +1,11 @@
-#include "ruvia/http/HttpCorsFields.h"
+#include "ruvia/http/HttpFieldNameList.h"
 
 #include "ruvia/http/HttpFieldWhitespace.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
 
 namespace ruvia {
 
-bool isValidHttpSerializedOrigin(std::string_view value) noexcept {
-    return detail::isValidHttpSerializedOrigin(value);
-}
-
-std::optional<std::string_view> HttpCorsRequestHeaderNames::next() noexcept {
+std::optional<std::string_view> http_field_name_list::next() noexcept {
     while (!finished_) {
         const auto separator = remaining_.find(',');
         const auto member = remaining_.substr(0, separator);
@@ -22,7 +17,7 @@ std::optional<std::string_view> HttpCorsRequestHeaderNames::next() noexcept {
         const auto name = httpTrimOws(member);
         if (name.empty()) {
             if (finished_) {
-                valid_ = sawName_;
+                valid_ = true;
             }
             continue;
         }
@@ -31,7 +26,6 @@ std::optional<std::string_view> HttpCorsRequestHeaderNames::next() noexcept {
             valid_ = false;
             return std::nullopt;
         }
-        sawName_ = true;
         if (finished_) {
             valid_ = true;
         }

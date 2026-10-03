@@ -223,7 +223,8 @@ int remove_cid_callback(ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) no
 }
 
 state_owner make_state(quic_connection_config config, quic_crypto_provider_view crypto,
-    quic_tls_driver_view driver, std::pmr::memory_resource* resource, quic_timestamp now) {
+    quic_tls_driver_view driver, std::pmr::memory_resource* resource, quic_timestamp now,
+    std::span<const std::byte> early_transport_parameters = {}) {
     crypto.validate();
     if (!resource) {
         throw std::invalid_argument("QUIC connection requires a memory resource");
@@ -232,12 +233,22 @@ state_owner make_state(quic_connection_config config, quic_crypto_provider_view 
     std::pmr::polymorphic_allocator<detail::quic_connection_state> allocator(selected);
     auto* state = allocator.allocate(1);
     try {
-        std::construct_at(state, std::move(config), crypto, driver, selected, now);
+        std::construct_at(state, std::move(config), crypto, driver, selected, now,
+            early_transport_parameters);
     } catch (...) {
         allocator.deallocate(state, 1);
         throw;
     }
     return state_owner(state, detail::quic_connection_state_deleter{selected});
+}
+
+int path_validation_callback(ngtcp2_conn*, uint32_t, const ngtcp2_path* path,
+    const ngtcp2_path*, ngtcp2_path_validation_result result, void* user_data) {
+    auto& state = *static_cast<detail::quic_connection_state*>(user_data);
+    if (path != nullptr) {
+        state.on_path_validation(*path, result);
+    }
+    return 0;
 }
 
 void initialize_native_connection(detail::quic_connection_state& state, quic_timestamp now) {
@@ -248,9 +259,33 @@ void initialize_native_connection(detail::quic_connection_state& state, quic_tim
     callbacks.get_new_connection_id2 = get_new_cid_callback;
     callbacks.remove_connection_id = remove_cid_callback;
     callbacks.get_path_challenge_data2 = path_challenge_callback;
+    callbacks.path_validation = path_validation_callback;
 
     ngtcp2_settings settings{};
     ngtcp2_settings_default(&settings);
+    const auto preferred_version = static_cast<std::uint32_t>(state.config_.preferred_version);
+    const auto initial_version = static_cast<std::uint32_t>(state.config_.version);
+    // RFC 9368 compatible versions can negotiate in-place; incompatible versions require
+    // a fresh TLS/QUIC connection and are intentionally not advertised here.
+    static constexpr std::array<std::uint32_t, 2> v1_first_versions{
+        NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
+    static constexpr std::array<std::uint32_t, 2> v2_first_versions{
+        NGTCP2_PROTO_VER_V2, NGTCP2_PROTO_VER_V1};
+    const auto& preferred_versions = preferred_version == NGTCP2_PROTO_VER_V1
+                                         ? v1_first_versions
+                                         : v2_first_versions;
+    static constexpr std::array<std::uint32_t, 2> available_versions{
+        NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
+    settings.preferred_versions = preferred_versions.data();
+    settings.preferred_versionslen = state.config_.role == quic_role::client ||
+                                             preferred_version != initial_version
+                                         ? preferred_versions.size()
+                                         : 1;
+    settings.available_versions = available_versions.data();
+    settings.available_versionslen = available_versions.size();
+    settings.original_version = state.config_.role == quic_role::client
+                                    ? static_cast<std::uint32_t>(state.config_.version)
+                                    : 0;
     settings.initial_ts = ts;
     settings.max_tx_udp_payload_size = state.config_.local_transport_parameters.max_udp_payload_size;
     settings.max_window = state.config_.limits.max_connection_buffer_size;
@@ -354,7 +389,8 @@ void check_native_result(detail::quic_connection_state& state, int result,
 }
 
 state_owner make_connection(quic_connection_config config, quic_crypto_provider_view crypto,
-    quic_tls_driver_view tls_driver, std::pmr::memory_resource* resource, quic_timestamp now) {
+    quic_tls_driver_view tls_driver, std::pmr::memory_resource* resource, quic_timestamp now,
+    std::span<const std::byte> early_transport_parameters = {}) {
     crypto.validate();
     tls_driver.validate();
     switch (config.role) {
@@ -383,7 +419,8 @@ state_owner make_connection(quic_connection_config config, quic_crypto_provider_
         crypto.random_bytes(crypto.context, random);
         config.source_connection_id = quic_connection_id(random);
     }
-    auto state = make_state(std::move(config), crypto, tls_driver, resource, now);
+    auto state = make_state(std::move(config), crypto, tls_driver, resource, now,
+        early_transport_parameters);
     initialize_native_connection(*state, now);
     return state;
 }
@@ -392,8 +429,10 @@ state_owner make_connection(quic_connection_config config, quic_crypto_provider_
 
 quic_connection::quic_connection(quic_connection_config config,
     quic_crypto_provider_view crypto, quic_tls_driver_view tls_driver,
-    std::pmr::memory_resource* resource, quic_timestamp now)
-    : impl_(make_connection(std::move(config), crypto, tls_driver, resource, now)) {}
+    std::pmr::memory_resource* resource, quic_timestamp now,
+    std::span<const std::byte> early_transport_parameters)
+    : impl_(make_connection(std::move(config), crypto, tls_driver, resource, now,
+          early_transport_parameters)) {}
 
 quic_connection::quic_connection(quic_initial_offer offer,
     quic_connection_config config, quic_crypto_provider_view crypto,
@@ -414,6 +453,41 @@ quic_tls_handshake& quic_connection::tls_handshake() noexcept {
 }
 quic_connection_info quic_connection::info() const noexcept {
     return impl_->info();
+}
+
+std::size_t quic_connection::encode_early_transport_parameters(
+    std::span<std::byte> output) const {
+    const auto& state = *impl_;
+    if (state.config_.role != quic_role::client || !state.connection_ ||
+        !state.tls_handshake_complete_ || output.empty()) {
+        throw quic_error(quic_error_code::invalid_state,
+            "remembered QUIC transport parameters require a completed client handshake");
+    }
+    const auto result = ngtcp2_conn_encode_0rtt_transport_params2(
+        state.connection_, reinterpret_cast<uint8_t*>(output.data()), output.size());
+    if (result < 0) {
+        throw quic_error(result == NGTCP2_ERR_NOBUF ? quic_error_code::resource_limit
+                                                    : quic_error_code::protocol_failure,
+            "ngtcp2 failed to encode remembered QUIC transport parameters");
+    }
+    return static_cast<std::size_t>(result);
+}
+
+quic_path_migration quic_connection::start_path_migration(const quic_address& local_address) {
+    return impl_->start_path_migration(local_address,
+        static_cast<ngtcp2_tstamp>(timestamp_value(impl_->last_supplied_time_)));
+}
+
+std::optional<quic_path_migration> quic_connection::path_migration(std::uint64_t id) const noexcept {
+    return impl_->path_migration(id);
+}
+
+quic_operation_status quic_connection::cancel_path_migration(std::uint64_t id) {
+    return impl_->cancel_path_migration(id);
+}
+
+quic_operation_status quic_connection::fail_path_migration(std::uint64_t id) noexcept {
+    return impl_->fail_path_migration(id);
 }
 
 quic_operation_status quic_connection::receive(const quic_datagram_view& datagram,

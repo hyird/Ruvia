@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -750,8 +751,8 @@ Http2SubmitStatus Http2Connection::submitBufferedResponse(
 }
 
 Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
-    std::uint32_t streamId, HttpResponse response, ResponseStreamKind kind,
-    ResponseTrailerIntent trailerIntent) {
+    std::uint32_t streamId, HttpResponse response, http_response_stream_kind kind,
+    http_response_trailer_intent trailerIntent) {
     return impl_->connection.submitStreamingResponseHead(
         streamId, std::move(response), kind, trailerIntent);
 }
@@ -759,7 +760,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
 Http2SubmitStatus Http2Connection::submitStreamingResponseHead(
     std::uint32_t streamId, HttpResponse response) {
     const auto result = submitStreamingResponseHead(streamId, std::move(response),
-        ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        http_response_stream_kind::generic, http_response_trailer_intent::none);
     if (const auto* failure = result.failure()) {
         switch (failure->error()) {
             case Http2ResponseHeadSubmitError::kPeerStreamLimitReached:

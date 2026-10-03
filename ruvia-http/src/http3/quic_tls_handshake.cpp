@@ -20,6 +20,8 @@ ngtcp2_encryption_level to_ngtcp2_level(quic_encryption_level level) {
             return NGTCP2_ENCRYPTION_LEVEL_HANDSHAKE;
         case quic_encryption_level::application:
             return NGTCP2_ENCRYPTION_LEVEL_1RTT;
+        case quic_encryption_level::early_data:
+            throw std::invalid_argument("QUIC 0-RTT does not carry TLS CRYPTO frames");
     }
     throw std::invalid_argument("invalid QUIC TLS encryption level");
 }
@@ -73,8 +75,11 @@ void quic_tls_handshake::submit_peer_transport_parameters(
     }
 
     constexpr std::string_view reason = "invalid peer QUIC transport parameters";
+    const auto transport_error = result == NGTCP2_ERR_VERSION_NEGOTIATION_FAILURE
+                                     ? NGTCP2_VERSION_NEGOTIATION_ERROR
+                                     : NGTCP2_TRANSPORT_PARAMETER_ERROR;
     state_->latch_close_reason({.kind = quic_close_kind::transport,
-        .code = NGTCP2_TRANSPORT_PARAMETER_ERROR,
+        .code = transport_error,
         .frame_type = 0,
         .reason = std::span<const char>(reason.data(), reason.size())});
     throw quic_error(quic_error_code::protocol_failure,

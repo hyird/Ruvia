@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 
 #include "test_harness.h"
@@ -53,11 +54,11 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     RUVIA_CHECK(buffered.requestBodyMode() == ruvia::detail::RequestBodyMode::kStream);
 
     const auto stream = RouteEndpoint::responseStream(
-        RouteStreamHandler(nullptr, &streamRouteHandler), ruvia::detail::ResponseStreamKind::kSse);
+        RouteStreamHandler(nullptr, &streamRouteHandler), ruvia::http_response_stream_kind::sse);
     RUVIA_CHECK(stream.buffered() == nullptr);
     RUVIA_CHECK(stream.responseStream() != nullptr);
     RUVIA_CHECK(stream.webSocket() == nullptr);
-    RUVIA_CHECK(stream.responseStream()->kind() == ruvia::detail::ResponseStreamKind::kSse);
+    RUVIA_CHECK(stream.responseStream()->kind() == ruvia::http_response_stream_kind::sse);
     RUVIA_CHECK(stream.requestBodyMode() == ruvia::detail::RequestBodyMode::kBuffered);
 
     std::vector<std::string> sourceProtocols{"chat", "superchat"};
@@ -102,7 +103,7 @@ RUVIA_TEST(route_endpoint_rejects_empty_handlers_and_invalid_discriminants) {
     rejected = false;
     try {
         (void)RouteEndpoint::responseStream(RouteStreamHandler(nullptr, &streamRouteHandler),
-            static_cast<ruvia::detail::ResponseStreamKind>(99));
+            static_cast<ruvia::http_response_stream_kind>(99));
     } catch (const std::invalid_argument&) {
         rejected = true;
     }

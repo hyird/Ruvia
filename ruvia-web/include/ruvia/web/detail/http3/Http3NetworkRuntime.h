@@ -103,6 +103,7 @@ private:
         std::optional<std::uint64_t> tunnelEstablishedBarrier{};
         ReceivePhase receivePhase{ReceivePhase::kHeaders};
         bool accepted{};
+        bool receivedEarlyData{};
         bool requestStream{};
         bool inputTerminal{};
         bool inputFin{};

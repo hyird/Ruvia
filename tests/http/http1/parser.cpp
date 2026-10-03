@@ -13,6 +13,7 @@
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
 
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 namespace {
@@ -42,6 +43,40 @@ const ruvia::Http1ChunkedRequestBody& requireChunked(const ruvia::Http1RequestBo
         throw std::runtime_error("test expected chunked request framing");
     }
     return *chunked;
+}
+
+template <typename parse_type, typename ready_check>
+void verify_parser_allocation_failures(ruvia::testing::TestContext& ruvia_ctx,
+    parse_type&& parse, ready_check&& is_ready) {
+    bool saw_failure = false;
+    bool saw_success = false;
+    for (std::size_t fail_after = 0; fail_after < 32; ++fail_after) {
+        failing_memory_resource resource;
+        resource.fail_after(fail_after);
+        bool allocation_failed = false;
+        {
+            try {
+                const auto result = parse(resource);
+                RUVIA_CHECK(is_ready(result));
+            } catch (const std::bad_alloc&) {
+                allocation_failed = true;
+            }
+        }
+        resource.allow_allocations();
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        if (!allocation_failed) {
+            saw_success = true;
+            break;
+        }
+        saw_failure = true;
+        {
+            const auto retry = parse(resource);
+            RUVIA_CHECK(is_ready(retry));
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(saw_failure);
+    RUVIA_CHECK(saw_success);
 }
 
 [[nodiscard]] bool isFailure(
@@ -625,7 +660,7 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
         "3\r\nraw\r\n0\r\n\r\n");
     RUVIA_CHECK(result.messageReady());
     const auto& chunked = requireChunked(result.bodyPlan);
-    RUVIA_CHECK_EQ(chunked.transferCodings().count, std::size_t{1});
+    RUVIA_CHECK_EQ(chunked.transferCodings().values.size(), std::size_t{1});
     RUVIA_CHECK(chunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
 }
 
@@ -661,6 +696,31 @@ RUVIA_TEST(http1_parse_transfer_encoding_not_chunked_rejected) {
     const auto result =
         parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
     RUVIA_CHECK(isFailure(result, HttpParseError::kInvalidTransferEncoding));
+}
+
+RUVIA_TEST(http1_request_unknown_transfer_coding_obeys_final_framing_precedence) {
+    Http1ServerRequestParser parser;
+    const auto unframed = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: unknown\r\n\r\n");
+    RUVIA_CHECK(isFailure(unframed, HttpParseError::kInvalidTransferEncoding));
+    RUVIA_CHECK(unframed.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
+
+    const auto framed = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Transfer-Encoding: unknown, chunked\r\n\r\n0\r\n\r\n");
+    RUVIA_CHECK(isFailure(framed, HttpParseError::kUnsupportedTransferEncoding));
+    RUVIA_CHECK(framed.connectionPlan.disposition() == Http1ClosePolicy::kCloseAfterResponse);
+}
+
+RUVIA_TEST(http1_request_parsers_propagate_transfer_plan_allocation_failures) {
+    constexpr std::string_view wire =
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Transfer-Encoding: gzip, deflate, chunked\r\n\r\n0\r\n\r\n";
+    const ruvia::Http1RequestParser public_parser;
+    verify_parser_allocation_failures(ruvia_ctx, [&public_parser, wire](failing_memory_resource& resource) { return public_parser.parse(wire, {.resource = &resource}); }, [](const auto& result) { return result.parsed() != nullptr; });
+
+    const Http1ServerRequestParser server_parser;
+    verify_parser_allocation_failures(ruvia_ctx, [&server_parser, wire](failing_memory_resource& resource) { return server_parser.parseMessage(wire, &resource); }, [](const auto& result) { return result.messageReady() != nullptr; });
 }
 
 RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {

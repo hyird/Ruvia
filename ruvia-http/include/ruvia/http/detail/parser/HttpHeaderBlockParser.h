@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -42,6 +43,10 @@ struct ParsedRequestHeaderSlot {
 using KnownRequestHeaderIndex = std::int16_t;
 
 struct ParsedRequestHeaderBlock {
+    explicit ParsedRequestHeaderBlock(
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        : transferEncoding(resource) {}
+
     HttpHeaderSlice method;
     HttpHeaderSlice target;
     HttpHeaderSlice version;
@@ -62,6 +67,6 @@ struct ParsedRequestHeaderBlock {
 [[nodiscard]] std::size_t findHttpHeaderEnd(
     std::string_view buffer, std::size_t searchOffset) noexcept;
 [[nodiscard]] std::optional<HttpParseError> parseHttpHeaderBlock(
-    std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) noexcept;
+    std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block);
 
 }  // namespace ruvia::detail

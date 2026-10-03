@@ -95,12 +95,8 @@ private:
     HttpResponseCompressionStatus status_;
 };
 
-// The protocol parser deliberately reports a coding stack as unsupported when
-// it contains more than one member, even when every member is a coding Ruvia
-// knows. That is the right result for decoding (the runtime owns no stack
-// decoder), but response negotiation still has to inspect a known stack: a
-// client that accepts gzip but rejects br cannot be sent `gzip, br` merely
-// because the stack is not executable by this process.
+// Response negotiation inspects every known coding in application-supplied
+// stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
 [[nodiscard]] inline bool httpKnownResponseContentEncodingStackAccepted(
     const HttpResponseCodingSelection& selection, const HttpResponse& response) noexcept {
     bool sawKnownCoding = false;
@@ -117,6 +113,9 @@ private:
                        httpAsciiEqualsIgnoreCase(item, "x-gzip")) {
                 sawKnownCoding = true;
                 accepted = accepted && selection.accepts(HttpContentCoding::kGzip);
+            } else if (httpAsciiEqualsIgnoreCase(item, "deflate")) {
+                sawKnownCoding = true;
+                accepted = accepted && selection.accepts(HttpContentCoding::deflate);
             } else if (httpAsciiEqualsIgnoreCase(item, "br")) {
                 sawKnownCoding = true;
                 accepted = accepted && selection.accepts(HttpContentCoding::kBrotli);
@@ -150,19 +149,10 @@ private:
         return false;
     }
     if (responseHasHeaderName(response, "Content-Encoding")) {
-        // An already-encoded response is a valid representation source, but it
-        // still cannot bypass Accept-Encoding. Ruvia can classify a single
-        // coding and a stack made entirely from its known codings without
-        // taking ownership of arbitrary application coding registries; stacks
-        // containing a custom coding remain application-managed.
-        const auto contentCoding = parseHttpContentCodingHeaders(response.headers());
-        if (const auto* coding = contentCoding.coding(); coding != nullptr) {
-            return !selection.accepts(*coding);
-        }
-        if (contentCoding.unsupported() != nullptr) {
-            return !httpKnownResponseContentEncodingStackAccepted(selection, response);
-        }
-        return false;
+        // Custom and malformed application-managed coding stacks remain the
+        // application's responsibility; every fully known stack is negotiated
+        // member by member without allocating in this noexcept decision.
+        return !httpKnownResponseContentEncodingStackAccepted(selection, response);
     }
     if (selection.coding() == HttpContentCoding::kIdentity || selection.identityAccepted()) {
         return false;

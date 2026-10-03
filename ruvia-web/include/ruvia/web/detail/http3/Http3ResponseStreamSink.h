@@ -9,6 +9,7 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/http/Http3DataWritePlan.h"
 #include "ruvia/http/Http3ResponseWriter.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 #include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
 
@@ -20,14 +21,14 @@ class Http3BufferedRequestDispatch;
 class Http3ResponseStreamSink final {
 public:
     Http3ResponseStreamSink(Http3BufferedRequestDispatch& publisher,
-        const WorkerHandle& worker, HttpKnownMethod method, ResponseStreamKind kind,
+        const WorkerHandle& worker, HttpKnownMethod method, http_response_stream_kind kind,
         std::pmr::memory_resource* resource, HttpResponseCodingSelection coding,
         HttpResponseCodingAvailability availability);
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
     }
-    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const& noexcept {
-        return state_.commitPlan();
+    [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
+        return state_.commit_plan();
     }
     [[nodiscard]] bool aborted() const noexcept;
     void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk head) {
@@ -41,13 +42,13 @@ public:
     [[nodiscard]] Task<TimerSleepResult> sleep(std::chrono::milliseconds duration, const StopToken& stop);
 
 private:
-    [[nodiscard]] Task<void> commit(ResponseTrailerIntent trailers);
+    [[nodiscard]] Task<void> commit(http_response_trailer_intent trailers);
     [[nodiscard]] Task<void> writeEncoded(std::string_view bytes);
     void requireActive() const;
     Http3BufferedRequestDispatch& publisher_;
     const WorkerHandle& worker_;
     HttpKnownMethod method_;
-    ResponseStreamKind kind_;
+    http_response_stream_kind kind_;
     std::pmr::memory_resource* resource_;
     ResponseStreamState state_;
     HttpStreamingResponseCompression compression_;

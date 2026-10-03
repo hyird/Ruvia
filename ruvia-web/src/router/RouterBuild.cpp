@@ -114,6 +114,7 @@ void detail::RouteTable::captureRouteIdentities() {
         if (const auto* buffered = endpoint.buffered()) {
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kBuffered;
             identity.requestBodyMode = buffered->requestBodyMode();
+            identity.replay_safe = buffered->replay_safe();
             identity.bufferedInvoke = buffered->handler().invoke();
         } else if (const auto* stream = endpoint.responseStream()) {
             identity.endpointKind = CompiledRoutePlan::EndpointKind::kResponseStream;
@@ -186,6 +187,8 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
             route.path() != identity.path || route.dynamic() != identity.dynamic ||
             route.maxRequestBodyBytes() != identity.maxRequestBodyBytes ||
             route.deadlineMs() != identity.deadlineMs ||
+            (route.endpoint().buffered() != nullptr &&
+                route.endpoint().buffered()->replay_safe() != identity.replay_safe) ||
             route.middlewareCount() != identity.middlewareInvokes.size()) {
             throw std::logic_error("worker route table differs from the compiled application plan");
         }
@@ -203,6 +206,7 @@ void detail::RouteTable::bindCompiledPlan(const CompiledRoutePlan& plan) {
         if (const auto* buffered = endpoint.buffered()) {
             endpointMatches = identity.endpointKind == CompiledRoutePlan::EndpointKind::kBuffered &&
                               identity.requestBodyMode == buffered->requestBodyMode() &&
+                              identity.replay_safe == buffered->replay_safe() &&
                               identity.bufferedInvoke == buffered->handler().invoke();
         } else if (const auto* stream = endpoint.responseStream()) {
             endpointMatches =

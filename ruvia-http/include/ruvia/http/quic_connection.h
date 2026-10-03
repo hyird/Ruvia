@@ -31,7 +31,8 @@ struct quic_stream_open_result {
 class quic_connection {
 public:
     quic_connection(quic_connection_config config, quic_crypto_provider_view crypto,
-        quic_tls_driver_view tls_driver, std::pmr::memory_resource* resource, quic_timestamp now);
+        quic_tls_driver_view tls_driver, std::pmr::memory_resource* resource, quic_timestamp now,
+        std::span<const std::byte> early_transport_parameters = {});
     quic_connection(const quic_connection&) = delete;
     quic_connection& operator=(const quic_connection&) = delete;
     quic_connection(quic_connection&&) = delete;
@@ -40,6 +41,18 @@ public:
 
     quic_tls_handshake& tls_handshake() noexcept;
     quic_connection_info info() const noexcept;
+    // Encodes the server parameters currently negotiated on this connection for ticket storage.
+    std::size_t encode_early_transport_parameters(std::span<std::byte> output) const;
+    // Starts one client-only migration to a bound local address. A started
+    // migration remains active until path validation completes or fails.
+    [[nodiscard]] quic_path_migration start_path_migration(const quic_address& local_address);
+    [[nodiscard]] std::optional<quic_path_migration> path_migration(
+        std::uint64_t id) const noexcept;
+    // ngtcp2 cannot cancel path validation in place; aborting closes the QUIC
+    // connection. Its owner must still drive and join normal connection teardown.
+    [[nodiscard]] quic_operation_status cancel_path_migration(std::uint64_t id);
+    // Records a local candidate-path I/O failure without closing the active path.
+    [[nodiscard]] quic_operation_status fail_path_migration(std::uint64_t id) noexcept;
     quic_operation_status receive(const quic_datagram_view& datagram, quic_timestamp now);
     quic_packet_result write_packet(std::span<std::byte> output, quic_timestamp now);
     std::optional<quic_timestamp> next_expiry() const noexcept;
@@ -49,6 +62,11 @@ public:
     quic_stream_open_result open_stream(bool unidirectional);
     quic_stream_accept_batch accept_streams() noexcept;
     quic_stream_read_result read_stream(std::uint64_t stream_id, std::span<std::byte> output);
+    [[nodiscard]] quic_stream_info stream_info(std::uint64_t stream_id) const noexcept;
+    // Returns and removes QUIC stream IDs invalidated by a rejected 0-RTT
+    // attempt. The owning HTTP layer must rebuild its per-stream protocol state.
+    [[nodiscard]] std::size_t take_rejected_early_streams(
+        std::span<std::uint64_t> output) noexcept;
     quic_stream_read_result read_health(std::uint64_t stream_id) const noexcept;
     // accepted means the accepted prefix was copied before return; would_block retains none.
     quic_stream_write_result write_stream(std::uint64_t stream_id,

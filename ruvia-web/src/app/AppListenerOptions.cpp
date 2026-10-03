@@ -50,7 +50,7 @@ bool hasTlsConfiguration(const TlsConfig& config) noexcept {
     return !config.certificateChainFile.empty() || !config.privateKeyFile.empty() ||
            !config.privateKeyPassword.empty() || config.clientCertificates.verifyFile.has_value() ||
            config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional ||
-           !config.sni.empty();
+           config.http3_early_data || !config.sni.empty();
 }
 
 std::pmr::string normalizeAltSvcAdvertisement(const AltSvcConfig& config,
@@ -110,6 +110,7 @@ HttpServerListenerDefinition::Tls normalizeTlsOptions(
     assignTlsFileName(tls.identity.certificateChainFile, config.certificateChainFile);
     assignTlsFileName(tls.identity.privateKeyFile, config.privateKeyFile);
     tls.identity.privateKeyPassword = config.privateKeyPassword;
+    tls.http3_early_data = config.http3_early_data;
     if (config.clientCertificates.verifyFile.has_value() ||
         config.clientCertificates.requirement != TlsClientCertificateRequirement::kOptional) {
         auto& policy = tls.clientCertificates.emplace(

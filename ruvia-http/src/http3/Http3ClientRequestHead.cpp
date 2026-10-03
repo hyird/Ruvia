@@ -13,6 +13,7 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -182,7 +183,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         }
         if (!validValue(field.value) ||
             (equalIgnoreCase(field.name, "origin") &&
-                !detail::isValidHttpOriginFieldValue(field.value)) ||
+                !detail::is_valid_http_origin_field_value(field.value)) ||
             (equalIgnoreCase(field.name, "access-control-request-method") &&
                 !detail::isValidHttpCorsRequestMethod(field.value)) ||
             (equalIgnoreCase(field.name, "access-control-request-headers") &&

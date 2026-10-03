@@ -150,7 +150,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
     }
     if (config_.protocol == HttpClientProtocol::kHttp3Only) {
         http3Tls_ = makePmrObject<http3_quic_client_tls_context>(
-            resource_, config_.transport.view());
+            resource_, config_.transport.view(), resource_);
         http3BodyBudget_ =
             makePmrObject<Http3ClientBodyBudget>(resource_, kHttp3PoolReceiveBodyBytes);
         http3Connections_.reserve(config_.connectionCount);
@@ -276,12 +276,116 @@ Task<void> HttpClientPool::join() {
     // Destroy QUIC SSL/socket/session owners while the worker loop and its PMR
     // owner are still alive. HttpClientPool itself is later destroyed by the
     // App lifecycle thread after the worker has joined.
+    if (quic_migration_ && quic_migration_->slot < http3Connections_.size()) {
+        const auto& connection = http3Connections_[quic_migration_->slot];
+        if (connection) {
+            if (const auto migration =
+                    connection->path_migration(quic_migration_->connection_migration_id)) {
+                quic_migration_->result = *migration;
+                quic_migration_->result.id = quic_migration_->id;
+            }
+        }
+        if (quic_migration_->result.status == ruvia::quic_migration_status::started) {
+            quic_migration_->result.status = ruvia::quic_migration_status::aborted;
+        }
+    }
     for (auto& connection : http3Connections_) {
         connection.reset();
     }
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
+}
+
+ruvia::quic_path_migration HttpClientPool::start_quic_path_migration(
+    const asio::ip::udp::endpoint& local_endpoint) {
+    if (!worker_.isCurrent() || backgroundJoined_) {
+        return {.status = ruvia::quic_migration_status::rejected};
+    }
+    if (quic_migration_ && quic_migration_->result.status == ruvia::quic_migration_status::started) {
+        const auto& active = quic_migration_;
+        if (active->slot < http3Connections_.size()) {
+            const auto& connection = http3Connections_[active->slot];
+            if (connection) {
+                const auto status = connection->path_migration(active->connection_migration_id);
+                if (status) {
+                    quic_migration_->result = *status;
+                    quic_migration_->result.id = active->id;
+                    if (status->status == ruvia::quic_migration_status::started) {
+                        return {.status = ruvia::quic_migration_status::rejected};
+                    }
+                }
+            }
+        }
+        if (quic_migration_->result.status == ruvia::quic_migration_status::started) {
+            quic_migration_->result.status = ruvia::quic_migration_status::aborted;
+        }
+    }
+    for (std::size_t slot = 0; slot < http3Connections_.size(); ++slot) {
+        const auto& connection = http3Connections_[slot];
+        if (!connection || !connection->running()) {
+            continue;
+        }
+        const auto result = connection->start_path_migration(local_endpoint);
+        if (result.status == ruvia::quic_migration_status::started ||
+            result.status == ruvia::quic_migration_status::validated) {
+            auto id = next_quic_migration_id_++;
+            if (id == 0) {
+                id = next_quic_migration_id_++;
+            }
+            quic_migration_ = quic_migration_tracking{
+                id, slot, connection->quic_generation(), result.id, result};
+            quic_migration_->result.id = id;
+            return quic_migration_->result;
+        }
+        if (result.status == ruvia::quic_migration_status::would_block) {
+            return result;
+        }
+    }
+    return {.status = ruvia::quic_migration_status::rejected};
+}
+
+std::optional<ruvia::quic_path_migration> HttpClientPool::path_migration(
+    std::uint64_t id) const noexcept {
+    if (!worker_.isCurrent() || !quic_migration_ || quic_migration_->id != id) {
+        return std::nullopt;
+    }
+    const auto& migration = *quic_migration_;
+    const auto fallback = [&migration, id] {
+        auto result = migration.result;
+        result.id = id;
+        if (result.status == ruvia::quic_migration_status::started) {
+            result.status = ruvia::quic_migration_status::aborted;
+        }
+        return result;
+    };
+    if (migration.slot >= http3Connections_.size()) {
+        return fallback();
+    }
+    const auto& connection = http3Connections_[migration.slot];
+    if (!connection) {
+        return fallback();
+    }
+    const auto status = connection->path_migration(migration.connection_migration_id);
+    if (!status) {
+        return fallback();
+    }
+    auto result = *status;
+    result.id = id;
+    return result;
+}
+
+ruvia::quic_operation_status HttpClientPool::cancel_quic_path_migration(std::uint64_t id) {
+    if (!worker_.isCurrent() || !quic_migration_ || quic_migration_->id != id ||
+        quic_migration_->slot >= http3Connections_.size()) {
+        return ruvia::quic_operation_status::retired;
+    }
+    const auto& migration = *quic_migration_;
+    const auto& connection = http3Connections_[migration.slot];
+    if (!connection || connection->quic_generation() != migration.generation) {
+        return ruvia::quic_operation_status::retired;
+    }
+    return connection->cancel_path_migration(migration.connection_migration_id);
 }
 
 HttpClientStats HttpClientPool::stats() const noexcept {
@@ -685,6 +789,7 @@ HttpClientRequestStorage HttpClientPool::makeHttp3Request(
     appendAutomaticHeaders(request, headers, cookieHeader);
 
     HttpClientRequestStorage wire(source.method.view(), source.target.view(), resource_);
+    wire.set_replay_safe(source.replay_safe);
     for (const auto& header : headers) {
         wire.appendHeader(header.name(), header.value());
     }
@@ -733,7 +838,8 @@ Http3ClientConnection& HttpClientPool::http3Connection(std::size_t connectionInd
                                        .receive = [](void* raw, std::size_t slot, Http3ClientConnection& connection, std::uint64_t id, const Http3MessageHead& head) { return static_cast<HttpClientPool*>(raw)->acceptHttp3Push(slot, connection, id, head); },
                                        .finished = [](void* raw) noexcept { --static_cast<HttpClientPool*>(raw)->activePushes_; },
                                    }
-                                 : Http3ClientPushObserver{});
+                                 : Http3ClientPushObserver{},
+            config_.initial_quic_version, config_.http3_early_data);
     }
     return *owner;
 }

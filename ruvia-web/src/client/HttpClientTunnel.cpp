@@ -25,12 +25,16 @@ void requireOutput(detail::HttpClientResponseState* state, bool finishing) {
     if (auto* domain = state->memoryDomain(); domain != nullptr && !domain->worker().isCurrent()) {
         throw std::logic_error("HTTP client tunnel requires its owner worker");
     }
-    if (finishing && state->tunnel && state->tunnel->ended && !state->tunnel->outputScope.hasPendingOperations()) {
-        return;
-    }
-    if (!state->tunnel || state->pool == nullptr || state->tunnel->stopped || !state->tunnel->accepted ||
+    // Normal retirement stops the queue after both directions complete, but
+    // cannot invalidate a finish that has already succeeded. Writes and failed
+    // or abandoned tunnels still reject terminal output operations.
+    const bool completed_finish = finishing && state->tunnel && state->tunnel->ended && state->complete;
+    if (!state->tunnel || (state->pool == nullptr && !completed_finish) || (state->tunnel->stopped && !completed_finish) || !state->tunnel->accepted ||
         state->abandoned || state->failure || state->errorCode) {
         throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel is closed");
+    }
+    if (finishing && state->tunnel->ended && !state->tunnel->outputScope.hasPendingOperations()) {
+        return;
     }
     auto& output = *state->tunnel;
     if (output.outputScope.hasPendingOperations()) {

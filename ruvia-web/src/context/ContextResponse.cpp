@@ -205,7 +205,7 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
 }
 
 Context& Context::setStableResponseHeader(std::string_view name, std::string_view value) {
-    detail::setResponseHeaderStableView(responseState().activeResponse(), name, value);
+    responseState().activeResponse().header_stable_view(name, value);
     return *this;
 }
 

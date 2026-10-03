@@ -1,5 +1,6 @@
 #include <expected>
 #include <optional>
+#include <utility>
 
 #include "ruvia/http/HttpClientResponseHead.h"
 #include "ruvia/http/detail/client/HttpClientResponseHead.h"
@@ -150,20 +151,20 @@ struct Http1ClientResponsePlanAccess final {
 
     [[nodiscard]] static Http1ClientResponsePlan zeroContentChunked(
         HttpTransferCodings transferCodings, Http1ClosePolicy persistence,
-        RequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(
-                    Http1ClientChunkedResponse(transferCodings, persistence)))),
+                    Http1ClientChunkedResponse(std::move(transferCodings), persistence)))),
             requestContentSignal);
     }
 
     [[nodiscard]] static Http1ClientResponsePlan zeroContentCloseDelimited(
-        HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) noexcept {
+        HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientResponseWithZeroContent(Http1ClientResponseWithZeroContent::Framing(
-                    Http1ClientCloseDelimitedResponse(transferCodings)))),
+                    Http1ClientCloseDelimitedResponse(std::move(transferCodings))))),
             requestContentSignal);
     }
 
@@ -176,16 +177,17 @@ struct Http1ClientResponsePlanAccess final {
     }
 
     [[nodiscard]] static Http1ClientResponsePlan chunked(HttpTransferCodings transferCodings,
-        Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) noexcept {
+        Http1ClosePolicy persistence, RequestContentSignal requestContentSignal) {
         return Http1ClientResponsePlan(Http1ClientResponsePlan::State(Http1ClientChunkedResponse(
-                                           transferCodings, persistence)),
+                                           std::move(transferCodings), persistence)),
             requestContentSignal);
     }
 
     [[nodiscard]] static Http1ClientResponsePlan closeDelimited(
-        HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) noexcept {
+        HttpTransferCodings transferCodings, RequestContentSignal requestContentSignal) {
         return Http1ClientResponsePlan(
-            Http1ClientResponsePlan::State(Http1ClientCloseDelimitedResponse(transferCodings)),
+            Http1ClientResponsePlan::State(Http1ClientCloseDelimitedResponse(
+                std::move(transferCodings))),
             requestContentSignal);
     }
 
@@ -204,7 +206,7 @@ struct Http1ClientResponsePlanAccess final {
 
 Http1ClientResponsePlanningResult planHttp1ClientResponse(
     const Http1ClientExchangeState& exchangeState, const Http1ClientParsedResponseHead& response,
-    Http1ClientRequestContentPhase requestContentPhase) noexcept {
+    Http1ClientRequestContentPhase requestContentPhase) {
     const auto contentSemantics = httpResponseContentSemantics(
         Http1ClientExchangeStateAccess::method(exchangeState), response.statusCode);
 
@@ -239,7 +241,7 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
         return Http1ClientResponsePlanAccess::withoutContent(persistence, persistentContentSignal);
     }
 
-    const auto transferEncoding = response.transferEncoding.value();
+    const auto& transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
             return std::unexpected(
@@ -279,10 +281,12 @@ Http1ClientResponsePlanningResult planHttp1ClientResponse(
     // length is delimited by server close and cannot return to a pool.
     if (resetContentRequiresEmpty) {
         return Http1ClientResponsePlanAccess::zeroContentCloseDelimited(
-            {}, requestContentSignal(requestContentPhase, response.statusCode, true));
+            HttpTransferCodings(response.transferEncoding.resource()),
+            requestContentSignal(requestContentPhase, response.statusCode, true));
     }
     return Http1ClientResponsePlanAccess::closeDelimited(
-        {}, requestContentSignal(requestContentPhase, response.statusCode, true));
+        HttpTransferCodings(response.transferEncoding.resource()),
+        requestContentSignal(requestContentPhase, response.statusCode, true));
 }
 
 }  // namespace ruvia::detail

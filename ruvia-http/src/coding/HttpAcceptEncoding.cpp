@@ -63,6 +63,9 @@ void HttpResponseCodingQualities::update(std::string_view acceptEncoding) noexce
         if (detail::httpAsciiEqualsIgnoreCase(token, "gzip")) {
             detail::httpAccumulateAcceptedQuality(
                 encodingQualityParameter(item), gzip.explicitQuality);
+        } else if (detail::httpAsciiEqualsIgnoreCase(token, "deflate")) {
+            detail::httpAccumulateAcceptedQuality(
+                encodingQualityParameter(item), deflate.explicitQuality);
         } else if (detail::httpAsciiEqualsIgnoreCase(token, "br")) {
             detail::httpAccumulateAcceptedQuality(
                 encodingQualityParameter(item), brotli.explicitQuality);
@@ -75,6 +78,7 @@ void HttpResponseCodingQualities::update(std::string_view acceptEncoding) noexce
         } else if (token == "*") {
             const auto wildcard = encodingQualityParameter(item);
             detail::httpAccumulateAcceptedQuality(wildcard, gzip.wildcardQuality);
+            detail::httpAccumulateAcceptedQuality(wildcard, deflate.wildcardQuality);
             detail::httpAccumulateAcceptedQuality(wildcard, brotli.wildcardQuality);
             detail::httpAccumulateAcceptedQuality(wildcard, zstd.wildcardQuality);
             detail::httpAccumulateAcceptedQuality(wildcard, identity.wildcardQuality);

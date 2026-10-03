@@ -530,7 +530,11 @@ RUVIA_TEST(quic_decrypt_callback_distinguishes_authentication_rejection_from_pro
 RUVIA_TEST(quic_native_key_update_installs_both_direction_slots_and_erases_partial_outputs_on_failure) {
     std::pmr::synchronized_pool_resource resource;
     initial_tls_context tls_context;
+    native_client_fixture native;
     initial_state_owner owner(tls_context, &resource);
+    if (native.initialize(ruvia_ctx, owner.state) != 0) {
+        return;
+    }
     owner.state.installed_cipher_suite_ = ruvia::quic_cipher_suite::aes_128_gcm_sha256;
 
     std::array<std::uint8_t, 32> current_rx{};
@@ -543,7 +547,7 @@ RUVIA_TEST(quic_native_key_update_installs_both_direction_slots_and_erases_parti
     ngtcp2_crypto_aead_ctx tx_context{};
     ngtcp2_callbacks callbacks{};
     ruvia::detail::fill_quic_crypto_callbacks(callbacks);
-    RUVIA_CHECK_EQ(callbacks.update_key(nullptr, rx_secret.data(), tx_secret.data(),
+    RUVIA_CHECK_EQ(callbacks.update_key(owner.state.connection_, rx_secret.data(), tx_secret.data(),
                        &rx_context, rx_iv.data(), &tx_context, tx_iv.data(),
                        current_rx.data(), current_tx.data(), current_rx.size(), &owner.state),
         0);
@@ -558,7 +562,11 @@ RUVIA_TEST(quic_native_key_update_installs_both_direction_slots_and_erases_parti
     RUVIA_CHECK_EQ(owner.crypto_context.destroyed, std::size_t{2});
 
     initial_tls_context failing_tls_context;
+    native_client_fixture failing_native;
     initial_state_owner failing_owner(failing_tls_context, &resource);
+    if (failing_native.initialize(ruvia_ctx, failing_owner.state) != 0) {
+        return;
+    }
     failing_owner.state.installed_cipher_suite_ = ruvia::quic_cipher_suite::aes_128_gcm_sha256;
     failing_owner.crypto_context.throw_aead_on_call = 2;
     rx_secret.fill(0xa1);
@@ -567,7 +575,7 @@ RUVIA_TEST(quic_native_key_update_installs_both_direction_slots_and_erases_parti
     tx_iv.fill(0xa4);
     rx_context.native_handle = reinterpret_cast<void*>(std::uintptr_t{1});
     tx_context.native_handle = reinterpret_cast<void*>(std::uintptr_t{2});
-    RUVIA_CHECK_EQ(callbacks.update_key(nullptr, rx_secret.data(), tx_secret.data(),
+    RUVIA_CHECK_EQ(callbacks.update_key(failing_owner.state.connection_, rx_secret.data(), tx_secret.data(),
                        &rx_context, rx_iv.data(), &tx_context, tx_iv.data(),
                        current_rx.data(), current_tx.data(), current_rx.size(), &failing_owner.state),
         NGTCP2_ERR_CALLBACK_FAILURE);

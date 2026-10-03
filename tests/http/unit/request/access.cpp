@@ -241,7 +241,7 @@ RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
         requestKnownHeader(request, RequestKnownHeader::kHost), std::string_view("second.example"));
 }
 
-RUVIA_TEST(request_content_coding_rejects_repeated_header_fields) {
+RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentEncoding);
@@ -252,10 +252,15 @@ RUVIA_TEST(request_content_coding_rejects_repeated_header_fields) {
 
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kContentEncoding),
         std::string_view("gzip"));
-    const auto coding = requestContentCoding(request);
-    RUVIA_CHECK(coding.coding() == nullptr);
+    std::pmr::monotonic_buffer_resource resource;
+    const auto coding = requestContentCoding(request, &resource);
     RUVIA_CHECK(coding.invalid() == nullptr);
-    RUVIA_CHECK(coding.unsupported() != nullptr);
+    RUVIA_CHECK(coding.unsupported() == nullptr);
+    RUVIA_CHECK_EQ(coding.codings().size(), 2U);
+    if (coding.codings().size() == 2) {
+        RUVIA_CHECK(coding.codings()[0] == HttpContentCoding::kBrotli);
+        RUVIA_CHECK(coding.codings()[1] == HttpContentCoding::kGzip);
+    }
 }
 
 RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
@@ -267,12 +272,13 @@ RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
     RUVIA_CHECK(
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
 
-    const auto coding = requestContentCoding(request);
+    std::pmr::monotonic_buffer_resource resource;
+    const auto coding = requestContentCoding(request, &resource);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
-    RUVIA_CHECK(coding.coding() != nullptr);
-    if (coding.coding() != nullptr) {
-        RUVIA_CHECK(*coding.coding() == HttpContentCoding::kGzip);
+    RUVIA_CHECK_EQ(coding.codings().size(), 1U);
+    if (!coding.codings().empty()) {
+        RUVIA_CHECK(coding.codings().front() == HttpContentCoding::kGzip);
     }
 }
 

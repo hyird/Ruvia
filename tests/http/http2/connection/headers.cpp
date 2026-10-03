@@ -1,4 +1,5 @@
 #include "ruvia/http/Http2Connection.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
 #include "ruvia/http/detail/request/HttpRequestAccess.h"
 
@@ -496,7 +497,7 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "5");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
@@ -550,13 +551,13 @@ RUVIA_TEST(http2_connection_head_streaming_response_ends_on_headers) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
 
     RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(submittedResponsePlan(headResult).bodyPlan().statusAllowsBody());
-    RUVIA_CHECK(submittedResponsePlan(headResult).bodyPlan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).headDisposition() ==
-                ResponseStreamHeadDisposition::kMessageEnded);
+    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().statusAllowsBody());
+    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
+    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+                http_response_stream_head_disposition::message_ended);
     RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
     RUVIA_CHECK(conn.stream(1)->localContent().knownLength() == nullptr);
     const auto head = conn.pendingOutput();
@@ -580,14 +581,14 @@ RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
     response.status(ruvia::http_status::kOk);
     response.header("Content-Length", "10");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kPresent);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::present);
 
     RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(submittedResponsePlan(headResult).bodyPlan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).headDisposition() ==
-                ResponseStreamHeadDisposition::kTrailersOnly);
-    RUVIA_CHECK(submittedResponsePlan(headResult).trailerFraming() ==
-                ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
+    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+                http_response_stream_head_disposition::trailers_only);
+    RUVIA_CHECK(submittedResponsePlan(headResult).trailer_framing() ==
+                http_response_stream_trailer_framing::http2_trailing_headers);
     const auto initialHead = conn.pendingOutput();
     const auto initialFrame = ruvia::detail::http2ParseFrameHeader(initialHead.substr(0, 9));
     RUVIA_CHECK_EQ(initialFrame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
@@ -634,7 +635,7 @@ RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
 
     const std::array<ruvia::HttpHeaderView, 2> mixedTrailers{
@@ -664,7 +665,7 @@ RUVIA_TEST(http2_connection_rejects_trailers_for_contentless_statuses_before_hea
         ruvia::HttpResponse response({.resource = &resource});
         response.status(status);
         const auto result = conn.submitStreamingResponseHead(1, std::move(response),
-            ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kPresent);
+            ruvia::http_response_stream_kind::generic, http_response_trailer_intent::present);
         RUVIA_CHECK(!responseHeadSubmitted(result));
         RUVIA_CHECK(result.failure() != nullptr);
         if (result.failure() != nullptr) {
@@ -686,13 +687,13 @@ RUVIA_TEST(http2_connection_reset_content_streaming_ends_on_headers) {
     response.status(ruvia::http_status::kResetContent);
     response.header("Content-Length", "9");
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
 
     RUVIA_CHECK(responseHeadSubmitted(headResult));
-    RUVIA_CHECK(!submittedResponsePlan(headResult).bodyPlan().statusAllowsBody());
-    RUVIA_CHECK(submittedResponsePlan(headResult).bodyPlan().bodySuppressed());
-    RUVIA_CHECK(submittedResponsePlan(headResult).headDisposition() ==
-                ResponseStreamHeadDisposition::kMessageEnded);
+    RUVIA_CHECK(!submittedResponsePlan(headResult).body_plan().statusAllowsBody());
+    RUVIA_CHECK(submittedResponsePlan(headResult).body_plan().bodySuppressed());
+    RUVIA_CHECK(submittedResponsePlan(headResult).head_disposition() ==
+                http_response_stream_head_disposition::message_ended);
     RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
     const auto head = conn.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
@@ -714,7 +715,7 @@ RUVIA_TEST(http2_connection_peer_reset_discards_queued_data_and_trailers) {
     ruvia::HttpResponse response({.resource = &resource});
     response.status(ruvia::http_status::kOk);
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(response),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
     RUVIA_CHECK(conn.submitData(1, "deferred", Http2EndStream::kKeepOpen) ==
                 Http2DataSubmitStatus::kQueued);
@@ -1030,7 +1031,7 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     head.status(ruvia::http_status::kOk);
     head.header("Content-Length", "8");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(head),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     conn.consumeOutput(conn.pendingOutput().size());
     RUVIA_CHECK(conn.submitData(1, "AAAABBBB", Http2EndStream::kKeepOpen) ==
                 Http2DataSubmitStatus::kQueued);

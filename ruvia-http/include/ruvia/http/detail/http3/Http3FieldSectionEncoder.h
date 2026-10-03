@@ -11,17 +11,13 @@ inline std::expected<std::pmr::vector<char>, Http3FieldSectionError> encodeHttp3
     if (!encoder) {
         return encodeHttp3FieldSection(fields, resource);
     }
-    auto result = encoder->encode(streamId, fields, limits);
+    auto result = encoder->encode(streamId, fields, limits, resource);
     if (!result) {
         return std::unexpected(result.error() == Http3QpackConnectionError::kLimit
                                    ? Http3FieldSectionError::kFieldSectionTooLarge
                                    : Http3FieldSectionError::kQpackEncodingFailed);
     }
-    // Detached results have the caller's lifetime, independent of the encoder.
-    if (result->get_allocator().resource()->is_equal(*resource)) {
-        return std::move(*result);
-    }
-    return std::pmr::vector<char>(result->begin(), result->end(), resource);
+    return std::move(*result);
 }
 
 }  // namespace ruvia::detail

@@ -21,6 +21,7 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 
 namespace ruvia {
 
@@ -321,6 +322,14 @@ public:
     void status(HttpStatusCode statusCode);
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, HeaderOptions options);
+    // Use the stable-view path for a header; name and value may be retained as
+    // borrowed views without copying. Keep their bytes valid and unchanged while
+    // this response or any header clone retains them.
+    void header_stable_view(std::string_view key, std::string_view value);
+    // Format Allow from known-method bits followed by extension method values.
+    // The resulting field is owned by this response.
+    void allow_methods(
+        std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
     // Remove a header set by an earlier step. header(key, std::nullopt) meant
     // deletion; removal now has its own named entry point.
     void removeHeader(std::string_view key);
@@ -336,6 +345,10 @@ public:
     [[nodiscard]] std::string_view bodyBytes() const&& = delete;
     [[nodiscard]] std::optional<HttpResponseFileView> fileBody() const& noexcept;
     [[nodiscard]] std::optional<HttpResponseFileView> fileBody() const&& = delete;
+    [[nodiscard]] bool has_multipart_file_body() const noexcept;
+    [[nodiscard]] std::size_t body_segment_count() const noexcept;
+    [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
+    http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
     void ownedBody(std::pmr::string&& value);
     void staticBody(std::string_view value) noexcept;
@@ -344,6 +357,8 @@ public:
     // opaque identity token. Path and range validation precede body replacement.
     void fileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset,
         std::uint64_t length, HttpResponseFileIdentity identity);
+    void multipart_file_body(std::filesystem::path file, std::uint64_t size,
+        HttpResponseFileIdentity identity, http_multipart_byte_range_plan&& plan);
     void contentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void contentRangeUnsatisfied(std::uint64_t size);
     void addVaryToken(std::string_view token);
@@ -367,10 +382,7 @@ private:
     void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
-    void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
-    void setAllowHeader(
-        std::uint32_t methodMask, std::span<const std::string_view> extensionMethods = {});
     void setContentRange(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);

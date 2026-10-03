@@ -34,6 +34,8 @@ struct HttpClientConfigStorage final {
     std::optional<std::chrono::milliseconds> acquireTimeout;
     std::size_t maxResponseBytes;
     HttpClientProtocol protocol;
+    quic_version initial_quic_version;
+    bool http3_early_data;
     Http3QpackConfig http3Qpack;
     HttpClientAdvertisementConfig advertisements;
     HttpClientPushConfig push;
@@ -66,6 +68,8 @@ private:
           acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes),
           protocol(source.protocol),
+          initial_quic_version(source.initial_quic_version),
+          http3_early_data(source.http3_early_data),
           http3Qpack(source.qpack),
           advertisements(source.advertisements),
           push(source.push),
@@ -96,6 +100,8 @@ private:
           acquireTimeout(source.acquireTimeout),
           maxResponseBytes(source.maxResponseBytes),
           protocol(source.protocol),
+          initial_quic_version(source.initial_quic_version),
+          http3_early_data(source.http3_early_data),
           http3Qpack(source.http3Qpack),
           advertisements(source.advertisements),
           push(source.push),

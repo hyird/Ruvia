@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
@@ -189,7 +190,7 @@ struct Http2HeaderDecodeContext final {
     }
     stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
-    if ((kind == RequestHeaderKind::kOrigin && !isValidHttpOriginFieldValue(value)) ||
+    if ((kind == RequestHeaderKind::kOrigin && !is_valid_http_origin_field_value(value)) ||
         (kind == RequestHeaderKind::kAccessControlRequestMethod &&
             !isValidHttpCorsRequestMethod(value)) ||
         (kind == RequestHeaderKind::kAccessControlRequestHeaders &&

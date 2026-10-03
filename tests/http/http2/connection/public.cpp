@@ -14,6 +14,7 @@
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 
 #include "test_harness.h"
@@ -602,19 +603,19 @@ RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_pub
 
     ruvia::HttpResponse response({.resource = &resource});
     const auto committed = server.submitStreamingResponseHead(1, std::move(response),
-        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kPresent);
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::present);
     RUVIA_CHECK(committed.failure() == nullptr);
     RUVIA_CHECK(committed.submitted() != nullptr);
     if (const auto* plan = committed.submitted()) {
-        RUVIA_CHECK(plan->framing() == ruvia::ResponseStreamFraming::kHttp2Frames);
-        RUVIA_CHECK(plan->headDisposition() ==
-                    ruvia::ResponseStreamHeadDisposition::kBodyOpen);
-        RUVIA_CHECK(plan->trailerFraming() ==
-                    ruvia::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+        RUVIA_CHECK(plan->framing() == ruvia::http_response_stream_framing::http2_frames);
+        RUVIA_CHECK(plan->head_disposition() ==
+                    ruvia::http_response_stream_head_disposition::body_open);
+        RUVIA_CHECK(plan->trailer_framing() ==
+                    ruvia::http_response_stream_trailer_framing::http2_trailing_headers);
     }
     ruvia::HttpResponse duplicate({.resource = &resource});
     const auto rejected = server.submitStreamingResponseHead(1, std::move(duplicate),
-        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(rejected.failure() != nullptr);
     RUVIA_CHECK(rejected.failure() && rejected.failure()->error() ==
                                           ruvia::Http2ResponseHeadSubmitError::kInvalidState);
@@ -657,10 +658,10 @@ RUVIA_TEST(http2_public_streaming_head_response_ends_at_headers) {
 
     ruvia::HttpResponse response({.resource = &resource});
     const auto committed = server.submitStreamingResponseHead(1, std::move(response),
-        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(committed.submitted() != nullptr);
-    RUVIA_CHECK(committed.submitted() && committed.submitted()->headDisposition() ==
-                                             ruvia::ResponseStreamHeadDisposition::kMessageEnded);
+    RUVIA_CHECK(committed.submitted() && committed.submitted()->head_disposition() ==
+                                             ruvia::http_response_stream_head_disposition::message_ended);
     const auto output = server.pendingOutput();
     const auto frame = ruvia::parseHttp2FrameHeader(
         std::span<const char>(output.data(), output.size()));
@@ -727,8 +728,8 @@ RUVIA_TEST(http2_public_response_head_submit_exposes_shared_failure_values) {
     RUVIA_CHECK(closedBuffered.failure() && closedBuffered.failure()->error() ==
                                                 ruvia::Http2ResponseHeadSubmitError::kClosed);
     const auto closedStreaming = closed.submitStreamingResponseHead(1,
-        ruvia::HttpResponse({.resource = &resource}), ruvia::ResponseStreamKind::kGeneric,
-        ruvia::ResponseTrailerIntent::kNone);
+        ruvia::HttpResponse({.resource = &resource}), ruvia::http_response_stream_kind::generic,
+        ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(closedStreaming.failure() != nullptr);
     RUVIA_CHECK(closedStreaming.failure() && closedStreaming.failure()->error() ==
                                                  ruvia::Http2ResponseHeadSubmitError::kClosed);
@@ -736,7 +737,7 @@ RUVIA_TEST(http2_public_response_head_submit_exposes_shared_failure_values) {
     auto client = preparedClient(&resource);
     ruvia::HttpResponse clientResponse({.resource = &resource});
     const auto invalidState = client.submitStreamingResponseHead(1, std::move(clientResponse),
-        ruvia::ResponseStreamKind::kGeneric, ruvia::ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(invalidState.failure() != nullptr);
     RUVIA_CHECK(invalidState.failure() && invalidState.failure()->error() ==
                                               ruvia::Http2ResponseHeadSubmitError::kInvalidState);
@@ -755,8 +756,8 @@ RUVIA_TEST(http2_public_response_head_submit_exposes_shared_failure_values) {
     ruvia::HttpResponse invalidResponse({.resource = &resource});
     invalidResponse.header("Content-Length", "invalid");
     const auto invalidMessage = server.submitStreamingResponseHead(1,
-        std::move(invalidResponse), ruvia::ResponseStreamKind::kGeneric,
-        ruvia::ResponseTrailerIntent::kNone);
+        std::move(invalidResponse), ruvia::http_response_stream_kind::generic,
+        ruvia::http_response_trailer_intent::none);
     RUVIA_CHECK(invalidMessage.failure() != nullptr);
     RUVIA_CHECK(invalidMessage.failure() && invalidMessage.failure()->error() ==
                                                 ruvia::Http2ResponseHeadSubmitError::kInvalidMessage);

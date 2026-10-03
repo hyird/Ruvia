@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/coding/HttpTransferCoding.h"
@@ -93,30 +96,30 @@ enum class HttpTransferEncodingParseStatus : std::uint8_t { kOk,
 
 class HttpNonChunkedTransferEncoding final {
 public:
-    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
         return transferCodings_;
     }
 
 private:
     friend class HttpTransferEncodingValue;
 
-    explicit HttpNonChunkedTransferEncoding(HttpTransferCodings transferCodings) noexcept
-        : transferCodings_(transferCodings) {}
+    explicit HttpNonChunkedTransferEncoding(HttpTransferCodings transferCodings)
+        : transferCodings_(std::move(transferCodings)) {}
 
     HttpTransferCodings transferCodings_;
 };
 
 class HttpFinalChunkedTransferEncoding final {
 public:
-    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
         return transferCodings_;
     }
 
 private:
     friend class HttpTransferEncodingValue;
 
-    explicit HttpFinalChunkedTransferEncoding(HttpTransferCodings transferCodings) noexcept
-        : transferCodings_(transferCodings) {}
+    explicit HttpFinalChunkedTransferEncoding(HttpTransferCodings transferCodings)
+        : transferCodings_(std::move(transferCodings)) {}
 
     HttpTransferCodings transferCodings_;
 };
@@ -139,106 +142,107 @@ private:
     using Value = std::variant<HttpNonChunkedTransferEncoding, HttpFinalChunkedTransferEncoding>;
 
     [[nodiscard]] static HttpTransferEncodingValue makeNonChunked(
-        HttpTransferCodings transferCodings) noexcept {
-        return HttpTransferEncodingValue(HttpNonChunkedTransferEncoding(transferCodings));
+        HttpTransferCodings transferCodings) {
+        return HttpTransferEncodingValue(HttpNonChunkedTransferEncoding(std::move(transferCodings)));
     }
 
     [[nodiscard]] static HttpTransferEncodingValue makeFinalChunked(
-        HttpTransferCodings transferCodings) noexcept {
-        return HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding(transferCodings));
+        HttpTransferCodings transferCodings) {
+        return HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding(std::move(transferCodings)));
     }
 
-    explicit HttpTransferEncodingValue(HttpNonChunkedTransferEncoding value) noexcept
-        : value_(value) {}
+    explicit HttpTransferEncodingValue(HttpNonChunkedTransferEncoding value)
+        : value_(std::move(value)) {}
 
-    explicit HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding value) noexcept
-        : value_(value) {}
+    explicit HttpTransferEncodingValue(HttpFinalChunkedTransferEncoding value)
+        : value_(std::move(value)) {}
 
     Value value_;
 };
 
-// Incremental, allocation-free parser for the supported Transfer-Encoding
-// sequence shared by HTTP/1 requests and body-bearing client responses. Field
-// lines are one logical list, so state and ordering continue across repeats.
-// Each field update is transactional. The exposed optional discriminates an
-// absent field, a non-chunked coding sequence, and a final-chunked sequence.
+static_assert(std::is_nothrow_move_constructible_v<HttpTransferEncodingValue>);
+
+// Field lines form one ordered list. Unknown but syntactically valid codings
+// are remembered while later items/fields are still checked for malformed syntax.
 class HttpTransferEncodingState final {
 public:
-    [[nodiscard]] HttpTransferEncodingParseStatus parseField(std::string_view fieldValue) noexcept {
-        auto next = value_;
-        HttpTransferCodings codings;
-        bool finalChunked = false;
-        if (next.has_value()) {
-            if (const auto* final = next->finalChunked()) {
-                codings = final->transferCodings();
-                finalChunked = true;
-            } else {
-                codings = next->nonChunked()->transferCodings();
-            }
-        }
+    explicit HttpTransferEncodingState(
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        : codings_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
 
-        auto status = HttpTransferEncodingParseStatus::kOk;
+    [[nodiscard]] HttpTransferEncodingParseStatus parseField(std::string_view fieldValue) {
+        auto nextCodings = codings_;
+        bool finalChunked = finalChunked_;
+        bool unsupported = unsupported_;
         bool sawItem = false;
+        bool malformed = false;
         httpVisitCommaSeparatedQuotedItems(fieldValue,
-            [&codings, &finalChunked, &status, &sawItem](std::string_view item) noexcept {
+            [&nextCodings, &finalChunked, &unsupported, &sawItem, &malformed](
+                std::string_view item) {
                 sawItem = true;
                 std::string_view coding;
                 bool hasParameters = false;
                 if (finalChunked || !httpParseTransferCodingSyntax(item, coding, hasParameters)) {
-                    status = HttpTransferEncodingParseStatus::kMalformed;
+                    malformed = true;
                     return false;
                 }
-                // RFC 9112 section 7.2: chunked and the compression transfer
-                // codings define no parameters. Unknown codings can define them,
-                // so valid extension syntax remains "unsupported", not malformed.
                 if (httpAsciiEqualsIgnoreCase(coding, "chunked")) {
                     if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
+                        malformed = true;
                         return false;
                     }
                     finalChunked = true;
                     return true;
                 }
-                if (codings.count == kMaxTransferCodings) {
-                    status = HttpTransferEncodingParseStatus::kUnsupported;
-                    return false;
-                }
-                if (httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-                    httpAsciiEqualsIgnoreCase(coding, "x-gzip")) {
+                const bool gzip = httpAsciiEqualsIgnoreCase(coding, "gzip") ||
+                                  httpAsciiEqualsIgnoreCase(coding, "x-gzip");
+                const bool deflate = httpAsciiEqualsIgnoreCase(coding, "deflate");
+                if (gzip || deflate) {
                     if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
+                        malformed = true;
                         return false;
                     }
-                    codings.values[codings.count++] = HttpTransferCoding::kGzip;
-                    return true;
-                }
-                if (httpAsciiEqualsIgnoreCase(coding, "deflate")) {
-                    if (hasParameters) {
-                        status = HttpTransferEncodingParseStatus::kMalformed;
-                        return false;
+                    if (nextCodings.values.size() == kMaxTransferCodings) {
+                        unsupported = true;
+                        return true;
                     }
-                    codings.values[codings.count++] = HttpTransferCoding::kDeflate;
+                    nextCodings.values.push_back(gzip ? HttpTransferCoding::kGzip
+                                                      : HttpTransferCoding::kDeflate);
                     return true;
                 }
-                status = HttpTransferEncodingParseStatus::kUnsupported;
-                return false;
+                unsupported = true;
+                return true;
             });
-        if (status == HttpTransferEncodingParseStatus::kOk && !sawItem) {
+        if (malformed || !sawItem) {
             return HttpTransferEncodingParseStatus::kMalformed;
         }
-        if (status == HttpTransferEncodingParseStatus::kOk) {
-            value_ = finalChunked ? HttpTransferEncodingValue::makeFinalChunked(codings)
-                                  : HttpTransferEncodingValue::makeNonChunked(codings);
-        }
-        return status;
+        auto next_value = finalChunked ? HttpTransferEncodingValue::makeFinalChunked(nextCodings)
+                                       : HttpTransferEncodingValue::makeNonChunked(nextCodings);
+        // All potentially allocating copies are complete. The value move and
+        // equal-resource vector swap below commit the state without allocation.
+        value_.emplace(std::move(next_value));
+        codings_.values.swap(nextCodings.values);
+        finalChunked_ = finalChunked;
+        unsupported_ = unsupported;
+        return unsupported_ ? HttpTransferEncodingParseStatus::kUnsupported
+                            : HttpTransferEncodingParseStatus::kOk;
     }
 
-    [[nodiscard]] std::optional<HttpTransferEncodingValue> value() const noexcept {
+    [[nodiscard]] const std::optional<HttpTransferEncodingValue>& value() const noexcept {
         return value_;
+    }
+    [[nodiscard]] bool unsupported() const noexcept {
+        return unsupported_;
+    }
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return codings_.values.get_allocator().resource();
     }
 
 private:
+    HttpTransferCodings codings_;
     std::optional<HttpTransferEncodingValue> value_;
+    bool finalChunked_{false};
+    bool unsupported_{false};
 };
 
 }  // namespace ruvia::detail

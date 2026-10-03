@@ -15,10 +15,16 @@ namespace ruvia {
 
 enum class quic_role : std::uint8_t { client,
     server };
-enum class quic_version : std::uint32_t { v1 = 0x00000001 };
+enum class quic_version : std::uint32_t { v1 = 0x00000001,
+    v2 = 0x6b3343cf };
 enum class quic_encryption_level : std::uint8_t { initial,
     handshake,
-    application };
+    application,
+    early_data };
+enum class quic_early_data_state : std::uint8_t { unavailable,
+    available,
+    accepted,
+    rejected };
 enum class quic_crypto_direction : std::uint8_t { read,
     write };
 enum class quic_cipher_suite : std::uint16_t {
@@ -43,6 +49,15 @@ enum class quic_operation_status : std::uint8_t {
     closing,
     draining,
     retired
+};
+
+enum class quic_migration_status : std::uint8_t {
+    started,
+    would_block,
+    rejected,
+    validated,
+    failed,
+    aborted
 };
 
 enum class quic_close_kind : std::uint8_t { transport,
@@ -150,7 +165,10 @@ struct quic_limits {
 
 struct quic_connection_config {
     quic_role role{quic_role::client};
+    // The version of the first packet/Initial offer; it remains unchanged by negotiation.
     quic_version version{quic_version::v1};
+    // Local preference used when RFC 9368 compatible version negotiation selects a version.
+    quic_version preferred_version{quic_version::v1};
     quic_address local_address{};
     quic_address peer_address{};
     quic_connection_id destination_connection_id{};
@@ -173,13 +191,21 @@ struct quic_close_reason_view {
     std::span<const char> reason{};
 };
 
+struct quic_path_migration final {
+    std::uint64_t id{};
+    quic_migration_status status{quic_migration_status::rejected};
+    quic_address local_address{};
+};
+
 struct quic_connection_info {
     quic_connection_state state{quic_connection_state::connecting};
+    quic_version negotiated_version{quic_version::v1};
     quic_address local_address{};
     quic_address peer_address{};
     bool tls_handshake_complete{};
     bool quic_handshake_complete{};
     bool confirmed{};
+    quic_early_data_state early_data{quic_early_data_state::unavailable};
     std::uint64_t negotiated_idle_timeout_ms{};
     std::uint64_t close_error_code{};
 };
@@ -206,6 +232,11 @@ enum class quic_stream_read_status : std::uint8_t { data,
     would_block,
     reset,
     closed };
+
+struct quic_stream_info final {
+    // Sticky transport fact: at least one byte on this stream arrived in 0-RTT.
+    bool received_early_data{};
+};
 
 struct quic_stream_read_result {
     quic_stream_read_status status{quic_stream_read_status::would_block};

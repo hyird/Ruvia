@@ -158,6 +158,22 @@ std::string distinctBytes(std::size_t count) {
     return out;
 }
 
+std::string zlib_deflate_compress(std::string_view input) {
+    z_stream stream{};
+    if (deflateInit(&stream, Z_BEST_SPEED) != Z_OK) {
+        return {};
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
+    stream.avail_in = static_cast<uInt>(input.size());
+    std::string output(input.size() + 256, '\0');
+    stream.next_out = reinterpret_cast<Bytef*>(output.data());
+    stream.avail_out = static_cast<uInt>(output.size());
+    const int status = deflate(&stream, Z_FINISH);
+    output.resize(stream.total_out);
+    deflateEnd(&stream);
+    return status == Z_STREAM_END ? output : std::string{};
+}
+
 std::string gzipCompress(std::string_view input) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
@@ -222,14 +238,14 @@ struct TransferBodyObservation final {
     std::optional<ruvia::HttpStatusCode> errorStatus;
 };
 
-TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
+TransferBodyObservation readTransferBody(std::string initial, bool streaming,
+    std::string_view transferEncoding = "gzip, chunked") {
     asio::io_context& io = ruvia::test::newTestIoContext();
     EofBodyStream stream{&io};
     ruvia::ConnectionScanner::Entry scannerEntry;
     std::pmr::monotonic_buffer_resource resource;
-    auto plan = parseBodyPlan(
-        "POST / HTTP/1.1\r\nHost: x\r\n"
-        "Transfer-Encoding: gzip, chunked\r\n\r\n");
+    const auto plan = parseBodyPlan("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: " +
+                                    std::string(transferEncoding) + "\r\n\r\n");
     ruvia::detail::StreamBodyReader<EofBodyStream> reader(stream,
         std::pmr::polymorphic_allocator<char>(&resource), initial, plan,
         ruvia::ProtocolByteLimit::limited(1u << 20), scannerEntry);
@@ -266,6 +282,20 @@ TransferBodyObservation readTransferBody(std::string initial, bool streaming) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http1_transfer_coding_stack_preserves_pipeline_for_streaming_and_buffered_reads) {
+    constexpr std::string_view plain = "two-layer request transfer coding";
+    constexpr std::string_view pipeline = "GET /next HTTP/1.1\r\nHost: x\r\n\r\n";
+    const auto encoded = chunked(zlib_deflate_compress(gzipCompress(plain)));
+    for (const bool streaming : {false, true}) {
+        const auto observation = readTransferBody(
+            encoded + std::string(pipeline), streaming, "gzip, deflate, chunked");
+        RUVIA_CHECK(!observation.errorStatus.has_value());
+        RUVIA_CHECK_EQ(observation.consumption, ruvia::Http1RequestBodyConsumption::kComplete);
+        RUVIA_CHECK_EQ(observation.body, plain);
+        RUVIA_CHECK_EQ(observation.pipeline, pipeline);
+    }
+}
 
 RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
     const auto plan = parseBodyPlan("GET / HTTP/1.1\r\nHost: x\r\n\r\n");

@@ -35,6 +35,7 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/SecurityHeaders.h"
@@ -795,9 +796,10 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     RUVIA_CHECK_EQ(ok.first, ruvia::http_status::kPartialContent);
     RUVIA_CHECK_EQ(ok.second, std::string("bytes 0-4/100"));
 
-    // Multiple ranges are not supported, so the whole file is served (RFC 7233).
+    // Multiple ranges produce a multipart representation without a top-level Content-Range.
     const auto multi = serve("bytes=0-9,20-29");
-    RUVIA_CHECK_EQ(multi.first, ruvia::http_status::kOk);
+    RUVIA_CHECK_EQ(multi.first, ruvia::http_status::kPartialContent);
+    RUVIA_CHECK(multi.second.empty());
 
     // A wholly unsatisfiable range -> 416 with "bytes */size".
     const auto bad = serve("bytes=1000-2000");
@@ -831,6 +833,68 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     RUVIA_CHECK(empty.second.empty());
 
     fs::remove_all(dir);
+}
+
+RUVIA_TEST(multipart_file_response_segments_frame_and_stream_the_selected_slices) {
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "ruvia_multipart_ranges.txt";
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "0123456789";
+    }
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    StaticFileTestRequest request(memory.resource());
+    request.addHeader({"Range", "bytes=0-2,7-9"});
+    auto context = ruvia::detail::ContextAccess::make(
+        memory, request, ruvia::test::testContextServices());
+    context.header("Content-Type", "application/x-original");
+    context.header("Content-Range", "bytes 0-1/10");
+    context.header("Content-Encoding", "br");
+    context.header("Content-Length", "1");
+    auto response = context.file({.path = path, .contentType = "text/plain"});
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kPartialContent);
+    const auto content_type = response.header("Content-Type").value_or("");
+    RUVIA_CHECK(content_type.starts_with("multipart/byteranges; boundary="));
+    RUVIA_CHECK(!response.header("Content-Range").has_value());
+    RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+    RUVIA_CHECK(!response.header("Content-Length").has_value());
+    constexpr std::string_view marker = "boundary=";
+    const auto boundary_position = content_type.find(marker);
+    RUVIA_CHECK(boundary_position != std::string_view::npos);
+    const auto boundary = boundary_position == std::string_view::npos
+                              ? std::string_view{}
+                              : content_type.substr(boundary_position + marker.size());
+    RUVIA_CHECK_EQ(boundary.size(), std::size_t{48});
+
+    std::string body;
+    for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
+        const auto segment = response.body_segment(index);
+        if (!segment.file_) {
+            body.append(segment.bytes_);
+            continue;
+        }
+        auto input = ruvia::detail::openResponseFileInput(*segment.file_);
+        RUVIA_CHECK(static_cast<bool>(input));
+        if (!input) {
+            continue;
+        }
+        input.seekg(static_cast<std::streamoff>(segment.file_->offset()), std::ios::beg);
+        std::string bytes(static_cast<std::size_t>(segment.file_->length()), '\0');
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        RUVIA_CHECK_EQ(input.gcount(), static_cast<std::streamsize>(bytes.size()));
+        body.append(bytes);
+    }
+    const auto expected = "--" + std::string(boundary) +
+                          "\r\nContent-Type: application/x-original\r\nContent-Range: bytes 0-2/10\r\n\r\n012\r\n--" +
+                          std::string(boundary) +
+                          "\r\nContent-Type: application/x-original\r\nContent-Range: bytes 7-9/10\r\n\r\n789\r\n--" +
+                          std::string(boundary) + "--\r\n";
+    RUVIA_CHECK_EQ(body, expected);
+    const auto writePlan = ruvia::planBufferedHttpResponseWrite(HttpKnownMethod::kGet, response);
+    RUVIA_CHECK_EQ(writePlan.contentLength(), static_cast<std::uint64_t>(body.size()));
+    RUVIA_CHECK(response.has_multipart_file_body());
+    fs::remove(path);
 }
 
 RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
@@ -970,11 +1034,11 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
 }
 
 RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
-    using ruvia::prepareHttpResponseStreamHead;
+    using ruvia::http_response_stream_framing;
+    using ruvia::http_response_stream_kind;
+    using ruvia::http_response_trailer_intent;
+    using ruvia::prepare_http_response_stream_head;
     using ruvia::detail::ContextAccess;
-    using ruvia::detail::ResponseStreamFraming;
-    using ruvia::detail::ResponseStreamKind;
-    using ruvia::detail::ResponseTrailerIntent;
 
     const auto head = [](bool presetNoCache) {
         ruvia::WorkerMemory worker;
@@ -986,9 +1050,9 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
         }
         auto response = ContextAccess::streamingHead(context);
-        auto streamHead = prepareHttpResponseStreamHead(std::move(response), ResponseStreamKind::kSse,
-            ruvia::planHttpResponseStreamCommit(ResponseStreamFraming::kHttp1Chunked,
-                HttpKnownMethod::kGet, ruvia::http_status::kOk, ResponseTrailerIntent::kNone));
+        auto streamHead = prepare_http_response_stream_head(std::move(response), http_response_stream_kind::sse,
+            ruvia::plan_http_response_stream_commit(http_response_stream_framing::http1_chunked,
+                HttpKnownMethod::kGet, ruvia::http_status::kOk, http_response_trailer_intent::none));
         return std::string(streamHead.response().header("Cache-Control").value_or(""));
     };
 

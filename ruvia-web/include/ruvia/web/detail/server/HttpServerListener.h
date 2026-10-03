@@ -71,6 +71,7 @@ struct HttpServerListenerDefinition final {
 
         TlsIdentity identity;
         std::optional<TlsClientCertificatePolicy> clientCertificates;
+        bool http3_early_data{};
         std::pmr::vector<SniIdentity> sniIdentities;
         // Empty disables automatic injection. Otherwise this complete field
         // value is borrowed by every TCP/TLS request Context on this listener.

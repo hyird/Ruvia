@@ -173,8 +173,39 @@ send policy uses QUIC only when it was negotiated and the packet fits, otherwise
 it sends a reliable capsule. Native sends are best-effort: a full bounded send
 queue may drop a packet, with no delivery or retry guarantee. The application
 middleware controls authorization and target policy, and opens and drives its
-UDP socket. WebTransport, 0-RTT and explicit connection migration APIs are not
-exposed.
+UDP socket. WebTransport is not exposed. HTTP/3 TLS 0-RTT is available but
+opt-in on both ends. Servers enable it with `ListenConfig::tls.http3_early_data`
+(default `false`); it is unavailable when TLS client-certificate authentication
+is configured and remains subject to OpenSSL's built-in anti-replay protection.
+A server request is eligible only for a bodyless GET/HEAD on a buffered route.
+The route opts its handler and middleware chain in by including at least one
+middleware that declares `static constexpr bool ruvia_replay_safe = true;`;
+every controller/route middleware in the chain must make that declaration
+(undeclared middleware is unsafe). An ineligible request received as 0-RTT is
+answered with `425 Too Early` before route middleware or handler execution.
+`Context::early_data_info()` distinguishes
+transport-confirmed early data from the untrusted `early-data` request field;
+the field alone is not proof of 0-RTT.
+
+Clients enable early data with `HttpClientConfig::http3_early_data` (default
+`false`, requiring HTTPS with HTTP/3 enabled) and must set
+`HttpClientRequestView::replay_safe = true` on each request they assert is safe.
+The client will send a request in 0-RTT only for a bodyless GET or HEAD; other
+requests are not eligible. Resumption needs a valid ticket and saved HTTP/3
+settings/transport parameters. The client retains one ticket in each HTTP/3
+client TLS context, scoped to that context, hostname and QUIC version; a ticket
+is consumed when selected and is not shared across client contexts or origins.
+If TLS rejects early data, the client rebuilds the rejected HTTP/3 streams and
+replays eligible requests in 1-RTT on the same connection, preserving their
+original deadlines and cancellation. An HTTP `425` response is returned to the
+caller; it does not trigger an automatic application-level retry.
+
+An outbound HTTP/3 client can explicitly migrate its local UDP endpoint on its
+owning loop with
+`start_quic_path_migration()`, inspect completion with `path_migration()`, and
+abort with `cancel_quic_path_migration()`. The peer must permit migration;
+validation failure retains the old path. Aborting a submitted migration closes
+the affected connection, including its other active requests.
 
 When HTTP/3 is active, TLS HTTP/1.1 and HTTP/2 responses automatically advertise
 its real port, for example `Alt-Svc: h3=":443"; ma=86400`; HTTP/3 responses do
@@ -1032,7 +1063,12 @@ File responses evaluate request preconditions against the selected representatio
 and the handler's normal status. Redirects and errors other than `412` retain
 that status instead of becoming `304` or a new precondition failure. A byte range
 is considered only for a GET whose response would otherwise be `200`; HEAD
-retains full-representation metadata. Unsupported multiple ranges are ignored.
+retains full-representation metadata. Multiple satisfiable ranges produce a
+`multipart/byteranges` response over HTTP/1, HTTP/2, or HTTP/3. Range plans are
+bounded to 16 ranges; unsupported or invalid range sets are ignored. Multipart
+metadata is owned by the HTTP response, while disk payloads remain file slices.
+For an encoded representation, its coding is declared on each part rather than
+on the unencoded multipart envelope.
 
 `compression()` also enables incremental gzip, Brotli, or zstd for response
 streams; each handler write is flushed through the encoder so SSE and other
@@ -2620,6 +2656,13 @@ The protocol interfaces implement HTTP semantics/framing from RFC 9110, 9112,
 9001, and 9002; HPACK (RFC 7541), QPACK (RFC 9204), WebSocket (RFC 6455), and
 these published optional extensions:
 
+- QUIC v2 (RFC 9369) and compatible v1/v2 version negotiation (RFC 9368).
+  `quic_connection_config::version` selects the initial version,
+  `preferred_version` selects the local preference, and connection information
+  reports `negotiated_version`. Outbound Web clients select their initial version
+  with `HttpClientConfig::initial_quic_version`. Unsupported, non-compatible
+  versions are rejected; no generic non-compatible reconnect is provided.
+
 - HTTP/2 and HTTP/3 server push, including promise metadata and cancellation.
   HTTP/2 clients opt in with `Http2ConnectionOptions::enablePush`; HTTP/3 clients
   send `prepareMaxPushId()` before accepting pushes. Pushed origins still require
@@ -2672,6 +2715,19 @@ on callback return.
 or chunked framing. `Http1RequestContentWriter` plans borrowed payload segments,
 validates request trailers, enforces the declared length, and gates upload on
 `100 Continue` or the driver's timeout. A final response aborts unfinished upload.
+
+The shared server response-stream contract is public in
+`<ruvia/http/HttpResponseStream.h>`. Build a
+`http_response_stream_commit_plan` with `plan_http_response_stream_commit()` and
+pass it to `prepare_http_response_stream_head()`. Preparation normalizes response
+headers once and returns the response with its plan; changing the response status
+or framing metadata afterward can invalidate that relationship. Preparation
+rejects trailer intent when the selected status or wire framing cannot carry it.
+
+`HttpResponse::header_stable_view()` may retain header name/value bytes by
+reference, so keep them valid and unchanged while the response or any header
+clone uses them. `HttpResponse::allow_methods()` formats the `Allow` field from
+known-method bits and extension-method values into response-owned storage.
 
 The sans-I/O `WebSocketConnection` and `WebSocketServerProtocol` default to a
 16 MiB message limit, including assembled and decompressed messages.
@@ -2759,9 +2815,13 @@ can only tighten it to close. Buffered and streaming response drivers consume
 that same plan when finalizing connection semantics.
 
 The library is sans-I/O: callers feed bytes, consume typed results/events, and
-drive transport I/O themselves. Content-Encoding parsing distinguishes identity,
-one supported coding, and an unsupported coding stack; Web request decoding
-reports the latter as HTTP 415.
+drive transport I/O themselves. Content-Encoding parsing owns the ordered coding
+sequence and supports identity, gzip, zlib-wrapped deflate, Brotli, and zstd.
+Buffer encoders apply codings in field order; decoders reverse that order and
+apply the configured size limit to every intermediate layer. Web request decoding
+reports unknown codings as HTTP 415. HTTP/1 transfer decoding supports ordered
+gzip/deflate stacks of up to eight layers, with bounded intermediate buffers;
+chunked framing remains independent of compression decoding.
 
 `HttpRequest` is move-only and owns a compact PMR header descriptor block;
 its strings still borrow the protocol input. HTTP/1 callers may select storage

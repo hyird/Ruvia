@@ -1,6 +1,7 @@
 #include <array>
 #include <new>
 
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
@@ -116,7 +117,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     bool allocationFailed = false;
     try {
         (void)conn.submitStreamingResponseHead(1, std::move(response),
-            ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+            ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     } catch (const std::bad_alloc&) {
         allocationFailed = true;
     }
@@ -133,7 +134,7 @@ RUVIA_TEST(http2_connection_response_head_does_not_publish_local_phase_before_ou
     retry.status(ruvia::http_status::kOk);
     retry.header("X-Large", largeValue);
     const auto retried = conn.submitStreamingResponseHead(1, std::move(retry),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(retried.submitted() != nullptr);
     RUVIA_CHECK(stream->localContent().unbounded() != nullptr);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
@@ -383,7 +384,7 @@ RUVIA_TEST(http2_connection_response_head_submit_result_is_discriminated) {
     streamingHead.status(ruvia::http_status::kOk);
     const auto streamingSubmitted =
         streaming.submitStreamingResponseHead(1, std::move(streamingHead),
-            ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+            ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(streamingSubmitted.submitted() != nullptr);
     RUVIA_CHECK(streamingSubmitted.failure() == nullptr);
     RUVIA_CHECK(streaming.submitData(1, "body", Http2EndStream::kKeepOpen) ==
@@ -446,7 +447,7 @@ RUVIA_TEST(http2_connection_rejects_duplicate_response_head_without_output) {
     ruvia::HttpResponse first({.resource = &resource});
     first.status(ruvia::http_status::kOk);
     const auto firstResult = conn.submitStreamingResponseHead(1, std::move(first),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(firstResult));
     conn.consumeOutput(conn.pendingOutput().size());
 
@@ -767,7 +768,7 @@ RUVIA_TEST(http2_connection_rejects_response_connection_fields_transactionally) 
         ruvia::HttpResponse response({.resource = &resource});
         response.status(ruvia::http_status::kOk);
         const auto name = randomCase(forbiddenNames[sample % forbiddenNames.size()]);
-        ruvia::detail::setResponseHeaderStableView(response, name, "close");
+        response.header_stable_view(name, "close");
 
         const auto rejected = submitBufferedResponseHead(connection, 1, response);
         RUVIA_CHECK(rejected.submitted() == nullptr);
@@ -1032,7 +1033,7 @@ RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
     ruvia::HttpResponse resp({.resource = &resource});
     resp.status(ruvia::http_status::kOk);
     const auto headResult = conn.submitStreamingResponseHead(1, std::move(resp),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
     RUVIA_CHECK(responseHeadSubmitted(headResult));
 
     const auto head = conn.pendingOutput();
@@ -1068,7 +1069,7 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
         response.status(ruvia::http_status::kOk);
         response.header("Content-Length", invalid);
         const auto result = conn.submitStreamingResponseHead(1, std::move(response),
-            ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone);
+            ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none);
         RUVIA_CHECK(
             responseHeadSubmitFailureMessage(result) == "invalid HTTP/2 response head message");
         RUVIA_CHECK(conn.pendingOutput().empty());
@@ -1083,7 +1084,7 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
     valid.status(ruvia::http_status::kOk);
     valid.header("Content-Length", "5");
     RUVIA_CHECK(responseHeadSubmitted(conn.submitStreamingResponseHead(1, std::move(valid),
-        ruvia::detail::ResponseStreamKind::kGeneric, ResponseTrailerIntent::kNone)));
+        ruvia::http_response_stream_kind::generic, http_response_trailer_intent::none)));
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK_EQ(requireLocalKnownLength(*stream).declaredLength(), std::uint64_t{5});
@@ -1099,7 +1100,7 @@ RUVIA_TEST(http2_connection_rejects_invalid_response_trailer_field_names_before_
 
         ruvia::HttpResponse response({.resource = &resource});
         response.status(ruvia::http_status::kOk);
-        ruvia::detail::setResponseHeaderStableView(response, "Trailer", value);
+        response.header_stable_view("Trailer", value);
         const auto result = submitBufferedResponseHead(conn, 1, response);
         RUVIA_CHECK(
             responseHeadSubmitFailureMessage(result) == "invalid HTTP/2 response head message");

@@ -99,8 +99,19 @@ void assignEntityValue(T& out, V&& value, std::pmr::memory_resource* resource) {
         }
     } else if constexpr (IsPmrVector<T>::value) {
         using Element = typename IsPmrVector<T>::value_type;
-        if constexpr (std::is_arithmetic_v<Element> || std::is_same_v<Element, std::pmr::string>) {
+        if constexpr (std::is_arithmetic_v<Element>) {
             out = std::forward<V>(value);
+        } else if constexpr (std::is_same_v<Element, std::pmr::string>) {
+            T owned(resource);
+            owned.reserve(value.size());
+            for (auto& item : value) {
+                if constexpr (std::is_lvalue_reference_v<V>) {
+                    owned.emplace_back(item);
+                } else {
+                    owned.emplace_back(std::move(item));
+                }
+            }
+            out = std::move(owned);
         } else {
             T owned(resource);
             owned.reserve(value.size());

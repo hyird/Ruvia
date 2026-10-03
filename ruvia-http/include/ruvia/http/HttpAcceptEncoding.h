@@ -39,6 +39,7 @@ struct HttpResponseCodingQualities final {
     bool fieldPresent{false};
     bool hasNonEmptyItem{false};
     HttpAcceptedEncodingQuality gzip;
+    HttpAcceptedEncodingQuality deflate;
     HttpAcceptedEncodingQuality brotli;
     HttpAcceptedEncodingQuality zstd;
     HttpAcceptedEncodingQuality identity;
@@ -71,6 +72,13 @@ private:
                 return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality
                                                                    : gzip.wildcardQuality)
                                       : -1;
+            case HttpContentCoding::deflate:
+                if (!fieldPresent) {
+                    return 999;
+                }
+                return deflate.accepts() ? (deflate.explicitQuality >= 0 ? deflate.explicitQuality
+                                                                         : deflate.wildcardQuality)
+                                         : -1;
             case HttpContentCoding::kBrotli:
                 if (!fieldPresent) {
                     return 999;
@@ -106,7 +114,8 @@ public:
     [[nodiscard]] static constexpr HttpResponseCodingCandidates all() noexcept {
         return HttpResponseCodingCandidates(
             bit(HttpContentCoding::kIdentity) | bit(HttpContentCoding::kGzip) |
-            bit(HttpContentCoding::kBrotli) | bit(HttpContentCoding::kZstd));
+            bit(HttpContentCoding::deflate) | bit(HttpContentCoding::kBrotli) |
+            bit(HttpContentCoding::kZstd));
     }
 
     constexpr HttpResponseCodingCandidates& include(HttpContentCoding coding) noexcept {
@@ -128,6 +137,8 @@ private:
                 return 1u;
             case HttpContentCoding::kGzip:
                 return 2u;
+            case HttpContentCoding::deflate:
+                return 16u;
             case HttpContentCoding::kBrotli:
                 return 4u;
             case HttpContentCoding::kZstd:
@@ -167,7 +178,9 @@ public:
     // missing Accept-Encoding field accepts every coding; an explicitly
     // present field uses the parsed q-value set, including wildcard rules.
     [[nodiscard]] constexpr bool accepts(HttpContentCoding coding) const noexcept {
-        return !acceptEncodingPresent_ || (acceptableBits_ & bit(coding)) != 0;
+        const auto codingBit = bit(coding);
+        return codingBit != 0 &&
+               (!acceptEncodingPresent_ || (acceptableBits_ & codingBit) != 0);
     }
 
 private:
@@ -184,6 +197,8 @@ private:
                 return 1u;
             case HttpContentCoding::kGzip:
                 return 2u;
+            case HttpContentCoding::deflate:
+                return 16u;
             case HttpContentCoding::kBrotli:
                 return 4u;
             case HttpContentCoding::kZstd:
@@ -249,7 +264,7 @@ private:
 
 // Picks the best response coding from the supplied representation candidates.
 // The highest client q-value wins; ties resolve by server preference br > zstd
-// > gzip > identity. A coding with q=0 or one the client never accepts is
+// > gzip > deflate > identity. A coding with q=0 or one the client never accepts is
 // excluded. A failure result means the request has no acceptable response
 // content coding and must be answered with 406 Not Acceptable by the Web layer.
 inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
@@ -265,6 +280,7 @@ inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
         HttpContentCoding::kBrotli,
         HttpContentCoding::kZstd,
         HttpContentCoding::kGzip,
+        HttpContentCoding::deflate,
         HttpContentCoding::kIdentity,
     };
     std::uint8_t acceptableBits = 0;

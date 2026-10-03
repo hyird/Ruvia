@@ -366,19 +366,20 @@ Task<std::string_view> Context::requestBody() const {
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
-    const auto parsedCoding = requestContentCoding(request_);
+    auto* const decodeResource = inbound_buffer_pool_ != nullptr ? inbound_buffer_pool_ : pool();
+    const auto parsedCoding = requestContentCoding(request_, decodeResource);
     if (const auto* invalid = parsedCoding.invalid()) {
         throw HttpProtocolError(invalid->status(), "invalid request Content-Encoding");
     }
     if (const auto* unsupported = parsedCoding.unsupported()) {
         throw detail::UnsupportedRequestContentCoding(*unsupported);
     }
-    const auto coding = *parsedCoding.coding();
-    if (coding == HttpContentCoding::kIdentity) {
+    const auto codings = parsedCoding.codings();
+    if (codings.empty()) {
         co_return raw;
     }
-    auto decodeResult = decodeHttpRequestContent(
-        coding, raw, {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = inbound_buffer_pool_ != nullptr ? inbound_buffer_pool_ : pool()});
+    auto decodeResult = decodeHttpRequestContent(codings, raw,
+        {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = decodeResource});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {

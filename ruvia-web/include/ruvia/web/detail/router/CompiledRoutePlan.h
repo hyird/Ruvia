@@ -12,6 +12,7 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/detail/router/RouteEndpoint.h"
 
 namespace ruvia::detail {
@@ -73,7 +74,8 @@ private:
         bool dynamic{false};
         EndpointKind endpointKind{EndpointKind::kBuffered};
         RequestBodyMode requestBodyMode{RequestBodyMode::kBuffered};
-        ResponseStreamKind responseStreamKind{ResponseStreamKind::kGeneric};
+        bool replay_safe{};
+        http_response_stream_kind responseStreamKind{http_response_stream_kind::generic};
         RouteHandler::Invoke bufferedInvoke{nullptr};
         RouteStreamHandler::Invoke streamInvoke{nullptr};
         std::pmr::vector<std::pmr::string> webSocketSubprotocols;

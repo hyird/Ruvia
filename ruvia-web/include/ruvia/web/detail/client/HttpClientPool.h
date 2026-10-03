@@ -70,6 +70,11 @@ public:
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
     [[nodiscard]] HttpClientStats stats() const noexcept;
+    [[nodiscard]] ruvia::quic_path_migration start_quic_path_migration(
+        const asio::ip::udp::endpoint& local_endpoint);
+    [[nodiscard]] std::optional<ruvia::quic_path_migration> path_migration(
+        std::uint64_t id) const noexcept;
+    [[nodiscard]] ruvia::quic_operation_status cancel_quic_path_migration(std::uint64_t id);
     [[nodiscard]] std::optional<HttpClientAdvertisement> nextAdvertisement() {
         return advertisements_.next();
     }
@@ -223,6 +228,14 @@ private:
         std::uint64_t requestId{};
     };
 
+    struct quic_migration_tracking final {
+        std::uint64_t id{};
+        std::size_t slot{};
+        std::uint64_t generation{};
+        std::uint64_t connection_migration_id{};
+        ruvia::quic_path_migration result{};
+    };
+
     struct StoredCookie final {
         StoredCookie(
             std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
@@ -353,6 +366,8 @@ private:
         http3Connections_;
     WorkerSignal http3GenerationSignal_;
     std::pmr::vector<Http3PendingCancellation> http3PendingCancellations_;
+    std::optional<quic_migration_tracking> quic_migration_{};
+    std::uint64_t next_quic_migration_id_{1};
     std::pmr::vector<StoredCookie> cookies_;
     std::size_t requestsBuffered_{0};
     std::size_t requestsInFlight_{0};

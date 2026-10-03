@@ -107,7 +107,7 @@ RUVIA_TEST(response_header_clone_shares_static_storage_and_isolates_owned_values
     RUVIA_CHECK(emptyClone.headers().empty());
 
     HttpResponse source({.resource = &resource});
-    ruvia::detail::setResponseHeaderStableView(source, "Content-Type", "application/json");
+    source.header_stable_view("Content-Type", "application/json");
     source.header("X-Owned", "original");
     const auto* staticValue = source.header("Content-Type")->data();
     const auto beforeClone = resource.allocations();

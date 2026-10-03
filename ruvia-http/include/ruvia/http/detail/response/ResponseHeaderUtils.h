@@ -18,7 +18,7 @@ namespace ruvia::detail {
 inline bool setKnownStaticVaryToken(HttpResponse& response, std::string_view token) {
     if (token == "Accept-Encoding" || token == "Origin" ||
         token == "Access-Control-Request-Headers" || token == "Access-Control-Request-Method") {
-        setResponseHeaderStableView(response, "Vary", token);
+        response.header_stable_view("Vary", token);
         return true;
     }
     return false;
@@ -55,7 +55,7 @@ inline void setResponseHeaderIfMissing(
 inline void setStableResponseHeaderIfMissing(
     HttpResponse& response, std::uint32_t bit, std::string_view name, std::string_view value) {
     if (!responseHasKnownHeader(response, bit)) {
-        setResponseHeaderStableView(response, name, value);
+        response.header_stable_view(name, value);
     }
 }
 
@@ -74,7 +74,7 @@ inline void addVaryTokens(
     }
     for (std::size_t i = 0; i < tokenCount; ++i) {
         if (httpTrimOws(tokens[i]) == "*") {
-            setResponseHeaderStableView(response, "Vary", "*");
+            response.header_stable_view("Vary", "*");
             return;
         }
     }

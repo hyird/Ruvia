@@ -167,6 +167,10 @@ struct HttpClientRequestView {
     // owns the small set of facts needed by the later response exchange.
     std::span<const HttpHeaderView> headers{};
     HttpClientRequestContentView content{HttpClientRequestContentView::none()};
+    // Explicit caller assertion that the complete server-side processing chain
+    // is replay-safe. HTTP/3 0-RTT additionally requires a configured early-data
+    // client and a bodyless GET or HEAD request.
+    bool replay_safe{};
 };
 
 }  // namespace ruvia

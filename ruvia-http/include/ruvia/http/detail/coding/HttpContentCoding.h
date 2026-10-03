@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <memory_resource>
 #include <string_view>
-#include <variant>
+#include <utility>
+#include <vector>
 
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
@@ -10,9 +12,9 @@
 namespace ruvia::detail {
 
 struct HttpContentCodingFieldResultAccess final {
-    [[nodiscard]] static constexpr HttpContentCodingFieldResult coding(
-        HttpContentCoding value) noexcept {
-        return HttpContentCodingFieldResult(value);
+    [[nodiscard]] static HttpContentCodingFieldResult coding(
+        std::pmr::vector<HttpContentCoding> values) noexcept {
+        return HttpContentCodingFieldResult(std::move(values));
     }
 
     [[nodiscard]] static constexpr HttpContentCodingFieldResult unsupported() noexcept {
@@ -29,22 +31,20 @@ struct HttpContentCodingFieldResultAccess final {
 class HttpContentCodingFieldParser final {
 public:
     explicit HttpContentCodingFieldParser(
-        HttpFieldListRole role = HttpFieldListRole::kRecipient) noexcept
+        HttpFieldListRole role = HttpFieldListRole::kRecipient,
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
         : role_(role),
-          state_(std::in_place_type<Supported>) {}
+          codings_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
-    void update(std::string_view value) noexcept;
+    void update(std::string_view value);
 
-    [[nodiscard]] HttpContentCodingFieldResult finish() const noexcept;
+    [[nodiscard]] HttpContentCodingFieldResult finish() &&;
 
 private:
-    struct Supported final {
-        HttpContentCoding coding{HttpContentCoding::kIdentity};
-        std::size_t codingCount{0};
-    };
-
     HttpFieldListRole role_;
-    std::variant<Supported, HttpUnsupportedContentCoding, HttpInvalidContentCodingField> state_;
+    std::pmr::vector<HttpContentCoding> codings_;
+    bool unsupported_{false};
+    bool invalid_{false};
 };
 
 [[nodiscard]] bool isValidHttpContentEncodingFieldValue(
@@ -52,14 +52,14 @@ private:
 
 template <typename Headers>
 [[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(
-    const Headers& headers) noexcept {
-    HttpContentCodingFieldParser parser;
+    const Headers& headers, std::pmr::memory_resource* resource) {
+    HttpContentCodingFieldParser parser(HttpFieldListRole::kRecipient, resource);
     for (const auto& header : headers) {
         if (httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
             parser.update(header.value());
         }
     }
-    return parser.finish();
+    return std::move(parser).finish();
 }
 
 }  // namespace ruvia::detail

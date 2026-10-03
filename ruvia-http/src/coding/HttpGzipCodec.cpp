@@ -10,8 +10,8 @@
 #include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
-// gzip (RFC 1952) through zlib, with zlib's allocator routed to the caller's
-// memory resource so neither direction makes a global allocation.
+// gzip (RFC 1952) and zlib-wrapped deflate through zlib, with zlib's allocator
+// routed to the caller's memory resource so neither direction makes a global allocation.
 
 namespace ruvia::detail {
 
@@ -47,12 +47,13 @@ inline void refillGzipInput(
 
 }  // namespace
 
-HttpContentDecodeResult decodeGzipContent(
-    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+static HttpContentDecodeResult decode_zlib_content(std::string_view input,
+    std::size_t maxDecodedBytes, std::pmr::memory_resource* resource, int windowBits,
+    bool allowConcatenatedMembers) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto stream = makeGzipStream(&allocation_context);
-    if (inflateInit2(&stream, 15 + 16) != Z_OK) {
+    if (inflateInit2(&stream, windowBits) != Z_OK) {
         allocation_context.rethrow_allocation_failure();
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
     }
@@ -87,9 +88,12 @@ HttpContentDecodeResult decodeGzipContent(
             if (stream.avail_in == 0 && supplied == input.size()) {
                 return HttpContentDecodeResultAccess::decoded(std::move(output));
             }
+            if (!allowConcatenatedMembers) {
+                return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kInvalidContent);
+            }
             auto* nextInput = stream.next_in;
             const auto availableInput = stream.avail_in;
-            const int reset = inflateReset2(&stream, 15 + 16);
+            const int reset = inflateReset2(&stream, windowBits);
             if (reset != Z_OK) {
                 allocation_context.rethrow_allocation_failure();
                 return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kDecoderFailure);
@@ -115,12 +119,12 @@ HttpContentDecodeResult decodeGzipContent(
     }
 }
 
-HttpContentEncodeResult encodeGzipContent(
-    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+static HttpContentEncodeResult encode_zlib_content(std::string_view input,
+    std::size_t maxEncodedBytes, std::pmr::memory_resource* resource, int windowBits) {
     std::pmr::string output(httpPmrResourceOrDefault(resource));
     pmr_codec_allocation_context allocation_context(output.get_allocator().resource());
     auto stream = makeGzipStream(&allocation_context);
-    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, windowBits, 8, Z_DEFAULT_STRATEGY) !=
         Z_OK) {
         allocation_context.rethrow_allocation_failure();
         return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
@@ -176,6 +180,26 @@ HttpContentEncodeResult encodeGzipContent(
             return HttpContentEncodeResultAccess::failure(HttpContentEncodeError::kEncoderFailure);
         }
     }
+}
+
+HttpContentDecodeResult decodeGzipContent(
+    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+    return decode_zlib_content(input, maxDecodedBytes, resource, 15 + 16, true);
+}
+
+HttpContentDecodeResult decode_deflate_content(
+    std::string_view input, std::size_t maxDecodedBytes, std::pmr::memory_resource* resource) {
+    return decode_zlib_content(input, maxDecodedBytes, resource, 15, false);
+}
+
+HttpContentEncodeResult encodeGzipContent(
+    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+    return encode_zlib_content(input, maxEncodedBytes, resource, 15 + 16);
+}
+
+HttpContentEncodeResult encode_deflate_content(
+    std::string_view input, std::size_t maxEncodedBytes, std::pmr::memory_resource* resource) {
+    return encode_zlib_content(input, maxEncodedBytes, resource, 15);
 }
 
 }  // namespace ruvia::detail

@@ -9,10 +9,11 @@
 
 namespace ruvia {
 
-HttpContentCodingFieldResult requestContentCoding(const HttpRequest& request) noexcept {
-    detail::HttpContentCodingFieldParser parser;
+HttpContentCodingFieldResult requestContentCoding(
+    const HttpRequest& request, std::pmr::memory_resource* resource) {
+    detail::HttpContentCodingFieldParser parser(detail::HttpFieldListRole::kRecipient, resource);
     if (!detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kContentEncoding)) {
-        return parser.finish();
+        return std::move(parser).finish();
     }
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
@@ -21,7 +22,7 @@ HttpContentCodingFieldResult requestContentCoding(const HttpRequest& request) no
             parser.update(headers[i].value());
         }
     }
-    return parser.finish();
+    return std::move(parser).finish();
 }
 
 }  // namespace ruvia

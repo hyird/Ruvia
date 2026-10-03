@@ -11,8 +11,9 @@ StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
     ruvia::ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
-      transferOutput_(allocator),
-      transferDecoder_(nullptr, PmrObjectDeleter<HttpTransferCodingDecoder>{allocator.resource()}),
+      transfer_output_(allocator),
+      transfer_decoder_(nullptr,
+          PmrObjectDeleter<http_transfer_coding_stack_decoder>{allocator.resource()}),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
       bodyLimit_(bodyLimit),
@@ -22,8 +23,10 @@ StreamBodyReader<Stream>::StreamBodyReader(Stream& stream,
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
     if (chunked != nullptr && !chunked->transferCodings().empty()) {
-        transferDecoder_ = makePmrObject<HttpTransferCodingDecoder>(allocator.resource(),
-            chunked->transferCodings().values[0], allocator.resource(), bodyLimit);
+        const auto& codings = chunked->transferCodings().values;
+        transfer_decoder_ = makePmrObject<http_transfer_coding_stack_decoder>(allocator.resource(),
+            std::span<const HttpTransferCoding>(codings.data(), codings.size()),
+            allocator.resource(), bodyLimit);
     }
 }
 
@@ -52,7 +55,7 @@ template <typename Stream>
 Task<std::optional<std::span<const std::byte>>> StreamBodyReader<Stream>::read() {
     if (bodyPlan_.chunked() != nullptr) {
         co_await ensureContinue();
-        co_return co_await readTransferDecodedChunked();
+        co_return co_await read_transfer_decoded_chunked();
     }
     const auto* knownLength = bodyPlan_.knownLength();
     if (knownLength == nullptr) {
@@ -77,8 +80,8 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
 
     co_await ensureContinue();
     while (auto chunk = co_await readChunked()) {
-        if (transferDecoder_ != nullptr) {
-            decodeTransferAppend(::ruvia::asChars(*chunk), body);
+        if (transfer_decoder_ != nullptr) {
+            decode_transfer_append(::ruvia::asChars(*chunk), body);
         } else {
             if (bodyLimit_.additionExceeds(body.size(), chunk->size())) {
                 throwRequestBodyTooLarge();
@@ -86,20 +89,20 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
             body.append(::ruvia::asChars(*chunk));
         }
     }
-    if (transferDecoder_ != nullptr) {
-        requireCompleteTransferCoding(*transferDecoder_);
+    if (transfer_decoder_ != nullptr) {
+        require_complete_transfer_coding(*transfer_decoder_);
     }
     markFinished();
     co_return std::string_view(body);
 }
 
 template <typename Stream>
-void StreamBodyReader<Stream>::decodeTransferAppend(
+void StreamBodyReader<Stream>::decode_transfer_append(
     std::string_view input, std::pmr::string& target) {
     for (;;) {
         const auto oldSize = target.size();
         ::ruvia::resizePmrStringForOverwrite(target, oldSize + kHttpBodyBufferBytes);
-        const auto result = transferDecoder_->decode(
+        const auto result = transfer_decoder_->decode(
             input, std::span<char>(target.data() + oldSize, kHttpBodyBufferBytes));
         input.remove_prefix(std::min(input.size(), result.consumedBytes()));
         if (const auto* output = result.output()) {

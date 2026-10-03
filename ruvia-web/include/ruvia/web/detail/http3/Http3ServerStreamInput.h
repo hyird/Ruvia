@@ -46,6 +46,7 @@ class Http3ServerStreamInput final {
         StreamPhase phase{StreamPhase::kOpen};
         bool requestStream{};
         bool requestActive{};
+        bool receivedEarlyData{};
     };
 
     struct StreamSlot final {
@@ -105,6 +106,7 @@ public:
         Result result{};
     };
     [[nodiscard]] bool canAcceptInput(std::uint64_t streamId) const noexcept;
+    [[nodiscard]] bool receivedEarlyData(std::uint64_t streamId) const noexcept;
     [[nodiscard]] std::optional<ResumedInput> resumeQpack() noexcept;
 
     // Call once for each routed mailbox block. A mismatched identity is

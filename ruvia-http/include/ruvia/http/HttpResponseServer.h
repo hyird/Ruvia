@@ -11,7 +11,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseHeadBuffer.h"
 #include "ruvia/http/HttpResponseTrailerSection.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 namespace ruvia {
@@ -31,22 +31,6 @@ void appendHttp1ResponseTrailers(
     std::span<const HttpHeaderView> trailers) {
     auto result = detail::validatedResponseTrailerSection(trailers);
     return *result.section();
-}
-
-[[nodiscard]] inline ResponseStreamCommitPlan planHttpResponseStreamCommit(
-    ResponseStreamFraming framing, HttpKnownMethod requestMethod, HttpStatusCode status,
-    ResponseTrailerIntent trailerIntent) noexcept {
-    return httpResponseStreamCommitPlan(framing, requestMethod, status, trailerIntent);
-}
-
-[[nodiscard]] inline ResponseStreamHead prepareHttpResponseStreamHead(
-    HttpResponse response, ResponseStreamKind kind, ResponseStreamCommitPlan commitPlan) {
-    return prepareResponseStreamHead(std::move(response), kind, commitPlan);
-}
-
-[[nodiscard]] inline ResponseTrailerIntent httpResponseTrailerIntent(
-    const HttpResponseTrailerSection& section) noexcept {
-    return responseTrailerIntent(section);
 }
 
 }  // namespace ruvia

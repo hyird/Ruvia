@@ -64,6 +64,37 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(Stream& stream,
     head.reset();
     appendHttp1ResponseHead(response, head, responsePlan.headPlan());
     const auto responseHeadBytes = head.view().size();
+    if (response.has_multipart_file_body()) {
+        auto writeCompletion = co_await ruvia::asyncAsio<std::size_t>(
+            [&stream, headView = head.view()](auto handler) mutable {
+                asio::async_write(stream, asio::buffer(headView), std::move(handler));
+            });
+        auto error = writeCompletion.errorCode();
+        auto written = writeCompletion.result();
+        if (error || !responsePlan.sendBody()) {
+            co_return classifyHttp1BufferedResponseWrite(responsePlan, responseHeadBytes, error, written);
+        }
+        for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
+            const auto segment = response.body_segment(index);
+            if (segment.file_) {
+                error = co_await writeHttpResponseFile(stream, memory, fileChunkBuffer, *segment.file_);
+                if (error) {
+                    break;
+                }
+            } else if (!segment.bytes_.empty()) {
+                auto part = co_await ruvia::asyncAsio<std::size_t>(
+                    [&stream, bytes = segment.bytes_](auto handler) mutable {
+                        asio::async_write(stream, asio::buffer(bytes), std::move(handler));
+                    });
+                error = part.errorCode();
+                if (error) {
+                    break;
+                }
+            }
+        }
+        co_return classifyHttp1BufferedResponseWrite(
+            responsePlan, responseHeadBytes, error, responseHeadBytes);
+    }
     if (const auto fileBody = response.fileBody()) {
         auto writeCompletion = co_await ruvia::asyncAsio<std::size_t>(
             [&stream, headView = head.view()](auto handler) mutable {
