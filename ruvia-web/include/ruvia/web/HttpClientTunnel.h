@@ -24,7 +24,8 @@ struct HttpClientTunnelWriteInput;
 // this owner; a read view lasts until the next read. Inputs are copied before a
 // cold write is returned. One read and one write/finish may coexist. Moving the
 // owner preserves operations. Destruction aborts both directions; shutdown joins
-// transport drivers. finish() closes only the local sending direction.
+// transport drivers. finish() closes only the local sending direction and is
+// idempotent after successful completion, including normal transport retirement.
 class HttpClientTunnel final {
 public:
     HttpClientTunnel(const HttpClientTunnel&) = delete;

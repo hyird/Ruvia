@@ -30,6 +30,7 @@ HttpClientRequestStorage::HttpClientRequestStorage(HttpClientRequestStorage&& ot
       isTunnel_(other.isTunnel_),
       tunnel_(std::exchange(other.tunnel_, nullptr)),
       hasBody_(std::exchange(other.hasBody_, false)),
+      replay_safe_(std::exchange(other.replay_safe_, false)),
       upload_(std::exchange(other.upload_, nullptr)) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
@@ -51,6 +52,7 @@ HttpClientRequestStorage HttpClientRequestStorage::intoResource(
     }
     result.body_.assign(body_);
     result.hasBody_ = hasBody_;
+    result.replay_safe_ = replay_safe_;
     result.upload_ = upload_;
     result.tunnel_ = tunnel_;
     result.isTunnel_ = isTunnel_;
@@ -101,6 +103,7 @@ HttpClientRequestView HttpClientRequestStorageAccess::view(
     result.headers = std::span<const HttpHeaderView>(headers);
     result.content = request.hasBody_ ? HttpClientRequestContentView::bytes(request.body_)
                                       : HttpClientRequestContentView::none();
+    result.replay_safe = request.replay_safe_;
     return result;
 }
 

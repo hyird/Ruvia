@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTeFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
@@ -79,7 +80,7 @@ namespace {
 // which may appear only once. Finding the bytes is the loop's job below; every
 // rule about what they mean is here.
 [[nodiscard]] std::optional<HttpParseError> applyRequestHeader(RequestHeaderKind kind,
-    std::string_view value, bool ignoreUpgrade, ParsedRequestHeaderBlock& block) noexcept {
+    std::string_view value, bool ignoreUpgrade, ParsedRequestHeaderBlock& block) {
     switch (kind) {
         case RequestHeaderKind::kHost:
             if (block.hostHeaderIndex >= 0 || !isValidHostHeader(value)) {
@@ -104,7 +105,7 @@ namespace {
                 case HttpTransferEncodingParseStatus::kMalformed:
                     return HttpParseError::kInvalidTransferEncoding;
                 case HttpTransferEncodingParseStatus::kUnsupported:
-                    return HttpParseError::kUnsupportedTransferEncoding;
+                    break;
             }
             break;
         }
@@ -151,7 +152,7 @@ namespace {
             }
             break;
         case RequestHeaderKind::kOrigin:
-            if (!isValidHttpOriginFieldValue(value)) {
+            if (!is_valid_http_origin_field_value(value)) {
                 return HttpParseError::kInvalidHeader;
             }
             if (const auto bit = singletonRequestHeaderBit(kind);
@@ -220,7 +221,7 @@ namespace {
 // ':' and CRLF with optional whitespace trimmed off the value.
 [[nodiscard]] std::optional<HttpParseError> parseHeaderFields(std::string_view buffer,
     std::size_t headersEnd, std::size_t cursor, bool ignoreUpgrade,
-    ParsedRequestHeaderBlock& block) noexcept {
+    ParsedRequestHeaderBlock& block) {
     while (cursor < headersEnd) {
         if (block.headerCount == kMaxHttpHeaderFields) {
             return HttpParseError::kTooManyHeaders;
@@ -314,7 +315,7 @@ std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset)
 }
 
 std::optional<HttpParseError> parseHttpHeaderBlock(
-    std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) noexcept {
+    std::string_view buffer, std::size_t headerBytes, ParsedRequestHeaderBlock& block) {
     const auto headersEnd = headerBytes - 2;
     std::size_t cursor = 0;
     bool ignoreUpgrade = false;

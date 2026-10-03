@@ -2,54 +2,25 @@
 
 #include <string_view>
 
-#include "ruvia/http/HttpCorsFields.h"
+#include "ruvia/http/HttpFieldNameList.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
-#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia::detail {
-
-// RFC 6454 section 7.1 permits either `null` or a space-delimited list of
-// serialized origins. Fetch-generated CORS requests currently send one item,
-// but the HTTP protocol primitive must retain the complete field grammar.
-[[nodiscard]] inline bool isValidHttpOriginFieldValue(std::string_view value) noexcept {
-    value = httpTrimOws(value);
-    if (value == "null") {
-        return true;
-    }
-    std::size_t offset = 0;
-    for (;;) {
-        const auto separator = value.find(' ', offset);
-        const auto end = separator == std::string_view::npos ? value.size() : separator;
-        if (!isValidHttpSerializedOrigin(value.substr(offset, end - offset))) {
-            return false;
-        }
-        if (separator == std::string_view::npos) {
-            return true;
-        }
-        offset = separator + 1;
-    }
-}
 
 [[nodiscard]] inline bool isValidHttpCorsRequestMethod(std::string_view value) noexcept {
     return isValidHttpMethodToken(value);
 }
 
-template <typename Visitor>
-[[nodiscard]] inline bool visitHttpCorsRequestHeaderNames(
-    std::string_view value, Visitor&& visitor) {
-    HttpCorsRequestHeaderNames names(value);
-    while (const auto name = names.next()) {
-        if (!visitor(*name)) {
-            return false;
-        }
-    }
-    return names.valid();
-}
-
 [[nodiscard]] inline bool isValidHttpCorsRequestHeaderNames(std::string_view value) noexcept {
-    return visitHttpCorsRequestHeaderNames(value, [](std::string_view) noexcept { return true; });
+    http_field_name_list names(value);
+    bool saw_name = false;
+    while (names.next()) {
+        saw_name = true;
+    }
+    // Access-Control-Request-Headers requires at least one field name, unlike
+    // the general #field-name grammar.
+    return saw_name && names.valid();
 }
 
 }  // namespace ruvia::detail

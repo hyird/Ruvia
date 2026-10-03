@@ -5,14 +5,17 @@
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/detail/util/NativePath.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 
 namespace ruvia {
 
@@ -163,9 +166,71 @@ private:
     HttpResponseFileIdentity identity_;
 };
 
+class http_multipart_response_body final {
+public:
+    http_multipart_response_body(std::pmr::memory_resource* resource,
+        const std::filesystem::path& path, std::uint64_t size,
+        HttpResponseFileIdentity identity, http_multipart_byte_range_plan plan)
+        : nativePath_(resource),
+          plan_(plan.resource() == resource ? std::move(plan) : plan.clone(resource)),
+          size_(size),
+          identity_(identity) {
+        assignHttpNativePath(nativePath_, path);
+        if (plan_.segments().empty()) {
+            throw std::invalid_argument("multipart response plan must contain segments");
+        }
+        bool containsFile = false;
+        for (const auto& segment : plan_.segments()) {
+            if (segment.kind == http_multipart_byte_range_plan::segment_kind::file) {
+                if (segment.file_length == 0 || segment.file_offset > size_ ||
+                    segment.file_length > size_ - segment.file_offset) {
+                    throw std::invalid_argument("multipart response file segment is out of range");
+                }
+                containsFile = true;
+            }
+        }
+        if (!containsFile) {
+            throw std::invalid_argument("multipart response plan must contain a file segment");
+        }
+    }
+
+    [[nodiscard]] std::size_t segment_count() const noexcept {
+        return plan_.segments().size();
+    }
+    [[nodiscard]] http_response_body_segment_view segment(std::size_t index) const {
+        const auto& item = plan_.segments()[index];
+        if (item.kind == http_multipart_byte_range_plan::segment_kind::metadata) {
+            return {.bytes_ = plan_.metadata().substr(item.metadata_offset, item.metadata_length)};
+        }
+        return {.file_ = HttpResponseFileView(nativePath_.c_str(), size_, item.file_offset,
+                    item.file_length, identity_)};
+    }
+    [[nodiscard]] std::uint64_t content_length() const noexcept {
+        return plan_.content_length();
+    }
+    [[nodiscard]] HttpResponseFileView file() const noexcept {
+        return HttpResponseFileView(nativePath_.c_str(), size_, 0, size_, identity_);
+    }
+    [[nodiscard]] std::uint64_t file_size() const noexcept {
+        return size_;
+    }
+    [[nodiscard]] HttpResponseFileIdentity identity() const noexcept {
+        return identity_;
+    }
+    [[nodiscard]] const http_multipart_byte_range_plan& plan() const& noexcept {
+        return plan_;
+    }
+
+private:
+    friend class HttpResponseBody;
+    HttpNativePathString nativePath_;
+    http_multipart_byte_range_plan plan_;
+    std::uint64_t size_{};
+    HttpResponseFileIdentity identity_{HttpResponseFileIdentity::unchecked()};
+};
+
 // Owns exactly one legal buffered response-body representation. The common
-// bytes()/file()/size() observations are derived from the active alternative;
-// callers never need a separate kind enum or has-file side channel.
+// bytes()/file()/size() observations are derived from the active alternative.
 class HttpResponseBody final {
 public:
     HttpResponseBody() noexcept
@@ -205,6 +270,10 @@ public:
         return std::get_if<HttpBorrowedResponseFile>(&value_);
     }
     [[nodiscard]] const HttpBorrowedResponseFile* borrowedFile() const&& = delete;
+    [[nodiscard]] const http_multipart_response_body* multipart_body() const& noexcept {
+        return std::get_if<http_multipart_response_body>(&value_);
+    }
+    [[nodiscard]] const http_multipart_response_body* multipart_body() const&& = delete;
 
     [[nodiscard]] std::string_view bytes() const& noexcept {
         if (const auto* body = borrowedBytes()) {
@@ -229,18 +298,24 @@ public:
             return HttpResponseFileView(body->nativePathCStr(), body->size(), body->offset(),
                 body->length(), body->identity());
         }
+        if (const auto* body = multipart_body()) {
+            return body->file();
+        }
         return std::nullopt;
     }
     [[nodiscard]] std::optional<HttpResponseFileView> file() const&& = delete;
 
-    [[nodiscard]] std::size_t size() const noexcept {
+    [[nodiscard]] std::uint64_t size() const noexcept {
         if (const auto* body = ownedFile()) {
-            return static_cast<std::size_t>(body->length());
+            return body->length();
         }
         if (const auto* body = borrowedFile()) {
-            return static_cast<std::size_t>(body->length());
+            return body->length();
         }
-        return bytes().size();
+        if (const auto* body = multipart_body()) {
+            return body->content_length();
+        }
+        return static_cast<std::uint64_t>(bytes().size());
     }
 
 private:
@@ -248,7 +323,8 @@ private:
 
     using Value =
         std::variant<HttpEmptyResponseBody, HttpBorrowedResponseBytes, HttpStaticResponseBytes,
-            HttpOwnedResponseBytes, HttpOwnedResponseFile, HttpBorrowedResponseFile>;
+            HttpOwnedResponseBytes, HttpOwnedResponseFile, HttpBorrowedResponseFile,
+            http_multipart_response_body>;
 
     void setEmpty() noexcept {
         value_.emplace<HttpEmptyResponseBody>(HttpEmptyResponseBody{});
@@ -304,6 +380,15 @@ private:
         value_.emplace<HttpOwnedResponseFile>(std::move(body));
     }
 
+    void set_multipart(std::pmr::memory_resource* resource, const std::filesystem::path& file,
+        std::uint64_t size, HttpResponseFileIdentity identity,
+        http_multipart_byte_range_plan plan) {
+        http_multipart_response_body replacement(
+            resource, file, size, identity, std::move(plan));
+        static_assert(std::is_nothrow_move_constructible_v<http_multipart_response_body>);
+        value_.emplace<http_multipart_response_body>(std::move(replacement));
+    }
+
     void setBorrowedFile(const HttpNativePathChar* file, std::uint64_t size, std::uint64_t offset,
         std::uint64_t length,
         HttpResponseFileIdentity identity = HttpResponseFileIdentity::unchecked()) noexcept {
@@ -316,6 +401,7 @@ private:
 
 static_assert(std::is_nothrow_move_constructible_v<HttpOwnedResponseBytes>);
 static_assert(std::is_nothrow_move_constructible_v<HttpOwnedResponseFile>);
+static_assert(std::is_nothrow_move_constructible_v<http_multipart_response_body>);
 
 }  // namespace detail
 }  // namespace ruvia

@@ -97,6 +97,10 @@ public:
         return usesRouteRateLimit_;
     }
 
+    [[nodiscard]] bool replay_safe() const noexcept {
+        return replay_safe_;
+    }
+
 private:
     template <typename MiddlewareT, typename... Args>
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor(Args&&... args);
@@ -105,7 +109,7 @@ private:
     constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy,
         const void* args, const void* validatedModelTypeKey, bool usesRouteRateLimit,
         bool runsOnUnmatchedRequests = false, std::size_t requestBodyLimit = 0,
-        std::int64_t deadlineMs = 0) noexcept
+        std::int64_t deadlineMs = 0, bool replay_safe = false) noexcept
         : invoke_(invoke),
           create_(create),
           destroy_(destroy),
@@ -114,7 +118,8 @@ private:
           usesRouteRateLimit_(usesRouteRateLimit),
           requestBodyLimit_(requestBodyLimit),
           deadlineMs_(deadlineMs),
-          runsOnUnmatchedRequests_(runsOnUnmatchedRequests) {}
+          runsOnUnmatchedRequests_(runsOnUnmatchedRequests),
+          replay_safe_(replay_safe) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
@@ -126,6 +131,7 @@ private:
     std::size_t requestBodyLimit_{0};
     std::int64_t deadlineMs_{0};
     bool runsOnUnmatchedRequests_{false};
+    bool replay_safe_{false};
 };
 
 }  // namespace detail

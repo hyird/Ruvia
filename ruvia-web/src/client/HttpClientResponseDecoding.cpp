@@ -21,9 +21,14 @@ void configureHttpClientResponseDecoding(HttpClientResponseState& state) {
         plan->contentSemantics() != HttpResponseContentSemantics::kWithContent) {
         return;
     }
-    const auto parsedCoding = parseHttpContentCodingHeaders(state.headers);
-    const auto* coding = parsedCoding.coding();
-    state.bodyDecodeRequired = coding == nullptr || *coding != HttpContentCoding::kIdentity;
+    const auto parsedCoding = parseHttpContentCodingHeaders(state.headers, state.resource);
+    const auto codings = parsedCoding.codings();
+    const bool transformsBody =
+        std::ranges::any_of(codings, [](HttpContentCoding coding) {
+            return coding != HttpContentCoding::kIdentity;
+        });
+    state.bodyDecodeRequired = parsedCoding.invalid() != nullptr ||
+                               parsedCoding.unsupported() != nullptr || transformsBody;
     if (state.bodyDecodeRequired) {
         state.collectAll = true;
     }
@@ -45,13 +50,17 @@ void decodeHttpClientResponseContentEncoding(HttpClientResponseState& state,
     }
 
     try {
-        const auto parsedCoding = parseHttpContentCodingHeaders(state.headers);
-        const auto* coding = parsedCoding.coding();
-        if (coding == nullptr) {
+        const auto parsedCoding = parseHttpContentCodingHeaders(state.headers, resource);
+        const auto codings = parsedCoding.codings();
+        if (parsedCoding.invalid() != nullptr || parsedCoding.unsupported() != nullptr) {
             throw HttpClientError(HttpClientError::Code::kProtocolError,
                 "unsupported HTTP response Content-Encoding");
         }
-        if (*coding == HttpContentCoding::kIdentity) {
+        const bool transformsBody =
+            std::ranges::any_of(codings, [](HttpContentCoding coding) {
+                return coding != HttpContentCoding::kIdentity;
+            });
+        if (!transformsBody) {
             state.bodyDecodeRequired = false;
             return;
         }
@@ -68,11 +77,9 @@ void decodeHttpClientResponseContentEncoding(HttpClientResponseState& state,
 
         const auto decodedLimit = std::min(maxDecodedBytes, state.bufferedLimit);
         auto decoded = decodeHttpContent(
-            *coding, encoded, {.maxDecodedBytes = decodedLimit, .resource = resource});
+            codings, encoded, {.maxDecodedBytes = decodedLimit, .resource = resource});
         if (auto* content = decoded.decoded()) {
-            auto bytes = std::move(*content).takeBytes();
-            std::pmr::string decodedBody(state.resource);
-            decodedBody.assign(bytes);
+            auto decodedBody = std::move(*content).takeBytes();
             if (!state.replaceProducerBodyBytes(decodedBody.size())) {
                 throw HttpClientError(HttpClientError::Code::kResponseTooLarge,
                     "HTTP response exceeds configured byte limit");

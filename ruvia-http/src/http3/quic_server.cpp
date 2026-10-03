@@ -209,7 +209,8 @@ quic_server::quic_server(quic_server_config config, quic_crypto_provider_view cr
     const auto initial_stream_count = stream_counts_valid
                                           ? transport.initial_max_streams_bidi + transport.initial_max_streams_uni
                                           : std::uint64_t{};
-    if (config.version != quic_version::v1 || transport.max_udp_payload_size < 1200 ||
+    if ((config.version != quic_version::v1 && config.version != quic_version::v2) ||
+        transport.max_udp_payload_size < 1200 ||
         transport.max_udp_payload_size > 65527 || limits.max_datagram_size < transport.max_udp_payload_size ||
         limits.max_datagram_size > 65527 || limits.max_crypto_buffer_size == 0 ||
         limits.max_stream_buffer_size == 0 || limits.max_connection_buffer_size == 0 ||
@@ -284,7 +285,8 @@ quic_server_route quic_server::route_datagram(const quic_datagram_view& datagram
     if (decoded.version == 0) {
         return {};
     }
-    if (decoded.version != static_cast<std::uint32_t>(quic_version::v1)) {
+    if (decoded.version != static_cast<std::uint32_t>(quic_version::v1) &&
+        decoded.version != static_cast<std::uint32_t>(quic_version::v2)) {
         if (datagram.bytes.size() < 1200 || decoded.dcidlen > quic_max_connection_id_size ||
             decoded.scidlen > quic_max_connection_id_size) {
             return {};
@@ -310,7 +312,8 @@ quic_server_route quic_server::route_datagram(const quic_datagram_view& datagram
 
     ngtcp2_pkt_hd header{};
     if (ngtcp2_accept(&header, packet, datagram.bytes.size()) != 0 ||
-        header.type != NGTCP2_PKT_INITIAL || header.version != NGTCP2_PROTO_VER_V1 ||
+        header.type != NGTCP2_PKT_INITIAL ||
+        (header.version != NGTCP2_PROTO_VER_V1 && header.version != NGTCP2_PROTO_VER_V2) ||
         header.tokenlen != 0 || header.dcid.datalen < 8 ||
         header.dcid.datalen > quic_max_connection_id_size ||
         header.scid.datalen > quic_max_connection_id_size) {
@@ -339,7 +342,7 @@ quic_server_route quic_server::route_datagram(const quic_datagram_view& datagram
         .destination_connection_id = initial_dcid,
         .source_connection_id = initial_scid,
         .original_destination_connection_id = initial_dcid,
-        .version = quic_version::v1};
+        .version = static_cast<quic_version>(header.version)};
     impl::pending pending(impl_->resource);
     pending.offer = offer;
     pending.bytes.assign(datagram.bytes.begin(), datagram.bytes.end());
@@ -380,7 +383,7 @@ quic_packet_result quic_server::write_version_negotiation(
     output = output.first(std::min(output.size(), amplification_limit));
     std::byte random{};
     impl_->crypto.random_bytes(impl_->crypto.context, std::span<std::byte>(&random, 1));
-    constexpr std::array<std::uint32_t, 1> versions{NGTCP2_PROTO_VER_V1};
+    constexpr std::array<std::uint32_t, 2> versions{NGTCP2_PROTO_VER_V1, NGTCP2_PROTO_VER_V2};
     const auto written = ngtcp2_pkt_write_version_negotiation(
         reinterpret_cast<std::uint8_t*>(output.data()), output.size(),
         std::to_integer<std::uint8_t>(random), dcid.data, dcid.datalen,
@@ -418,7 +421,7 @@ quic_server_admit_result quic_server::admit_initial(const quic_initial_offer& of
             offer.local_address.family != quic_address_family::ipv6) ||
         (offer.peer_address.family != quic_address_family::ipv4 &&
             offer.peer_address.family != quic_address_family::ipv6) ||
-        offer.version != quic_version::v1) {
+        (offer.version != quic_version::v1 && offer.version != quic_version::v2)) {
         throw std::invalid_argument("invalid or stale QUIC Initial offer");
     }
     tls_driver.validate();
@@ -427,7 +430,8 @@ quic_server_admit_result quic_server::admit_initial(const quic_initial_offer& of
     }
     auto& saved = pending_it->second;
     quic_connection_config config{.role = quic_role::server,
-        .version = quic_version::v1,
+        .version = offer.version,
+        .preferred_version = impl_->config.version,
         .local_address = offer.local_address,
         .peer_address = offer.peer_address,
         .destination_connection_id = offer.source_connection_id,

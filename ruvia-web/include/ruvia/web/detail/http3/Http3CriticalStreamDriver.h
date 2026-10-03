@@ -58,7 +58,7 @@ public:
                 streams_[i] = created.stream_id;
                 progress = true;
             }
-            const auto offered = output_.next(kind);
+            const auto offered = output_->next(kind);
             if (offered.empty()) {
                 continue;
             }
@@ -66,7 +66,7 @@ public:
             switch (result.status) {
                 case ruvia::quic_operation_status::accepted:
                     if (result.accepted > offered.size() ||
-                        !output_.acknowledge(kind, result.accepted)) {
+                        !output_->acknowledge(kind, result.accepted)) {
                         fatal_ = true;
                         return Result::kFatal;
                     }
@@ -74,14 +74,14 @@ public:
                     break;
                 case ruvia::quic_operation_status::would_block:
                 case ruvia::quic_operation_status::need_input:
-                    (void)output_.acknowledge(kind, 0);
+                    (void)output_->acknowledge(kind, 0);
                     break;
                 default:
                     fatal_ = true;
                     return Result::kFatal;
             }
         }
-        if (output_.complete()) {
+        if (output_->complete()) {
             return Result::kReady;
         }
         return progress ? Result::kProgress : Result::kBlocked;
@@ -89,12 +89,21 @@ public:
 
     // Server-only: identifier is a client-initiated request-stream boundary.
     [[nodiscard]] bool queueGoaway(std::uint64_t identifier) noexcept {
-        return !fatal_ && output_.queue_goaway(identifier);
+        return !fatal_ && output_->queue_goaway(identifier);
+    }
+
+    // Rejected 0-RTT removes the QUIC streams and rolls back their bytes.
+    // Recreate the per-connection stream IDs and output cursors from SETTINGS.
+    void restart(Http3LocalCriticalStreams prefixes) noexcept {
+        output_.reset();
+        output_.emplace(std::move(prefixes));
+        streams_.fill(std::nullopt);
+        fatal_ = false;
     }
 
     // True when all prefixes and any queued GOAWAY have been accepted by QUIC.
     [[nodiscard]] bool complete() const noexcept {
-        return output_.complete();
+        return output_->complete();
     }
 
     [[nodiscard]] std::optional<StreamId> streamId(Kind kind) const noexcept {
@@ -103,7 +112,7 @@ public:
     }
 
 private:
-    ruvia::http3_critical_stream_output output_;
+    std::optional<ruvia::http3_critical_stream_output> output_;
     std::array<std::optional<StreamId>, 3> streams_{};
     bool fatal_{false};
 };

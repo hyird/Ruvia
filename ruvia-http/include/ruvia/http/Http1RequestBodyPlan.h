@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/HttpExpectations.h"
@@ -42,15 +43,15 @@ private:
 
 class Http1ChunkedRequestBody final {
 public:
-    [[nodiscard]] constexpr HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
         return transferCodings_;
     }
 
 private:
     friend class Http1RequestBodyPlan;
 
-    explicit constexpr Http1ChunkedRequestBody(HttpTransferCodings transferCodings) noexcept
-        : transferCodings_(transferCodings) {}
+    explicit Http1ChunkedRequestBody(HttpTransferCodings transferCodings)
+        : transferCodings_(std::move(transferCodings)) {}
 
     HttpTransferCodings transferCodings_;
 };
@@ -111,11 +112,11 @@ private:
         : Http1RequestBodyPlan(Framing(Http1KnownLengthRequestBody(contentLength)), expectations) {}
 
     Http1RequestBodyPlan(
-        HttpTransferCodings transferCodings, HttpRequestExpectations expectations) noexcept
-        : Http1RequestBodyPlan(Framing(Http1ChunkedRequestBody(transferCodings)), expectations) {}
+        HttpTransferCodings transferCodings, HttpRequestExpectations expectations)
+        : Http1RequestBodyPlan(Framing(Http1ChunkedRequestBody(std::move(transferCodings))), expectations) {}
 
-    Http1RequestBodyPlan(Framing framing, HttpRequestExpectations expectations) noexcept
-        : framing_(framing),
+    Http1RequestBodyPlan(Framing framing, HttpRequestExpectations expectations)
+        : framing_(std::move(framing)),
           expectations_(expectations) {}
 
     Framing framing_;

@@ -34,13 +34,13 @@ struct Http1RequestParseResultAccess final {
         return Http1RequestParseResult(Http1RequestNeedMore(requiredTotalBytes));
     }
 
-    // HttpRequest is a fixed-size collection of borrowed views. The result
-    // copies it once into its own value object; no owning data is transferred.
+    // HttpRequest is a fixed-size collection of borrowed views; the request and
+    // framing plan are transferred into the result without allocating copies.
     [[nodiscard]] static Http1RequestParseResult parsed(HttpRequest request,
         Http1RequestBodyPlan bodyPlan, std::string_view wireBody,
         std::size_t consumedBytes) noexcept {
-        return Http1RequestParseResult(
-            Http1ParsedRequest(std::move(request), bodyPlan, wireBody, consumedBytes));
+        return Http1RequestParseResult(Http1ParsedRequest(
+            std::move(request), std::move(bodyPlan), wireBody, consumedBytes));
     }
 
     [[nodiscard]] static Http1RequestParseResult failure(HttpParseError error,

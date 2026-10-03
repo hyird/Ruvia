@@ -7,7 +7,7 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
+#include "ruvia/http/HttpOrigin.h"
 
 namespace ruvia {
 namespace {
@@ -23,7 +23,7 @@ std::expected<std::pmr::vector<char>, Error> originPayload(std::span<const std::
     std::size_t maximum, std::pmr::memory_resource* resource) {
     std::size_t size = 0;
     for (const auto origin : origins) {
-        if (!detail::isValidHttpSerializedOrigin(origin)) {
+        if (!is_valid_http_serialized_origin(origin)) {
             return std::unexpected(Error::kInvalidOrigin);
         }
         if (origin.size() > 65535 || size > maximum || maximum - size < 2 || origin.size() > maximum - size - 2) {
@@ -67,7 +67,7 @@ std::expected<HttpOriginAdvertisement, Error> decodeHttpOriginAdvertisement(std:
             return std::unexpected(Error::kMalformedPayload);
         }
         const std::string_view origin(payload.data(), size);
-        if (detail::isValidHttpSerializedOrigin(origin)) {
+        if (is_valid_http_serialized_origin(origin)) {
             result.origins.emplace_back(origin);
         }
         payload = payload.subspan(size);
@@ -115,7 +115,7 @@ std::expected<HttpAlternativeServiceAdvertisement, Error> decodeHttp2Alternative
         return std::unexpected(Error::kInvalidStream);
     }
     const std::string_view origin(payload.data(), size);
-    if (!origin.empty() && !detail::isValidHttpSerializedOrigin(origin)) {
+    if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
         return std::unexpected(Error::kInvalidOrigin);
     }
     const std::string_view value(payload.data() + size, payload.size() - size);
@@ -134,7 +134,7 @@ std::expected<std::pmr::vector<char>, Error> encodeHttp2AlternativeServiceFrame(
     if (streamId > 0x7fffffff || ((streamId == 0) != (!origin.empty()))) {
         return std::unexpected(Error::kInvalidStream);
     }
-    if (!origin.empty() && !detail::isValidHttpSerializedOrigin(origin)) {
+    if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
         return std::unexpected(Error::kInvalidOrigin);
     }
     if (!isValidHttpHeaderValue(value)) {

@@ -23,6 +23,8 @@ struct Http3StreamMessageId final {
     // Ordinary request streams leave this empty; critical streams use their
     // separate mailbox destination and cannot masquerade as pushed responses.
     std::optional<std::uint64_t> pushId{};
+    // Sticky QUIC transport provenance copied from ngtcp2's 0-RTT receive flag.
+    bool received_early_data{};
 };
 
 struct Http3CriticalStreamMessageId final {

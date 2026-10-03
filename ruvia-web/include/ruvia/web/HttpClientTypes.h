@@ -13,6 +13,7 @@
 #include "ruvia/core/TcpSocketOptions.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/quic_types.h"
 #include "ruvia/web/Http3QpackConfig.h"
 #include "ruvia/web/HttpClientAdvertisementConfig.h"
 #include "ruvia/web/HttpClientPushConfig.h"
@@ -62,6 +63,9 @@ struct HttpClientConfig final {
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{kDefaultMaxBufferedBodyBytes};
     HttpClientProtocol protocol{HttpClientProtocol::kNegotiate};
+    quic_version initial_quic_version{quic_version::v1};
+    // Enables client 0-RTT only for explicitly replay-safe bodyless GET/HEAD.
+    bool http3_early_data{false};
     Http3QpackConfig qpack{};
     HttpClientAdvertisementConfig advertisements{};
     HttpClientPushConfig push{};

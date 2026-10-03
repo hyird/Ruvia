@@ -280,6 +280,35 @@ RUVIA_TEST(validate_server_options_enforces_tls_material) {
     RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerListener(configured); }));
 }
 
+RUVIA_TEST(http3_early_data_is_opt_in_and_rejects_client_certificate_policy) {
+    const auto validTls = [] {
+        HttpServerListenerDefinition::Tls tls;
+        tls.identity.certificateChainFile = "cert.pem";
+        tls.identity.privateKeyFile = "key.pem";
+        return tls;
+    };
+    {
+        auto tls = validTls();
+        RUVIA_CHECK(!tls.http3_early_data);
+        auto listener = makeListener(std::move(tls));
+        RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerListener(listener); }));
+    }
+    {
+        auto tls = validTls();
+        tls.http3_early_data = true;
+        auto listener = makeListener(std::move(tls));
+        RUVIA_CHECK(!throwsInvalid([&] { validateHttpServerListener(listener); }));
+    }
+    {
+        auto tls = validTls();
+        tls.http3_early_data = true;
+        tls.clientCertificates.emplace(std::pmr::get_default_resource(),
+            ruvia::TlsClientCertificateRequirement::kOptional);
+        auto listener = makeListener(std::move(tls));
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerListener(listener); }));
+    }
+}
+
 RUVIA_TEST(validate_server_options_enforces_nested_tls_material) {
     const auto validTls = [] {
         HttpServerListenerDefinition::Tls tls;

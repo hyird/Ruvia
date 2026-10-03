@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -81,7 +82,7 @@ private:
     Http1ParsedRequest(HttpRequest request, Http1RequestBodyPlan bodyPlan,
         std::string_view wireBody, std::size_t consumedBytes) noexcept
         : request_(std::move(request)),
-          bodyPlan_(bodyPlan),
+          bodyPlan_(std::move(bodyPlan)),
           wireBody_(wireBody),
           consumedBytes_(consumedBytes) {}
 
@@ -90,6 +91,8 @@ private:
     std::string_view wireBody_;
     std::size_t consumedBytes_{0};
 };
+
+static_assert(std::is_nothrow_move_constructible_v<Http1ParsedRequest>);
 
 enum class Http1RequestParseFailureSource : std::uint8_t { kRequestLine,
     kMessage };
@@ -157,6 +160,8 @@ private:
 
     std::variant<Http1RequestNeedMore, Http1ParsedRequest, Http1RequestParseFailure> state_;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<Http1RequestParseResult>);
 
 struct Http1RequestParseOptions final {
     // Must outlive the result. nullptr uses the default PMR resource.

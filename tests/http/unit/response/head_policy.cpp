@@ -6,8 +6,8 @@
 
 #include "ruvia/http/Http1ResponseHeadPlan.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 
 #include "test_harness.h"
@@ -111,17 +111,17 @@ RUVIA_TEST(response_body_plan_classifies_protocol_response_states) {
 RUVIA_TEST(response_stream_plan_restricts_trailers_by_status_not_method) {
     for (const auto status : {ruvia::HttpStatusCode::fromValue(199),
              ruvia::http_status::kNoContent, ruvia::http_status::kNotModified}) {
-        const auto plan = ruvia::httpResponseStreamCommitPlan(
-            ruvia::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kGet,
-            status, ruvia::ResponseTrailerIntent::kPresent);
-        RUVIA_CHECK(!plan.trailerIntentAllowed());
+        const auto plan = ruvia::plan_http_response_stream_commit(
+            ruvia::http_response_stream_framing::http2_frames, ruvia::HttpKnownMethod::kGet,
+            status, ruvia::http_response_trailer_intent::present);
+        RUVIA_CHECK(!plan.trailer_intent_allowed());
     }
 
-    const auto headPlan = ruvia::httpResponseStreamCommitPlan(
-        ruvia::ResponseStreamFraming::kHttp2Frames, ruvia::HttpKnownMethod::kHead,
-        ruvia::http_status::kOk, ruvia::ResponseTrailerIntent::kPresent);
-    RUVIA_CHECK(headPlan.trailerIntentAllowed());
-    RUVIA_CHECK(headPlan.headDisposition() == ruvia::ResponseStreamHeadDisposition::kTrailersOnly);
+    const auto headPlan = ruvia::plan_http_response_stream_commit(
+        ruvia::http_response_stream_framing::http2_frames, ruvia::HttpKnownMethod::kHead,
+        ruvia::http_status::kOk, ruvia::http_response_trailer_intent::present);
+    RUVIA_CHECK(headPlan.trailer_intent_allowed());
+    RUVIA_CHECK(headPlan.head_disposition() == ruvia::http_response_stream_head_disposition::trailers_only);
 }
 
 RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {

@@ -25,11 +25,6 @@ struct HttpResponseHeaderStateAccess final {
         return response.cloneForTransaction();
     }
 
-    static void setStableView(
-        HttpResponse& response, std::string_view key, std::string_view value) {
-        response.setHeaderStableView(key, value);
-    }
-
     static void setValidated(HttpResponse& response, std::string_view key, std::string_view value,
         std::uint32_t knownBit) {
         response.setHeaderValidated(key, value, knownBit);
@@ -54,11 +49,6 @@ struct HttpResponseHeaderStateAccess final {
     static void setUnsigned(
         HttpResponse& response, std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
         response.setHeaderUnsigned(key, value, knownBit);
-    }
-
-    static void setAllow(HttpResponse& response, std::uint32_t methodMask,
-        std::span<const std::string_view> extensionMethods = {}) {
-        response.setAllowHeader(methodMask, extensionMethods);
     }
 
     static void setContentRange(
@@ -102,11 +92,6 @@ struct HttpResponseHeaderStateAccess final {
     }
 };
 
-inline void setResponseHeaderStableView(
-    HttpResponse& response, std::string_view key, std::string_view value) {
-    HttpResponseHeaderStateAccess::setStableView(response, key, value);
-}
-
 inline void setResponseHeaderValidated(
     HttpResponse& response, std::string_view key, std::string_view value, std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::setValidated(response, key, value, knownBit);
@@ -131,11 +116,6 @@ inline void upsertResponseSetCookieValidated(HttpResponse& response, std::string
 inline void setResponseHeaderUnsigned(
     HttpResponse& response, std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::setUnsigned(response, key, value, knownBit);
-}
-
-inline void setResponseAllowHeader(HttpResponse& response, std::uint32_t methodMask,
-    std::span<const std::string_view> extensionMethods = {}) {
-    HttpResponseHeaderStateAccess::setAllow(response, methodMask, extensionMethods);
 }
 
 inline void setResponseContentRange(

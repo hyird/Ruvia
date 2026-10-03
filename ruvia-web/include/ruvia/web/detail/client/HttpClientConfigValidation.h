@@ -44,6 +44,10 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     if (scheme != HttpScheme::kHttp && scheme != HttpScheme::kHttps) {
         throw std::invalid_argument("http client scheme is invalid");
     }
+    if (config.initial_quic_version != quic_version::v1 &&
+        config.initial_quic_version != quic_version::v2) {
+        throw std::invalid_argument("HTTP client QUIC version is invalid");
+    }
     if (config.protocol != HttpClientProtocol::kNegotiate &&
         config.protocol != HttpClientProtocol::kHttp1Only &&
         config.protocol != HttpClientProtocol::kHttp2Only &&
@@ -52,6 +56,11 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     }
     if (config.protocol == HttpClientProtocol::kHttp3Only && scheme != HttpScheme::kHttps) {
         throw std::invalid_argument("HTTP/3 client requires the HTTPS scheme");
+    }
+    if (config.http3_early_data &&
+        (scheme != HttpScheme::kHttps || config.protocol == HttpClientProtocol::kHttp1Only ||
+            config.protocol == HttpClientProtocol::kHttp2Only)) {
+        throw std::invalid_argument("HTTP/3 early data requires an HTTPS client with HTTP/3 enabled");
     }
     validateClientTransportConfig(clientTransportConfigView(config));
     if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&

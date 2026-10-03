@@ -44,6 +44,7 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
@@ -61,7 +62,6 @@
 #include "ruvia/http/detail/http2/stream/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamState.h"
 #include "ruvia/http/detail/http2/stream/Http2StreamTable.h"
-#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
@@ -359,8 +359,8 @@ public:
     // one, END_STREAM is carried by the initial HEADERS. The owner then streams DATA
     // (when allowed) and terminates through finishResponse(streamId, trailers).
     [[nodiscard]] Http2StreamingResponseHeadSubmitResult submitStreamingResponseHead(
-        std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind,
-        ResponseTrailerIntent trailerIntent);
+        std::uint32_t streamId, HttpResponse head, http_response_stream_kind kind,
+        http_response_trailer_intent trailerIntent);
     [[nodiscard]] Http2DataSubmitStatus submitData(
         std::uint32_t streamId, std::string_view chunk, Http2EndStream endStream);
     // Submit a typed interim 1xx head. HttpInterimResponseHead excludes 101 and

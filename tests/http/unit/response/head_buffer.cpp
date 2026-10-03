@@ -50,6 +50,42 @@ RUVIA_TEST(head_buffer_stack_appends) {
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }
 
+RUVIA_TEST(head_buffer_empty_view_append_preserves_storage_and_content) {
+    const std::string_view empty;
+    ResponseHeadBuffer buffer(std::pmr::get_default_resource());
+
+    buffer.append(empty);
+    RUVIA_CHECK(buffer.view().empty());
+    RUVIA_CHECK(buffer.canAppendOnStack(0));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+
+    buffer.append("prefix");
+    buffer.append(empty);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+
+    const std::string full(kResponseHeadStackBytes, 's');
+    buffer.reset();
+    buffer.append(full);
+    buffer.append(empty);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(full));
+    RUVIA_CHECK(buffer.canAppendOnStack(0));
+    RUVIA_CHECK(!buffer.canAppendOnStack(1));
+
+    const std::string large(kResponseHeadStackBytes + 1, 'h');
+    buffer.reset();
+    buffer.append(large);
+    buffer.append(empty);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(large));
+    RUVIA_CHECK(!buffer.canAppendOnStack(0));
+
+    buffer.reset();
+    buffer.append(empty);
+    RUVIA_CHECK(buffer.view().empty());
+    RUVIA_CHECK(buffer.canAppendOnStack(0));
+    RUVIA_CHECK(buffer.canAppendOnStack(1));
+}
+
 RUVIA_TEST(head_buffer_stack_cursor_bulk_write_commits_and_guards_bounds) {
     ResponseHeadBuffer buffer(std::pmr::get_default_resource());
 

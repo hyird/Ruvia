@@ -27,7 +27,7 @@ struct HttpSelectedRepresentationMetadata final {
 
 enum class HttpRangeRequestPolicy {
     kIgnore,
-    kHonorSingleByteRange,
+    honor_byte_ranges,
 };
 
 struct HttpRepresentationResponseOptions final {
@@ -47,6 +47,7 @@ public:
     struct PreconditionFailed final {};
     using RangeUnsatisfiable = HttpByteRangeUnsatisfiable;
     using Partial = HttpResolvedByteRange;
+    using multipart = http_byte_range_set;
 
     [[nodiscard]] const Full* full() const& noexcept;
     [[nodiscard]] const Full* full() const&& = delete;
@@ -58,6 +59,8 @@ public:
     [[nodiscard]] const RangeUnsatisfiable* rangeUnsatisfiable() const&& = delete;
     [[nodiscard]] const Partial* partial() const& noexcept;
     [[nodiscard]] const Partial* partial() const&& = delete;
+    [[nodiscard]] const multipart* multipart_ranges() const& noexcept;
+    [[nodiscard]] const multipart* multipart_ranges() const&& = delete;
     [[nodiscard]] HttpStatusCode status() const noexcept;
 
 private:
@@ -65,7 +68,7 @@ private:
         const HttpRequest&, HttpSelectedRepresentationMetadata,
         HttpRepresentationResponseOptions);
 
-    using Value = std::variant<Full, NotModified, PreconditionFailed, RangeUnsatisfiable, Partial>;
+    using Value = std::variant<Full, NotModified, PreconditionFailed, RangeUnsatisfiable, Partial, multipart>;
 
     template <typename Alternative>
     explicit HttpRepresentationResponsePlan(Alternative alternative) noexcept

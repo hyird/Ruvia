@@ -13,13 +13,13 @@ namespace ruvia::detail {
 
 template <typename Headers>
 [[nodiscard]] inline HttpContentCodingFieldResult httpClientContentCodingOf(
-    const Headers& headers) noexcept {
-    return httpContentCodingFromHeaders(headers);
+    const Headers& headers, std::pmr::memory_resource* resource) {
+    return httpContentCodingFromHeaders(headers, resource);
 }
 
 [[nodiscard]] inline HttpContentCodingFieldResult httpClientResponseContentCoding(
-    const HttpClientResponseHead& head) noexcept {
-    return httpClientContentCodingOf(head.headers());
+    const HttpClientResponseHead& head, std::pmr::memory_resource* resource) {
+    return httpClientContentCodingOf(head.headers(), resource);
 }
 
 [[nodiscard]] inline HttpContentDecodeResult decodeHttpClientResponseContentEncoding(
@@ -28,13 +28,13 @@ template <typename Headers>
     // The immutable parsed head and externally driven encoded bytes remain
     // separate. A decoded representation has different Content-Encoding and
     // Content-Length metadata, so return independently owned bytes.
-    const auto parsedCoding = httpClientResponseContentCoding(head);
-    const auto* coding = parsedCoding.coding();
-    if (coding == nullptr) {
+    const auto parsedCoding = httpClientContentCodingOf(head.headers(), resource);
+    if (parsedCoding.invalid() != nullptr || parsedCoding.unsupported() != nullptr) {
         return HttpContentDecodeResultAccess::failure(HttpContentDecodeError::kUnsupportedCoding);
     }
     return decodeHttpContent(
-        *coding, encodedContent, {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
+        parsedCoding.codings(), encodedContent,
+        {.maxDecodedBytes = maxDecodedBytes, .resource = resource});
 }
 
 }  // namespace ruvia::detail

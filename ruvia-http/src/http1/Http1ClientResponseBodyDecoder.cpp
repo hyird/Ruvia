@@ -29,12 +29,11 @@ Http1ClientResponseBodyDecoder::Http1ClientResponseBodyDecoder(
     if (plan.informational() || plan.connectTunnel() || plan.protocolUpgrade()) {
         throw std::invalid_argument("HTTP/1 response plan has no ordinary message body");
     }
-    const auto configureCoding = [this, resource](HttpTransferCodings codings) {
-        if (codings.count > 1) {
-            throw std::invalid_argument("multiple HTTP transfer codings are unsupported");
-        }
-        if (codings.count == 1) {
-            transfer_.emplace(codings.values[0], resource, ProtocolByteLimit::unlimited());
+    const auto configureCoding = [this, resource](const HttpTransferCodings& codings) {
+        if (!codings.empty()) {
+            transfer_.emplace(std::span<const HttpTransferCoding>(
+                                  codings.values.data(), codings.values.size()),
+                resource, ProtocolByteLimit::unlimited());
         }
     };
     if (const auto* without = plan.withoutContent()) {
@@ -423,7 +422,7 @@ Http1ClientResponseBodyDecoder::Result Http1ClientResponseBodyDecoder::finishTra
         return fail(Http1ClientResponseBodyError::kIncompleteBody, consumed);
     }
     if (decoded.needInput() != nullptr) {
-        decoded = transfer_->finishInput();
+        decoded = transfer_->finish_input();
     }
     if (decoded.complete() != nullptr) {
         transferPhase_ = TransferPhase::kEnded;

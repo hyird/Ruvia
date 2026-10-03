@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
@@ -32,6 +33,9 @@ using ruvia::Http2ResponseHeadSubmitError;
 using ruvia::Http2ResponseHeadSubmitFailure;
 using ruvia::Http2ResponseHeadSubmitResult;
 using ruvia::Http2StreamingResponseHeadSubmitResult;
+using ruvia::http_response_stream_head_disposition;
+using ruvia::http_response_stream_trailer_framing;
+using ruvia::http_response_trailer_intent;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
 using ruvia::detail::Http2ConnectForm;
@@ -59,9 +63,6 @@ using ruvia::detail::Http2SubmittedRequestHead;
 using ruvia::detail::Http2TunnelState;
 using ruvia::detail::Http2WebSocketHandshakeSubmitFailure;
 using ruvia::detail::Http2WebSocketHandshakeSubmitResult;
-using ruvia::detail::ResponseStreamHeadDisposition;
-using ruvia::detail::ResponseStreamTrailerFraming;
-using ruvia::detail::ResponseTrailerIntent;
 
 inline ruvia::detail::HttpResponseTrailerSection validatedTrailers(
     std::span<const ruvia::HttpHeaderView> fields) {

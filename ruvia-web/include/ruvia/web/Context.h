@@ -33,6 +33,7 @@
 #include "ruvia/web/Dispatch.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/Http3EarlyDataInfo.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/HttpTunnel.h"
 #include "ruvia/web/ModelTypes.h"
@@ -174,6 +175,13 @@ public:
         return connInfo_;
     }
     ConnInfo conn() const&& = delete;
+
+    // Immutable snapshot for this request. `received_from_early_data` is trusted
+    // local QUIC transport provenance; `upstream_declared_early_data` reflects
+    // only the untrusted HTTP field and must not be used as proof of 0-RTT.
+    [[nodiscard]] http3_early_data_info early_data_info() const noexcept {
+        return early_data_info_;
+    }
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an
@@ -455,6 +463,7 @@ private:
     const HttpRequest& request_;
     const HttpRequestTrailers* requestTrailers_{};
     const std::optional<HttpPriority>* requestPriorityUpdate_{};
+    http3_early_data_info early_data_info_{};
     detail::HttpInterimResponseOutput* interimOutput_{};
     detail::HttpConnectionAdvertisementOutput* connectionAdvertisements_{};
     detail::HttpPushOutput* pushOutput_{};

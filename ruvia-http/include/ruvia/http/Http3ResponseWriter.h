@@ -11,6 +11,7 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 namespace ruvia {
 
@@ -19,6 +20,9 @@ enum class Http3ResponseHeadError : std::uint8_t {
     kForbiddenField,
     kUnsupportedStatus,
     kFieldSectionError,
+    // A connection-owned encoder refused the peer's decoded-size limit before
+    // touching QPACK state; this is not an invalid application response.
+    peer_field_section_limit,
 };
 
 struct Http3ResponseFieldSection {
@@ -76,7 +80,7 @@ struct Http3ResponseHead final : Http3ResponseFieldSection {
 
 struct Http3StreamingResponseHead final {
     Http3ResponseHead head;
-    ResponseStreamCommitPlan commitPlan;
+    http_response_stream_commit_plan commit_plan;
 };
 
 struct Http3ResponseHeadFailure final {
@@ -87,7 +91,7 @@ struct Http3ResponseHeadFailure final {
 // Validates and projects streaming metadata without inventing a buffered length.
 [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeHttp3StreamingResponseHead(HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers,
+    http_response_stream_kind kind, http_response_trailer_intent trailers,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 // Projects an interim 1xx head, validating its bodyless message semantics.
@@ -125,7 +129,7 @@ encodeHttp3ResponseTrailers(std::span<const Http3FieldSectionFieldView> fields,
 class Http3QpackEncoder;
 [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeHttp3StreamingResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 [[nodiscard]] std::expected<Http3ResponseHead, Http3ResponseHeadFailure>
 encodeHttp3InterimResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, const HttpInterimResponseHead& response,
     Http3FieldSectionLimits limits = {}, std::pmr::memory_resource* resource = std::pmr::get_default_resource());

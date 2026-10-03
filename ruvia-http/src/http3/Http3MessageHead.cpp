@@ -10,6 +10,7 @@
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
@@ -249,7 +250,7 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         state.hostSeen = true;
     }
     if (state.kind == Http3MessageHeadKind::kRequest) {
-        if ((field.name == "origin" && !detail::isValidHttpOriginFieldValue(field.value)) ||
+        if ((field.name == "origin" && !detail::is_valid_http_origin_field_value(field.value)) ||
             (field.name == "access-control-request-method" &&
                 !detail::isValidHttpCorsRequestMethod(field.value)) ||
             (field.name == "access-control-request-headers" &&

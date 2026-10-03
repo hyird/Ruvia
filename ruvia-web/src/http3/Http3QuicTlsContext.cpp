@@ -74,6 +74,13 @@ http3_quic_tls_context::http3_quic_tls_context(const HttpServerListenerDefinitio
     configure_quic_tls_context(default_context.get(), tls.identity, tls.clientCertificates,
         &select_alpn_protocol);
     default_context_ = default_context.get();
+    early_data_enabled_ = tls.http3_early_data;
+    if (SSL_CTX_set_max_early_data(default_context_,
+            early_data_enabled_ ? 65536U : 0U) != 1) {
+        throw std::runtime_error("failed to configure QUIC server early-data allowance");
+    }
+    // Keep OpenSSL's built-in anti-replay enabled. Early data is never enabled
+    // for listeners requesting client certificates (validated above).
     SSL_CTX_set_cert_cb(default_context_, &select_certificate, this);
     // SSL objects and active QUIC connections borrow this context's cert callback
     // argument, and SNI cert_cb copies from identity_contexts_; all must stay alive.

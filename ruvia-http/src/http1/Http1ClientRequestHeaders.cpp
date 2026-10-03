@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpMediaType.h"
+#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTeFields.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 namespace ruvia {
@@ -54,7 +55,7 @@ bool analyzeHeaders(std::span<const HttpHeaderView> headers, RequestHeaderFacts&
             return false;
         }
         if ((kind == detail::RequestHeaderKind::kOrigin &&
-                !detail::isValidHttpOriginFieldValue(value)) ||
+                !detail::is_valid_http_origin_field_value(value)) ||
             (kind == detail::RequestHeaderKind::kAccessControlRequestMethod &&
                 !detail::isValidHttpCorsRequestMethod(value)) ||
             (kind == detail::RequestHeaderKind::kAccessControlRequestHeaders &&

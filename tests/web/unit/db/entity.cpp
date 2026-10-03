@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -66,6 +67,36 @@ using NullableArrayEntity = ruvia::DbEntity<"nullable_events",
     ruvia::DbColumn<"tags", std::pmr::vector<std::pmr::string>,
         ruvia::DbColumnOptions{.nullable = true}>>;
 using NumericEntity = ruvia::DbEntity<"numeric_values", ruvia::DbColumn<"value", int>>;
+
+class equivalent_memory_resource final : public std::pmr::memory_resource {
+public:
+    explicit equivalent_memory_resource(std::pmr::memory_resource* upstream)
+        : upstream_(upstream) {}
+
+    void reject_allocations(bool reject = true) noexcept {
+        reject_allocations_ = reject;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (reject_allocations_) {
+            throw std::bad_alloc();
+        }
+        return upstream_->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        upstream_->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        const auto* equivalent = dynamic_cast<const equivalent_memory_resource*>(&other);
+        return equivalent != nullptr && upstream_ == equivalent->upstream_;
+    }
+
+    std::pmr::memory_resource* upstream_;
+    bool reject_allocations_{false};
+};
 
 using RelationTarget = ruvia::DbEntity<"relation_targets", ruvia::DbColumn<"id", std::int64_t>>;
 using RelationOwner = ruvia::DbEntity<"relation_owners", ruvia::DbColumn<"id", std::int64_t>,
@@ -212,6 +243,68 @@ RUVIA_TEST(db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
         RUVIA_CHECK_EQ(target.liveAllocations(), baseline);
     }
     RUVIA_CHECK_EQ(target.allocationCount(), target.deallocationCount());
+}
+
+RUVIA_TEST(db_entity_string_vector_assignment_normalizes_equivalent_resource_allocators) {
+    using string_array_entity = ruvia::DbEntity<"string_arrays",
+        ruvia::DbColumn<"values", std::pmr::vector<std::pmr::string>>>;
+    ruvia::test::CountingMemoryResource upstream;
+    equivalent_memory_resource target(&upstream);
+    {
+        string_array_entity entity(&target);
+        {
+            equivalent_memory_resource source(&upstream);
+            RUVIA_CHECK(source.is_equal(target));
+            std::pmr::vector<std::pmr::string> values(&source);
+            values.emplace_back(200, 'a');
+            values.emplace_back(240, 'b');
+            entity.set<"values">(values);
+            RUVIA_CHECK_EQ(values.size(), std::size_t{2});
+            RUVIA_CHECK_EQ(values[0], std::string_view(std::string(200, 'a')));
+            RUVIA_CHECK_EQ(values[1], std::string_view(std::string(240, 'b')));
+            RUVIA_CHECK(values.get_allocator().resource() == &source);
+            RUVIA_CHECK(values[0].get_allocator().resource() == &source);
+        }
+        const auto& lvalue_stored = entity.get<"values">();
+        RUVIA_CHECK(lvalue_stored.get_allocator().resource() == &target);
+        RUVIA_CHECK(lvalue_stored[0].get_allocator().resource() == &target);
+        RUVIA_CHECK(lvalue_stored[1].get_allocator().resource() == &target);
+        RUVIA_CHECK_EQ(lvalue_stored[0], std::string_view(std::string(200, 'a')));
+        RUVIA_CHECK_EQ(lvalue_stored[1], std::string_view(std::string(240, 'b')));
+
+        std::uintptr_t transferred_address = 0;
+        {
+            equivalent_memory_resource source(&upstream);
+            std::pmr::vector<std::pmr::string> values(&source);
+            values.emplace_back(260, 'b');
+            values.emplace_back(280, 'c');
+            transferred_address = reinterpret_cast<std::uintptr_t>(values[0].data());
+            entity.set<"values">(std::move(values));
+        }
+        const auto& rvalue_stored = entity.get<"values">();
+        RUVIA_CHECK(rvalue_stored.get_allocator().resource() == &target);
+        RUVIA_CHECK(rvalue_stored[0].get_allocator().resource() == &target);
+        RUVIA_CHECK(rvalue_stored[1].get_allocator().resource() == &target);
+        RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(rvalue_stored[0].data()), transferred_address);
+        RUVIA_CHECK_EQ(rvalue_stored[0], std::string_view(std::string(260, 'b')));
+        RUVIA_CHECK_EQ(rvalue_stored[1], std::string_view(std::string(280, 'c')));
+
+        target.reject_allocations();
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            equivalent_memory_resource source(&upstream);
+            std::pmr::vector<std::pmr::string> values(&source);
+            values.emplace_back(220, 'd');
+            entity.set<"values">(std::move(values));
+        }));
+        target.reject_allocations(false);
+        RUVIA_CHECK(entity.isSet<"values">());
+        RUVIA_CHECK_EQ(entity.get<"values">().size(), std::size_t{2});
+        RUVIA_CHECK_EQ(entity.get<"values">()[0], std::string_view(std::string(260, 'b')));
+        RUVIA_CHECK(entity.get<"values">().get_allocator().resource() == &target);
+        RUVIA_CHECK(entity.get<"values">()[0].get_allocator().resource() == &target);
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
 }
 
 RUVIA_TEST(db_entity_rows_mapping_owns_field_storage) {

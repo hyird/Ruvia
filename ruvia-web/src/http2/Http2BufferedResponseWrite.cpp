@@ -154,6 +154,64 @@ Task<Http2BufferedResponseWriteResult> Http2BufferedResponseWriter::write(
         co_return Http2BufferedResponseWriteResult::makeCompleted(committedStatus);
     }
 
+    if (response.has_multipart_file_body()) {
+        std::pmr::string fileChunk(worker_.allocator<char>());
+        ensureFileChunkBuffer(fileChunk);
+        for (std::size_t segmentIndex = 0; segmentIndex < response.body_segment_count(); ++segmentIndex) {
+            const auto segment = response.body_segment(segmentIndex);
+            const bool lastSegment = segmentIndex + 1 == response.body_segment_count();
+            if (segment.file_) {
+                auto input = openResponseFileInput(*segment.file_);
+                if (!input) {
+                    co_return failAfterCommit();
+                }
+                input.seekg(static_cast<std::streamoff>(segment.file_->offset()), std::ios::beg);
+                if (!input) {
+                    co_return failAfterCommit();
+                }
+                std::uint64_t remaining = segment.file_->length();
+                while (remaining != 0) {
+                    if (connection_.streamAborted(streamId)) {
+                        co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
+                    }
+                    const auto next = static_cast<std::size_t>(std::min<std::uint64_t>(kHttp2DataOutputCreditBytes, remaining));
+                    input.read(fileChunk.data(), static_cast<std::streamsize>(next));
+                    const auto count = input.gcount();
+                    if (count <= 0) {
+                        co_return failAfterCommit();
+                    }
+                    remaining -= static_cast<std::uint64_t>(count);
+                    const bool finalChunk = lastSegment && remaining == 0;
+                    const auto result = co_await writeData(streamId,
+                        std::string_view(fileChunk.data(), static_cast<std::size_t>(count)),
+                        finalChunk ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen);
+                    if (result == DataWriteResult::kPeerAborted) {
+                        co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
+                    }
+                    if (result == DataWriteResult::kFailed) {
+                        co_return failAfterCommit();
+                    }
+                }
+            } else {
+                std::size_t offset = 0;
+                while (offset < segment.bytes_.size()) {
+                    const auto count = std::min<std::size_t>(kHttp2DataOutputCreditBytes, segment.bytes_.size() - offset);
+                    const bool finalChunk = lastSegment && offset + count == segment.bytes_.size();
+                    const auto result = co_await writeData(streamId, segment.bytes_.substr(offset, count),
+                        finalChunk ? Http2EndStream::kEndStream : Http2EndStream::kKeepOpen);
+                    if (result == DataWriteResult::kPeerAborted) {
+                        co_return Http2BufferedResponseWriteResult::makePeerAbortedAfterCommit(committedStatus);
+                    }
+                    if (result == DataWriteResult::kFailed) {
+                        co_return failAfterCommit();
+                    }
+                    offset += count;
+                }
+            }
+        }
+        co_return Http2BufferedResponseWriteResult::makeCompleted(committedStatus);
+    }
+
     if (const auto fileBody = response.fileBody()) {
         auto input = openResponseFileInput(*fileBody);
         bool ready = static_cast<bool>(input);

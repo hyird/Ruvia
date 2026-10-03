@@ -92,6 +92,26 @@ private:
     std::size_t maximumBlockBytes_;
 };
 
+inline std::string zlib_deflate_compress(std::string_view data) {
+    z_stream stream{};
+    if (deflateInit(&stream, Z_BEST_COMPRESSION) != Z_OK) {
+        return {};
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    stream.avail_in = static_cast<uInt>(data.size());
+    std::string output(data.size() + 256, '\0');
+    stream.next_out = reinterpret_cast<Bytef*>(output.data());
+    stream.avail_out = static_cast<uInt>(output.size());
+    const int status = deflate(&stream, Z_FINISH);
+    const auto written = stream.total_out;
+    deflateEnd(&stream);
+    if (status != Z_STREAM_END) {
+        return {};
+    }
+    output.resize(written);
+    return output;
+}
+
 inline std::string gzipCompress(std::string_view data) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) !=

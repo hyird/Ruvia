@@ -5,6 +5,7 @@
 
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/HttpResponseStream.h"
 
 namespace ruvia {
 
@@ -66,10 +67,10 @@ private:
 
 class Http2StreamingResponseHeadSubmitResult final {
 public:
-    [[nodiscard]] const ResponseStreamCommitPlan* submitted() const& noexcept {
+    [[nodiscard]] const http_response_stream_commit_plan* submitted() const& noexcept {
         return value_ ? &*value_ : nullptr;
     }
-    const ResponseStreamCommitPlan* submitted() const&& = delete;
+    const http_response_stream_commit_plan* submitted() const&& = delete;
     [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure* failure() const& noexcept {
         return value_ ? nullptr : &value_.error();
     }
@@ -78,15 +79,15 @@ public:
 private:
     friend class Http2Connection;
     friend class detail::Http2Connection;
-    using Value = std::expected<ResponseStreamCommitPlan, Http2ResponseHeadSubmitFailure>;
+    using Value = std::expected<http_response_stream_commit_plan, Http2ResponseHeadSubmitFailure>;
 
-    explicit Http2StreamingResponseHeadSubmitResult(ResponseStreamCommitPlan plan)
+    explicit Http2StreamingResponseHeadSubmitResult(http_response_stream_commit_plan plan)
         : value_(std::move(plan)) {}
     explicit Http2StreamingResponseHeadSubmitResult(Http2ResponseHeadSubmitFailure failure)
         : value_(std::unexpected(failure)) {}
 
     [[nodiscard]] static Http2StreamingResponseHeadSubmitResult makeSubmitted(
-        ResponseStreamCommitPlan plan) {
+        http_response_stream_commit_plan plan) {
         return Http2StreamingResponseHeadSubmitResult(std::move(plan));
     }
     [[nodiscard]] static Http2StreamingResponseHeadSubmitResult makeFailure(

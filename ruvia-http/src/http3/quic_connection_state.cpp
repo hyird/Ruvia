@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/detail/http3/quic_address_codec.h"
 #include "ruvia/http/quic_connection.h"
 
 namespace ruvia::detail {
@@ -17,9 +19,14 @@ std::pmr::memory_resource* require_resource(std::pmr::memory_resource* resource)
     return resource;
 }
 
+bool same_address(const quic_address& left, const quic_address& right) noexcept {
+    return left.family == right.family && left.port == right.port &&
+           left.scope_id == right.scope_id && left.bytes == right.bytes;
+}
+
 std::size_t level_index(quic_encryption_level level) {
     const auto index = static_cast<std::size_t>(level);
-    if (index >= 3) {
+    if (index >= 4) {
         throw std::invalid_argument("invalid QUIC encryption level");
     }
     return index;
@@ -56,7 +63,9 @@ void validate_config(const quic_connection_config& config,
         transport.active_connection_id_limit <= varint_max &&
         transport.active_connection_id_limit >= 2 &&
         transport.idle_timeout_ms <= varint_max;
-    const bool invalid = !resource || !role_valid || config.version != quic_version::v1 ||
+    const bool invalid = !resource || !role_valid ||
+                         (config.version != quic_version::v1 && config.version != quic_version::v2) ||
+                         (config.preferred_version != quic_version::v1 && config.preferred_version != quic_version::v2) ||
                          config.local_address.port == 0 || config.peer_address.port == 0 || !cid_valid ||
                          config.limits.max_crypto_buffer_size == 0 || config.limits.max_stream_buffer_size == 0 ||
                          config.limits.max_connection_buffer_size == 0 || config.limits.max_streams == 0 ||
@@ -85,24 +94,39 @@ void validate_config(const quic_connection_config& config,
 
 quic_connection_state::quic_connection_state(quic_connection_config config,
     quic_crypto_provider_view crypto, quic_tls_driver_view tls_driver,
-    std::pmr::memory_resource* resource, quic_timestamp now)
+    std::pmr::memory_resource* resource, quic_timestamp now,
+    std::span<const std::byte> early_transport_parameters)
     : config_(std::move(config)),
+      negotiated_version_(config_.version),
       crypto_(crypto),
       tls_driver_(tls_driver),
       resource_(require_resource(resource)),
       last_supplied_time_(now),
       tls_handshake_(this),
+      current_local_address_(config_.local_address),
       inbound_crypto_{std::pmr::list<crypto_record>(resource_),
           std::pmr::list<crypto_record>(resource_),
+          std::pmr::list<crypto_record>(resource_),
           std::pmr::list<crypto_record>(resource_)},
+      early_transport_parameters_(resource_),
       local_transport_parameters_(resource_),
       streams_(resource_),
+      rejected_early_streams_(resource_),
       received_datagrams_(resource_),
       send_datagrams_(resource_),
       close_reason_(resource_) {
     validate_config(config_, crypto_, resource_);
+    if (!early_transport_parameters.empty()) {
+        if (config_.role != quic_role::client) {
+            throw quic_error(quic_error_code::invalid_state,
+                "remembered transport parameters are client-only");
+        }
+        early_transport_parameters_.assign(
+            early_transport_parameters.begin(), early_transport_parameters.end());
+    }
     local_transport_parameters_.reserve(64);
     streams_.reserve(config_.limits.max_streams);
+    rejected_early_streams_.reserve(config_.limits.max_streams);
     tls_driver_.validate();
 }
 
@@ -245,13 +269,118 @@ void quic_connection_state::rethrow_failure() const {
 
 quic_connection_info quic_connection_state::info() const noexcept {
     return {.state = state_,
-        .local_address = config_.local_address,
+        .negotiated_version = negotiated_version_,
+        .local_address = current_local_address_,
         .peer_address = config_.peer_address,
         .tls_handshake_complete = tls_handshake_complete_,
         .quic_handshake_complete = quic_handshake_complete_,
         .confirmed = confirmed_,
+        .early_data = early_data_state_,
         .negotiated_idle_timeout_ms = config_.local_transport_parameters.idle_timeout_ms,
         .close_error_code = close_error_code_};
+}
+
+quic_path_migration quic_connection_state::start_path_migration(
+    const quic_address& local_address, ngtcp2_tstamp now) {
+    rethrow_failure();
+    if (!connection_ || state_ != ruvia::quic_connection_state::ready ||
+        config_.role != quic_role::client || !confirmed_ ||
+        migration_validation_pending_ ||
+        local_address.family != current_local_address_.family || local_address.port == 0 ||
+        same_address(local_address, current_local_address_)) {
+        return {.status = quic_migration_status::rejected};
+    }
+    const auto* remote_parameters = ngtcp2_conn_get_remote_transport_params2(connection_);
+    if (!remote_parameters || remote_parameters->disable_active_migration) {
+        return {.status = quic_migration_status::rejected};
+    }
+    auto id = next_migration_id_++;
+    if (id == 0) {
+        id = next_migration_id_++;
+    }
+    migration_ = quic_path_migration{id, quic_migration_status::started, local_address};
+    migration_validation_pending_ = true;
+    fill_quic_path(migration_path_, local_address, config_.peer_address);
+    const auto result = ngtcp2_conn_initiate_migration(
+        connection_, &migration_path_.path, now);
+    if (result != 0) {
+        migration_.reset();
+        migration_validation_pending_ = false;
+        return {.status = result == NGTCP2_ERR_CONN_ID_BLOCKED
+                              ? quic_migration_status::would_block
+                              : quic_migration_status::rejected};
+    }
+    const auto* current_path = ngtcp2_conn_get_path2(connection_);
+    if (current_path != nullptr) {
+        const auto current_local = decode_quic_address(current_path->local);
+        const auto current_peer = decode_quic_address(current_path->remote);
+        if (same_address(current_local, local_address) &&
+            same_address(current_peer, config_.peer_address)) {
+            migration_validation_pending_ = false;
+            if (migration_->status == quic_migration_status::started) {
+                current_local_address_ = current_local;
+                migration_->status = quic_migration_status::validated;
+            }
+        }
+    }
+    return *migration_;
+}
+
+std::optional<quic_path_migration> quic_connection_state::path_migration(
+    std::uint64_t id) const noexcept {
+    if (!migration_ || migration_->id != id) {
+        return std::nullopt;
+    }
+    return migration_;
+}
+
+quic_operation_status quic_connection_state::cancel_path_migration(std::uint64_t id) {
+    if (!migration_ || migration_->id != id || migration_->status != quic_migration_status::started) {
+        return quic_operation_status::retired;
+    }
+    migration_->status = quic_migration_status::aborted;
+    latch_close_reason({.kind = quic_close_kind::application, .code = 0, .reason = {}});
+    latched_failure_ = nullptr;
+    state_ = ruvia::quic_connection_state::closing;
+    return quic_operation_status::accepted;
+}
+
+quic_operation_status quic_connection_state::fail_path_migration(std::uint64_t id) noexcept {
+    if (!migration_ || migration_->id != id || migration_->status != quic_migration_status::started) {
+        return quic_operation_status::retired;
+    }
+    migration_->status = quic_migration_status::failed;
+    migration_validation_pending_ = false;
+    return quic_operation_status::accepted;
+}
+
+void quic_connection_state::on_path_validation(const ngtcp2_path& path,
+    ngtcp2_path_validation_result result) noexcept {
+    if (!migration_) {
+        return;
+    }
+    try {
+        const auto local = decode_quic_address(path.local);
+        const auto peer = decode_quic_address(path.remote);
+        if (!same_address(local, migration_->local_address) ||
+            !same_address(peer, config_.peer_address)) {
+            return;
+        }
+        migration_validation_pending_ = false;
+        if (migration_->status != quic_migration_status::started) {
+            return;
+        }
+        if (result == NGTCP2_PATH_VALIDATION_RESULT_SUCCESS) {
+            current_local_address_ = local;
+            migration_->status = quic_migration_status::validated;
+        } else if (result == NGTCP2_PATH_VALIDATION_RESULT_ABORTED) {
+            migration_->status = quic_migration_status::aborted;
+        } else {
+            migration_->status = quic_migration_status::failed;
+        }
+    } catch (...) {
+        latch_failure(std::current_exception());
+    }
 }
 
 void quic_connection_state::complete_tls(quic_tls_info_view info) {
@@ -398,6 +527,52 @@ quic_crypto_record_lease quic_tls_handshake::take_crypto_record() {
 
 std::span<const std::byte> quic_tls_handshake::local_transport_parameters() const noexcept {
     return state_->local_transport_parameters_;
+}
+
+void quic_tls_handshake::complete_early_data(bool accepted) {
+    if (!state_->tls_driver_active_) {
+        throw std::logic_error("early-data outcome is valid only during the synchronous TLS drive");
+    }
+    if (state_->early_data_state_ == quic_early_data_state::accepted ||
+        state_->early_data_state_ == quic_early_data_state::rejected) {
+        throw std::logic_error("TLS reported the early-data outcome more than once");
+    }
+    if (accepted && (state_->early_data_state_ != quic_early_data_state::available ||
+                        !state_->early_data_key_installed_)) {
+        throw std::logic_error("TLS accepted early data without installed 0-RTT keys");
+    }
+    if (!accepted && state_->config_.role == quic_role::client) {
+        const int result = ngtcp2_conn_tls_early_data_rejected(state_->connection_);
+        if (result != 0) {
+            throw quic_error(quic_error_code::protocol_failure,
+                "ngtcp2 failed to roll back rejected 0-RTT stream state");
+        }
+    }
+    if (!accepted) {
+        for (auto stream = state_->streams_.begin(); stream != state_->streams_.end();) {
+            auto& value = stream->second;
+            if (!value.early_data_candidate && !value.received_early_data) {
+                ++stream;
+                continue;
+            }
+            if (state_->rejected_early_streams_.size() ==
+                state_->rejected_early_streams_.capacity()) {
+                throw quic_error(quic_error_code::resource_limit,
+                    "rejected early-stream notification capacity exhausted");
+            }
+            state_->rejected_early_streams_.push_back(stream->first);
+            const auto unread = value.input.size() - value.input_offset;
+            if (unread > state_->retained_stream_input_bytes_ ||
+                value.retained_output_bytes > state_->retained_stream_output_bytes_) {
+                std::terminate();
+            }
+            state_->retained_stream_input_bytes_ -= unread;
+            state_->retained_stream_output_bytes_ -= value.retained_output_bytes;
+            stream = state_->streams_.erase(stream);
+        }
+    }
+    state_->early_data_state_ = accepted ? quic_early_data_state::accepted
+                                         : quic_early_data_state::rejected;
 }
 
 void quic_tls_handshake::complete(quic_tls_info_view info) {

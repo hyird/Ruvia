@@ -27,6 +27,9 @@ void HttpResponseHeadBuffer::spillToHeap(std::size_t minCapacity) {
 }
 
 void HttpResponseHeadBuffer::append(std::string_view value) {
+    if (value.empty()) {
+        return;
+    }
     if (auto* const stackState = std::get_if<StackState>(&state_)) {
         if (value.size() <= stack_.size() - stackState->used) {
             std::memcpy(stack_.data() + stackState->used, value.data(), value.size());

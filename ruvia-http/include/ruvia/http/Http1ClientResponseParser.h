@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -109,7 +110,7 @@ class Http1ClientChunkedResponse final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] constexpr HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
         return transferCodings_;
     }
 
@@ -120,9 +121,9 @@ public:
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    constexpr Http1ClientChunkedResponse(
-        HttpTransferCodings transferCodings, Http1ClosePolicy persistence) noexcept
-        : transferCodings_(transferCodings),
+    Http1ClientChunkedResponse(
+        HttpTransferCodings transferCodings, Http1ClosePolicy persistence)
+        : transferCodings_(std::move(transferCodings)),
           persistence_(persistence) {}
 
     HttpTransferCodings transferCodings_;
@@ -134,16 +135,15 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] constexpr HttpTransferCodings transferCodings() const noexcept {
+    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
         return transferCodings_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
-    explicit constexpr Http1ClientCloseDelimitedResponse(
-        HttpTransferCodings transferCodings) noexcept
-        : transferCodings_(transferCodings) {}
+    explicit Http1ClientCloseDelimitedResponse(HttpTransferCodings transferCodings)
+        : transferCodings_(std::move(transferCodings)) {}
 
     HttpTransferCodings transferCodings_;
 };
@@ -177,8 +177,8 @@ private:
     using Framing = std::variant<Http1ClientKnownLengthResponse, Http1ClientChunkedResponse,
         Http1ClientCloseDelimitedResponse>;
 
-    explicit constexpr Http1ClientResponseWithZeroContent(Framing framing) noexcept
-        : framing_(framing) {}
+    explicit Http1ClientResponseWithZeroContent(Framing framing)
+        : framing_(std::move(framing)) {}
 
     Framing framing_;
 };
@@ -261,13 +261,15 @@ private:
         Http1ClientProtocolUpgrade>;
 
     Http1ClientResponsePlan(
-        State state, std::optional<HttpClientRequestContentSignal> requestContentSignal) noexcept
-        : state_(state),
+        State state, std::optional<HttpClientRequestContentSignal> requestContentSignal)
+        : state_(std::move(state)),
           requestContentSignal_(requestContentSignal) {}
 
     State state_;
     std::optional<HttpClientRequestContentSignal> requestContentSignal_;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<Http1ClientResponsePlan>);
 
 // Protocol failures are typed and allocation-free. Resource exhaustion can
 // still throw while materializing a successful owning response. Exchange
@@ -337,13 +339,15 @@ private:
     Http1ParsedClientResponseHead(HttpClientResponseHead head, Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept
         : head_(std::move(head)),
-          plan_(plan),
+          plan_(std::move(plan)),
           consumedBytes_(consumedBytes) {}
 
     HttpClientResponseHead head_;
     Http1ClientResponsePlan plan_;
     std::size_t consumedBytes_{0};
 };
+
+static_assert(std::is_nothrow_move_constructible_v<Http1ParsedClientResponseHead>);
 
 class Http1ClientResponseParseFailure final {
 public:
@@ -435,6 +439,8 @@ private:
         Http1ClientResponseParseFailure, Http1ClientResponseParseTerminal>
         state_;
 };
+
+static_assert(std::is_nothrow_move_constructible_v<Http1ClientResponseParseResult>);
 
 // Per-request HTTP/1 response-head state machine. Construction consumes the
 // owning exchange state from one successfully prepared request; informational

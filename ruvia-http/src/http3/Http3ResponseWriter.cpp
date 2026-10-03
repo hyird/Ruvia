@@ -5,9 +5,12 @@
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <vector>
 
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
@@ -23,6 +26,45 @@ constexpr bool isTokenChar(unsigned char ch) noexcept {
            ch == '*' || ch == '+' || ch == '-' || ch == '.' || ch == '^' || ch == '_' ||
            ch == '`' || ch == '|' || ch == '~';
 }
+
+constexpr bool has_uppercase(std::string_view name) noexcept {
+    return std::any_of(name.begin(), name.end(), [](unsigned char ch) {
+        return ch >= 'A' && ch <= 'Z';
+    });
+}
+
+bool add_lowercase_name_bytes(std::size_t& total, std::string_view name) noexcept {
+    if (!has_uppercase(name)) {
+        return true;
+    }
+    if (name.size() > std::numeric_limits<std::size_t>::max() - total) {
+        return false;
+    }
+    total += name.size();
+    return true;
+}
+
+class lowercase_field_names final {
+public:
+    lowercase_field_names(std::pmr::memory_resource* resource, std::size_t bytes)
+        : storage_(resource) {
+        storage_.reserve(bytes);
+    }
+
+    std::string_view project(std::string_view name) {
+        if (!has_uppercase(name)) {
+            return name;
+        }
+        const auto start = storage_.size();
+        for (const unsigned char ch : name) {
+            storage_.push_back(static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch));
+        }
+        return {storage_.data() + start, name.size()};
+    }
+
+private:
+    std::pmr::vector<char> storage_;
+};
 
 constexpr bool equalsIgnoreCase(std::string_view lhs, std::string_view rhs) noexcept {
     if (lhs.size() != rhs.size()) {
@@ -125,7 +167,7 @@ static std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encode
     }
 
     std::size_t decodedBytes = 0;
-    std::size_t lowercaseBytes = 0;
+    std::size_t lowercase_bytes = 0;
     for (const auto& field : fields) {
         if (!detail::isValidResponseTrailerName(field.name) ||
             !detail::isValidResponseTrailerValue(field.value)) {
@@ -138,15 +180,9 @@ static std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encode
             return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
                 Http3FieldSectionError::kFieldListTooLarge});
         }
-        const bool hasUppercase = std::any_of(field.name.begin(), field.name.end(), [](unsigned char ch) {
-            return ch >= 'A' && ch <= 'Z';
-        });
-        if (hasUppercase) {
-            if (field.name.size() > std::numeric_limits<std::size_t>::max() - lowercaseBytes) {
-                return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
-                    Http3FieldSectionError::kFieldListTooLarge});
-            }
-            lowercaseBytes += field.name.size();
+        if (!add_lowercase_name_bytes(lowercase_bytes, field.name)) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kFieldListTooLarge});
         }
     }
 
@@ -156,23 +192,11 @@ static std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encode
             Http3FieldSectionError::kFieldSectionTooLarge});
     }
     auto* const memory = resource != nullptr ? resource : std::pmr::get_default_resource();
-    std::pmr::vector<char> lowercase(memory);
+    lowercase_field_names lowercase(memory, lowercase_bytes);
     std::pmr::vector<Http3FieldSectionFieldView> normalized(memory);
-    lowercase.reserve(lowercaseBytes);
     normalized.reserve(fields.size());
     for (const auto& field : fields) {
-        std::string_view name = field.name;
-        const bool hasUppercase = std::any_of(name.begin(), name.end(), [](unsigned char ch) {
-            return ch >= 'A' && ch <= 'Z';
-        });
-        if (hasUppercase) {
-            const auto start = lowercase.size();
-            for (const unsigned char ch : name) {
-                lowercase.push_back(static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch));
-            }
-            name = std::string_view(lowercase.data() + start, name.size());
-        }
-        normalized.push_back({name, field.value, true});
+        normalized.push_back({lowercase.project(field.name), field.value, true});
     }
     auto encoded = detail::encodeHttp3Fields(normalized, memory, limits, encoder, streamId);
     if (!encoded) {
@@ -287,15 +311,9 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
                 Http3FieldSectionError::kTooManyFields});
         }
         ++projectedCount;
-        const bool hasUppercase = std::any_of(name.begin(), name.end(), [](unsigned char ch) {
-            return ch >= 'A' && ch <= 'Z';
-        });
-        if (hasUppercase) {
-            if (name.size() > std::numeric_limits<std::size_t>::max() - nameBytes) {
-                return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
-                    Http3FieldSectionError::kFieldListTooLarge});
-            }
-            nameBytes += name.size();
+        if (!add_lowercase_name_bytes(nameBytes, name)) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kFieldListTooLarge});
         }
     }
 
@@ -343,27 +361,17 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
         }
         canonicalLengthSize = static_cast<std::size_t>(end - lengthBytes.data());
     }
-    std::pmr::vector<char> lowercase(memory);
+    lowercase_field_names lowercase(memory, nameBytes);
     std::pmr::vector<Http3FieldSectionFieldView> projected(memory);
-    lowercase.reserve(nameBytes);
     projected.reserve(projectedCount - 1);
     if (!generatedDate.empty()) {
         projected.push_back({"date", generatedDate, false});
     }
     for (const auto& header : headers) {
-        std::string_view name = header.name();
+        const auto original_name = header.name();
         auto value = header.value();
-        const bool contentLengthField = equalsIgnoreCase(name, "content-length");
-        const bool hasUppercase = std::any_of(name.begin(), name.end(), [](unsigned char ch) {
-            return ch >= 'A' && ch <= 'Z';
-        });
-        if (hasUppercase) {
-            const auto start = lowercase.size();
-            for (const unsigned char ch : name) {
-                lowercase.push_back(static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch));
-            }
-            name = std::string_view(lowercase.data() + start, name.size());
-        }
+        const bool contentLengthField = equalsIgnoreCase(original_name, "content-length");
+        const auto name = lowercase.project(original_name);
         if (contentLengthField) {
             value = std::string_view(lengthBytes.data(), canonicalLengthSize);
         }
@@ -382,52 +390,54 @@ static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeResponse
 
 static std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeInterimResponseHead(
     const HttpInterimResponseHead& response, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
+    auto* const memory = resource != nullptr ? resource : std::pmr::get_default_resource();
     if (detail::validateHttpInterimResponseHeaders(response) != detail::HttpInterimResponseHeaderValidationStatus::kOk) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
     }
-    std::pmr::vector<std::pmr::string> names(resource);
-    std::pmr::vector<Http3FieldSectionFieldView> fields(resource);
-    names.reserve(response.headers().size());
+    std::size_t lowercase_bytes = 0;
+    for (const auto& field : response.headers()) {
+        if (!add_lowercase_name_bytes(lowercase_bytes, field.name())) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kFieldListTooLarge});
+        }
+    }
+    lowercase_field_names lowercase(memory, lowercase_bytes);
+    std::pmr::vector<Http3FieldSectionFieldView> fields(memory);
     fields.reserve(response.headers().size());
     for (const auto& field : response.headers()) {
-        names.emplace_back(field.name());
-        for (auto& ch : names.back()) {
-            if (ch >= 'A' && ch <= 'Z') {
-                ch += 'a' - 'A';
-            }
-        }
-        fields.push_back({names.back(), field.value(), false});
+        fields.push_back({lowercase.project(field.name()), field.value(), false});
     }
-    return encodeResponseHead(response.status(), HttpKnownMethod::kGet, fields, limits, resource, encoder, streamId);
+    return encodeResponseHead(response.status(), HttpKnownMethod::kGet, fields, limits, memory, encoder, streamId);
 }
 
 static std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure>
 encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits,
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits,
     std::pmr::memory_resource* resource, Http3QpackEncoder* encoder, std::uint64_t streamId) {
-    const auto plan = planHttpResponseStreamCommit(ResponseStreamFraming::kHttp3Frames, method, response.status(), trailers);
+    const auto plan = plan_http_response_stream_commit(http_response_stream_framing::http3_frames, method, response.status(), trailers);
     if (response.status().isInformational()) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kUnsupportedStatus});
     }
-    if (!plan.trailerIntentAllowed()) {
+    if (!plan.trailer_intent_allowed()) {
         return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kInvalidField});
     }
-    auto prepared = prepareHttpResponseStreamHead(std::move(response), kind, plan);
+    auto prepared = prepare_http_response_stream_head(std::move(response), kind, plan);
     auto* memory = resource != nullptr ? resource : std::pmr::get_default_resource();
-    std::pmr::vector<std::pmr::string> names(memory);
+    std::size_t lowercase_bytes = 0;
+    for (const auto& header : prepared.response().headers()) {
+        if (!add_lowercase_name_bytes(lowercase_bytes, header.name())) {
+            return std::unexpected(Http3ResponseHeadFailure{Http3ResponseHeadError::kFieldSectionError,
+                Http3FieldSectionError::kFieldListTooLarge});
+        }
+    }
+    lowercase_field_names lowercase(memory, lowercase_bytes);
     std::pmr::vector<Http3FieldSectionFieldView> fields(memory);
-    names.reserve(prepared.response().headers().size());
     fields.reserve(prepared.response().headers().size() + 1);
     bool hasDate = false;
     for (const auto& header : prepared.response().headers()) {
-        names.emplace_back(header.name());
-        for (auto& ch : names.back()) {
-            if (ch >= 'A' && ch <= 'Z') {
-                ch = static_cast<char>(ch + ('a' - 'A'));
-            }
-        }
-        fields.push_back({names.back(), header.value(), false});
-        hasDate = hasDate || names.back() == "date";
+        const auto name = lowercase.project(header.name());
+        fields.push_back({name, header.value(), false});
+        hasDate = hasDate || name == "date";
     }
     if (!hasDate) {
         fields.push_back({"date", detail::cachedDateValue(), false});
@@ -440,11 +450,11 @@ encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method,
 }
 
 std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeHttp3StreamingResponseHead(HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeStreamingResponseHead(std::move(response), method, kind, trailers, limits, resource, nullptr, 0);
 }
 std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeHttp3StreamingResponseHead(Http3QpackEncoder& encoder, std::uint64_t streamId, HttpResponse response, HttpKnownMethod method,
-    ResponseStreamKind kind, ResponseTrailerIntent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
+    http_response_stream_kind kind, http_response_trailer_intent trailers, Http3FieldSectionLimits limits, std::pmr::memory_resource* resource) {
     return encodeStreamingResponseHead(std::move(response), method, kind, trailers, limits, resource, &encoder, streamId);
 }
 std::expected<Http3ResponseHead, Http3ResponseHeadFailure> encodeHttp3InterimResponseHead(const HttpInterimResponseHead& response,

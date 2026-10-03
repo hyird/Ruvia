@@ -86,25 +86,21 @@ void validate_client_initial_dcid(std::span<const std::byte> bytes) {
 }
 
 void install_initial_keys_impl(quic_connection_state& state,
-    std::span<const std::byte> client_dcid, bool version_negotiation) {
+    std::span<const std::byte> client_dcid, quic_version version, bool version_negotiation) {
     if (!state.connection_) {
         throw std::logic_error("cannot install QUIC Initial keys before connection initialization");
     }
-    if (state.config_.version != quic_version::v1) {
-        throw std::invalid_argument("only QUIC version 1 Initial keys are supported");
-    }
-
     validate_client_initial_dcid(client_dcid);
-    auto initial = derive_quic_v1_initial_secrets(state.crypto_, state.resource_, client_dcid);
+    auto initial = derive_quic_initial_secrets(state.crypto_, state.resource_, version, client_dcid);
     const auto read_secret = state.config_.role == quic_role::client
                                  ? initial.server.view()
                                  : initial.client.view();
     const auto write_secret = state.config_.role == quic_role::client
                                   ? initial.client.view()
                                   : initial.server.view();
-    auto read_keys = derive_quic_packet_keys(state.crypto_, state.resource_,
+    auto read_keys = derive_quic_packet_keys(state.crypto_, state.resource_, version,
         quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::read, read_secret);
-    auto write_keys = derive_quic_packet_keys(state.crypto_, state.resource_,
+    auto write_keys = derive_quic_packet_keys(state.crypto_, state.resource_, version,
         quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write, write_secret);
 
     auto read_aead = make_aead_slot(state, std::move(read_keys.aead()),
@@ -122,7 +118,7 @@ void install_initial_keys_impl(quic_connection_state& state,
     ngtcp2_conn_set_initial_crypto_ctx(state.connection_, &crypto_context);
 
     const int result = version_negotiation
-                           ? ngtcp2_conn_install_vneg_initial_key(state.connection_, NGTCP2_PROTO_VER_V1,
+                           ? ngtcp2_conn_install_vneg_initial_key(state.connection_, static_cast<std::uint32_t>(version),
                                  &read_aead_ctx, reinterpret_cast<const uint8_t*>(read_keys.iv().data()),
                                  &read_header_ctx, &write_aead_ctx,
                                  reinterpret_cast<const uint8_t*>(write_keys.iv().data()),
@@ -155,6 +151,8 @@ void configure_application_context(quic_connection_state& state, quic_cipher_sui
     }
 }
 
+quic_version refresh_negotiated_version(quic_connection_state& state);
+
 void install_aead_context(quic_connection_state& state, quic_encryption_level level,
     quic_crypto_direction direction, quic_cipher_suite suite,
     std::span<const std::byte> secret, std::span<const std::byte> iv, quic_aead_key key,
@@ -185,6 +183,25 @@ void install_aead_context(quic_connection_state& state, quic_encryption_level le
     }
     aead.release();
     header.release();
+    if (level == quic_encryption_level::handshake &&
+        direction == quic_crypto_direction::write &&
+        state.config_.role == quic_role::server) {
+        (void)refresh_negotiated_version(state);
+        encode_quic_local_transport_parameters(state);
+    }
+}
+
+quic_version refresh_negotiated_version(quic_connection_state& state) {
+    auto version = ngtcp2_conn_get_negotiated_version2(state.connection_);
+    if (version == 0) {
+        version = static_cast<std::uint32_t>(state.config_.version);
+    }
+    if (version != NGTCP2_PROTO_VER_V1 && version != NGTCP2_PROTO_VER_V2) {
+        throw quic_error(quic_error_code::protocol_failure,
+            "ngtcp2 selected an unsupported QUIC version");
+    }
+    state.negotiated_version_ = static_cast<quic_version>(version);
+    return state.negotiated_version_;
 }
 
 quic_connection_state* state_from(void* opaque) noexcept {
@@ -207,28 +224,33 @@ int callback_failure(quic_connection_state* state) noexcept {
 }
 
 void install_retry_integrity_aead(quic_connection_state& state) {
-    if (state.retry_aead_installed_) {
+    if (state.config_.role != quic_role::client ||
+        state.retry_aead_version_ == state.config_.version) {
         return;
     }
+    const auto key_bytes = state.config_.version == quic_version::v1
+                               ? std::span<const std::byte>(quic_v1_retry_integrity_key)
+                               : std::span<const std::byte>(quic_v2_retry_integrity_key);
     auto key = state.crypto_.create_aead_key(state.crypto_.context,
-        quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write,
-        quic_v1_retry_integrity_key);
+        quic_cipher_suite::aes_128_gcm_sha256, quic_crypto_direction::write, key_bytes);
     auto slot = make_aead_slot(state, std::move(key),
         quic_cipher_suite_parameters_for(quic_cipher_suite::aes_128_gcm_sha256));
     ngtcp2_crypto_aead_ctx context{.native_handle = slot.get()};
     ngtcp2_crypto_aead aead{.native_handle = nullptr, .max_overhead = 16};
-    ngtcp2_conn_set_retry_aead(state.connection_, &aead, &context);
     slot.release();
-    state.retry_aead_installed_ = true;
+    ngtcp2_conn_set_retry_aead(state.connection_, &aead, &context);
+    state.retry_aead_version_ = state.config_.version;
 }
 
 int drive_tls_handshake(quic_connection_state& state, ngtcp2_conn& connection) {
+    (void)refresh_negotiated_version(state);
     if (state.local_transport_parameters_.empty()) {
         throw std::logic_error("TLS drive requires initialized local transport parameters");
     }
     if (state.tls_driver_active_ || state.tls_driver_retiring_ || state.tls_driver_retired_) {
         return callback_failure(&state);
     }
+    state.tls_drive_started_ = true;
     state.tls_driver_active_ = true;
     struct driver_guard final {
         bool& active;
@@ -275,10 +297,23 @@ int client_initial_callback(ngtcp2_conn* connection, void* user_data) noexcept {
             throw std::logic_error("ngtcp2 client connection has no valid current Initial DCID");
         }
         install_initial_keys_impl(*state,
-            {reinterpret_cast<const std::byte*>(current_dcid->data), current_dcid->datalen}, false);
+            {reinterpret_cast<const std::byte*>(current_dcid->data), current_dcid->datalen},
+            state->negotiated_version_, false);
         install_retry_integrity_aead(*state);
         if (state->local_transport_parameters_.empty()) {
             throw std::logic_error("client Initial TLS drive requires initialized local transport parameters");
+        }
+        if (!state->early_transport_parameters_.empty() &&
+            !state->early_transport_parameters_set_) {
+            const int imported = ngtcp2_conn_decode_and_set_0rtt_transport_params(connection,
+                reinterpret_cast<const uint8_t*>(state->early_transport_parameters_.data()),
+                state->early_transport_parameters_.size());
+            if (imported != 0) {
+                throw quic_error(quic_error_code::protocol_failure,
+                    "ngtcp2 rejected remembered QUIC transport parameters");
+            }
+            state->early_transport_parameters_set_ = true;
+            state->early_data_state_ = quic_early_data_state::available;
         }
         return drive_tls_handshake(*state, *connection);
     } catch (...) {
@@ -294,7 +329,8 @@ int recv_client_initial_callback(ngtcp2_conn*, const ngtcp2_cid* dcid,
             throw std::invalid_argument("missing QUIC server Initial callback state, role or DCID");
         }
         install_initial_keys_impl(*state,
-            {reinterpret_cast<const std::byte*>(dcid->data), dcid->datalen}, false);
+            {reinterpret_cast<const std::byte*>(dcid->data), dcid->datalen},
+            state->negotiated_version_, false);
         return 0;
     } catch (...) {
         return callback_failure(state);
@@ -335,8 +371,12 @@ int recv_retry_callback(ngtcp2_conn*, const ngtcp2_pkt_hd* header,
         if (!state || !header || state->config_.role != quic_role::client) {
             throw std::invalid_argument("missing QUIC Retry callback state, role or header");
         }
+        if (header->version != NGTCP2_PROTO_VER_V1 && header->version != NGTCP2_PROTO_VER_V2) {
+            throw quic_error(quic_error_code::protocol_failure, "QUIC Retry used an unsupported version");
+        }
         install_initial_keys_impl(*state,
-            {reinterpret_cast<const std::byte*>(header->scid.data), header->scid.datalen}, false);
+            {reinterpret_cast<const std::byte*>(header->scid.data), header->scid.datalen},
+            static_cast<quic_version>(header->version), false);
         return 0;
     } catch (...) {
         return callback_failure(state);
@@ -345,16 +385,17 @@ int recv_retry_callback(ngtcp2_conn*, const ngtcp2_pkt_hd* header,
 
 int version_negotiation_callback(ngtcp2_conn*, uint32_t version,
     const ngtcp2_cid* client_dcid, void* user_data) noexcept {
-    if (version != NGTCP2_PROTO_VER_V1 || !client_dcid) {
+    if ((version != NGTCP2_PROTO_VER_V1 && version != NGTCP2_PROTO_VER_V2) || !client_dcid) {
         return NGTCP2_ERR_VERSION_NEGOTIATION_FAILURE;
     }
     auto* const state = state_from(user_data);
     try {
-        if (!state || state->config_.role != quic_role::client) {
-            throw std::logic_error("missing QUIC version-negotiation callback state or wrong role");
+        if (!state) {
+            throw std::logic_error("missing QUIC version-negotiation callback state");
         }
         install_initial_keys_impl(*state,
-            {reinterpret_cast<const std::byte*>(client_dcid->data), client_dcid->datalen}, true);
+            {reinterpret_cast<const std::byte*>(client_dcid->data), client_dcid->datalen},
+            static_cast<quic_version>(version), true);
         return 0;
     } catch (...) {
         return callback_failure(state);
@@ -524,6 +565,7 @@ int update_key_callback(ngtcp2_conn*, uint8_t* rx_secret, uint8_t* tx_secret,
     std::size_t wipe_size{};
     std::size_t iv_size{};
     try {
+        const auto version = refresh_negotiated_version(*state);
         const auto suite = *state->installed_cipher_suite_;
         const auto parameters = quic_cipher_suite_parameters_for(suite);
         if (secret_size != parameters.hash_size) {
@@ -531,10 +573,10 @@ int update_key_callback(ngtcp2_conn*, uint8_t* rx_secret, uint8_t* tx_secret,
         }
         wipe_size = secret_size;
         iv_size = parameters.iv_size;
-        auto updated_rx = update_quic_packet_keys(state->crypto_, state->resource_, suite,
+        auto updated_rx = update_quic_packet_keys(state->crypto_, state->resource_, version, suite,
             quic_crypto_direction::read,
             {reinterpret_cast<const std::byte*>(current_rx_secret), secret_size});
-        auto updated_tx = update_quic_packet_keys(state->crypto_, state->resource_, suite,
+        auto updated_tx = update_quic_packet_keys(state->crypto_, state->resource_, version, suite,
             quic_crypto_direction::write,
             {reinterpret_cast<const std::byte*>(current_tx_secret), secret_size});
         std::ranges::copy(updated_rx.traffic_secret(), reinterpret_cast<std::byte*>(rx_secret));
@@ -614,7 +656,8 @@ void initialize_quic_random_context(ngtcp2_rand_ctx& context,
 
 void install_quic_initial_keys(quic_connection_state& state,
     std::span<const std::byte> client_initial_dcid, bool version_negotiation) {
-    install_initial_keys_impl(state, client_initial_dcid, version_negotiation);
+    install_initial_keys_impl(state, client_initial_dcid,
+        state.negotiated_version_, version_negotiation);
 }
 
 void encode_quic_local_transport_parameters(quic_connection_state& state) {
@@ -647,13 +690,49 @@ void install_quic_traffic_secret(quic_connection_state& state,
     if (!state.connection_) {
         throw std::logic_error("cannot install QUIC traffic keys before connection initialization");
     }
-    if (level != quic_encryption_level::handshake && level != quic_encryption_level::application) {
-        throw std::invalid_argument("QUIC TLS may install only Handshake or 1-RTT traffic secrets");
+    if (level != quic_encryption_level::early_data &&
+        level != quic_encryption_level::handshake &&
+        level != quic_encryption_level::application) {
+        throw std::invalid_argument("invalid QUIC TLS traffic-secret level");
     }
     if (direction != quic_crypto_direction::read && direction != quic_crypto_direction::write) {
         throw std::invalid_argument("invalid QUIC traffic-secret direction");
     }
-    auto keys = derive_quic_packet_keys(state.crypto_, state.resource_, suite, direction, secret);
+    const auto version = refresh_negotiated_version(state);
+    if (level == quic_encryption_level::early_data) {
+        const bool expected_direction =
+            (state.config_.role == quic_role::client && direction == quic_crypto_direction::write) ||
+            (state.config_.role == quic_role::server && direction == quic_crypto_direction::read);
+        if (!expected_direction ||
+            (state.config_.role == quic_role::client && !state.early_transport_parameters_set_)) {
+            throw quic_error(quic_error_code::invalid_state,
+                "QUIC early keys require the ticket's transport parameters and role direction");
+        }
+        auto keys = derive_quic_packet_keys(state.crypto_, state.resource_, version,
+            suite, direction, secret);
+        auto aead = make_aead_slot(state, std::move(keys.aead()),
+            quic_cipher_suite_parameters_for(suite));
+        auto header = make_header_slot(state, std::move(keys.header_protection()));
+        ngtcp2_crypto_aead_ctx aead_context{.native_handle = aead.get()};
+        ngtcp2_crypto_cipher_ctx header_context{.native_handle = header.get()};
+        const auto crypto_context = make_crypto_context(suite);
+        ngtcp2_conn_set_0rtt_crypto_ctx(state.connection_, &crypto_context);
+        const int result = ngtcp2_conn_install_0rtt_key(state.connection_, &aead_context,
+            reinterpret_cast<const uint8_t*>(keys.iv().data()), keys.iv().size(), &header_context);
+        if (result != 0) {
+            throw quic_error(quic_error_code::crypto_failure,
+                "ngtcp2 rejected QUIC 0-RTT traffic keys");
+        }
+        aead.release();
+        header.release();
+        state.early_data_key_installed_ = true;
+        if (state.early_data_state_ == quic_early_data_state::unavailable) {
+            state.early_data_state_ = quic_early_data_state::available;
+        }
+        return;
+    }
+    auto keys = derive_quic_packet_keys(state.crypto_, state.resource_, version,
+        suite, direction, secret);
     configure_application_context(state, suite);
     install_aead_context(state, level, direction, suite, keys.traffic_secret(), keys.iv(),
         std::move(keys.aead()), std::move(keys.header_protection()));

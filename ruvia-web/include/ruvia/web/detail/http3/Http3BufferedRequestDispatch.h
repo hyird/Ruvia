@@ -17,6 +17,7 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/WebSocketProtocolTypes.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/HttpDatagramInput.h"
@@ -79,6 +80,7 @@ public:
         kWrongWorker,
         kCancelled,
         kFilePayloadUnsupported,
+        peer_field_section_limit,
         kTunnelComplete,
         kOutputComplete,
         kFailed,
@@ -146,7 +148,7 @@ public:
 
     // Both tasks are lazy. The first actual start acquires the request lease;
     // constructing and discarding either cold task changes no session state.
-    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, ResponseStreamKind kind, ResponseTrailerIntent trailers) {
+    [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
         return session_.encodeStreamingResponseHead(messageId_.streamId, std::move(response), method, kind, trailers);
     }
     [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {
@@ -197,9 +199,10 @@ public:
     [[nodiscard]] Task<void> publishResponseBytes(std::span<const char> bytes);
     [[nodiscard]] Task<void> finishResponse();
     [[nodiscard]] bool responseAborted() const noexcept {
-        return cancellationRequested() || tunnelAborted_;
+        return cancellationRequested() || tunnelAborted_ || peer_field_section_rejected_;
     }
     [[nodiscard]] bool responseFieldSectionAllowed(std::size_t decodedSize) const noexcept;
+    [[noreturn]] void reject_peer_field_section();
     void notifyTunnelInput() noexcept;
     [[nodiscard]] Task<HttpStreamReadResult> readTunnel(std::pmr::string& buffer);
     [[nodiscard]] Task<std::optional<HttpDatagramInput>> readDatagramInput();
@@ -285,6 +288,7 @@ private:
     std::size_t streamFrameOffset_{};
     std::pmr::string tunnelDataFrame_;
     std::uint64_t streamPublishedWireBytes_{};
+    bool peer_field_section_rejected_{};
     bool streamOutputActive_{};
     bool tunnelDataPending_{};
     bool tunnelEstablishedPending_{};

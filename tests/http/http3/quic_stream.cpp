@@ -385,6 +385,57 @@ void test_callback_allocation_failure_latches_without_partial_retention(
 
 }  // namespace
 
+RUVIA_TEST(quic_stream_early_data_provenance_is_sticky_transport_state) {
+    counting_resource resource;
+    ruvia::detail::quic_connection_state state(config(), provider(),
+        {.drive = drive_tls, .retire = retire_tls}, &resource, {});
+    const auto stream_id = open_peer_bidi(state, ruvia_ctx);
+    RUVIA_CHECK_EQ(ruvia::detail::quic_stream_data_callback(nullptr,
+                       NGTCP2_STREAM_DATA_FLAG_0RTT,
+                       static_cast<std::int64_t>(stream_id), 0,
+                       reinterpret_cast<const std::uint8_t*>("four"), 4, &state, nullptr),
+        0);
+    RUVIA_CHECK(ruvia::detail::stream_received_early_data(state, stream_id));
+    RUVIA_CHECK_EQ(ruvia::detail::quic_stream_data_callback(nullptr, 0,
+                       static_cast<std::int64_t>(stream_id), 4,
+                       reinterpret_cast<const std::uint8_t*>("late"), 4, &state, nullptr),
+        0);
+    RUVIA_CHECK(ruvia::detail::stream_received_early_data(state, stream_id));
+}
+
+RUVIA_TEST(quic_stream_early_data_rejection_retires_buffers_and_reports_invalidated_streams) {
+    counting_resource resource;
+    auto test_config = config();
+    test_config.role = ruvia::quic_role::server;
+    test_config.original_destination_connection_id = test_config.destination_connection_id;
+    ruvia::detail::quic_connection_state state(std::move(test_config), provider(),
+        {.drive = drive_tls, .retire = retire_tls}, &resource, {});
+    constexpr std::uint64_t stream_id = 0;
+    RUVIA_CHECK_EQ(ruvia::detail::quic_stream_open_callback(nullptr,
+                       static_cast<std::int64_t>(stream_id), &state),
+        0);
+    RUVIA_CHECK_EQ(ruvia::detail::quic_stream_data_callback(nullptr,
+                       NGTCP2_STREAM_DATA_FLAG_0RTT,
+                       static_cast<std::int64_t>(stream_id), 0,
+                       reinterpret_cast<const std::uint8_t*>("body"), 4, &state, nullptr),
+        0);
+    const auto queued = ruvia::detail::queue_stream_write(state, stream_id,
+        bytes("out", 3), true);
+    RUVIA_CHECK(queued.status == ruvia::quic_operation_status::accepted);
+    RUVIA_CHECK_EQ(state.retained_stream_input_bytes_, std::size_t{4});
+    RUVIA_CHECK_EQ(state.retained_stream_output_bytes_, std::size_t{3});
+
+    state.tls_driver_active_ = true;
+    state.tls_handshake().complete_early_data(false);
+    state.tls_driver_active_ = false;
+    RUVIA_CHECK(!state.streams_.contains(stream_id));
+    RUVIA_CHECK_EQ(state.retained_stream_input_bytes_, std::size_t{0});
+    RUVIA_CHECK_EQ(state.retained_stream_output_bytes_, std::size_t{0});
+    RUVIA_CHECK_EQ(state.rejected_early_streams_.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(state.rejected_early_streams_.front(), stream_id);
+    RUVIA_CHECK(state.info().early_data == ruvia::quic_early_data_state::rejected);
+}
+
 RUVIA_TEST(quic_stream_callbacks_preserve_input_and_replenish_consumed_buffers) {
     test_receive_copy_consume_and_append(ruvia_ctx);
 }

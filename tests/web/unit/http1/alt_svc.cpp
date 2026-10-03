@@ -1,4 +1,6 @@
 #include <array>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <stdexcept>
 #include <string>
@@ -17,7 +19,9 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1ServerSemantics.h"
+#include "ruvia/http/HttpByteRange.h"
 #include "ruvia/http/HttpResponseServer.h"
+#include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -377,6 +381,84 @@ RUVIA_TEST(http1_tls_streaming_and_websocket_wire_responses_emit_alt_svc) {
     const auto handshake = firstResponseHead(webSocket);
     RUVIA_CHECK(handshake.starts_with("HTTP/1.1 101"));
     RUVIA_CHECK(handshake.contains("alt-svc: h3=\":443\"; ma=86400\r\n"));
+}
+
+RUVIA_TEST(http1BufferedResponseWriterSendsMultipartFileSlicesWithExactLength) {
+    namespace fs = std::filesystem;
+    const auto path = fs::temp_directory_path() / "ruvia-http1-multipart-writer.bin";
+    const std::string content(50000, 'h');
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << content;
+    }
+
+    const auto wire = captureHttp1Wire([&](tcp::socket& socket) -> ruvia::Task<void> {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::Http1ServerRequestParseState parsed;
+        constexpr std::string_view requestWire =
+            "GET /multipart HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n";
+        parseHttp1Request(requestWire, parsed, memory);
+        const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-19999,30000-49999", content.size());
+        auto multipart = ruvia::make_http_multipart_byte_range_plan(
+            ranges, content.size(), "text/plain", "h1_writer_boundary", {}, memory.resource());
+        ruvia::HttpResponse response({.resource = memory.resource()});
+        response.status(ruvia::http_status::kPartialContent);
+        response.header("Content-Type", multipart.content_type());
+        response.multipart_file_body(path, content.size(),
+            ruvia::HttpResponseFileIdentity::unchecked(), std::move(multipart));
+        const auto connectionPlan = ruvia::detail::requireHttp1FinalResponseCommit(
+            response, parsed.connectionPlan);
+        co_await writeBufferedResponse(socket, worker, parsed.request, response, connectionPlan);
+    });
+
+    const auto head = firstResponseHead(wire);
+    RUVIA_CHECK(head.starts_with("HTTP/1.1 206"));
+    const auto lengthStart = head.find("Content-Length: ");
+    RUVIA_CHECK(lengthStart != std::string_view::npos);
+    const auto lengthEnd = head.find("\r\n", lengthStart);
+    const auto body = wire.substr(head.size());
+    const std::string expected =
+        "--h1_writer_boundary\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-19999/50000\r\n\r\n" +
+        content.substr(0, 20000) + "\r\n--h1_writer_boundary\r\nContent-Type: text/plain\r\n" +
+        "Content-Range: bytes 30000-49999/50000\r\n\r\n" + content.substr(30000) +
+        "\r\n--h1_writer_boundary--\r\n";
+    RUVIA_CHECK_EQ(body, expected);
+    if (lengthStart != std::string_view::npos && lengthEnd != std::string_view::npos) {
+        const auto declared = head.substr(lengthStart + 16, lengthEnd - lengthStart - 16);
+        RUVIA_CHECK_EQ(declared, std::to_string(expected.size()));
+    }
+
+    bool identityFailedAfterCommit = false;
+    const auto identityFailureWire = captureHttp1Wire([&](tcp::socket& socket) -> ruvia::Task<void> {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::Http1ServerRequestParseState parsed;
+        constexpr std::string_view requestWire =
+            "GET /multipart HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n";
+        parseHttp1Request(requestWire, parsed, memory);
+        const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,10-11", content.size());
+        auto multipart = ruvia::make_http_multipart_byte_range_plan(
+            ranges, content.size(), "text/plain", "h1_identity_boundary", {}, memory.resource());
+        ruvia::HttpResponse response({.resource = memory.resource()});
+        response.status(ruvia::http_status::kPartialContent);
+        response.header("Content-Type", multipart.content_type());
+        response.multipart_file_body(path, content.size(),
+            ruvia::HttpResponseFileIdentity::checked({}), std::move(multipart));
+        const auto writePlan = ruvia::http1BufferedResponsePlan(
+            ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response),
+            parsed.connectionPlan);
+        ruvia::HttpResponseHeadBuffer responseHead(worker.allocator<char>());
+        std::pmr::string fileChunk(worker.allocator<char>());
+        const auto result = co_await ruvia::detail::writeResponse(
+            socket, worker, &responseHead, &fileChunk, response, writePlan);
+        identityFailedAfterCommit = result.failedAfterCommit() != nullptr;
+    });
+    RUVIA_CHECK(identityFailedAfterCommit);
+    RUVIA_CHECK(firstResponseHead(identityFailureWire).starts_with("HTTP/1.1 206"));
+    const auto failedHead = firstResponseHead(identityFailureWire);
+    RUVIA_CHECK(identityFailureWire.substr(failedHead.size()).find("hh") == std::string_view::npos);
+    fs::remove(path);
 }
 
 RUVIA_TEST(http1_tls_unsupported_websocket_version_wire_is_400_without_upgrade_fields) {

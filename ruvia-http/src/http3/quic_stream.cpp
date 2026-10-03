@@ -177,6 +177,12 @@ quic_stream_read_result read_stream_buffer(quic_connection_state& state,
     return {.status = quic_stream_read_status::data, .size = count};
 }
 
+bool stream_received_early_data(
+    const quic_connection_state& state, std::uint64_t stream_id) noexcept {
+    const auto found = state.streams_.find(stream_id);
+    return found != state.streams_.end() && found->second.received_early_data;
+}
+
 quic_stream_read_result inspect_stream_read(const quic_connection_state& state,
     std::uint64_t stream_id) noexcept {
     if (terminal(state)) {
@@ -545,6 +551,8 @@ int quic_stream_data_callback(ngtcp2_conn* connection, std::uint32_t flags,
             throw_invalid_stream("ngtcp2 delivered data for an unknown QUIC stream");
         }
         auto& stream = found->second;
+        stream.received_early_data = stream.received_early_data ||
+                                     (flags & NGTCP2_STREAM_DATA_FLAG_0RTT) != 0;
         if (!stream.readable || offset != stream.received_offset ||
             size > NGTCP2_MAX_VARINT - offset ||
             stream.receive_fin || stream.peer_reset_error) {
@@ -768,6 +776,25 @@ quic_stream_open_result quic_connection::open_stream(bool unidirectional) {
     if (state.connection_ == nullptr) {
         throw quic_error(quic_error_code::invalid_state, "QUIC connection is not initialized");
     }
+    if (state.config_.role == quic_role::client && !state.tls_handshake_complete_ &&
+        !state.early_transport_parameters_set_) {
+        if (state.early_transport_parameters_.empty()) {
+            return {.status = quic_operation_status::would_block};
+        }
+        const int imported = ngtcp2_conn_decode_and_set_0rtt_transport_params(
+            state.connection_,
+            reinterpret_cast<const uint8_t*>(state.early_transport_parameters_.data()),
+            state.early_transport_parameters_.size());
+        if (imported != 0) {
+            auto failure = std::make_exception_ptr(quic_error(
+                quic_error_code::protocol_failure,
+                "ngtcp2 rejected remembered QUIC transport parameters"));
+            state.latch_failure(failure);
+            std::rethrow_exception(failure);
+        }
+        state.early_transport_parameters_set_ = true;
+        state.early_data_state_ = quic_early_data_state::available;
+    }
     if (state.streams_.size() >= state.config_.limits.max_streams) {
         return {.status = quic_operation_status::would_block};
     }
@@ -793,6 +820,8 @@ quic_stream_open_result quic_connection::open_stream(bool unidirectional) {
         stream.readable = !unidirectional;
         stream.writable = true;
         stream.accepted = true;
+        stream.early_data_candidate = state.config_.role == quic_role::client &&
+                                      !state.tls_handshake_complete_;
     } catch (...) {
         state.latch_failure(std::current_exception());
         throw;
@@ -838,6 +867,24 @@ quic_stream_read_result quic_connection::read_stream(std::uint64_t stream_id,
         ngtcp2_conn_extend_max_offset(state.connection_, result.size);
     }
     return result;
+}
+
+quic_stream_info quic_connection::stream_info(std::uint64_t stream_id) const noexcept {
+    return impl_ ? quic_stream_info{.received_early_data =
+                                        detail::stream_received_early_data(*impl_, stream_id)}
+                 : quic_stream_info{};
+}
+
+std::size_t quic_connection::take_rejected_early_streams(
+    std::span<std::uint64_t> output) noexcept {
+    if (!impl_) {
+        return 0;
+    }
+    auto& rejected = impl_->rejected_early_streams_;
+    const auto count = std::min(output.size(), rejected.size());
+    std::copy_n(rejected.begin(), count, output.begin());
+    rejected.erase(rejected.begin(), rejected.begin() + static_cast<std::ptrdiff_t>(count));
+    return count;
 }
 
 quic_stream_read_result quic_connection::read_health(std::uint64_t stream_id) const noexcept {

@@ -225,6 +225,19 @@ Task<void> HttpClient::shutdown() & {
 HttpClientStats HttpClient::stats() const {
     return state_->stats();
 }
+
+quic_path_migration HttpClient::start_quic_path_migration(
+    const asio::ip::udp::endpoint& local_endpoint) const {
+    return withOptions({}).start_quic_path_migration(local_endpoint);
+}
+
+std::optional<quic_path_migration> HttpClient::path_migration(std::uint64_t id) const {
+    return withOptions({}).path_migration(id);
+}
+
+quic_operation_status HttpClient::cancel_quic_path_migration(std::uint64_t id) const {
+    return withOptions({}).cancel_quic_path_migration(id);
+}
 std::optional<HttpClientPush> HttpClient::nextPush() const& {
     return withOptions({}).nextPush();
 }

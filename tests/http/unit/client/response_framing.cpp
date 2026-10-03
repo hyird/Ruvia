@@ -1,3 +1,4 @@
+#include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: what the head says about the body.
@@ -56,10 +57,46 @@ RUVIA_TEST(http_client_response_plan_owns_chunked_framing_and_reuse) {
     RUVIA_CHECK(chunked.persistence() == Http1ClosePolicy::kAllowReuse);
 }
 
+RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failures) {
+    constexpr std::string_view header =
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked";
+    bool saw_failure = false;
+    bool saw_success = false;
+    for (std::size_t fail_after = 0; fail_after < 32; ++fail_after) {
+        failing_memory_resource resource;
+        resource.fail_after(fail_after);
+        bool allocation_failed = false;
+        {
+            try {
+                const auto result = parseResult("GET", header,
+                    Http1ClosePolicy::kAllowReuse, {}, &resource);
+                RUVIA_CHECK(result.parsed() != nullptr);
+            } catch (const std::bad_alloc&) {
+                allocation_failed = true;
+            }
+        }
+        resource.allow_allocations();
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        if (!allocation_failed) {
+            saw_success = true;
+            break;
+        }
+        saw_failure = true;
+        {
+            const auto retry = parseResult("GET", header,
+                Http1ClosePolicy::kAllowReuse, {}, &resource);
+            RUVIA_CHECK(retry.parsed() != nullptr);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(saw_failure);
+    RUVIA_CHECK(saw_success);
+}
+
 RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
     const auto combined = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked");
     const auto& combinedChunked = requireChunked(combined.plan());
-    RUVIA_CHECK_EQ(combinedChunked.transferCodings().count, std::size_t{1});
+    RUVIA_CHECK_EQ(combinedChunked.transferCodings().values.size(), std::size_t{1});
     RUVIA_CHECK(combinedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
     RUVIA_CHECK(combinedChunked.persistence() == Http1ClosePolicy::kAllowReuse);
 
@@ -68,13 +105,22 @@ RUVIA_TEST(http_client_transfer_coding_before_final_chunked_is_typed) {
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: deflate\r\n"
         "Transfer-Encoding: chunked");
     const auto& splitChunked = requireChunked(split.plan());
+    RUVIA_CHECK_EQ(splitChunked.transferCodings().values.size(), std::size_t{1});
     RUVIA_CHECK(splitChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kDeflate);
+
+    const auto repeated = parseHead("GET",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n"
+        "Transfer-Encoding: deflate, chunked");
+    const auto& repeatedChunked = requireChunked(repeated.plan());
+    RUVIA_CHECK_EQ(repeatedChunked.transferCodings().values.size(), std::size_t{2});
+    RUVIA_CHECK(repeatedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(repeatedChunked.transferCodings().values[1] == ruvia::HttpTransferCoding::kDeflate);
 }
 
 RUVIA_TEST(http_client_non_chunked_transfer_coding_is_close_delimited) {
     const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");
     const auto& closeDelimited = requireCloseDelimited(head.plan());
-    RUVIA_CHECK_EQ(closeDelimited.transferCodings().count, std::size_t{1});
+    RUVIA_CHECK_EQ(closeDelimited.transferCodings().values.size(), std::size_t{1});
 }
 
 RUVIA_TEST(http_client_rejects_invalid_or_unsupported_transfer_coding) {
@@ -82,7 +128,19 @@ RUVIA_TEST(http_client_rejects_invalid_or_unsupported_transfer_coding) {
     RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip"));
     RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked;foo=bar"));
     RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress, chunked"));
-    RUVIA_CHECK(parseFails("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked"));
+    const auto malformedAfterUnknown = parseResult("GET",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: compress\r\n"
+        "Transfer-Encoding: deflate, chunked, gzip");
+    RUVIA_CHECK(malformedAfterUnknown.failure() != nullptr);
+    if (const auto* failure = malformedAfterUnknown.failure()) {
+        RUVIA_CHECK(failure->error() == Http1ClientResponseParseError::kInvalidTransferEncoding);
+    }
+    const auto stacked = parseHead(
+        "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked");
+    const auto& stackedChunked = requireChunked(stacked.plan());
+    RUVIA_CHECK_EQ(stackedChunked.transferCodings().values.size(), std::size_t{2});
+    RUVIA_CHECK(stackedChunked.transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
+    RUVIA_CHECK(stackedChunked.transferCodings().values[1] == ruvia::HttpTransferCoding::kDeflate);
 }
 
 RUVIA_TEST(http_client_content_length_and_transfer_encoding_rejected_for_body) {
@@ -150,7 +208,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK(chunkedZero.chunked() != nullptr);
     RUVIA_CHECK(chunkedZero.closeDelimited() == nullptr);
     if (chunkedZero.chunked() != nullptr) {
-        RUVIA_CHECK_EQ(chunkedZero.chunked()->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK_EQ(chunkedZero.chunked()->transferCodings().values.size(), std::size_t{1});
         RUVIA_CHECK(
             chunkedZero.chunked()->transferCodings().values[0] == ruvia::HttpTransferCoding::kGzip);
     }
@@ -161,7 +219,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto& transferCodedZero = requireZeroContent(transferCoded.plan());
     RUVIA_CHECK(transferCodedZero.closeDelimited() != nullptr);
     if (transferCodedZero.closeDelimited() != nullptr) {
-        RUVIA_CHECK_EQ(transferCodedZero.closeDelimited()->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK_EQ(transferCodedZero.closeDelimited()->transferCodings().values.size(), std::size_t{1});
         RUVIA_CHECK(transferCodedZero.closeDelimited()->transferCodings().values[0] ==
                     ruvia::HttpTransferCoding::kGzip);
     }

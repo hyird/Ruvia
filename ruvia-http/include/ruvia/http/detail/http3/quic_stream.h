@@ -40,6 +40,8 @@ quic_stream_read_result read_stream_buffer(quic_connection_state& state,
     std::uint64_t stream_id, std::span<std::byte> output);
 quic_stream_read_result inspect_stream_read(const quic_connection_state& state,
     std::uint64_t stream_id) noexcept;
+[[nodiscard]] bool stream_received_early_data(
+    const quic_connection_state& state, std::uint64_t stream_id) noexcept;
 quic_operation_status inspect_stream_write(const quic_connection_state& state,
     std::uint64_t stream_id) noexcept;
 // The returned spans borrow queued blocks until any stream-buffer mutation.

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -110,6 +111,12 @@ private:
 [[nodiscard]] HttpContentEncodeResult encodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentEncodeOptions options);
 
+// Applies the listed codings in order. Each intermediate representation is
+// bounded by maxEncodedBytes and released before the next stage completes.
+[[nodiscard]] HttpContentEncodeResult encodeHttpContent(
+    std::span<const HttpContentCoding> codings, std::string_view input,
+    HttpContentEncodeOptions options);
+
 enum class HttpContentDecodeError : std::uint8_t {
     kUnsupportedCoding,
     kInvalidContent,
@@ -207,5 +214,11 @@ private:
 // complete representation.
 [[nodiscard]] HttpContentDecodeResult decodeHttpContent(
     HttpContentCoding coding, std::string_view input, HttpContentDecodeOptions options);
+
+// Decodes the listed codings in reverse order. Each intermediate representation
+// is bounded by maxDecodedBytes and released before the next stage completes.
+[[nodiscard]] HttpContentDecodeResult decodeHttpContent(
+    std::span<const HttpContentCoding> codings, std::string_view input,
+    HttpContentDecodeOptions options);
 
 }  // namespace ruvia

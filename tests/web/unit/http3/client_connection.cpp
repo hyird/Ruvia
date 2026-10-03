@@ -50,6 +50,7 @@
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/http3/Http3ClientConnection.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
+#include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/server/ServerNetworkRuntime.h"
@@ -59,8 +60,48 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 
+namespace ruvia::detail {
+struct http3_client_connection_test_access final {
+    using http3_client_connection = Http3ClientConnection;
+
+    static std::optional<std::uint64_t> request_stream_id(
+        const http3_client_connection& connection,
+        http3_client_connection::RequestId id) noexcept {
+        const auto request = std::find_if(connection.requests_.begin(), connection.requests_.end(),
+            [id](const auto& candidate) { return candidate.id == id; });
+        return request == connection.requests_.end() ? std::nullopt : request->writer.streamId();
+    }
+
+    static bool has_pending_priority_update(
+        const http3_client_connection& connection,
+        http3_client_connection::RequestId id) noexcept {
+        const auto request = std::find_if(connection.requests_.begin(), connection.requests_.end(),
+            [id](const auto& candidate) { return candidate.id == id; });
+        return request != connection.requests_.end() && request->pending_priority_update.has_value();
+    }
+
+    static bool early_request_finished(const http3_client_connection& connection,
+        http3_client_connection::RequestId id) noexcept {
+        if (!connection.session_) {
+            return false;
+        }
+        const auto request = std::find_if(connection.requests_.begin(), connection.requests_.end(),
+            [id](const auto& candidate) { return candidate.id == id; });
+        if (request == connection.requests_.end()) {
+            return false;
+        }
+        const auto info = connection.session_->transport().info();
+        return connection.session_->early_data_enabled() &&
+               info.early_data == ruvia::quic_early_data_state::available &&
+               !info.quic_handshake_complete && request->responseParserRegistered &&
+               request->writer.finished();
+    }
+};
+}  // namespace ruvia::detail
+
 namespace {
 using Connection = ruvia::detail::Http3ClientConnection;
+using connection_test_access = ruvia::detail::http3_client_connection_test_access;
 using namespace std::chrono_literals;
 
 class CountingResource final : public std::pmr::memory_resource {
@@ -283,16 +324,22 @@ public:
     explicit local_quic_response_peer(const TestIdentityFiles& identity,
         bool malformedTail = false, bool consumeRequest = true, bool webSocket = false,
         bool advertiseOrigins = false, std::optional<quic_push_scenario> push = {},
-        bool tunnel = false, bool udp = false)
+        bool tunnel = false, bool udp = false, bool early_data = false,
+        ruvia::detail::http3_quic_tls_context* shared_server_tls = nullptr,
+        bool hold_handshake_on_early_decision = false)
         : consumeRequest_(consumeRequest),
           webSocket_(webSocket),
           advertiseOrigins_(advertiseOrigins),
           push_(push),
           tunnel_(tunnel || udp),
-          udp_(udp) {
+          udp_(udp),
+          early_data_(early_data),
+          shared_server_tls_(shared_server_tls),
+          hold_handshake_on_early_decision_(hold_handshake_on_early_decision) {
         ruvia::detail::HttpServerListenerDefinition::Tls tls;
         tls.identity.certificateChainFile = identity.certificate().string();
         tls.identity.privateKeyFile = identity.privateKey().string();
+        tls.http3_early_data = early_data_;
         const std::string_view contentLength = malformedTail ? "67" : "6";
         ruvia::Http3FieldSectionFieldView fields[]{{":status", "200"}, {"content-length", contentLength}};
         std::pmr::monotonic_buffer_resource temporary;
@@ -403,6 +450,18 @@ public:
     [[nodiscard]] bool handshake_observed() const noexcept {
         return handshake_observed_.load(std::memory_order_acquire);
     }
+    [[nodiscard]] bool early_data_rejected() const noexcept {
+        return early_data_rejected_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] bool early_data_accepted() const noexcept {
+        return early_data_accepted_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] bool handshake_paused() const noexcept {
+        return handshake_paused_.load(std::memory_order_acquire);
+    }
+    void allow_handshake() noexcept {
+        allow_handshake_.store(true, std::memory_order_release);
+    }
     [[nodiscard]] std::size_t request_payload_bytes() const noexcept {
         return request_payload_bytes_.load(std::memory_order_acquire);
     }
@@ -439,6 +498,18 @@ public:
     [[nodiscard]] int priority_observed() const noexcept {
         return priority_observed_.load(std::memory_order_acquire);
     }
+    [[nodiscard]] std::optional<std::uint64_t> peer_max_push_id() const noexcept {
+        if (!peer_max_push_id_observed_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        return peer_max_push_id_.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] std::optional<std::uint64_t> priority_element_id() const noexcept {
+        if (!priority_element_id_observed_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        return priority_element_id_.load(std::memory_order_acquire);
+    }
     [[nodiscard]] std::size_t tunnel_bytes() const noexcept {
         return tunnel_bytes_.load(std::memory_order_acquire);
     }
@@ -459,8 +530,13 @@ public:
 private:
     void run(ruvia::detail::HttpServerListenerDefinition::Tls tls) noexcept {
         try {
-            pair_ = std::make_unique<ruvia::testing::http3_quic_udp_pair>(tls,
-                ruvia::testing::http3_quic_udp_pair::server_only_t{}, &resource_);
+            if (shared_server_tls_ != nullptr) {
+                pair_ = std::make_unique<ruvia::testing::http3_quic_udp_pair>(
+                    *shared_server_tls_, ruvia::testing::http3_quic_udp_pair::server_only_t{}, &resource_);
+            } else {
+                pair_ = std::make_unique<ruvia::testing::http3_quic_udp_pair>(tls,
+                    ruvia::testing::http3_quic_udp_pair::server_only_t{}, &resource_);
+            }
             auto& pair = *pair_;
             port_.store(pair.server_endpoint().port(), std::memory_order_release);
             auto prefixes = ruvia::Http3LocalCriticalStreams::create({.enableConnectProtocol = webSocket_ || tunnel_});
@@ -519,6 +595,8 @@ private:
                 std::pmr::memory_resource* resource;
                 std::atomic<int>* priority;
                 std::atomic<int>* pushPriority;
+                std::atomic<std::uint64_t>* priority_element_id;
+                std::atomic<bool>* priority_element_id_observed;
                 std::atomic<std::size_t>* cancelled;
                 bool webSocket;
                 bool tunnel;
@@ -530,12 +608,18 @@ private:
                 std::optional<ruvia::WebSocketConnection> websocket{};
                 bool headReady{false};
                 unsigned messages{0};
-            } wsReceive{&resource_, &priority_observed_, &push_priority_observed_, &cancelled_pushes_, webSocket_, tunnel_, udp_, &tunnel_bytes_};
+            } wsReceive{&resource_, &priority_observed_, &push_priority_observed_,
+                &priority_element_id_, &priority_element_id_observed_, &cancelled_pushes_, webSocket_,
+                tunnel_, udp_, &tunnel_bytes_};
             const auto onWsEvent = [](void* context, const ruvia::Http3ConnectionEvent& event) {
                 auto& state = *static_cast<WsReceive*>(context);
                 if (event.priorityUpdate) {
                     const auto priority = event.priorityUpdate->fields.requestPriority();
                     (event.priorityUpdate->push ? state.pushPriority : state.priority)->store(priority.urgency | (priority.incremental ? 0x100 : 0), std::memory_order_release);
+                    if (!event.priorityUpdate->push) {
+                        state.priority_element_id->store(event.priorityUpdate->elementId, std::memory_order_release);
+                        state.priority_element_id_observed->store(true, std::memory_order_release);
+                    }
                 } else if (event.kind == ruvia::Http3ConnectionEventKind::kPushCanceled) {
                     state.cancelled->fetch_add(1, std::memory_order_release);
                 } else if (event.kind == ruvia::Http3ConnectionEventKind::kRequestHead) {
@@ -595,14 +679,27 @@ private:
                 }
             };
 
+            bool handshake_gate_released = false;
             while (!stop_.load(std::memory_order_acquire)) {
-                pair.pump();
+                handshake_gate_released |= allow_handshake_.load(std::memory_order_acquire);
+                const bool drop_handshake_packets =
+                    hold_handshake_on_early_decision_ && !handshake_gate_released;
+                pair.pump(drop_handshake_packets, drop_handshake_packets ? 1 : 32);
                 if (!connectionId) {
                     connectionId = pair.maybe_connection_token();
                 }
                 if (connectionId) {
                     auto& server = pair.server();
                     const auto info = server.info();
+                    if (info.early_data == ruvia::quic_early_data_state::rejected) {
+                        early_data_rejected_.store(true, std::memory_order_release);
+                    } else if (info.early_data == ruvia::quic_early_data_state::accepted) {
+                        early_data_accepted_.store(true, std::memory_order_release);
+                    }
+                    if (hold_handshake_on_early_decision_ && !handshake_gate_released &&
+                        !info.quic_handshake_complete) {
+                        handshake_paused_.store(true, std::memory_order_release);
+                    }
                     if (info.quic_handshake_complete && info.state == ruvia::quic_connection_state::ready) {
                         handshake_observed_.store(true, std::memory_order_release);
                         for (std::size_t i = 0; i < localCriticalIds.size(); ++i) {
@@ -645,6 +742,10 @@ private:
                                     const auto parsed = wsRequest.feed(id, std::span<const char>(requestBytes.data(), read.size), false, false, onWsEvent, &wsReceive);
                                     if (parsed.scope != ruvia::Http3ConnectionErrorScope::kNone) {
                                         throw std::runtime_error("invalid WebSocket peer critical input");
+                                    }
+                                    if (const auto max_push_id = wsRequest.peerMaxPushId()) {
+                                        peer_max_push_id_.store(*max_push_id, std::memory_order_relaxed);
+                                        peer_max_push_id_observed_.store(true, std::memory_order_release);
                                     }
                                 } else if (read.status != ruvia::quic_stream_read_status::would_block && !finalFinSent) {
                                     throw std::runtime_error("WebSocket peer critical transport failed");
@@ -891,7 +992,10 @@ private:
                         }
                     }
                 }
-                pair.pump();
+                const bool drop_handshake_packets_at_end =
+                    hold_handshake_on_early_decision_ && !handshake_gate_released;
+                pair.pump(drop_handshake_packets_at_end,
+                    drop_handshake_packets_at_end ? 1 : 32);
                 {
                     std::lock_guard lock(mutex_);
                     synchronizationCompleted_ = synchronizationRequested_;
@@ -923,6 +1027,10 @@ private:
     std::uint64_t synchronizationCompleted_{};
     std::atomic<bool> stop_{};
     std::atomic<bool> handshake_observed_{};
+    std::atomic<bool> early_data_rejected_{};
+    std::atomic<bool> early_data_accepted_{};
+    std::atomic<bool> handshake_paused_{};
+    std::atomic<bool> allow_handshake_{};
     std::atomic<std::size_t> request_payload_bytes_{};
     std::atomic<bool> first_part_ready_{};
     std::atomic<bool> allow_final_part_{};
@@ -933,6 +1041,9 @@ private:
     std::optional<quic_push_scenario> push_{};
     bool tunnel_{};
     bool udp_{};
+    bool early_data_{};
+    ruvia::detail::http3_quic_tls_context* shared_server_tls_{};
+    bool hold_handshake_on_early_decision_{};
     std::atomic<std::size_t> tunnel_bytes_{};
     std::atomic<std::size_t> cancelled_pushes_{};
     std::atomic<std::size_t> promised_pushes_{};
@@ -940,6 +1051,10 @@ private:
     std::atomic<unsigned> websocket_messages_{};
     std::atomic<bool> client_end_observed_{};
     std::atomic<int> priority_observed_{-1};
+    std::atomic<std::uint64_t> priority_element_id_{};
+    std::atomic<bool> priority_element_id_observed_{};
+    std::atomic<std::uint64_t> peer_max_push_id_{};
+    std::atomic<bool> peer_max_push_id_observed_{};
 };
 
 template <typename Predicate>
@@ -999,6 +1114,246 @@ private:
     asio::steady_timer timer_;
     std::shared_ptr<State> state_;
 };
+
+ruvia::detail::HttpClientResponseState* reject_early_test_push(void*, std::size_t,
+    Connection&, std::uint64_t, const ruvia::Http3MessageHead&) {
+    return nullptr;
+}
+
+void finish_early_test_push(void*) noexcept {}
+
+ruvia::Task<void> exerciseEarlyDataRejectionRecovery(asio::io_context& io,
+    const ruvia::WorkerHandle& worker, ruvia::EventLoopAttachment& attachment,
+    local_quic_response_peer& ticketPeer, local_quic_response_peer& acceptingPeer,
+    local_quic_response_peer& rejectingPeer, ruvia::testing::TestContext& ruvia_ctx) {
+    try {
+        CountingResource memory;
+        ruvia::detail::ClientTransportConfigView tls_config{
+            .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification};
+        ruvia::detail::http3_quic_client_tls_context tls(tls_config);
+        std::optional<ruvia::detail::http3_quic_client_tls_context::ticket_lease> ticket;
+        {
+            ruvia::TaskScope tasks(worker, {.resource = &memory});
+            Connection connection(io, worker, tasks, tls,
+                ruvia::HttpOriginView::https({.host = "127.0.0.1", .port = ticketPeer.port()}),
+                10s, &memory, 4, 16 * 1024 * 1024, 2s, nullptr, 30s, {}, {}, {}, {},
+                ruvia::quic_version::v1, true);
+            ruvia::detail::HttpClientRequestStorage request("GET", "/ticket", &memory);
+            request.set_replay_safe(true);
+            const auto submitted = connection.submit(
+                std::move(request), std::chrono::steady_clock::now() + 10s);
+            RUVIA_CHECK(submitted.outcome == Connection::Outcome::kPending);
+            connection.start();
+            ticketPeer.allow_final_part();
+            co_await connection.wait(submitted.id);
+            const auto completed = connection.result(submitted.id);
+            RUVIA_CHECK(completed != nullptr);
+            if (completed != nullptr) {
+                RUVIA_CHECK(completed->outcome == Connection::Outcome::kComplete);
+            }
+
+            const bool ticket_ready = co_await wait_for_peer(worker, ticketPeer, [&] {
+                if (!ticket) {
+                    auto captured = tls.take_ticket("127.0.0.1", ruvia::quic_version::v1);
+                    if (captured) {
+                        ticket.emplace(std::move(*captured));
+                    }
+                }
+                return ticket.has_value(); }, 8s);
+            RUVIA_CHECK(ticket_ready);
+            if (ticket) {
+                RUVIA_CHECK(SSL_SESSION_get_max_early_data(ticket->session.get()) != 0);
+                ruvia::detail::http3_quic_client_tls_context no_early_tls(tls_config);
+                ruvia::detail::http3_quic_client_tls_context::ssl_session_owner no_early_session(
+                    SSL_SESSION_dup(ticket->session.get()));
+                RUVIA_CHECK(no_early_session != nullptr);
+                if (no_early_session) {
+                    SSL_SESSION_set_max_early_data(no_early_session.get(), 0);
+                    no_early_tls.remember_ticket(no_early_session.get(), ticket->host,
+                        ticket->version, ticket->transport_parameters, ticket->settings);
+                    asio::ip::udp::socket reservation(io,
+                        {asio::ip::address_v4::loopback(), 0});
+                    const auto local = ruvia::detail::to_http3_quic_datagram_address(
+                        reservation.local_endpoint());
+                    const auto peer = ruvia::detail::to_http3_quic_datagram_address(
+                        asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), ticketPeer.port()));
+                    RUVIA_CHECK(local.has_value() && peer.has_value());
+                    if (local && peer) {
+                        ruvia::quic_connection_config quic_config;
+                        quic_config.local_address = ruvia::detail::to_quic_address(*local);
+                        quic_config.peer_address = ruvia::detail::to_quic_address(*peer);
+                        ruvia::detail::http3_quic_client_transport transport(
+                            no_early_tls, quic_config, "127.0.0.1",
+                            std::chrono::steady_clock::now(), &memory, true);
+                        RUVIA_CHECK(!transport.early_data_enabled());
+                    }
+                }
+                tls.remember_ticket(ticket->session.get(), ticket->host, ticket->version,
+                    ticket->transport_parameters, ticket->settings);
+            }
+            connection.requestStop();
+            co_await tasks.join();
+            RUVIA_CHECK(connection.release(submitted.id));
+            RUVIA_CHECK_EQ(connection.retainedRequests(), std::size_t{0});
+        }
+        // Reuse the original server TLS context so this peer accepts the real
+        // ticket while its handshake is gated after the early-data decision.
+        if (ticket) {
+            tls.remember_ticket(ticket->session.get(), ticket->host, ticket->version,
+                ticket->transport_parameters, ticket->settings);
+        }
+        {
+            ruvia::TaskScope tasks(worker, {.resource = &memory});
+            Connection connection(io, worker, tasks, tls,
+                ruvia::HttpOriginView::https({.host = "127.0.0.1", .port = acceptingPeer.port()}),
+                10s, &memory, 4, 16 * 1024 * 1024, 2s, nullptr, 30s, {}, {}, {}, {},
+                ruvia::quic_version::v1, true);
+            ruvia::detail::HttpClientRequestStorage request("GET", "/accepted-early", &memory);
+            request.set_replay_safe(true);
+            const auto submitted = connection.submit(
+                std::move(request), std::chrono::steady_clock::now() + 10s);
+            RUVIA_CHECK(submitted.outcome == Connection::Outcome::kPending);
+            connection.start();
+
+            const bool handshake_paused = co_await wait_for_peer(worker, acceptingPeer, [&] { return acceptingPeer.handshake_paused(); }, 8s);
+            RUVIA_CHECK(handshake_paused);
+            const bool early_request_finished = co_await wait_for_peer(worker, acceptingPeer, [&] { return connection_test_access::early_request_finished(connection, submitted.id); }, 8s);
+            RUVIA_CHECK(early_request_finished);
+            const auto early_stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+            RUVIA_CHECK(early_stream_id.has_value());
+            RUVIA_CHECK(connection.reprioritize(submitted.id,
+                {.urgency = 1, .incremental = true}));
+            RUVIA_CHECK(connection_test_access::has_pending_priority_update(connection, submitted.id));
+
+            acceptingPeer.allow_handshake();
+            const bool priority_observed = co_await wait_for_peer(worker, acceptingPeer, [&] {
+                const auto stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+                const auto element_id = acceptingPeer.priority_element_id();
+                return acceptingPeer.priority_observed() == 0x101 && stream_id && element_id == stream_id; }, 8s);
+            RUVIA_CHECK(priority_observed);
+            RUVIA_CHECK(acceptingPeer.handshake_observed());
+            RUVIA_CHECK(acceptingPeer.early_data_accepted());
+            const auto accepted_stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+            const auto accepted_priority_id = acceptingPeer.priority_element_id();
+            RUVIA_CHECK(accepted_stream_id.has_value() && accepted_priority_id == accepted_stream_id);
+
+            acceptingPeer.allow_final_part();
+            co_await connection.wait(submitted.id);
+            const auto completed = connection.result(submitted.id);
+            RUVIA_CHECK(completed != nullptr);
+            if (completed != nullptr) {
+                RUVIA_CHECK(completed->outcome == Connection::Outcome::kComplete);
+                RUVIA_CHECK_EQ(completed->status, std::uint16_t{200});
+            }
+            RUVIA_CHECK(connection.release(submitted.id));
+            RUVIA_CHECK_EQ(connection.active_response_streams(), std::size_t{0});
+            connection.requestStop();
+            co_await tasks.join();
+        }
+
+        // The second peer has independent ticket keys and must reject the same
+        // valid ticket after the client has completely written its 0-RTT request.
+        if (ticket) {
+            tls.remember_ticket(ticket->session.get(), ticket->host, ticket->version,
+                ticket->transport_parameters, ticket->settings);
+        }
+        {
+            ruvia::detail::Http3ClientBodyBudget pushBudget(1024 * 1024);
+            int pushObserverContext{};
+            const ruvia::detail::Http3ClientPushObserver pushObserver{
+                .context = &pushObserverContext,
+                .config = {.enabled = true, .maxConcurrentPushes = 1},
+                .receive = reject_early_test_push,
+                .finished = finish_early_test_push};
+            ruvia::TaskScope tasks(worker, {.resource = &memory});
+            Connection connection(io, worker, tasks, tls,
+                ruvia::HttpOriginView::https({.host = "127.0.0.1", .port = rejectingPeer.port()}),
+                10s, &memory, 4, 16 * 1024 * 1024, 2s, &pushBudget, 30s, {}, {}, {},
+                pushObserver, ruvia::quic_version::v1, true);
+            ruvia::detail::HttpClientRequestStorage request("GET", "/recover", &memory);
+            request.set_replay_safe(true);
+            const auto submitted = connection.submit(
+                std::move(request), std::chrono::steady_clock::now() + 10s);
+            RUVIA_CHECK(submitted.outcome == Connection::Outcome::kPending);
+            connection.start();
+            const bool handshake_paused = co_await wait_for_peer(worker, rejectingPeer, [&] { return rejectingPeer.handshake_paused(); }, 8s);
+            RUVIA_CHECK(handshake_paused);
+            const bool early_request_finished = co_await wait_for_peer(worker, rejectingPeer, [&] { return connection_test_access::early_request_finished(connection, submitted.id); }, 8s);
+            RUVIA_CHECK(early_request_finished);
+            const auto early_stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+            RUVIA_CHECK(early_stream_id.has_value());
+            RUVIA_CHECK(connection.reprioritize(submitted.id,
+                {.urgency = 1, .incremental = true}));
+            RUVIA_CHECK(connection_test_access::has_pending_priority_update(connection, submitted.id));
+
+            rejectingPeer.allow_handshake();
+            const bool peer_control_ready = co_await wait_for_peer(worker, rejectingPeer, [&] {
+                const auto max_push_id = rejectingPeer.peer_max_push_id();
+                const auto stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+                const auto element_id = rejectingPeer.priority_element_id();
+                return max_push_id == std::optional<std::uint64_t>{0} &&
+                       rejectingPeer.priority_observed() == 0x101 && stream_id && element_id == stream_id; }, 8s);
+            RUVIA_CHECK(peer_control_ready);
+            const auto replayed_stream_id = connection_test_access::request_stream_id(connection, submitted.id);
+            const auto priority_element_id = rejectingPeer.priority_element_id();
+            RUVIA_CHECK(replayed_stream_id.has_value() && priority_element_id == replayed_stream_id);
+            RUVIA_CHECK(rejectingPeer.early_data_rejected());
+            rejectingPeer.allow_final_part();
+            co_await connection.wait(submitted.id);
+            const auto completed = connection.result(submitted.id);
+            RUVIA_CHECK(completed != nullptr);
+            if (completed != nullptr) {
+                RUVIA_CHECK(completed->outcome == Connection::Outcome::kComplete);
+                RUVIA_CHECK_EQ(completed->status, std::uint16_t{200});
+            }
+            RUVIA_CHECK(rejectingPeer.handshake_observed());
+            RUVIA_CHECK(rejectingPeer.early_data_rejected());
+            RUVIA_CHECK(rejectingPeer.request_payload_bytes() != 0);
+            RUVIA_CHECK(connection.release(submitted.id));
+            RUVIA_CHECK_EQ(connection.active_response_streams(), std::size_t{0});
+            RUVIA_CHECK(connection.accepting());
+
+            ruvia::detail::HttpClientRequestStorage cancelled_request("GET", "/cancel", &memory);
+            cancelled_request.set_replay_safe(true);
+            const auto cancelled = connection.submit(std::move(cancelled_request),
+                std::chrono::steady_clock::now() + 5s);
+            RUVIA_CHECK(cancelled.outcome == Connection::Outcome::kPending);
+            const bool cancel_stream_opened = co_await wait_for_peer(worker, rejectingPeer, [&] { return connection.active_response_streams() != 0; }, 2s);
+            RUVIA_CHECK(cancel_stream_opened);
+            connection.cancel(cancelled.id);
+            co_await connection.wait(cancelled.id);
+            const auto cancelled_result = connection.result(cancelled.id);
+            RUVIA_CHECK(cancelled_result != nullptr &&
+                        cancelled_result->outcome == Connection::Outcome::kCancelled);
+            RUVIA_CHECK(connection.release(cancelled.id));
+            RUVIA_CHECK_EQ(connection.active_response_streams(), std::size_t{0});
+
+            ruvia::detail::HttpClientRequestStorage timed_request("GET", "/timeout", &memory);
+            timed_request.set_replay_safe(true);
+            const auto timed = connection.submit(std::move(timed_request),
+                std::chrono::steady_clock::now() + 500ms);
+            RUVIA_CHECK(timed.outcome == Connection::Outcome::kPending);
+            const bool timeout_stream_opened = co_await wait_for_peer(worker, rejectingPeer, [&] { return connection.active_response_streams() != 0; }, 2s);
+            RUVIA_CHECK(timeout_stream_opened);
+            co_await connection.wait(timed.id);
+            const auto timed_result = connection.result(timed.id);
+            RUVIA_CHECK(timed_result != nullptr &&
+                        timed_result->outcome == Connection::Outcome::kDeadline);
+            RUVIA_CHECK(connection.release(timed.id));
+            RUVIA_CHECK_EQ(connection.active_response_streams(), std::size_t{0});
+
+            connection.requestStop();
+            co_await tasks.join();
+            RUVIA_CHECK_EQ(connection.retainedRequests(), std::size_t{0});
+        }
+        RUVIA_CHECK_EQ(memory.allocations, memory.returns);
+        RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    } catch (...) {
+        attachment.stop();
+        throw;
+    }
+    attachment.stop();
+}
 
 ruvia::Task<void> exerciseRealResponse(asio::io_context& io, const ruvia::WorkerHandle& worker,
     ruvia::EventLoopAttachment& attachment, local_quic_response_peer& peer,
@@ -1418,7 +1773,9 @@ ruvia::Task<void> exerciseParserRegistrationAllocationFailure(asio::io_context& 
             RUVIA_CHECK(memory.matchingAllocationAttempts() == 1);
             RUVIA_CHECK(!connection.running());
             RUVIA_CHECK(peer.synchronize());
-            RUVIA_CHECK(peer.handshake_observed());
+            // Registration failure can close the client before the peer has
+            // confirmed the TLS handshake. Only the no-request-payload contract
+            // is synchronized here; peer handshake readiness is not guaranteed.
             RUVIA_CHECK_EQ(peer.request_payload_bytes(), std::size_t{0});
 
             const auto firstResult = connection.result(first.id);
@@ -1790,13 +2147,82 @@ ruvia::Task<void> exerciseWriteInactivityTimeout(asio::io_context& io,
     attachment.stop();
 }
 
+ruvia::Task<void> exercise_migration_retirement(asio::io_context& io,
+    const ruvia::WorkerHandle& worker, ruvia::EventLoopAttachment& attachment,
+    local_quic_response_peer& peer, ruvia::testing::TestContext& ruvia_ctx) {
+    CountingResource memory;
+    std::optional<std::uint64_t> migration_id;
+    {
+        ruvia::detail::ClientTransportConfigView tls_config{
+            .tlsPeerVerification = ruvia::TlsPeerVerificationPolicy::kSkipVerification};
+        ruvia::detail::http3_quic_client_tls_context tls(tls_config);
+        ruvia::TaskScope tasks(worker, {.resource = &memory});
+        Connection connection(io, worker, tasks, tls,
+            ruvia::HttpOriginView::https({.host = "127.0.0.1", .port = peer.port()}), 10s,
+            &memory, 4, 16 * 1024 * 1024, 2s);
+        ruvia::detail::HttpClientRequestStorage request("GET", "/public-pool", &memory);
+        const auto submitted = connection.submit(
+            std::move(request), std::chrono::steady_clock::now() + 10s);
+        RUVIA_CHECK(submitted.outcome == Connection::Outcome::kPending);
+        connection.start();
+        peer.allow_final_part();
+        co_await connection.wait(submitted.id);
+        const auto completed = connection.result(submitted.id);
+        RUVIA_CHECK(completed != nullptr);
+        if (completed != nullptr) {
+            RUVIA_CHECK(completed->outcome == Connection::Outcome::kComplete);
+        }
+
+        asio::ip::udp::socket reservation(
+            io, {asio::ip::address_v4::loopback(), 0});
+        const auto local_endpoint = reservation.local_endpoint();
+        reservation.close();
+        const auto migration = connection.start_path_migration(local_endpoint);
+        RUVIA_CHECK(migration.status == ruvia::quic_migration_status::started ||
+                    migration.status == ruvia::quic_migration_status::validated);
+        if (migration.status == ruvia::quic_migration_status::started ||
+            migration.status == ruvia::quic_migration_status::validated) {
+            migration_id = migration.id;
+            const bool validated = co_await wait_for_peer(worker, peer, [&] {
+                const auto status = connection.path_migration(*migration_id);
+                return status && status->status != ruvia::quic_migration_status::started; }, 8s);
+            RUVIA_CHECK(validated);
+            const auto status = connection.path_migration(*migration_id);
+            RUVIA_CHECK(status.has_value());
+            if (status) {
+                RUVIA_CHECK(status->status == ruvia::quic_migration_status::validated);
+            }
+        }
+
+        const bool retired = co_await wait_for_peer(
+            worker, peer, [&] { return !connection.running(); }, 5s);
+        RUVIA_CHECK(retired);
+        if (migration_id) {
+            const auto result = connection.path_migration(*migration_id);
+            RUVIA_CHECK(result.has_value());
+            if (result) {
+                RUVIA_CHECK(result->status == ruvia::quic_migration_status::validated);
+            }
+        }
+        connection.requestStop();
+        co_await tasks.join();
+        if (submitted.outcome == Connection::Outcome::kPending) {
+            RUVIA_CHECK(connection.release(submitted.id));
+        }
+    }
+    RUVIA_CHECK_EQ(memory.allocations, memory.returns);
+    RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
+    attachment.stop();
+}
+
 ruvia::Task<void> exercisePublicHttp3ClientPool(asio::io_context& io,
     const ruvia::WorkerHandle& worker, ruvia::EventLoopAttachment& attachment,
     local_quic_response_peer& peer, ruvia::testing::TestContext& ruvia_ctx,
-    bool observeOrigins = false, std::string_view caFile = {}) {
+    bool observeOrigins = false, std::string_view caFile = {}, bool migrate_quic_path = false) {
     CountingResource memory;
     std::exception_ptr failure;
     std::optional<ruvia::HttpClientAdvertisement> retainedAdvertisement;
+    std::optional<std::uint64_t> migration_id;
     {
         ruvia::HttpClientConfig config{
             .scheme = ruvia::HttpScheme::kHttps,
@@ -1866,11 +2292,40 @@ ruvia::Task<void> exercisePublicHttp3ClientPool(asio::io_context& io,
             RUVIA_CHECK_EQ(stats.completedRequests, std::size_t{1});
             RUVIA_CHECK_EQ(stats.failedRequests, std::size_t{0});
             RUVIA_CHECK_EQ(stats.inFlightRequests, std::size_t{0});
+            if (migrate_quic_path) {
+                asio::ip::udp::socket reservation(
+                    io, {asio::ip::address_v4::loopback(), 0});
+                const auto local_endpoint = reservation.local_endpoint();
+                reservation.close();
+                const auto migration = pool.start_quic_path_migration(local_endpoint);
+                RUVIA_CHECK(migration.status == ruvia::quic_migration_status::started ||
+                            migration.status == ruvia::quic_migration_status::validated);
+                if (migration.status == ruvia::quic_migration_status::started ||
+                    migration.status == ruvia::quic_migration_status::validated) {
+                    migration_id = migration.id;
+                    const bool settled = co_await wait_for_peer(worker, peer, [&] {
+                        const auto status = pool.path_migration(*migration_id);
+                        return status && status->status != ruvia::quic_migration_status::started; }, 8s);
+                    RUVIA_CHECK(settled);
+                    const auto status = pool.path_migration(*migration_id);
+                    RUVIA_CHECK(status.has_value());
+                    if (status) {
+                        RUVIA_CHECK(status->status == ruvia::quic_migration_status::validated);
+                    }
+                }
+            }
         } catch (...) {
             failure = std::current_exception();
         }
         pool.closeNow();
         co_await pool.join();
+        if (migration_id) {
+            const auto retired = pool.path_migration(*migration_id);
+            RUVIA_CHECK(retired.has_value());
+            if (retired) {
+                RUVIA_CHECK(retired->status == ruvia::quic_migration_status::validated);
+            }
+        }
     }
     RUVIA_CHECK_EQ(memory.allocations, memory.returns);
     RUVIA_CHECK_EQ(memory.liveBytes, std::size_t{0});
@@ -1930,6 +2385,34 @@ RUVIA_TEST(http3ClientConnectionPublishesRealQuicResponseIncrementallyAndReclaim
 #endif
 }
 
+RUVIA_TEST(http3ClientReplaysBodylessGetAfterRejectedEarlyDataOnRebuiltCriticalStreams) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    TestIdentityFiles identity;
+    auto serverTlsConfig = ruvia::detail::HttpServerListenerDefinition::Tls{};
+    serverTlsConfig.identity.certificateChainFile = identity.certificate().string();
+    serverTlsConfig.identity.privateKeyFile = identity.privateKey().string();
+    serverTlsConfig.http3_early_data = true;
+    ruvia::detail::http3_quic_tls_context shared_server_tls(
+        serverTlsConfig, std::pmr::get_default_resource());
+    local_quic_response_peer ticketPeer(identity, false, true, false, false, {}, false, false,
+        true, &shared_server_tls);
+    local_quic_response_peer acceptingPeer(identity, false, true, false, false, {}, false, false,
+        true, &shared_server_tls, true);
+    // This independent server TLS context must reject the otherwise valid ticket.
+    local_quic_response_peer rejectingPeer(identity, false, true, false, false, {}, false, false,
+        true, nullptr, true);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    auto root = attachment.loop().start(exerciseEarlyDataRejectionRecovery(
+        io, worker, attachment, ticketPeer, acceptingPeer, rejectingPeer, ruvia_ctx));
+    attachment.run();
+    root.get();
+#endif
+}
+
 RUVIA_TEST(http3ClientPoolPublishesIncrementalResponseThroughPublicResponseApi) {
 #if OPENSSL_VERSION_NUMBER < 0x30600000L
     RUVIA_CHECK(true);
@@ -1941,6 +2424,38 @@ RUVIA_TEST(http3ClientPoolPublishesIncrementalResponseThroughPublicResponseApi) 
     const auto worker = attachment.loop().handle();
     auto root = attachment.loop().start(
         exercisePublicHttp3ClientPool(io, worker, attachment, peer, ruvia_ctx));
+    attachment.run();
+    root.get();
+#endif
+}
+
+RUVIA_TEST(http3ClientConnectionRetainsValidatedMigrationAfterIdleSessionRetirement) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    TestIdentityFiles identity;
+    local_quic_response_peer peer(identity);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    auto root = attachment.loop().start(
+        exercise_migration_retirement(io, worker, attachment, peer, ruvia_ctx));
+    attachment.run();
+    root.get();
+#endif
+}
+
+RUVIA_TEST(http3ClientPoolRetainsValidatedMigrationAfterSessionRetirement) {
+#if OPENSSL_VERSION_NUMBER < 0x30600000L
+    RUVIA_CHECK(true);
+#else
+    TestIdentityFiles identity;
+    local_quic_response_peer peer(identity);
+    auto& io = ruvia::test::newTestIoContext();
+    auto attachment = ruvia::attachEventLoop(io);
+    const auto worker = attachment.loop().handle();
+    auto root = attachment.loop().start(
+        exercisePublicHttp3ClientPool(io, worker, attachment, peer, ruvia_ctx, false, {}, true));
     attachment.run();
     root.get();
 #endif
@@ -2445,6 +2960,7 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
         auto run = [&]() -> ruvia::Task<void> {
             const auto& worker = attachment.loop().handle();
             ruvia::HttpClient client(attachment.loop(), {.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1", .port = peer.port(), .connectionCount = 1, .requestTimeout = 5s, .maxResponseBytes = 16384, .protocol = ruvia::HttpClientProtocol::kHttp3Only, .caFile = identity.certificate().string()});
+            std::optional<ruvia::HttpClientTunnel> retired_tunnel;
             try {
                 const bool extended = (round & 1) != 0;
                 auto result = co_await client.openTunnel({.authority = extended ? "proxy.test" : "target.test:443", .protocol = extended ? "test-protocol" : "", .target = extended ? "/tunnel" : ""});
@@ -2452,7 +2968,8 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 if (!result.tunnel()) {
                     throw std::runtime_error("missing CONNECT tunnel");
                 }
-                auto tunnel = std::move(*result.tunnel());
+                retired_tunnel.emplace(std::move(*result.tunnel()));
+                auto& tunnel = *retired_tunnel;
                 RUVIA_CHECK(tunnel.protocolVersion() == ruvia::HttpProtocolVersion::kHttp3);
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
                 std::string greeting;
@@ -2490,7 +3007,10 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                     }
                     RUVIA_CHECK(greeting == std::string(100003, 's') + "ended");
                 }
+                RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().completedRequests == 1; }, 2s));
                 RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().inFlightRequests == 0; }, 2s));
+                // Normal bidirectional retirement must not undo a successfully
+                // completed sending direction or make finish non-idempotent.
                 co_await tunnel.finish();
                 RUVIA_CHECK(tunnel.header("x-tunnel") == "owned-metadata");
                 RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)tunnel.write("late"); }));
@@ -2498,6 +3018,15 @@ RUVIA_TEST(http3_client_tunnel_preserves_metadata_inputs_and_both_half_close_ord
                 failure = std::current_exception();
             }
             co_await client.shutdown();
+            if (!failure && retired_tunnel) {
+                try {
+                    co_await retired_tunnel->finish();
+                    RUVIA_CHECK(retired_tunnel->header("x-tunnel") == "owned-metadata");
+                    RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)retired_tunnel->write("late after shutdown"); }));
+                } catch (...) {
+                    failure = std::current_exception();
+                }
+            }
             attachment.stop();
         };
         auto root = attachment.loop().start(run());
