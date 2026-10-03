@@ -199,6 +199,10 @@ private:
     using StateOwner = std::unique_ptr<TaskCompletionState, StateDeleter>;
 
     static void deliver(StateOwner owner) {
+        // The delivery owner outlives the result and every callback argument.
+        // An owning completion handler can publish external readiness in its
+        // destructor only after moved-from result storage has been reclaimed.
+        auto handler = std::move(owner->handler_);
         auto result = [&owner]() {
             if constexpr (std::is_void_v<T>) {
                 try {
@@ -216,7 +220,6 @@ private:
                 }
             }
         }();
-        auto handler = std::move(owner->handler_);
         owner.reset();
         std::move(handler)(std::move(result));
     }

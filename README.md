@@ -714,8 +714,11 @@ loops.join();
 Keep the `RootTask` and consume it before stopping resources the task may still
 use. Register resource cancellation with `onStop()` so admitted roots can finish
 when the loop stops; a root waiting indefinitely without a cancellation path
-prevents retirement. `get()` waits and rethrows the task exception. Destroying an in-flight
-`RootTask` never destroys its suspended coroutine frame; an eventual unobserved
+prevents retirement. `get()` waits and rethrows the task exception. Readiness is
+published only after the task frame and completion-delivery temporaries retire;
+`get()` also releases the internal moved-from result before returning. Any PMR
+resource used by the returned result must still outlive that result.
+Destroying an in-flight `RootTask` never destroys its suspended coroutine frame; an eventual unobserved
 failure is routed to the loop failure sink and a pooled loop rethrows it from
 `join()`. This setup-time root ownership does not replace bounded
 `EventLoop::post()` for ongoing cross-thread submissions. `asAwaitable()`
