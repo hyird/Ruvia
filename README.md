@@ -2803,6 +2803,14 @@ A failure is terminal: later calls throw `std::logic_error`, as do writes after
 successful finish. HTTP/1, HTTP/2, and HTTP/3 stream sinks share this error
 contract and abort the response stream without replacing the original exception.
 
+`HttpTransferCodings::values` is a bounded `transfer_coding_sequence`, not a
+vector. It owns one lazily allocated PMR buffer for at most `kMaxTransferCodings`
+entries. Construction and move construction do not allocate. Copies retain the
+source resource; assignment retains the destination resource, transferring the
+buffer only when resources compare equal. The resource must outlive its owner.
+HTTP field parsing publishes one owned sequence transactionally: syntax or
+allocation failure leaves the previously committed field value unchanged.
+
 `http_transfer_coding_stack_decoder` from `<ruvia/http/HttpTransferCodingDecoder.h>`
 is the single incremental transfer-decoding entry point for one or more codings.
 Pass the coding sequence in protocol order (for example,

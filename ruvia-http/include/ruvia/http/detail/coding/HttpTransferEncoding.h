@@ -168,16 +168,25 @@ class HttpTransferEncodingState final {
 public:
     explicit HttpTransferEncodingState(
         std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : codings_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
 
     [[nodiscard]] HttpTransferEncodingParseStatus parseField(std::string_view fieldValue) {
-        auto nextCodings = codings_;
-        bool finalChunked = finalChunked_;
+        // The published value is the sole owner of the committed coding list.
+        HttpTransferCodings next_codings(resource_);
+        bool finalChunked = false;
+        if (value_) {
+            if (const auto* chunked = value_->finalChunked()) {
+                next_codings = chunked->transferCodings();
+                finalChunked = true;
+            } else {
+                next_codings = value_->nonChunked()->transferCodings();
+            }
+        }
         bool unsupported = unsupported_;
         bool sawItem = false;
         bool malformed = false;
         httpVisitCommaSeparatedQuotedItems(fieldValue,
-            [&nextCodings, &finalChunked, &unsupported, &sawItem, &malformed](
+            [&next_codings, &finalChunked, &unsupported, &sawItem, &malformed](
                 std::string_view item) {
                 sawItem = true;
                 std::string_view coding;
@@ -202,12 +211,12 @@ public:
                         malformed = true;
                         return false;
                     }
-                    if (nextCodings.values.size() == kMaxTransferCodings) {
+                    if (next_codings.values.size() == kMaxTransferCodings) {
                         unsupported = true;
                         return true;
                     }
-                    nextCodings.values.push_back(gzip ? HttpTransferCoding::kGzip
-                                                      : HttpTransferCoding::kDeflate);
+                    next_codings.values.push_back(gzip ? HttpTransferCoding::kGzip
+                                                       : HttpTransferCoding::kDeflate);
                     return true;
                 }
                 unsupported = true;
@@ -216,13 +225,11 @@ public:
         if (malformed || !sawItem) {
             return HttpTransferEncodingParseStatus::kMalformed;
         }
-        auto next_value = finalChunked ? HttpTransferEncodingValue::makeFinalChunked(nextCodings)
-                                       : HttpTransferEncodingValue::makeNonChunked(nextCodings);
-        // All potentially allocating copies are complete. The value move and
-        // equal-resource vector swap below commit the state without allocation.
+        auto next_value = finalChunked ? HttpTransferEncodingValue::makeFinalChunked(std::move(next_codings))
+                                       : HttpTransferEncodingValue::makeNonChunked(std::move(next_codings));
+        // All allocations precede publication. Sequence move construction only
+        // transfers its PMR buffer, including with MSVC iterator debugging.
         value_.emplace(std::move(next_value));
-        codings_.values.swap(nextCodings.values);
-        finalChunked_ = finalChunked;
         unsupported_ = unsupported;
         return unsupported_ ? HttpTransferEncodingParseStatus::kUnsupported
                             : HttpTransferEncodingParseStatus::kOk;
@@ -235,13 +242,12 @@ public:
         return unsupported_;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return codings_.values.get_allocator().resource();
+        return resource_;
     }
 
 private:
-    HttpTransferCodings codings_;
+    std::pmr::memory_resource* resource_;
     std::optional<HttpTransferEncodingValue> value_;
-    bool finalChunked_{false};
     bool unsupported_{false};
 };
 
