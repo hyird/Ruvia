@@ -57,8 +57,7 @@ void HttpContentCodingFieldParser::update(std::string_view value) {
             HttpContentCoding coding = HttpContentCoding::kIdentity;
             if (httpAsciiEqualsIgnoreCase(token, "identity")) {
                 coding = HttpContentCoding::kIdentity;
-            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
-                       httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
+            } else if (http_is_gzip_coding_token(token)) {
                 coding = HttpContentCoding::kGzip;
             } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
                 coding = HttpContentCoding::deflate;

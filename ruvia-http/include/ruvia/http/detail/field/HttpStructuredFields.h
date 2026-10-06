@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -88,7 +89,11 @@ struct HttpStructuredParser {
                 }
                 ++count;
             }
-            return take(':') && count % 4 != 1 && (!padding || count % 4 == 0);
+            // RFC 8941 section 4.2.7 allows missing padding, including the
+            // final '=' of a partially padded sequence. Validate the data
+            // quartet and supplied padding as if missing padding were added.
+            const auto data_remainder = (count - padding) % 4;
+            return take(':') && data_remainder != 1 && padding <= (4 - data_remainder) % 4;
         }
         if (text[at] == '-' || (text[at] >= '0' && text[at] <= '9')) {
             const bool negative = take('-');

@@ -8,6 +8,7 @@
 
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
 // request expresses, and the response coding the server picks from them.
+// gzip and its deprecated x-gzip spelling share one case-insensitive weight.
 
 namespace ruvia {
 

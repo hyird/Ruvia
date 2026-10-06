@@ -1,7 +1,98 @@
+#include <memory_resource>
+#include <string>
+#include <utility>
+
+#include "ruvia/http/detail/HttpHeaderAccess.h"
+
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 
 // HTTP/1 client responses: what the head says about the body.
+
+RUVIA_TEST(http_owned_header_string_inputs_survive_allocation_failure) {
+    failing_memory_resource resource;
+    {
+        std::pmr::string name("X-Test", &resource);
+        std::pmr::string value("retained", &resource);
+        resource.fail_after(0);
+        bool failed = false;
+        try {
+            (void)ruvia::detail::HttpHeaderAccess::make(std::move(name), std::move(value));
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK_EQ(name, "X-Test");
+        RUVIA_CHECK_EQ(value, "retained");
+        resource.allow_allocations();
+        const auto header = ruvia::detail::HttpHeaderAccess::make(std::move(name), std::move(value));
+        RUVIA_CHECK_EQ(header.name(), "X-Test");
+        RUVIA_CHECK_EQ(header.value(), "retained");
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
+    failing_memory_resource first_resource;
+    failing_memory_resource second_resource;
+    {
+        auto first = ruvia::HttpHeader::copyOf("X-First", "retained", &first_resource);
+        auto second = ruvia::HttpHeader::copyOf("X-Second", "replacement", &second_resource);
+        const auto* first_bytes = first.name().data();
+        first_resource.fail_after(0);
+        bool failed = false;
+        try {
+            first = std::move(second);
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK(first.name().data() == first_bytes);
+        RUVIA_CHECK_EQ(first.value(), "retained");
+        RUVIA_CHECK_EQ(second.value(), "replacement");
+        first_resource.allow_allocations();
+        first = std::move(second);
+        RUVIA_CHECK_EQ(first.name(), "X-Second");
+        RUVIA_CHECK_EQ(first.value(), "replacement");
+        RUVIA_CHECK_EQ(second_resource.live_allocations(), std::size_t{0});
+        auto copy = first;
+        RUVIA_CHECK_EQ(copy.name(), first.name());
+        RUVIA_CHECK(copy.name().data() != first.name().data());
+        auto moved = std::move(first);
+        RUVIA_CHECK_EQ(moved.value(), "replacement");
+        copy = moved;
+        RUVIA_CHECK_EQ(copy.value(), "replacement");
+    }
+    RUVIA_CHECK_EQ(first_resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(second_resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_response_header_extraction_preserves_owned_fields_on_failure) {
+    failing_memory_resource resource;
+    {
+        auto head = ruvia::detail::HttpClientResponseHeadAccess::make(
+            ruvia::http_status::kOk, ruvia::HttpProtocolVersion::kHttp11, &resource);
+        ruvia::detail::HttpClientResponseHeadAccess::headers(head).push_back(
+            ruvia::HttpHeader::copyOf("Content-Type", "text/plain", &resource));
+        resource.fail_after(0);
+        bool failed = false;
+        try {
+            const auto extracted = std::move(head).takeHeaders();
+            RUVIA_CHECK_EQ(extracted.size(), std::size_t{1});
+        } catch (const std::bad_alloc&) {
+            failed = true;
+        }
+        resource.allow_allocations();
+        if (failed) {
+            RUVIA_CHECK_EQ(head.headers().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(head.headers().front().value(), "text/plain");
+            const auto extracted = std::move(head).takeHeaders();
+            RUVIA_CHECK_EQ(extracted.size(), std::size_t{1});
+            RUVIA_CHECK_EQ(extracted.front().name(), "Content-Type");
+        }
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
 
 RUVIA_TEST(http_client_response_plan_alternatives_are_exclusive) {
     const ruvia::HttpHeaderView upgradeHeaders[] = {

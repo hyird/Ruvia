@@ -217,6 +217,23 @@ RUVIA_TEST(byte_range_set_tolerates_bounded_empty_members) {
             .ignored());
 }
 
+RUVIA_TEST(byte_range_set_counts_only_received_empty_members) {
+    const auto prefix = std::string("bytes=") + std::string(32, ',');
+    for (const auto tail : {"100-", "100-199", "-0"}) {
+        const auto ranges = resolve_http_byte_range_set(prefix + tail, 100);
+        RUVIA_CHECK(!ranges.ignored());
+        RUVIA_CHECK(ranges.unsatisfiable());
+    }
+    const auto satisfiable = resolve_http_byte_range_set(prefix + "0-1", 100);
+    RUVIA_CHECK_EQ(satisfiable.size(), std::size_t{1});
+    if (satisfiable.size() == 1) {
+        RUVIA_CHECK_EQ(satisfiable[0].offset_, std::uint64_t{0});
+        RUVIA_CHECK_EQ(satisfiable[0].length_, std::uint64_t{2});
+    }
+    RUVIA_CHECK(resolve_http_byte_range_set(prefix + ",100-", 100).ignored());
+    RUVIA_CHECK(resolve_http_byte_range_set(prefix + ",0-1", 100).ignored());
+}
+
 RUVIA_TEST(byte_range_set_ignores_malformed_and_over_limit_sets) {
     std::string ranges = "bytes=";
     for (std::size_t index = 0; index <= http_byte_range_set::capacity; ++index) {

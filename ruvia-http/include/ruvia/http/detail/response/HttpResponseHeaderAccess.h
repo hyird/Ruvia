@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
 
@@ -24,6 +25,19 @@ inline void validateResponseHeaderStorageSize(std::size_t nameSize, std::size_t 
     if (!responseHeaderStorageSizeFits(nameSize, valueSize)) {
         throw std::length_error("HTTP response header is too large");
     }
+}
+
+[[nodiscard]] inline bool response_header_storage_overlaps(
+    const HttpResponseHeader& header, std::string_view value) noexcept {
+    const auto name = header.name();
+    if (value.empty() || name.data() == nullptr) {
+        return false;
+    }
+    const auto storage_begin = reinterpret_cast<std::uintptr_t>(name.data());
+    const auto storage_end = storage_begin + name.size() + header.value().size();
+    const auto value_begin = reinterpret_cast<std::uintptr_t>(value.data());
+    const auto value_end = value_begin + value.size();
+    return value_begin < storage_end && storage_begin < value_end;
 }
 
 struct HttpResponseHeaderAccess final {

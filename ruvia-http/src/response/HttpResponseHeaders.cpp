@@ -8,22 +8,6 @@
 #include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
 
 namespace ruvia {
-namespace {
-
-[[nodiscard]] bool overlapsHeaderStorage(
-    const HttpResponseHeader& header, std::string_view value) noexcept {
-    const auto name = header.name();
-    if (value.empty() || name.data() == nullptr) {
-        return false;
-    }
-    const auto storageBegin = reinterpret_cast<std::uintptr_t>(name.data());
-    const auto storageEnd = storageBegin + name.size() + header.value().size();
-    const auto valueBegin = reinterpret_cast<std::uintptr_t>(value.data());
-    const auto valueEnd = valueBegin + value.size();
-    return valueBegin < storageEnd && storageBegin < valueEnd;
-}
-
-}  // namespace
 
 HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(
     std::string_view name, std::string_view value, std::uint32_t knownBit) {
@@ -122,7 +106,7 @@ HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(HttpResponseHe
     std::string_view name, std::size_t valueSize, std::uint32_t knownBit) {
     detail::validateResponseHeaderStorageSize(name.size(), valueSize);
     const auto total = name.size() + valueSize;
-    if (header.owned && header.bytes != nullptr && !overlapsHeaderStorage(header, name) &&
+    if (header.owned && header.bytes != nullptr && !detail::response_header_storage_overlaps(header, name) &&
         total == static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         auto* const bytes = const_cast<char*>(header.bytes);
         std::memcpy(bytes, name.data(), name.size());
@@ -145,8 +129,8 @@ bool HttpResponseHeaders::tryAssignOwnedInPlace(HttpResponseHeader& header, std:
         return false;
     }
     const auto total = name.size() + value.size();
-    if (!header.owned || header.bytes == nullptr || overlapsHeaderStorage(header, name) ||
-        overlapsHeaderStorage(header, value) ||
+    if (!header.owned || header.bytes == nullptr || detail::response_header_storage_overlaps(header, name) ||
+        detail::response_header_storage_overlaps(header, value) ||
         total != static_cast<std::size_t>(header.nameSize) + header.valueSize) {
         return false;
     }

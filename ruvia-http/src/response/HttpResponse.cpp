@@ -357,7 +357,7 @@ void HttpResponse::applyContentEncoding(std::string_view contentEncoding) {
                 *existing = prepared[slot];
                 preparedActive[slot] = false;
                 if (wasAppended) {
-                    (void)collapseResponseHeaders(*existing, name, knownBit);
+                    (void)collapseResponseHeaders(*existing, knownBit);
                 }
                 return;
             }
@@ -463,7 +463,7 @@ void HttpResponse::replaceBodyWithContentEncoding(
                 *existing = prepared[slot];
                 preparedActive[slot] = false;
                 if (wasAppended) {
-                    (void)collapseResponseHeaders(*existing, name, knownBit);
+                    (void)collapseResponseHeaders(*existing, knownBit);
                 }
                 return;
             }

@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -9,9 +11,13 @@
 #include <vector>
 
 #include "ruvia/http/HttpByteRange.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
 
 namespace ruvia {
 
+// Owns copied framing metadata and ordered file-slice descriptors. Observed
+// views borrow the plan; its PMR resource must outlive it. Construction and
+// clone propagate allocation failures.
 class http_multipart_byte_range_plan final {
 public:
     enum class segment_kind : std::uint8_t {
@@ -33,22 +39,22 @@ public:
     http_multipart_byte_range_plan& operator=(http_multipart_byte_range_plan&&) = delete;
 
     [[nodiscard]] std::string_view content_type() const& noexcept {
-        return content_type_;
+        return state_->content_type_;
     }
     [[nodiscard]] std::string_view content_type() const&& = delete;
     [[nodiscard]] std::string_view metadata() const& noexcept {
-        return metadata_;
+        return state_->metadata_;
     }
     [[nodiscard]] std::string_view metadata() const&& = delete;
     [[nodiscard]] std::span<const segment> segments() const& noexcept {
-        return segments_;
+        return state_->segments_;
     }
     [[nodiscard]] std::span<const segment> segments() const&& = delete;
     [[nodiscard]] std::uint64_t content_length() const noexcept {
-        return content_length_;
+        return state_->content_length_;
     }
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return content_type_.get_allocator().resource();
+        return state_.get_deleter().resource;
     }
     [[nodiscard]] http_multipart_byte_range_plan clone(
         std::pmr::memory_resource* resource) const;
@@ -58,15 +64,22 @@ private:
         const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view,
         std::string_view, std::pmr::memory_resource*);
 
-    explicit http_multipart_byte_range_plan(std::pmr::memory_resource* resource)
-        : content_type_(resource),
-          metadata_(resource),
-          segments_(resource) {}
+    struct storage final {
+        explicit storage(std::pmr::memory_resource* resource)
+            : content_type_(std::string_view{}, resource),
+              metadata_(std::string_view{}, resource),
+              segments_(std::initializer_list<segment>{}, resource) {}
 
-    std::pmr::string content_type_;
-    std::pmr::string metadata_;
-    std::pmr::vector<segment> segments_;
-    std::uint64_t content_length_{};
+        std::pmr::string content_type_;
+        std::pmr::string metadata_;
+        std::pmr::vector<segment> segments_;
+        std::uint64_t content_length_{};
+    };
+
+    explicit http_multipart_byte_range_plan(std::pmr::memory_resource* resource)
+        : state_(detail::makeHttpPmrObject<storage>(resource, resource)) {}
+
+    std::unique_ptr<storage, detail::HttpPmrObjectDeleter<storage>> state_;
 };
 
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(

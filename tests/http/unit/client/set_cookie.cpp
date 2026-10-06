@@ -205,3 +205,74 @@ RUVIA_TEST(set_cookie_parser_uses_cookie_date_token_grammar) {
     }
     RUVIA_CHECK(shortYear->expires() == ruvia::parseHttpDate("Thu, 01 Jan 1970 00:00:00 GMT"));
 }
+
+RUVIA_TEST(set_cookie_parser_accepts_date_token_suffixes) {
+    const auto expected = std::chrono::system_clock::to_time_t(
+        std::chrono::sys_days{std::chrono::year{2021} / 6 / 9} +
+        std::chrono::hours{10} + std::chrono::minutes{18} + std::chrono::seconds{14});
+    constexpr std::string_view dates[]{
+        "Wed, 09th Jun 2021 10:18:14 GMT",
+        "Wed, 09 June 2021 10:18:14 GMT",
+        "Wed, 09 jUn123 2021 10:18:14 GMT",
+        "Wed, 09 Jun 2021year123 10:18:14 GMT",
+        "Wed, 09 Jun 2021 10:18:14clock123 GMT",
+        "Wed, 09 Jun 2021 10:18:14:GMT",
+        "10:18:14clock 09th June123 2021year",
+        "2021year June123 09th 10:18:14clock"};
+    for (const auto date : dates) {
+        const auto input = std::string("sid=abc; Expires=") + std::string(date);
+        const auto parsed = ruvia::parseSetCookie(input);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            RUVIA_CHECK(parsed->expires() == expected);
+        }
+    }
+
+    struct year_case final {
+        std::string_view value_;
+        int year_;
+    };
+    constexpr year_case years[]{
+        {"70year", 1970}, {"69year", 2069}, {"00year", 2000}};
+    for (const auto& entry : years) {
+        const auto input = std::string("sid=abc; Expires=01 January ") + std::string(entry.value_) + " 0:0:0clock";
+        const auto parsed = ruvia::parseSetCookie(input);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            const auto year_start = std::chrono::system_clock::to_time_t(
+                std::chrono::sys_days{std::chrono::year{entry.year_} / 1 / 1});
+            RUVIA_CHECK(parsed->expires() == year_start);
+        }
+    }
+
+    RUVIA_CHECK(!ruvia::parseHttpDate("Wed, 09th June 2021year 10:18:14clock GMT"));
+}
+
+RUVIA_TEST(set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
+    constexpr std::string_view dates[]{
+        "Wed, 009th Jun 2021 10:18:14clock",
+        "Wed, 09 Jun 02021year 10:18:14clock",
+        "Wed, 09 Jun 1year 10:18:14clock",
+        "Wed, 09 Jun 2021 010:18:14clock",
+        "Wed, 09 Jun 2021 10:018:14clock",
+        "Wed, 09 Jun 2021 10:18:014clock",
+        "Wed, 09 Jun 2021 10x:18:14clock",
+        "Wed, 09 Jun 2021 10:18x:14clock",
+        "Wed, 09 Jux 2021 10:18:14clock",
+        "Wed, 32nd June 2021year 10:18:14clock",
+        "Wed, 29th February 2021year 10:18:14clock",
+        "Wed, 09th June 1600year 10:18:14clock",
+        "Wed, 09th June 2021year 24:18:14clock",
+        "Wed, 09th June 2021year 10:60:14clock",
+        "Wed, 09th June 2021year 10:18:60clock",
+        "32nd 09 June 2021year 10:18:14clock",
+        "09th June 2021year 24:00:00clock 10:18:14clock"};
+    for (const auto date : dates) {
+        const auto input = std::string("sid=abc; Expires=") + std::string(date);
+        const auto parsed = ruvia::parseSetCookie(input);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            RUVIA_CHECK(!parsed->expires());
+        }
+    }
+}

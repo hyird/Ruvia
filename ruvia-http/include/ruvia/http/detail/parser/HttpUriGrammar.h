@@ -18,13 +18,12 @@ namespace ruvia::detail {
 
 // RFC 3986 section 2.3 unreserved. Percent-encoding one of these octets is
 // equivalent to spelling it literally, which host comparison relies on.
-[[nodiscard]] inline bool isUnreservedByte(unsigned char byte) noexcept {
+[[nodiscard]] inline constexpr bool isUnreservedByte(unsigned char byte) noexcept {
     return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
            (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
-// RFC 3986 pchar = unreserved / pct-encoded / sub-delims / ":" / "@" (the
-// percent sign itself is admitted; the encoding is checked by the caller).
+// Literal pchar bytes. The caller validates percent-encoded triplets separately.
 [[nodiscard]] bool isUriPchar(unsigned char byte) noexcept;
 
 // Parse a decimal port, rejecting anything that does not fit 16 bits.

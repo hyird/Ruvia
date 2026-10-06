@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
+#include <limits>
 #include <memory_resource>
-#include <string>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -21,6 +23,43 @@ inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 // represents initial fields and trailers for requests and responses.
 class HttpHeader final {
 public:
+    HttpHeader(const HttpHeader& other)
+        : HttpHeader(other.name(), other.value(), std::pmr::get_default_resource()) {}
+
+    HttpHeader(HttpHeader&& other) noexcept
+        : resource_(other.resource_),
+          bytes_(std::exchange(other.bytes_, nullptr)),
+          name_size_(std::exchange(other.name_size_, 0)),
+          value_size_(std::exchange(other.value_size_, 0)) {}
+
+    HttpHeader& operator=(const HttpHeader& other) {
+        if (this != &other) {
+            HttpHeader replacement(other.name(), other.value(), resource_);
+            swap_storage(replacement);
+        }
+        return *this;
+    }
+
+    HttpHeader& operator=(HttpHeader&& other) {
+        if (this != &other) {
+            if (resource_->is_equal(*other.resource_)) {
+                release();
+                bytes_ = std::exchange(other.bytes_, nullptr);
+                name_size_ = std::exchange(other.name_size_, 0);
+                value_size_ = std::exchange(other.value_size_, 0);
+            } else {
+                HttpHeader replacement(other.name(), other.value(), resource_);
+                swap_storage(replacement);
+                other.release();
+            }
+        }
+        return *this;
+    }
+
+    ~HttpHeader() noexcept {
+        release();
+    }
+
     [[nodiscard]] static HttpHeader copyOf(std::string_view name, std::string_view value,
         std::pmr::memory_resource* resource) {
         return HttpHeader(name, value,
@@ -28,25 +67,55 @@ public:
     }
 
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
-        return name_;
+        return name_size_ != 0 ? std::string_view(bytes_, name_size_) : std::string_view{};
     }
     std::string_view name() const&& = delete;
     [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
-        return value_;
+        return value_size_ != 0 ? std::string_view(bytes_ + name_size_, value_size_) : std::string_view{};
     }
     std::string_view value() const&& = delete;
 
 private:
     friend struct detail::HttpHeaderAccess;
-    HttpHeader(std::pmr::string name, std::pmr::string value)
-        : name_(std::move(name)),
-          value_(std::move(value)) {}
     HttpHeader(std::string_view name, std::string_view value,
         std::pmr::memory_resource* resource)
-        : name_(name, resource),
-          value_(value, resource) {}
-    std::pmr::string name_;
-    std::pmr::string value_;
+        : resource_(resource),
+          name_size_(name.size()),
+          value_size_(value.size()) {
+        if (value.size() > (std::numeric_limits<std::size_t>::max)() - name.size()) {
+            throw std::length_error("HTTP header storage size overflows size_t");
+        }
+        const auto size = name.size() + value.size();
+        if (size != 0) {
+            bytes_ = static_cast<char*>(resource_->allocate(size, alignof(char)));
+            if (!name.empty()) {
+                std::memcpy(bytes_, name.data(), name.size());
+            }
+            if (!value.empty()) {
+                std::memcpy(bytes_ + name.size(), value.data(), value.size());
+            }
+        }
+    }
+
+    void release() noexcept {
+        if (bytes_ != nullptr) {
+            resource_->deallocate(bytes_, name_size_ + value_size_, alignof(char));
+        }
+        bytes_ = nullptr;
+        name_size_ = 0;
+        value_size_ = 0;
+    }
+
+    void swap_storage(HttpHeader& other) noexcept {
+        std::swap(bytes_, other.bytes_);
+        std::swap(name_size_, other.name_size_);
+        std::swap(value_size_, other.value_size_);
+    }
+
+    std::pmr::memory_resource* resource_;
+    char* bytes_{nullptr};
+    std::size_t name_size_{};
+    std::size_t value_size_{};
 };
 
 class HttpHeaderView final {

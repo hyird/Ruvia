@@ -21,6 +21,24 @@ RUVIA_TEST(http_priority_structured_dictionary_types_duplicates_and_parameters) 
         RUVIA_CHECK(!ruvia::parseHttpPriority(invalid));
     }
 }
+RUVIA_TEST(http_priority_byte_sequences_accept_optional_padding_and_validate_quartets) {
+    for (const auto value : {"u=2, i;bytes=:YQ=:", "u=2, i;bytes=:YQ==:", "u=2, i;bytes=:YQ:",
+             "u=2, i;bytes=:YWJj:", "u=2, i;bytes=:YWJ:", "u=2, i;bytes=:YWJ=:", "u=2, i;bytes=:YR==:",
+             "u=2, i, x=:YQ=:", "u=2, i, x=(:YQ=:)", "u=2, i;bytes=::"}) {
+        const auto parsed = ruvia::parseHttpPriority(value);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            RUVIA_CHECK(parsed->urgency == 2);
+            RUVIA_CHECK(parsed->incremental == true);
+        }
+    }
+    for (const auto value : {"u=2, i;bytes=:Y:", "u=2, i;bytes=:Y=:", "u=2, i;bytes=:YWJj=:",
+             "u=2, i;bytes=:YWJ==:", "u=2, i;bytes=:YQ===:", "u=2, i;bytes=:Y=Q:",
+             "u=2, i;bytes=:YQ$:", "u=2, i;bytes=:YQ\n:", "u=2, i;bytes=:YQ"}) {
+        RUVIA_CHECK(!ruvia::parseHttpPriority(value));
+    }
+}
+
 RUVIA_TEST(http_priority_repeated_headers_combine_members_and_replace_invalid_values) {
     const std::array headers{ruvia::HttpHeaderView{"Priority", "u=2, i"},
         ruvia::HttpHeaderView{"X-Other", "u=0"},

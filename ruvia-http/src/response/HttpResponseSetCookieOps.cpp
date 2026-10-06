@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/HttpHeader.h"
@@ -43,27 +44,36 @@ namespace {
 
 }  // namespace
 
-HttpResponseHeader& HttpResponse::upsertSetCookieHeaderUninitializedValue(
-    std::string_view wirePrefix, std::string_view cookieName, std::string_view path,
-    std::string_view domain, std::size_t valueSize) {
-    const bool hasPath = !path.empty();
-    auto* retained = findSetCookieHeader(wirePrefix, cookieName, hasPath, path, domain);
+void HttpResponse::setCookie(const SetCookiePlan& plan) {
+    auto* retained = findSetCookieHeader(
+        plan.wirePrefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain());
     if (retained == nullptr) {
-        return appendHeaderUninitializedValue(
-            "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+        auto& header = appendHeaderUninitializedValue(
+            "Set-Cookie", plan.size(), detail::kResponseHeaderSetCookie);
+        plan.write(detail::responseHeaderValueBegin(header));
+        return;
     }
 
-    headers_.assignUninitializedValue(
-        *retained, "Set-Cookie", valueSize, detail::kResponseHeaderSetCookie);
+    const bool borrows_retained =
+        detail::response_header_storage_overlaps(*retained, plan.name_) ||
+        detail::response_header_storage_overlaps(*retained, plan.value_) ||
+        detail::response_header_storage_overlaps(*retained, plan.path_) ||
+        detail::response_header_storage_overlaps(*retained, plan.domain_);
+    SetCookiePlan::written_fields written;
+    if (borrows_retained) {
+        auto prepared = headers_.makeUninitializedHeader(
+            "Set-Cookie", plan.size(), detail::kResponseHeaderSetCookie);
+        written = plan.write_fields(detail::responseHeaderValueBegin(prepared));
+        headers_.releaseHeader(*retained);
+        *retained = prepared;
+    } else {
+        headers_.assignUninitializedValue(
+            *retained, "Set-Cookie", plan.size(), detail::kResponseHeaderSetCookie);
+        written = plan.write_fields(detail::responseHeaderValueBegin(*retained));
+    }
     detail::setResponseHeaderAppend(*retained, true);
-    eraseLaterSetCookieHeaders(*retained, wirePrefix, cookieName, hasPath, path, domain);
-    return *retained;
-}
-
-void HttpResponse::setCookie(const SetCookiePlan& plan) {
-    auto& header = upsertSetCookieHeaderUninitializedValue(
-        plan.wirePrefix(), plan.name(), plan.path(), plan.domain(), plan.size());
-    plan.write(detail::responseHeaderValueBegin(header));
+    eraseLaterSetCookieHeaders(*retained, written.wire_name_, !written.path_.empty(),
+        written.path_, written.domain_);
 }
 
 void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
@@ -83,10 +93,19 @@ void HttpResponse::upsertSetCookieHeaderValidated(std::string_view value) {
         return;
     }
 
+    const auto name_size = cookieName.size();
+    const auto path_size = parsed->path().size();
+    const auto domain_size = parsed->domain().size();
+    const auto name_offset = static_cast<std::size_t>(cookieName.data() - value.data());
+    const auto path_offset = parsed->path().empty() ? std::size_t{0}
+                                                    : static_cast<std::size_t>(parsed->path().data() - value.data());
+    const auto domain_offset = parsed->domain().empty() ? std::size_t{0}
+                                                        : static_cast<std::size_t>(parsed->domain().data() - value.data());
     headers_.assign(*retained, "Set-Cookie", value, detail::kResponseHeaderSetCookie);
     detail::setResponseHeaderAppend(*retained, true);
-    eraseLaterSetCookieHeaders(
-        *retained, {}, cookieName, hasPath, parsed->path(), parsed->domain());
+    const auto copied_value = retained->value();
+    eraseLaterSetCookieHeaders(*retained, copied_value.substr(name_offset, name_size), hasPath,
+        copied_value.substr(path_offset, path_size), copied_value.substr(domain_offset, domain_size));
 }
 
 HttpResponseHeader* HttpResponse::findSetCookieHeader(std::string_view wirePrefix,
@@ -103,7 +122,7 @@ HttpResponseHeader* HttpResponse::findSetCookieHeader(std::string_view wirePrefi
 }
 
 void HttpResponse::eraseLaterSetCookieHeaders(HttpResponseHeader& retained,
-    std::string_view wirePrefix, std::string_view cookieName, bool hasPath, std::string_view path,
+    std::string_view cookieName, bool hasPath, std::string_view path,
     std::string_view domain) noexcept {
     // A response might already contain duplicates introduced through the raw
     // header API. Once an authoritative cookie path owns this storage key,
@@ -114,7 +133,7 @@ void HttpResponse::eraseLaterSetCookieHeaders(HttpResponseHeader& retained,
     for (auto* read = &retained + 1; read != end; ++read) {
         if (detail::responseHeaderKnownBit(*read) == detail::kResponseHeaderSetCookie &&
             setCookieValueMatchesStorageKey(
-                read->value(), wirePrefix, cookieName, hasPath, path, domain)) {
+                read->value(), {}, cookieName, hasPath, path, domain)) {
             headers_.releaseHeader(*read);
             continue;
         }

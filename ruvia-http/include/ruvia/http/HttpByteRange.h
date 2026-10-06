@@ -120,19 +120,17 @@ private:
     result.ignored_ = false;
     std::size_t empty_members = 0;
     bool saw_range_spec = false;
-    for (;;) {
+    bool has_more = false;
+    do {
         const auto comma = specs.find(',');
         auto spec = httpTrimOws(specs.substr(0, comma));
-        const bool has_more = comma != std::string_view::npos;
+        has_more = comma != std::string_view::npos;
         specs = has_more ? specs.substr(comma + 1) : std::string_view{};
         if (spec.empty()) {
             // RFC 9110 list recipients tolerate empty members; bound the work
             // while accepting more than the five elements RFC 9110 recommends.
             if (++empty_members > 32) {
                 return http_byte_range_set{};
-            }
-            if (!has_more) {
-                break;
             }
             continue;
         }
@@ -164,16 +162,10 @@ private:
                 if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
                     previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
                                        previous.offset_;
-                    if (!has_more) {
-                        break;
-                    }
                     continue;
                 }
             }
             result.ranges_[result.count_++] = resolved;
-            if (!has_more) {
-                break;
-            }
             continue;
         }
         if (!parse_number(first, start) || (!last.empty() && !parse_number(last, end))) {
@@ -207,17 +199,11 @@ private:
             if (resolved.offset_ >= previous.offset_ && resolved.offset_ <= previous_end) {
                 previous.length_ = std::max(previous_end, resolved.offset_ + resolved.length_) -
                                    previous.offset_;
-                if (!has_more) {
-                    break;
-                }
                 continue;
             }
         }
         result.ranges_[result.count_++] = resolved;
-        if (!has_more) {
-            break;
-        }
-    }
+    } while (has_more);
     if (result.count_ == 0 && !saw_range_spec) {
         return http_byte_range_set{};
     }

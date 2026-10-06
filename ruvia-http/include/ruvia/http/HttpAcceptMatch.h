@@ -13,6 +13,9 @@ enum class HttpAcceptTokenMatchMode : std::uint8_t {
 // Accumulates one offered representation's match across multiple Accept field
 // lines, equivalent to a comma-joined field without allocating or copying it.
 // More specific matches override less specific ones, including q=0 exclusions.
+// Language-prefix mode uses the longest matching range; equal specificity takes
+// the highest quality, independently of field order. Token fields allow only
+// an optional q weight; unknown or additional parameters are unacceptable.
 class HttpAcceptMatch final {
 public:
     void updateMediaType(std::string_view field, std::string_view offered) noexcept;

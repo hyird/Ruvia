@@ -17,7 +17,8 @@ enum class HttpSetCookieAttribute : std::uint8_t {
 
 // Borrowed, allocation-free Set-Cookie fields for outbound client runtimes.
 // Unknown and oversized attributes are ignored; invalid received cookies are
-// rejected.
+// rejected. Expires follows RFC 6265 cookie-date token grammar, including its
+// permitted suffixes; this does not relax the separate HTTP-date grammar.
 class HttpSetCookieView final {
 public:
     [[nodiscard]] constexpr std::string_view name() const noexcept {

@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpStatus.h"
 
@@ -31,6 +32,12 @@ enum class HttpContentCoding : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept;
+
+// RFC 9110 section 8.4.1.3 treats x-gzip as gzip. The token is already trimmed.
+[[nodiscard]] inline bool http_is_gzip_coding_token(std::string_view token) noexcept {
+    return httpAsciiEqualsIgnoreCase(token, "gzip") ||
+           httpAsciiEqualsIgnoreCase(token, "x-gzip");
+}
 
 // Codings supported for incoming request bodies, as an Accept-Encoding field value.
 [[nodiscard]] inline constexpr std::string_view httpSupportedRequestContentCodings() noexcept {

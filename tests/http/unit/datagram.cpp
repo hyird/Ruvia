@@ -21,6 +21,26 @@ void capsule(void* context, ruvia::HttpCapsuleEvent event) {
     capture.ends += event.endCapsule;
 }
 }  // namespace
+RUVIA_TEST(http_capsule_protocol_byte_parameters_accept_optional_padding_and_validate_quartets) {
+    for (const auto value : {"?1;bytes=:YQ=:", "?1;bytes=:YQ==:", "?1;bytes=:YQ:", "?1;bytes=:YWJj:",
+             "?1;bytes=:YWJ:", "?1;bytes=:YWJ=:", "?1;bytes=:YR==:", "?1;bytes=::"}) {
+        const auto parsed = ruvia::parseHttpCapsuleProtocol(value);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            RUVIA_CHECK(*parsed);
+        }
+    }
+    const auto disabled = ruvia::parseHttpCapsuleProtocol("?0;bytes=:YQ=:");
+    RUVIA_CHECK(disabled.has_value());
+    if (disabled) {
+        RUVIA_CHECK(!*disabled);
+    }
+    for (const auto value : {"?1;bytes=:Y:", "?1;bytes=:Y=:", "?1;bytes=:YWJj=:", "?1;bytes=:YWJ==:",
+             "?1;bytes=:YQ===:", "?1;bytes=:Y=Q:", "?1;bytes=:YQ$:", "?1;bytes=:YQ\n:", "?1;bytes=:YQ"}) {
+        RUVIA_CHECK(!ruvia::parseHttpCapsuleProtocol(value));
+    }
+}
+
 RUVIA_TEST(http_datagram_quarter_stream_id_and_udp_context) {
     std::array<char, 16> prefix{};
     auto count = ruvia::encodeHttp3DatagramPrefix(prefix, 4096);

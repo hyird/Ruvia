@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -513,6 +514,53 @@ RUVIA_TEST(response_header_append_failure_does_not_mark_existing_header) {
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
     for (const auto& header : response.headers()) {
         RUVIA_CHECK(ruvia::detail::responseHeaderAppend(header));
+    }
+}
+
+RUVIA_TEST(response_header_removal_preserves_unrelated_fields) {
+    for (const int filler_count : {0, 8}) {
+        CountingMemoryResource resource;
+        HttpResponse response({.resource = &resource});
+        response.header("Content-Type", "text/plain");
+        response.header("Vary", "Accept-Encoding");
+        response.header("Vary", "Origin", {.mode = ruvia::HttpResponseHeaderMode::kAppend});
+        for (int i = 0; i < filler_count; ++i) {
+            response.header("X-Filler-" + std::to_string(i), "value");
+        }
+        std::vector<std::pair<std::string_view, std::string_view>> fields;
+        for (const auto& header : response.headers()) {
+            fields.emplace_back(header.name(), header.value());
+        }
+        const auto* const table = response.headers().begin();
+        const auto allocations = resource.allocations();
+        response.removeHeader("content-length");
+        response.removeHeader("Set-Cookie");
+        response.removeHeader("X-Missing");
+        RUVIA_CHECK_EQ(resource.allocations(), allocations);
+        RUVIA_CHECK(response.headers().begin() == table);
+        RUVIA_CHECK_EQ(response.headers().size(), fields.size());
+        std::size_t index = 0;
+        for (const auto& header : response.headers()) {
+            RUVIA_CHECK_EQ(header.name(), fields[index].first);
+            RUVIA_CHECK_EQ(header.value(), fields[index].second);
+            ++index;
+        }
+        RUVIA_CHECK_EQ(response.header("content-type"), std::string_view("text/plain"));
+        RUVIA_CHECK_EQ(response.header("vary"), std::string_view("Accept-Encoding"));
+        RUVIA_CHECK(!response.header("Content-Length").has_value());
+
+        // A present empty known field is still removed, and removing an
+        // appended known field removes every occurrence without stale indexes.
+        response.header("Content-Length", "");
+        RUVIA_CHECK(response.header("Content-Length").has_value());
+        response.removeHeader("CONTENT-LENGTH");
+        RUVIA_CHECK(!response.header("Content-Length").has_value());
+        response.removeHeader("vary");
+        RUVIA_CHECK(!response.header("Vary").has_value());
+        RUVIA_CHECK_EQ(response.headers().size(), fields.size() - 2);
+        RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
+        response.removeHeader("Vary");
+        RUVIA_CHECK_EQ(response.headers().size(), fields.size() - 2);
     }
 }
 

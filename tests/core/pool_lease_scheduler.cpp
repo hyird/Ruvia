@@ -2,6 +2,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -266,9 +267,37 @@ bool exerciseCompletedAcquireIgnoresStalePostedCancellation(
 }
 
 AcquireProbeTask observe_prepared_acquire(
-    ruvia::Task<ruvia::PoolWaiterResult> task, bool& cancelled) {
+    ruvia::Task<ruvia::PoolWaiterResult> task, ruvia::PoolWaiterResult::Status expected_status,
+    bool& matched) {
     const auto result = co_await std::move(task);
-    cancelled = result.status() == ruvia::PoolWaiterResult::Status::kCancelled;
+    matched = result.status() == expected_status;
+}
+
+bool test_scheduler_owns_timeout_for_lazy_acquires() {
+    bool success = true;
+    for (const bool with_stop_token : {false, true}) {
+        ruvia::PoolLeaseScheduler scheduler(0);
+        std::optional<ruvia::Task<ruvia::PoolWaiterResult>> pending;
+        {
+            std::optional<std::chrono::milliseconds> timeout = std::chrono::milliseconds(1);
+            if (with_stop_token) {
+                pending.emplace(scheduler.acquire(timeout, {}));
+            } else {
+                pending.emplace(scheduler.acquire(timeout));
+            }
+            timeout.reset();
+        }
+        bool timed_out = false;
+        auto probe = observe_prepared_acquire(
+            std::move(*pending), ruvia::PoolWaiterResult::Status::kTimedOut, timed_out);
+        pending.reset();
+        probe.start();
+        success = success && !probe.done();
+        scheduler.scanDeadlines(std::chrono::steady_clock::now() + std::chrono::seconds(1));
+        success = success && probe.done() && timed_out;
+        (void)scheduler.close();
+    }
+    return success;
 }
 
 bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
@@ -287,7 +316,8 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
         }
         const auto baseline = memory.liveBlocks;
         bool cancelled = false;
-        auto probe = observe_prepared_acquire(std::move(*pending), cancelled);
+        auto probe = observe_prepared_acquire(
+            std::move(*pending), ruvia::PoolWaiterResult::Status::kCancelled, cancelled);
         pending.reset();
         probe.start();
         success = success && !probe.done();
@@ -368,6 +398,7 @@ int main() {
     dispatcher->close();
     return leaseSuccess && timeoutSuccess && workerTimeoutSuccess && saturatedTimeoutSuccess &&
                    cancellationSuccess && staleCancellationSuccess && pmrLifecycleSuccess &&
+                   test_scheduler_owns_timeout_for_lazy_acquires() &&
                    test_scheduler_retains_worker_binding_for_lazy_acquires()
                ? 0
                : 1;

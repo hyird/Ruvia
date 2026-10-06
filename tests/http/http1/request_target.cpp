@@ -143,6 +143,59 @@ RUVIA_TEST(uri_scheme_uses_complete_rfc3986_grammar) {
     RUVIA_CHECK_EQ(httpUriSchemeDefaultPort("ftp"), std::uint16_t{0});
 }
 
+RUVIA_TEST(uri_components_preserve_their_literal_byte_grammars) {
+    constexpr std::string_view unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    constexpr std::string_view sub_delimiters = "!$&'()*+,;=";
+    for (unsigned value = 0; value < 256; ++value) {
+        const auto byte = static_cast<char>(value);
+        const std::string_view literal(&byte, 1);
+        const bool plain = unreserved.find(byte) != std::string_view::npos;
+        const bool reg_name = plain || sub_delimiters.find(byte) != std::string_view::npos;
+        const bool pchar = reg_name || byte == ':' || byte == '@';
+        RUVIA_CHECK_EQ(ruvia::detail::isUnreservedByte(static_cast<unsigned char>(byte)), plain);
+        RUVIA_CHECK_EQ(ruvia::detail::isUriPchar(static_cast<unsigned char>(byte)), pchar);
+        RUVIA_CHECK_EQ(ruvia::detail::isValidRegName(literal), reg_name);
+        RUVIA_CHECK_EQ(ruvia::detail::isValidUriUserinfo(literal), reg_name || byte == ':');
+        RUVIA_CHECK_EQ(ruvia::detail::isValidUriComponent(literal, false, false), pchar);
+        RUVIA_CHECK_EQ(ruvia::detail::isValidUriComponent(literal, false, true), pchar || byte == '?');
+        RUVIA_CHECK_EQ(ruvia::detail::isValidUriComponent(literal, true, false), pchar || byte == '/');
+        RUVIA_CHECK_EQ(ruvia::detail::isValidUriComponent(literal, true, true), pchar || byte == '/' || byte == '?');
+        const std::string future = std::string("v1.") + byte;
+        RUVIA_CHECK_EQ(ruvia::detail::isValidIpvFuture(future), reg_name || byte == ':');
+    }
+}
+
+RUVIA_TEST(uri_components_validate_percent_encoding_without_changing_component_delimiters) {
+    for (const std::string_view hex : {"0123456789ABCDEF", "0123456789abcdef"}) {
+        for (unsigned value = 0; value < 256; ++value) {
+            const char bytes[]{'%', hex[value >> 4], hex[value & 15]};
+            const std::string_view escaped(bytes, sizeof(bytes));
+            RUVIA_CHECK(ruvia::detail::isValidRegName(escaped));
+            RUVIA_CHECK(ruvia::detail::isValidUriUserinfo(escaped));
+            RUVIA_CHECK(ruvia::detail::isValidUriComponent(escaped, false, false));
+        }
+    }
+    RUVIA_CHECK(!ruvia::detail::isValidRegName(""));
+    RUVIA_CHECK(ruvia::detail::isValidUriUserinfo(""));
+    RUVIA_CHECK(ruvia::detail::isValidUriComponent("", false, false));
+    for (const auto value : {"%00", "%2f", "%3F", "%40", "%7e", "%80", "%ff"}) {
+        RUVIA_CHECK(ruvia::detail::isValidRegName(value));
+        RUVIA_CHECK(ruvia::detail::isValidUriUserinfo(value));
+        RUVIA_CHECK(ruvia::detail::isValidUriComponent(value, false, false));
+    }
+    for (const auto value : {"%", "%2", "%g0", "%0g", "name%2", "name%20%", "name%0g"}) {
+        RUVIA_CHECK(!ruvia::detail::isValidRegName(value));
+        RUVIA_CHECK(!ruvia::detail::isValidUriUserinfo(value));
+        RUVIA_CHECK(!ruvia::detail::isValidUriComponent(value, true, true));
+    }
+    RUVIA_CHECK(!ruvia::detail::isValidRegName("name@host"));
+    RUVIA_CHECK(!ruvia::detail::isValidUriUserinfo("name@host"));
+    RUVIA_CHECK(ruvia::detail::isValidUriComponent("name@host", false, false));
+    RUVIA_CHECK(!ruvia::detail::isValidUriComponent("/path?query", true, false));
+    RUVIA_CHECK(ruvia::detail::isValidUriComponent("/path?query", true, true));
+    RUVIA_CHECK(!ruvia::detail::isValidIpvFuture("v1.name%20"));
+}
+
 RUVIA_TEST(uri_authority_uses_complete_rfc3986_generic_grammar) {
     RUVIA_CHECK(isValidUriAuthority(""));
     RUVIA_CHECK(isValidUriAuthority("example.com"));

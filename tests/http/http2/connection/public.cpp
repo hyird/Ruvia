@@ -1073,9 +1073,9 @@ RUVIA_TEST(http2_public_trailer_decode_failure_is_retryable_and_event_retains_pa
     const auto received = retried->messageEnd()->trailers();
     RUVIA_CHECK(received.front().value() == trailerValue);
     // Debug STL implementations may allocate iterator metadata while moving a
-    // container. The decoded header array and value must retain their storage.
+    // container. The decoded header array and owned fields must retain storage.
     RUVIA_CHECK(std::ranges::find(storedBlocks, received.data()) != storedBlocks.end());
-    RUVIA_CHECK(std::ranges::find(storedBlocks, received.front().value().data()) != storedBlocks.end());
+    RUVIA_CHECK(std::ranges::find(storedBlocks, received.front().name().data()) != storedBlocks.end());
 }
 
 RUVIA_TEST(http2_public_data_credit_merge_is_allocation_free_and_linear) {

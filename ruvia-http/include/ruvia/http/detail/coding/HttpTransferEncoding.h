@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/coding/HttpTransferCoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
@@ -203,8 +204,7 @@ public:
                     finalChunked = true;
                     return true;
                 }
-                const bool gzip = httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-                                  httpAsciiEqualsIgnoreCase(coding, "x-gzip");
+                const bool gzip = http_is_gzip_coding_token(coding);
                 const bool deflate = httpAsciiEqualsIgnoreCase(coding, "deflate");
                 if (gzip || deflate) {
                     if (hasParameters) {
