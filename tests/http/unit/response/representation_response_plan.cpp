@@ -126,6 +126,26 @@ RUVIA_TEST(representation_response_plan_resolves_supported_range_outcomes) {
     }
 }
 
+RUVIA_TEST(representation_response_plan_preserves_unsatisfiable_ranges_after_empty_members) {
+    const auto options = ruvia::HttpRepresentationResponseOptions{
+        .rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges};
+    const auto prefix = std::string("bytes=") + std::string(32, ',');
+    for (const auto tail : {"20-", "20-29", "-0"}) {
+        const auto value = prefix + tail;
+        auto req = request("GET");
+        add(req, RequestKnownHeader::kRange, value);
+        const auto plan = ruvia::planHttpRepresentationResponse(req, kRepresentation, options);
+        RUVIA_CHECK(plan.rangeUnsatisfiable() != nullptr);
+        RUVIA_CHECK_EQ(plan.status(), ruvia::http_status::kRangeNotSatisfiable);
+    }
+    const auto over_limit = prefix + ",20-";
+    auto req = request("GET");
+    add(req, RequestKnownHeader::kRange, over_limit);
+    const auto plan = ruvia::planHttpRepresentationResponse(req, kRepresentation, options);
+    RUVIA_CHECK(plan.full() != nullptr);
+    RUVIA_CHECK_EQ(plan.status(), ruvia::http_status::kOk);
+}
+
 RUVIA_TEST(representation_response_plan_obeys_method_precondition_and_presence_precedence) {
     for (const auto method : {"GET", "HEAD", "POST"}) {
         auto req = request(method);
@@ -168,6 +188,80 @@ RUVIA_TEST(representation_response_plan_obeys_method_precondition_and_presence_p
         {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
     RUVIA_CHECK(failedFirstPlan.preconditionFailed() != nullptr);
     RUVIA_CHECK_EQ(failedFirstPlan.status(), ruvia::http_status::kPreconditionFailed);
+}
+
+RUVIA_TEST(representation_response_plan_evaluates_supported_representation_extension_methods) {
+    for (const auto method : {"UPDATE", "MERGE", "get", "trace"}) {
+        auto exists = request(method);
+        add(exists, RequestKnownHeader::kIfNoneMatch, "*");
+        const auto exists_plan = ruvia::planHttpRepresentationResponse(exists, {.length = 10});
+        RUVIA_CHECK_EQ(exists_plan.status(), ruvia::http_status::kPreconditionFailed);
+
+        auto none_match = request(method);
+        add(none_match, RequestKnownHeader::kIfNoneMatch, R"(W/"v1")");
+        const auto none_match_plan = ruvia::planHttpRepresentationResponse(none_match, kRepresentation);
+        RUVIA_CHECK(none_match_plan.preconditionFailed() != nullptr);
+
+        auto match = request(method);
+        add(match, RequestKnownHeader::kIfMatch, R"(W/"v1")");
+        const auto match_plan = ruvia::planHttpRepresentationResponse(match, kRepresentation);
+        RUVIA_CHECK(match_plan.preconditionFailed() != nullptr);
+
+        auto unmodified = request(method);
+        add(unmodified, RequestKnownHeader::kIfUnmodifiedSince, "Sun, 06 Nov 1994 08:49:36 GMT");
+        const auto unmodified_plan = ruvia::planHttpRepresentationResponse(unmodified, kRepresentation);
+        RUVIA_CHECK(unmodified_plan.preconditionFailed() != nullptr);
+
+        auto matched = request(method);
+        add(matched, RequestKnownHeader::kIfMatch, R"("v1")");
+        add(matched, RequestKnownHeader::kIfUnmodifiedSince, "Sun, 06 Nov 1994 08:49:36 GMT");
+        add(matched, RequestKnownHeader::kIfNoneMatch, R"("stale")");
+        add(matched, RequestKnownHeader::kIfModifiedSince, "Sun, 06 Nov 1994 08:49:38 GMT");
+        add(matched, RequestKnownHeader::kRange, "bytes=2-4");
+        const auto matched_plan = ruvia::planHttpRepresentationResponse(matched, kRepresentation,
+            {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
+        RUVIA_CHECK(matched_plan.full() != nullptr);
+        RUVIA_CHECK_EQ(matched_plan.status(), ruvia::http_status::kOk);
+
+        auto modified_since = request(method);
+        add(modified_since, RequestKnownHeader::kIfModifiedSince, "Sun, 06 Nov 1994 08:49:38 GMT");
+        const auto modified_since_plan = ruvia::planHttpRepresentationResponse(modified_since, kRepresentation);
+        RUVIA_CHECK_EQ(modified_since_plan.status(), ruvia::http_status::kOk);
+
+        auto range = request(method);
+        add(range, RequestKnownHeader::kRange, "bytes=2-4");
+        add(range, RequestKnownHeader::kIfRange, R"("v1")");
+        const auto range_plan = ruvia::planHttpRepresentationResponse(range, kRepresentation,
+            {.rangePolicy = ruvia::HttpRangeRequestPolicy::honor_byte_ranges});
+        RUVIA_CHECK(range_plan.full() != nullptr);
+        RUVIA_CHECK_EQ(range_plan.status(), ruvia::http_status::kOk);
+
+        auto wildcard_match = request(method);
+        add(wildcard_match, RequestKnownHeader::kIfMatch, "*");
+        const auto wildcard_match_plan = ruvia::planHttpRepresentationResponse(wildcard_match, {.length = 10});
+        RUVIA_CHECK_EQ(wildcard_match_plan.status(), ruvia::http_status::kOk);
+
+        const auto no_content = ruvia::planHttpRepresentationResponse(exists, kRepresentation,
+            {.normalStatus = ruvia::http_status::kNoContent});
+        RUVIA_CHECK_EQ(no_content.status(), ruvia::http_status::kPreconditionFailed);
+
+        const auto precondition = ruvia::planHttpRepresentationResponse(matched, kRepresentation,
+            {.normalStatus = ruvia::http_status::kPreconditionFailed});
+        RUVIA_CHECK(precondition.full() != nullptr);
+        RUVIA_CHECK_EQ(precondition.status(), ruvia::http_status::kPreconditionFailed);
+    }
+}
+
+RUVIA_TEST(representation_response_plan_ignores_extension_conditions_for_ineligible_responses) {
+    for (const auto status : {ruvia::http_status::kNotFound, ruvia::http_status::kNotImplemented,
+             ruvia::http_status::kMethodNotAllowed, ruvia::http_status::kTemporaryRedirect}) {
+        auto req = request("UPDATE");
+        add(req, RequestKnownHeader::kIfNoneMatch, "*");
+        add(req, RequestKnownHeader::kIfMatch, R"("stale")");
+        const auto plan = ruvia::planHttpRepresentationResponse(req, kRepresentation, {.normalStatus = status});
+        RUVIA_CHECK(plan.full() != nullptr);
+        RUVIA_CHECK_EQ(plan.status(), status);
+    }
 }
 
 RUVIA_TEST(representation_response_plan_uses_last_modified_only_when_present_and_if_range_is_strong) {

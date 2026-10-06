@@ -1,5 +1,6 @@
 #include "ruvia/http/Cookies.h"
 
+#include <cassert>
 #include <charconv>
 #include <chrono>
 #include <cstring>
@@ -98,31 +99,40 @@ SetCookiePlan::SetCookiePlan(
 }
 
 void SetCookiePlan::write(char* cursor) const {
+    (void)write_fields(cursor);
+}
+
+SetCookiePlan::written_fields SetCookiePlan::write_fields(char* cursor) const noexcept {
+    written_fields fields;
+    const auto* const name_begin = cursor;
     const auto append = [&cursor](std::string_view text) noexcept {
         if (!text.empty()) {
             std::memcpy(cursor, text.data(), text.size());
             cursor += text.size();
         }
     };
-    const auto appendUnsigned = [&cursor](std::uint64_t number, std::size_t size) {
+    const auto appendUnsigned = [&cursor](std::uint64_t number, std::size_t size) noexcept {
         auto* const end = cursor + size;
-        const auto [ptr, ec] = std::to_chars(cursor, end, number);
-        if (ec != std::errc{} || ptr != end) {
-            throw std::logic_error("failed to format cookie Max-Age");
-        }
-        cursor = ptr;
+        // The constructor fixed the exact digit count; integral to_chars does
+        // not throw and this immutable value fits its prevalidated slice.
+        const auto result = std::to_chars(cursor, end, number);
+        assert(result.ec == std::errc{} && result.ptr == end);
+        cursor = result.ptr;
     };
 
     append(prefixText_);
     append(name_);
+    fields.wire_name_ = {name_begin, static_cast<std::size_t>(cursor - name_begin)};
     *cursor++ = '=';
     append(value_);
     if (!path_.empty()) {
         append("; Path=");
+        fields.path_ = {cursor, path_.size()};
         append(path_);
     }
     if (!domain_.empty()) {
         append("; Domain=");
+        fields.domain_ = {cursor, domain_.size()};
         append(domain_);
     }
     if (hasMaxAge_) {
@@ -150,6 +160,7 @@ void SetCookiePlan::write(char* cursor) const {
     if (partitioned_) {
         append("; Partitioned");
     }
+    return fields;
 }
 
 }  // namespace ruvia

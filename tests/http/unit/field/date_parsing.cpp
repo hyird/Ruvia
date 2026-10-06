@@ -119,6 +119,67 @@ RUVIA_TEST(http_parse_http_date_accepts_all_three_formats) {
     RUVIA_CHECK(!httpParseHttpDate("garbage").has_value());
 }
 
+RUVIA_TEST(http_rfc850_date_keeps_the_rolling_century_rule) {
+    using ruvia::detail::httpParseImfFixdate;
+    using ruvia::detail::httpParseRfc850Date;
+    struct date_case final {
+        std::string_view reference_;
+        std::string_view field_;
+        std::string_view expected_;
+    };
+    constexpr date_case cases[] = {
+        {"Thu, 01 Jan 2026 00:00:00 GMT", "Wednesday, 01-Jan-70 00:00:00 GMT", "Wed, 01 Jan 2070 00:00:00 GMT"},
+        {"Thu, 01 Jan 2026 00:00:00 GMT", "Wednesday, 01-Jan-76 00:00:00 GMT", "Wed, 01 Jan 2076 00:00:00 GMT"},
+        {"Thu, 01 Jan 2026 00:00:00 GMT", "Saturday, 01-Jan-77 00:00:00 GMT", "Sat, 01 Jan 1977 00:00:00 GMT"},
+        {"Sun, 01 Jan 2090 00:00:00 GMT", "Thursday, 01-Jan-99 00:00:00 GMT", "Thu, 01 Jan 2099 00:00:00 GMT"},
+        {"Sun, 01 Jan 2090 00:00:00 GMT", "Saturday, 01-Jan-00 00:00:00 GMT", "Sat, 01 Jan 2000 00:00:00 GMT"},
+    };
+    for (const auto& item : cases) {
+        const auto reference = httpParseImfFixdate(item.reference_);
+        // A platform with a narrower time_t cannot supply every reference.
+        if (reference) {
+            RUVIA_CHECK(httpParseRfc850Date(item.field_, *reference) == httpParseImfFixdate(item.expected_));
+        }
+    }
+}
+
+RUVIA_TEST(http_rfc850_date_uses_the_complete_fifty_year_boundary) {
+    using ruvia::detail::httpParseImfFixdate;
+    using ruvia::detail::httpParseRfc850Date;
+    const auto reference = httpParseImfFixdate("Thu, 15 Jan 2026 12:34:56 GMT");
+    RUVIA_CHECK(reference.has_value());
+    if (!reference) {
+        return;
+    }
+    struct date_case final {
+        std::string_view field_;
+        std::string_view expected_;
+    };
+    constexpr date_case cases[] = {
+        {"Wednesday, 14-Jan-76 23:59:59 GMT", "Tue, 14 Jan 2076 23:59:59 GMT"},
+        {"Wednesday, 15-Jan-76 12:34:55 GMT", "Wed, 15 Jan 2076 12:34:55 GMT"},
+        {"Wednesday, 15-Jan-76 12:34:56 GMT", "Wed, 15 Jan 2076 12:34:56 GMT"},
+        {"Thursday, 15-Jan-76 12:34:57 GMT", "Thu, 15 Jan 1976 12:34:57 GMT"},
+        {"Thursday, 15-Jan-76 12:35:00 GMT", "Thu, 15 Jan 1976 12:35:00 GMT"},
+        {"Thursday, 15-Jan-76 13:00:00 GMT", "Thu, 15 Jan 1976 13:00:00 GMT"},
+        {"Friday, 16-Jan-76 00:00:00 GMT", "Fri, 16 Jan 1976 00:00:00 GMT"},
+        {"Sunday, 01-Feb-76 00:00:00 GMT", "Sun, 01 Feb 1976 00:00:00 GMT"},
+        {"Friday, 31-Dec-76 00:00:00 GMT", "Fri, 31 Dec 1976 00:00:00 GMT"},
+    };
+    for (const auto& item : cases) {
+        RUVIA_CHECK(httpParseRfc850Date(item.field_, *reference) == httpParseImfFixdate(item.expected_));
+    }
+}
+
+RUVIA_TEST(http_rfc850_date_accepts_an_explicit_pre_epoch_reference) {
+    using ruvia::detail::httpParseImfFixdate;
+    using ruvia::detail::httpParseRfc850Date;
+    const auto reference = httpParseImfFixdate("Wed, 31 Dec 1969 23:59:59 GMT");
+    if (reference) {
+        RUVIA_CHECK(httpParseRfc850Date("Wednesday, 31-Dec-69 23:59:59 GMT", *reference) == reference);
+    }
+}
+
 RUVIA_TEST(imf_fixdate_parses_known_dates) {
     using ruvia::detail::httpParseImfFixdate;
     const auto epoch = httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 GMT");

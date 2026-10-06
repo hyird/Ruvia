@@ -5,10 +5,8 @@
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 
-// The weight grammar every Accept-* field shares (RFC 9110 section 12.4.2): a
-// qvalue parsed to thousandths, the strict `;q=` parameter syntax around it, and
-// the running maximum a multi-line field folds into. Nothing here knows which
-// field it is negotiating.
+// Shared quality parsing and accumulation (RFC 9110 section 12.4.2). Token
+// fields use one optional weight; media ranges extract q from their parameters.
 
 namespace ruvia::detail {
 
@@ -44,6 +42,30 @@ namespace ruvia::detail {
     return -1;
 }
 
+// Token-based Accept fields allow one optional weight, not media parameters.
+// The list visitor has already trimmed surrounding OWS. Invalid weights are
+// unacceptable rather than inheriting the unweighted default quality.
+[[nodiscard]] inline int http_weight_parameter(std::string_view value) noexcept {
+    const auto semicolon = value.find(';');
+    if (semicolon == std::string_view::npos) {
+        return 1000;
+    }
+    auto weight = value.substr(semicolon + 1);
+    while (!weight.empty() && (weight.front() == ' ' || weight.front() == '\t')) {
+        weight.remove_prefix(1);
+    }
+    if (weight.size() < 3 || httpAsciiToLower(static_cast<unsigned char>(weight[0])) != 'q' ||
+        weight[1] != '=') {
+        return 0;
+    }
+    const auto qvalue = weight.substr(2);
+    if (qvalue != httpTrimOws(qvalue)) {
+        return 0;
+    }
+    const auto parsed = httpParseQualityValue(qvalue);
+    return parsed < 0 ? 0 : parsed;
+}
+
 [[nodiscard]] inline bool httpAcceptParametersHaveStrictEquals(std::string_view value) noexcept {
     return httpAllParameters(value, [](std::string_view part) noexcept {
         const auto equals = part.find('=');
@@ -58,10 +80,9 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline int httpQualityParameter(std::string_view value) noexcept {
-    // Reuse the shared quote-aware parameter scanner so a ';' inside a quoted media-range
-    // parameter (RFC 7231 section 5.3.1: token "=" (token / quoted-string)) is not mistaken for a
-    // parameter separator ; the same helper multipart Content-Type parsing uses. The leading
-    // media-type / coding token has no '=', so it is skipped exactly as before; first q wins.
+    // Media-range parameters can contain quoted-string values. Reuse the shared
+    // quote-aware scanner so an embedded ';' is not a parameter separator. Skip
+    // the leading media type and reject duplicate weights.
     if (!httpAcceptParametersHaveStrictEquals(value)) {
         return 0;
     }

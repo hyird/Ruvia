@@ -77,6 +77,12 @@ private:
     Value value_;
 };
 
+// Call after normal request checks, before processing request content or
+// performing the method, with the target resource's current representation.
+// The method must be supported and allowed. For extensions, the caller must
+// establish that it selects or modifies that representation; non-representation
+// extensions and extensions redefining conditional semantics are outside this API.
+// CONNECT, OPTIONS, and TRACE ignore conditions, as do ineligible normal statuses.
 [[nodiscard]] HttpRepresentationResponsePlan planHttpRepresentationResponse(
     const HttpRequest& request, HttpSelectedRepresentationMetadata representation,
     HttpRepresentationResponseOptions options = {});

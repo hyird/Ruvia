@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <utility>
@@ -10,6 +12,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
 
 namespace ruvia::detail {
@@ -41,14 +44,14 @@ public:
     }
 
     [[nodiscard]] std::span<const HttpHeader> headers() const& noexcept RUVIA_LIFETIMEBOUND {
-        return headers_;
+        return *headers_;
     }
     [[nodiscard]] std::span<const HttpHeader> headers() const&& = delete;
 
     // Transfers the owned parsed fields to a consumer that retains the head's
     // metadata but needs to extend the fields' lifetime independently.
-    [[nodiscard]] std::pmr::vector<HttpHeader> takeHeaders() && noexcept {
-        return std::move(headers_);
+    [[nodiscard]] std::pmr::vector<HttpHeader> takeHeaders() && {
+        return std::pmr::vector<HttpHeader>(std::move(*headers_), headers_->get_allocator());
     }
 
 private:
@@ -63,11 +66,12 @@ private:
         HttpProtocolVersion protocolVersion, std::pmr::memory_resource* resource)
         : status_(status),
           protocolVersion_(protocolVersion),
-          headers_(resource) {}
+          headers_(detail::makeHttpPmrObject<std::pmr::vector<HttpHeader>>(
+              resource, std::initializer_list<HttpHeader>{}, resource)) {}
 
     HttpStatusCode status_;
     HttpProtocolVersion protocolVersion_;
-    std::pmr::vector<HttpHeader> headers_;
+    std::unique_ptr<std::pmr::vector<HttpHeader>, detail::HttpPmrObjectDeleter<std::pmr::vector<HttpHeader>>> headers_;
 };
 
 }  // namespace ruvia

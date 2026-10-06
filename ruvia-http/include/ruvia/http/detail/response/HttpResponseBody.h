@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpResponseFile.h"
+#include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/NativePath.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 
@@ -64,7 +66,7 @@ private:
 class HttpOwnedResponseBytes final {
 public:
     [[nodiscard]] std::string_view bytes() const& noexcept {
-        return bytes_;
+        return *bytes_;
     }
     [[nodiscard]] std::string_view bytes() const&& = delete;
 
@@ -72,20 +74,18 @@ private:
     friend class HttpResponseBody;
 
     HttpOwnedResponseBytes(std::pmr::memory_resource* resource, std::string_view bytes)
-        : bytes_(bytes.data(), bytes.size(), resource) {}
+        : bytes_(makeHttpPmrObject<std::pmr::string>(resource, bytes, resource)) {}
 
     HttpOwnedResponseBytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes)
-        : bytes_(resource) {
-        bytes_ = std::move(bytes);
-    }
+        : bytes_(makeHttpPmrObject<std::pmr::string>(resource, std::move(bytes), resource)) {}
 
-    std::pmr::string bytes_;
+    std::unique_ptr<std::pmr::string, HttpPmrObjectDeleter<std::pmr::string>> bytes_;
 };
 
 class HttpOwnedResponseFile final {
 public:
     [[nodiscard]] const HttpNativePathChar* nativePathCStr() const& noexcept {
-        return nativePath_.c_str();
+        return nativePath_->c_str();
     }
     [[nodiscard]] const HttpNativePathChar* nativePathCStr() const&& = delete;
 
@@ -111,15 +111,16 @@ private:
     HttpOwnedResponseFile(std::pmr::memory_resource* resource, const std::filesystem::path& file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
         HttpResponseFileIdentity identity)
-        : nativePath_(resource),
+        : nativePath_(makeHttpPmrObject<HttpNativePathString>(
+              resource, std::basic_string_view<HttpNativePathChar>{}, resource)),
           size_(size),
           offset_(offset),
           length_(length),
           identity_(identity) {
-        assignHttpNativePath(nativePath_, file);
+        assignHttpNativePath(*nativePath_, file);
     }
 
-    HttpNativePathString nativePath_;
+    std::unique_ptr<HttpNativePathString, HttpPmrObjectDeleter<HttpNativePathString>> nativePath_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
@@ -171,11 +172,12 @@ public:
     http_multipart_response_body(std::pmr::memory_resource* resource,
         const std::filesystem::path& path, std::uint64_t size,
         HttpResponseFileIdentity identity, http_multipart_byte_range_plan plan)
-        : nativePath_(resource),
+        : nativePath_(makeHttpPmrObject<HttpNativePathString>(
+              resource, std::basic_string_view<HttpNativePathChar>{}, resource)),
           plan_(plan.resource() == resource ? std::move(plan) : plan.clone(resource)),
           size_(size),
           identity_(identity) {
-        assignHttpNativePath(nativePath_, path);
+        assignHttpNativePath(*nativePath_, path);
         if (plan_.segments().empty()) {
             throw std::invalid_argument("multipart response plan must contain segments");
         }
@@ -202,14 +204,14 @@ public:
         if (item.kind == http_multipart_byte_range_plan::segment_kind::metadata) {
             return {.bytes_ = plan_.metadata().substr(item.metadata_offset, item.metadata_length)};
         }
-        return {.file_ = HttpResponseFileView(nativePath_.c_str(), size_, item.file_offset,
+        return {.file_ = HttpResponseFileView(nativePath_->c_str(), size_, item.file_offset,
                     item.file_length, identity_)};
     }
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return plan_.content_length();
     }
     [[nodiscard]] HttpResponseFileView file() const noexcept {
-        return HttpResponseFileView(nativePath_.c_str(), size_, 0, size_, identity_);
+        return HttpResponseFileView(nativePath_->c_str(), size_, 0, size_, identity_);
     }
     [[nodiscard]] std::uint64_t file_size() const noexcept {
         return size_;
@@ -223,7 +225,7 @@ public:
 
 private:
     friend class HttpResponseBody;
-    HttpNativePathString nativePath_;
+    std::unique_ptr<HttpNativePathString, HttpPmrObjectDeleter<HttpNativePathString>> nativePath_;
     http_multipart_byte_range_plan plan_;
     std::uint64_t size_{};
     HttpResponseFileIdentity identity_{HttpResponseFileIdentity::unchecked()};

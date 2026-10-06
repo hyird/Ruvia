@@ -1,3 +1,4 @@
+#include <initializer_list>
 #include <stdexcept>
 #include <string_view>
 
@@ -50,6 +51,9 @@ RUVIA_TEST(response_coding_single_pass_matches_per_coding_scans) {
         "identity, gzip",
         "  gzip ,  br ",
         "GZIP, Br, ZSTD",  // token match is case-insensitive
+        "x-gzip, br",
+        "X-GZIP;q=0.8, gzip;q=0.2, *;q=0.1",
+        "gzip;q=0.2, x-gzip;q=0.8",
         "",
         "deflate;q=0.2",  // unknown coding: leaves all three untouched
         "gzip;q=0, gzip;q=0.9",
@@ -181,6 +185,50 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     const auto explicitEmptyGzip = HttpResponseCodingSelection::select(emptyHeader, gzipOnly);
     RUVIA_CHECK(explicitEmptyGzip.selected() == nullptr);
     RUVIA_CHECK(explicitEmptyGzip.failure() != nullptr);
+}
+
+RUVIA_TEST(accepted_encoding_quality_treats_gzip_aliases_as_the_same_coding) {
+    for (const auto coding : {std::string_view{"gzip"}, std::string_view{"x-gzip"}, std::string_view{"X-GZIP"}}) {
+        RUVIA_CHECK(ruvia::httpAcceptsEncoding("x-gzip", coding));
+        RUVIA_CHECK(ruvia::httpAcceptsEncoding("GZIP", coding));
+        RUVIA_CHECK(!ruvia::httpAcceptsEncoding("x-gzip;q=0, *;q=1", coding));
+        RUVIA_CHECK(!ruvia::httpAcceptsEncoding("gzip;q=0, *;q=1", coding));
+        RUVIA_CHECK(ruvia::httpAcceptsEncoding("x-gzip;q=0.8, *;q=0", coding));
+    }
+}
+
+RUVIA_TEST(response_coding_selection_accepts_the_gzip_alias) {
+    for (const auto header : {std::string_view{"x-gzip, identity;q=0"}, std::string_view{"X-GZIP;q=0.8, identity;q=0"}}) {
+        HttpResponseCodingQualities qualities;
+        qualities.update(header);
+        const auto result = HttpResponseCodingSelection::select(qualities);
+        RUVIA_CHECK(result.failure() == nullptr);
+        RUVIA_CHECK(result.selected() != nullptr);
+        if (const auto* selected = result.selected()) {
+            RUVIA_CHECK(selected->coding() == HttpContentCoding::kGzip);
+            RUVIA_CHECK(selected->accepts(HttpContentCoding::kGzip));
+            RUVIA_CHECK(!selected->identityAccepted());
+            RUVIA_CHECK(!selected->accepts(HttpContentCoding::kIdentity));
+            RUVIA_CHECK_EQ(ruvia::httpContentCodingToken(selected->coding()), "gzip");
+        }
+    }
+}
+
+RUVIA_TEST(response_coding_gzip_aliases_share_weights_across_field_lines) {
+    for (const bool alias_first : {false, true}) {
+        const auto first = alias_first ? "x-gzip;q=0.8" : "gzip;q=0.2";
+        const auto second = alias_first ? "gzip;q=0.2" : "X-GZIP;q=0.8";
+        HttpResponseCodingQualities qualities;
+        qualities.update(first);
+        qualities.update(second);
+        RUVIA_CHECK_EQ(qualities.gzip.explicitQuality, 800);
+        for (const auto coding : {std::string_view{"gzip"}, std::string_view{"x-gzip"}}) {
+            HttpAcceptedEncodingQuality quality;
+            quality.update(first, coding);
+            quality.update(second, coding);
+            RUVIA_CHECK_EQ(quality.explicitQuality, qualities.gzip.explicitQuality);
+        }
+    }
 }
 
 RUVIA_TEST(response_coding_selection_retains_client_preference_until_representation_policy) {

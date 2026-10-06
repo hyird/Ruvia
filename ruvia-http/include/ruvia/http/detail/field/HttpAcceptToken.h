@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <string_view>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
@@ -56,13 +58,16 @@ inline void httpAccumulateTokenAcceptance(std::string_view accept, std::string_v
     bool prefixMatching, int& bestSpecificity, int& bestQuality) noexcept {
     httpVisitCommaSeparatedQuoted(accept,
         [offered, prefixMatching, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
-            const auto match =
-                httpAcceptTokenMatches(httpAcceptTokenValue(item), offered, prefixMatching);
+            const auto range = httpAcceptTokenValue(item);
+            const auto match = httpAcceptTokenMatches(range, offered, prefixMatching);
             if (match == HttpAcceptTokenMatch::kNone) {
                 return true;
             }
-            const auto specificity = static_cast<int>(match);
-            const auto quality = httpQualityParameter(item);
+            const auto specificity = prefixMatching && match != HttpAcceptTokenMatch::kWildcard
+                                         ? static_cast<int>(std::min(range.size(),
+                                               static_cast<std::size_t>((std::numeric_limits<int>::max)())))
+                                         : static_cast<int>(match);
+            const auto quality = http_weight_parameter(item);
             if (specificity > bestSpecificity ||
                 (specificity == bestSpecificity && quality > bestQuality)) {
                 bestSpecificity = specificity;

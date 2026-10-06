@@ -54,7 +54,8 @@ private:
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
 // A supplied worker endpoint is retained once by the scheduler. Lazy acquires
-// borrow only their scheduler, which must outlive them.
+// copy their inputs before return and borrow only their scheduler, which must
+// outlive them.
 class PoolLeaseScheduler final {
 public:
     explicit PoolLeaseScheduler(std::size_t poolSize,
@@ -69,8 +70,8 @@ public:
     ~PoolLeaseScheduler();
 
     [[nodiscard]] Task<PoolWaiterResult> acquire(
-        std::optional<std::chrono::milliseconds> timeout);
-    [[nodiscard]] Task<PoolWaiterResult> acquire(std::optional<std::chrono::milliseconds> timeout,
+        const std::optional<std::chrono::milliseconds>& timeout);
+    [[nodiscard]] Task<PoolWaiterResult> acquire(const std::optional<std::chrono::milliseconds>& timeout,
         StopToken stopToken);
 
     [[nodiscard]] PoolLeaseReleaseStatus release(std::size_t slot) noexcept;

@@ -88,7 +88,7 @@ HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assignUninitializedValue(*header, key, valueSize, knownBit);
-        return wasAppended ? collapseResponseHeaders(*header, key, knownBit) : *header;
+        return wasAppended ? collapseResponseHeaders(*header, knownBit) : *header;
     }
 
     const auto index = headers_.size();
@@ -183,7 +183,7 @@ void HttpResponse::setHeaderValidated(
         const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assign(*header, key, value, knownBit);
         if (wasAppended) {
-            (void)collapseResponseHeaders(*header, key, knownBit);
+            (void)collapseResponseHeaders(*header, knownBit);
         }
         return;
     }
@@ -234,7 +234,8 @@ HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
 }
 
 HttpResponseHeader& HttpResponse::collapseResponseHeaders(
-    HttpResponseHeader& retained, std::string_view key, std::uint32_t knownBit) noexcept {
+    HttpResponseHeader& retained, std::uint32_t knownBit) noexcept {
+    const auto key = retained.name();
     auto* const begin = headers_.begin();
     auto* const end = headers_.end();
     auto* const retainedAddress = &retained;
@@ -264,17 +265,26 @@ HttpResponseHeader& HttpResponse::collapseResponseHeaders(
 }
 
 bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept {
+    if (knownBit != 0 && (knownHeaderBits_ & knownBit) == 0) {
+        return false;
+    }
     auto* const begin = headers_.begin();
     auto* const end = headers_.end();
     auto* write = begin;
     bool removed = false;
+    HttpResponseHeader retired_key_header;
 
     for (auto* read = begin; read != end; ++read) {
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
         const bool matches = knownBit != 0 ? headerKnownBit == knownBit
                                            : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
         if (matches) {
-            headers_.releaseHeader(*read);
+            if (!removed) {
+                retired_key_header = std::exchange(*read, HttpResponseHeader{});
+                key = retired_key_header.name();
+            } else {
+                headers_.releaseHeader(*read);
+            }
             removed = true;
             continue;
         }
@@ -288,6 +298,7 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
         return false;
     }
 
+    headers_.releaseHeader(retired_key_header);
     detail::HttpResponseHeadersAccess::truncate(headers_, begin, write);
     rebuildKnownHeaderIndex();
     return true;
@@ -300,7 +311,7 @@ void HttpResponse::header_stable_view(std::string_view key, std::string_view val
         const bool wasAppended = detail::responseHeaderAppend(*header);
         headers_.assignStableView(*header, key, value, knownBit);
         if (wasAppended) {
-            (void)collapseResponseHeaders(*header, key, knownBit);
+            (void)collapseResponseHeaders(*header, knownBit);
         }
         return;
     }

@@ -165,6 +165,7 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     };
     checkCoding("gzip", HttpContentCoding::kGzip);
     checkCoding("x-gzip", HttpContentCoding::kGzip);
+    checkCoding("X-GZIP", HttpContentCoding::kGzip);
     checkCoding("GZIP", HttpContentCoding::kGzip);
     checkCoding("  br ", HttpContentCoding::kBrotli);
     checkCoding("zstd", HttpContentCoding::kZstd);

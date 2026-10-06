@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/coding/HttpTransferEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpQualityValue.h"
@@ -14,15 +15,11 @@ enum class HttpTeFieldValidationMode : std::uint8_t { kRecipient,
     kClientCapability };
 
 [[nodiscard]] inline bool httpIsClientSupportedTeTransferCoding(std::string_view coding) noexcept {
-    return httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-           httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
-           httpAsciiEqualsIgnoreCase(coding, "deflate");
+    return http_is_gzip_coding_token(coding) || httpAsciiEqualsIgnoreCase(coding, "deflate");
 }
 
 [[nodiscard]] inline bool httpTeCodingAllowsOnlyQualityParameter(std::string_view coding) noexcept {
-    return httpAsciiEqualsIgnoreCase(coding, "compress") ||
-           httpAsciiEqualsIgnoreCase(coding, "gzip") ||
-           httpAsciiEqualsIgnoreCase(coding, "x-gzip") ||
+    return httpAsciiEqualsIgnoreCase(coding, "compress") || http_is_gzip_coding_token(coding) ||
            httpAsciiEqualsIgnoreCase(coding, "deflate");
 }
 

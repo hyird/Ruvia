@@ -12,34 +12,11 @@ namespace ruvia::detail {
 
 namespace {
 
-inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
-    std::array<bool, 256> table{};
-    for (unsigned c = '0'; c <= '9'; ++c) {
-        table[c] = true;
-    }
-    for (unsigned c = 'A'; c <= 'Z'; ++c) {
-        table[c] = true;
-    }
-    for (unsigned c = 'a'; c <= 'z'; ++c) {
-        table[c] = true;
-    }
-    for (const unsigned char c :
-        {'-', '.', '_', '~', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '='}) {
-        table[c] = true;
-    }
-    return table;
-}();
-
 [[nodiscard]] bool isHexDigit(char c) noexcept {
     return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
 }
 
-[[nodiscard]] bool isUriUnreserved(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
-           (byte >= 'a' && byte <= 'z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
-}
-
-[[nodiscard]] bool isUriSubDelimiter(unsigned char byte) noexcept {
+[[nodiscard]] constexpr bool isUriSubDelimiter(unsigned char byte) noexcept {
     switch (byte) {
         case '!':
         case '$':
@@ -56,6 +33,19 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
         default:
             return false;
     }
+}
+
+inline constexpr std::array<bool, 256> reg_name_char_table = [] {
+    std::array<bool, 256> table{};
+    for (std::size_t value = 0; value < table.size(); ++value) {
+        const auto byte = static_cast<unsigned char>(value);
+        table[value] = isUnreservedByte(byte) || isUriSubDelimiter(byte);
+    }
+    return table;
+}();
+
+[[nodiscard]] constexpr bool is_uri_userinfo_literal(unsigned char byte) noexcept {
+    return reg_name_char_table[byte] || byte == ':';
 }
 
 [[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
@@ -88,7 +78,7 @@ template <typename IsAllowed>
 }  // namespace
 
 [[nodiscard]] bool isUriPchar(unsigned char byte) noexcept {
-    return isUriUnreserved(byte) || isUriSubDelimiter(byte) || byte == ':' || byte == '@';
+    return is_uri_userinfo_literal(byte) || byte == '@';
 }
 
 std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) noexcept {
@@ -118,7 +108,7 @@ std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) n
 
 [[nodiscard]] bool isValidUriUserinfo(std::string_view value) noexcept {
     return isValidPercentEncoded(value, [](unsigned char byte) noexcept {
-        return isUriUnreserved(byte) || isUriSubDelimiter(byte) || byte == ':';
+        return is_uri_userinfo_literal(byte);
     });
 }
 
@@ -240,12 +230,11 @@ std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) n
         return false;
     }
 
-    for (; cursor < literal.size(); ++cursor) {
-        const auto byte = static_cast<unsigned char>(literal[cursor]);
-        if (byte == ':' || kRegNameCharTable[byte]) {
-            continue;
+    literal.remove_prefix(cursor);
+    for (const unsigned char byte : literal) {
+        if (!is_uri_userinfo_literal(byte)) {
+            return false;
         }
-        return false;
     }
     return true;
 }
@@ -253,7 +242,7 @@ std::expected<std::uint16_t, std::errc> parsePortValue(std::string_view value) n
 [[nodiscard]] bool isValidRegName(std::string_view value) noexcept {
     return !value.empty() &&
            isValidPercentEncoded(value, [](unsigned char byte) noexcept {
-               return kRegNameCharTable[byte];
+               return reg_name_char_table[byte];
            });
 }
 

@@ -65,7 +65,11 @@ HttpRepresentationResponsePlan planHttpRepresentationResponse(
     const auto makeFull = [&]() noexcept {
         return HttpRepresentationResponsePlan(HttpRepresentationResponsePlan::Full{options.normalStatus});
     };
-    const auto method = httpConditionalMethodPlan(request.knownMethod());
+    auto method = httpConditionalMethodPlan(request.knownMethod());
+    if (request.knownMethod() == HttpKnownMethod::kUnknown &&
+        !request.method().empty() && request.method() != "TRACE") {
+        method.evaluatesPreconditions = true;
+    }
     if (!method.evaluatesPreconditions ||
         (!options.normalStatus.isSuccessful() && options.normalStatus != http_status::kPreconditionFailed)) {
         return makeFull();
@@ -97,7 +101,7 @@ HttpRepresentationResponsePlan planHttpRepresentationResponse(
     }
 
     if (options.normalStatus != http_status::kOk ||
-        request.knownMethod() != HttpKnownMethod::kGet ||
+        !method.evaluatesRange ||
         options.rangePolicy != HttpRangeRequestPolicy::honor_byte_ranges || headers.range.empty()) {
         return makeFull();
     }

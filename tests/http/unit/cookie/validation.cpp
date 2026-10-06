@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/http/detail/cookie/CookieValidation.h"
 
@@ -51,7 +52,18 @@ RUVIA_TEST(cookie_borrowed_text_accepts_stable_string_owners) {
     const ruvia::SetCookiePlan plan(name, value, options);
     std::string wire(plan.size(), '\0');
     plan.write(wire.data());
+    name.assign("changed");
     RUVIA_CHECK_EQ(wire, std::string("sid=value; Path=/account; Domain=example.com"));
+    const auto parsed = ruvia::parseSetCookie(wire);
+    RUVIA_CHECK(parsed.has_value());
+    if (parsed) {
+        RUVIA_CHECK_EQ(parsed->name(), "sid");
+        RUVIA_CHECK_EQ(parsed->path(), "/account");
+        RUVIA_CHECK_EQ(parsed->domain(), "example.com");
+        RUVIA_CHECK(parsed->name().data() == wire.data());
+        RUVIA_CHECK(parsed->path().data() == wire.data() + wire.find("/account"));
+        RUVIA_CHECK(parsed->domain().data() == wire.data() + wire.find("example.com"));
+    }
 }
 
 RUVIA_TEST(cookie_expires_formats_historical_dates_at_second_resolution) {

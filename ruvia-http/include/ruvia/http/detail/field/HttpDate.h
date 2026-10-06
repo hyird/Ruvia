@@ -146,7 +146,7 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline std::optional<std::time_t> httpParseRfc850Date(
-    std::string_view value) noexcept {
+    std::string_view value, std::optional<std::time_t> reference_time = std::nullopt) noexcept {
     const auto comma = value.find(", ");
     if (comma == std::string_view::npos || !httpIsLongWeekday(value.substr(0, comma))) {
         return std::nullopt;
@@ -165,8 +165,8 @@ namespace ruvia::detail {
     if (!day || month == 0 || !shortYear || !hour || !minute || !second) {
         return std::nullopt;
     }
-    const auto now = std::time(nullptr);
-    if (now == std::time_t{-1}) {
+    const auto now = reference_time ? *reference_time : std::time(nullptr);
+    if (!reference_time && now == std::time_t{-1}) {
         return std::nullopt;
     }
     const auto currentUtc = httpUtcTm(now);
@@ -174,7 +174,15 @@ namespace ruvia::detail {
         return std::nullopt;
     }
     const int currentYear = currentUtc->tm_year + 1900;
-    const int year = httpResolveRfc850Year(*shortYear, currentYear);
+    auto year = httpResolveRfc850Year(*shortYear, currentYear);
+    // RFC 9110 section 5.6.7 applies the rolling 50-year pivot to the full
+    // timestamp. Equal years alone do not establish that a date is in range.
+    const std::array date_fields{month, *day, *hour, *minute, *second};
+    const std::array reference_fields{currentUtc->tm_mon + 1, currentUtc->tm_mday,
+        currentUtc->tm_hour, currentUtc->tm_min, currentUtc->tm_sec};
+    if (year == currentYear + 50 && date_fields > reference_fields) {
+        year -= 100;
+    }
     return httpCivilToTimeT(year, month, *day, *hour, *minute, *second);
 }
 

@@ -2252,8 +2252,9 @@ ruvia::Task<void> exercisePublicHttp3ClientPool(asio::io_context& io,
                 RUVIA_CHECK(!peer.final_part_sent());
 
                 if (observeOrigins) {
-                    retainedAdvertisement = pool.nextAdvertisement();
-                    RUVIA_CHECK(retainedAdvertisement && retainedAdvertisement->origins());
+                    RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] {
+                        retainedAdvertisement = pool.nextAdvertisement();
+                        return retainedAdvertisement && retainedAdvertisement->origins(); }, 2s));
                     if (retainedAdvertisement && retainedAdvertisement->origins()) {
                         RUVIA_CHECK(retainedAdvertisement->origins()->origins.size() == 2);
                         RUVIA_CHECK(retainedAdvertisement->origins()->origins[0] == "https://127.0.0.1");
@@ -2810,7 +2811,7 @@ RUVIA_TEST(http3_client_push_bounds_origin_validation_errors_and_cancellation_pr
         auto attachment = ruvia::attachEventLoop(io);
         const auto worker = attachment.loop().handle();
         auto task = [&]() -> ruvia::Task<void> {
-            ruvia::HttpClient client(attachment.loop(), {.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1", .port = peer.port(), .connectionCount = 1, .connectTimeout = 5s, .requestTimeout = 10s, .maxResponseBytes = 2 * 1024 * 1024, .protocol = ruvia::HttpClientProtocol::kHttp3Only, .push = {.enabled = true, .maxQueuedPushes = 1, .maxConcurrentPushes = 2, .timeout = 100ms}, .caFile = identity.certificate().string()});
+            ruvia::HttpClient client(attachment.loop(), {.scheme = ruvia::HttpScheme::kHttps, .host = "127.0.0.1", .port = peer.port(), .connectionCount = 1, .connectTimeout = 5s, .requestTimeout = 10s, .maxResponseBytes = 2 * 1024 * 1024, .protocol = ruvia::HttpClientProtocol::kHttp3Only, .push = {.enabled = true, .maxQueuedPushes = 1, .maxConcurrentPushes = 2, .timeout = index == 1 ? 100ms : 5s}, .caFile = identity.certificate().string()});
             std::exception_ptr operationFailure;
             try {
                 auto parent = co_await client.send({.method = "GET", .target = "/parent"});
@@ -2840,7 +2841,11 @@ RUVIA_TEST(http3_client_push_bounds_origin_validation_errors_and_cancellation_pr
                     }
                 } else {
                     RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return peer.promised_pushes() == 1; }, 2s));
-                    (void)co_await ruvia::sleepFor(worker, 50ms);
+                    if (index == 4) {
+                        RUVIA_CHECK(co_await wait_for_peer(worker, peer, [&] { return client.stats().rejectedPushes == 1; }, 2s));
+                    } else {
+                        (void)co_await ruvia::sleepFor(worker, 50ms);
+                    }
                     auto cancelled_push = client.nextPush();
                     if (index == 2) {
                         // QUIC does not order the control and request streams.

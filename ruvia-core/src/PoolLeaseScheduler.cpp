@@ -203,12 +203,12 @@ PoolLeaseScheduler::PoolLeaseScheduler(std::size_t poolSize, const WorkerHandle&
 PoolLeaseScheduler::~PoolLeaseScheduler() = default;
 
 Task<PoolWaiterResult> PoolLeaseScheduler::acquire(
-    std::optional<std::chrono::milliseconds> timeout) {
+    const std::optional<std::chrono::milliseconds>& timeout) {
     return Impl::acquireReserved(Impl::AcquireReservation(*impl_), timeout, {}, &impl_->worker_);
 }
 
 Task<PoolWaiterResult> PoolLeaseScheduler::acquire(
-    std::optional<std::chrono::milliseconds> timeout, StopToken stopToken) {
+    const std::optional<std::chrono::milliseconds>& timeout, StopToken stopToken) {
     return Impl::acquireReserved(
         Impl::AcquireReservation(*impl_), timeout, std::move(stopToken), &impl_->worker_);
 }

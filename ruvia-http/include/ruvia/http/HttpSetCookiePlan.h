@@ -10,10 +10,12 @@
 
 namespace ruvia {
 
+class HttpResponse;
+
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
-// until write() completes, so owning-string and CookieOptions temporaries are
-// rejected at construction. Construction throws std::length_error if the wire
+// unchanged until write() completes, so owning-string and CookieOptions
+// temporaries are rejected at construction. Construction throws std::length_error if the wire
 // length cannot be represented by std::size_t.
 class SetCookiePlan final {
 public:
@@ -47,9 +49,17 @@ public:
         return domain_;
     }
 
+    // output must cover size() bytes and not overlap the borrowed inputs.
     void write(char* output) const;
 
 private:
+    friend class HttpResponse;
+    struct written_fields final {
+        std::string_view wire_name_;
+        std::string_view path_;
+        std::string_view domain_;
+    };
+    [[nodiscard]] written_fields write_fields(char* output) const noexcept;
     std::array<char, 32> expiresBuffer_{};
     std::string_view name_;
     std::string_view value_;

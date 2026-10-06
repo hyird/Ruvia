@@ -10,6 +10,7 @@
 
 namespace ruvia {
 // The resource must outlive the advertisement and all retained frame results.
+// Encoders validate limits before allocation and write into the final owned result.
 struct HttpOriginAdvertisement final {
     std::pmr::vector<std::pmr::string> origins;
     explicit HttpOriginAdvertisement(std::pmr::memory_resource* resource)

@@ -17,7 +17,7 @@ struct HttpClientResponseHeadAccess final {
 
     [[nodiscard]] static std::pmr::vector<HttpHeader>& headers(
         HttpClientResponseHead& head) noexcept {
-        return head.headers_;
+        return *head.headers_;
     }
 };
 

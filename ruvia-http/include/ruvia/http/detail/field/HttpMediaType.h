@@ -172,20 +172,20 @@ template <typename Visitor>
     });
 }
 
+// The complete media type is already validated, with unique parameter names.
 [[nodiscard]] inline bool httpOfferedMediaTypeHasParameter(std::string_view offered,
     std::string_view expectedName, std::string_view expectedValue) noexcept {
     bool found = false;
-    const bool valid = httpVisitMediaTypeParameters(offered, false,
+    httpVisitSemicolonParametersQuoted(offered,
         [expectedName, expectedValue, &found](
             std::string_view name, std::string_view value) noexcept {
-            if (httpAsciiEqualsIgnoreCase(name, expectedName) &&
-                httpMediaParameterValueEquals(
-                    value, expectedValue, httpAsciiEqualsIgnoreCase(name, "charset"))) {
-                found = true;
+            if (!httpAsciiEqualsIgnoreCase(name, expectedName)) {
+                return true;
             }
-            return true;
+            found = httpMediaParameterValueEquals(value, expectedValue, httpAsciiEqualsIgnoreCase(name, "charset"));
+            return false;
         });
-    return valid && found;
+    return found;
 }
 
 [[nodiscard]] inline bool httpParseMediaTypeParts(

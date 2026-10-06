@@ -74,18 +74,23 @@ bool isCookieDateDelimiter(unsigned char byte) noexcept {
            (byte >= 0x5b && byte <= 0x60) || (byte >= 0x7b && byte <= 0x7e);
 }
 
-std::optional<int> parseCookieDateDigits(
-    std::string_view value, std::size_t minimumDigits, std::size_t maximumDigits) noexcept {
-    if (value.size() < minimumDigits || value.size() > maximumDigits) {
-        return std::nullopt;
-    }
+// Consume only on success. Any remaining suffix starts with a non-digit,
+// as required by RFC 6265 section 5.1.1 and verified erratum 4148.
+std::optional<int> consume_cookie_date_digits(
+    std::string_view& value, std::size_t minimum_digits, std::size_t maximum_digits) noexcept {
+    std::size_t digits = 0;
     int result = 0;
-    for (const char character : value) {
-        if (character < '0' || character > '9') {
+    while (digits < value.size() && value[digits] >= '0' && value[digits] <= '9') {
+        if (digits == maximum_digits) {
             return std::nullopt;
         }
-        result = result * 10 + (character - '0');
+        result = result * 10 + (value[digits] - '0');
+        ++digits;
     }
+    if (digits < minimum_digits) {
+        return std::nullopt;
+    }
+    value.remove_prefix(digits);
     return result;
 }
 
@@ -96,26 +101,28 @@ struct CookieDateTime final {
 };
 
 std::optional<CookieDateTime> parseCookieDateTime(std::string_view value) noexcept {
-    const auto firstColon = value.find(':');
-    if (firstColon == std::string_view::npos) {
+    const auto hour = consume_cookie_date_digits(value, 1, 2);
+    if (!hour || value.empty() || value.front() != ':') {
         return std::nullopt;
     }
-    const auto secondColon = value.find(':', firstColon + 1);
-    if (secondColon == std::string_view::npos ||
-        value.find(':', secondColon + 1) != std::string_view::npos) {
+    value.remove_prefix(1);
+    const auto minute = consume_cookie_date_digits(value, 1, 2);
+    if (!minute || value.empty() || value.front() != ':') {
         return std::nullopt;
     }
-    const auto hour = parseCookieDateDigits(value.substr(0, firstColon), 1, 2);
-    const auto minute =
-        parseCookieDateDigits(value.substr(firstColon + 1, secondColon - firstColon - 1), 1, 2);
-    const auto second = parseCookieDateDigits(value.substr(secondColon + 1), 1, 2);
-    if (!hour || !minute || !second) {
+    value.remove_prefix(1);
+    const auto second = consume_cookie_date_digits(value, 1, 2);
+    if (!second) {
         return std::nullopt;
     }
     return CookieDateTime{*hour, *minute, *second};
 }
 
 std::optional<int> parseCookieDateMonth(std::string_view value) noexcept {
+    if (value.size() < 3) {
+        return std::nullopt;
+    }
+    value = value.substr(0, 3);
     constexpr std::array<std::string_view, 12> months{
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     for (std::size_t index = 0; index < months.size(); ++index) {
@@ -146,7 +153,7 @@ std::optional<std::time_t> parseCookieDate(std::string_view value) noexcept {
         if (begin == cursor) {
             continue;
         }
-        const auto token = value.substr(begin, cursor - begin);
+        auto token = value.substr(begin, cursor - begin);
         if (!time) {
             time = parseCookieDateTime(token);
             if (time) {
@@ -154,7 +161,7 @@ std::optional<std::time_t> parseCookieDate(std::string_view value) noexcept {
             }
         }
         if (!day) {
-            day = parseCookieDateDigits(token, 1, 2);
+            day = consume_cookie_date_digits(token, 1, 2);
             if (day) {
                 continue;
             }
@@ -166,7 +173,7 @@ std::optional<std::time_t> parseCookieDate(std::string_view value) noexcept {
             }
         }
         if (!year) {
-            year = parseCookieDateDigits(token, 2, 4);
+            year = consume_cookie_date_digits(token, 2, 4);
         }
     }
 

@@ -19,8 +19,8 @@ void appendLength(std::pmr::vector<char>& bytes, std::size_t length) {
 std::size_t length(std::span<const char> bytes) {
     return (static_cast<unsigned char>(bytes[0]) << 8) | static_cast<unsigned char>(bytes[1]);
 }
-std::expected<std::pmr::vector<char>, Error> originPayload(std::span<const std::string_view> origins,
-    std::size_t maximum, std::pmr::memory_resource* resource) {
+std::expected<std::size_t, Error> origin_payload_size(std::span<const std::string_view> origins,
+    std::size_t maximum) {
     std::size_t size = 0;
     for (const auto origin : origins) {
         if (!is_valid_http_serialized_origin(origin)) {
@@ -31,25 +31,22 @@ std::expected<std::pmr::vector<char>, Error> originPayload(std::span<const std::
         }
         size += 2 + origin.size();
     }
-    std::pmr::vector<char> payload(resource);
-    payload.reserve(size);
-    for (const auto origin : origins) {
-        appendLength(payload, origin.size());
-        payload.insert(payload.end(), origin.begin(), origin.end());
-    }
-    return payload;
+    return size;
 }
-std::expected<std::pmr::vector<char>, Error> http2Frame(std::uint8_t type, std::uint32_t streamId,
-    std::span<const char> payload, std::uint32_t maximum, std::pmr::memory_resource* resource) {
-    if (payload.size() > std::min(maximum, 0xffffffU)) {
-        return std::unexpected(Error::kLimit);
+void append_origin_payload(std::pmr::vector<char>& bytes, std::span<const std::string_view> origins) {
+    for (const auto origin : origins) {
+        appendLength(bytes, origin.size());
+        bytes.insert(bytes.end(), origin.begin(), origin.end());
     }
+}
+std::expected<std::pmr::vector<char>, Error> make_http2_frame(std::uint8_t type, std::uint32_t streamId,
+    std::size_t payload_size, std::pmr::memory_resource* resource) {
     std::pmr::vector<char> bytes(resource);
+    bytes.reserve(9 + payload_size);
     bytes.resize(9);
-    if (!encodeHttp2FrameHeader(bytes, static_cast<std::uint32_t>(payload.size()), static_cast<Http2FrameType>(type), 0, streamId)) {
+    if (!encodeHttp2FrameHeader(bytes, static_cast<std::uint32_t>(payload_size), static_cast<Http2FrameType>(type), 0, streamId)) {
         return std::unexpected(Error::kInvalidStream);
     }
-    bytes.insert(bytes.end(), payload.begin(), payload.end());
     return bytes;
 }
 }  // namespace
@@ -77,27 +74,36 @@ std::expected<HttpOriginAdvertisement, Error> decodeHttpOriginAdvertisement(std:
 std::expected<std::pmr::vector<char>, Error> encodeHttp2OriginFrame(std::span<const std::string_view> origins,
     std::uint32_t maximum, std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
-    const auto payload = originPayload(origins, std::min(maximum, 0xffffffU), resource);
+    const auto payload = origin_payload_size(origins, std::min(maximum, 0xffffffU));
     if (!payload) {
         return std::unexpected(payload.error());
     }
-    return http2Frame(0xc, 0, *payload, maximum, resource);
+    auto bytes = make_http2_frame(0xc, 0, *payload, resource);
+    if (bytes) {
+        append_origin_payload(*bytes, origins);
+    }
+    return bytes;
 }
 std::expected<std::pmr::vector<char>, Error> encodeHttp3OriginFrame(std::span<const std::string_view> origins,
     std::size_t maximum, std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
-    const auto payload = originPayload(origins, maximum, resource);
+    const auto payload = origin_payload_size(origins, maximum);
     if (!payload) {
         return std::unexpected(payload.error());
     }
-    std::pmr::vector<char> bytes(resource);
-    bytes.resize(16);
-    const auto header = encodeHttp3FrameHeader(bytes, 0xc, payload->size());
+    std::array<char, 16> header_bytes{};
+    const auto header = encodeHttp3FrameHeader(header_bytes, 0xc, *payload);
     if (!header) {
         return std::unexpected(Error::kLimit);
     }
-    bytes.resize(*header);
-    bytes.insert(bytes.end(), payload->begin(), payload->end());
+    if (*payload > (std::numeric_limits<std::size_t>::max)() - *header) {
+        return std::unexpected(Error::kLimit);
+    }
+    std::pmr::vector<char> bytes(resource);
+    bytes.reserve(*header + *payload);
+    const auto encoded_header = std::span(header_bytes).first(*header);
+    bytes.insert(bytes.end(), encoded_header.begin(), encoded_header.end());
+    append_origin_payload(bytes, origins);
     return bytes;
 }
 std::expected<HttpAlternativeServiceAdvertisement, Error> decodeHttp2AlternativeService(std::uint32_t streamId,
@@ -140,14 +146,16 @@ std::expected<std::pmr::vector<char>, Error> encodeHttp2AlternativeServiceFrame(
     if (!isValidHttpHeaderValue(value)) {
         return std::unexpected(Error::kInvalidField);
     }
-    if (origin.size() > 65535 || maximum < 2 || origin.size() > maximum - 2 || value.size() > maximum - 2 - origin.size()) {
+    const auto payload_limit = std::min(maximum, 0xffffffU);
+    if (origin.size() > 65535 || payload_limit < 2 || origin.size() > payload_limit - 2 || value.size() > payload_limit - 2 - origin.size()) {
         return std::unexpected(Error::kLimit);
     }
-    std::pmr::vector<char> payload(resource);
-    payload.reserve(2 + origin.size() + value.size());
-    appendLength(payload, origin.size());
-    payload.insert(payload.end(), origin.begin(), origin.end());
-    payload.insert(payload.end(), value.begin(), value.end());
-    return http2Frame(0xa, streamId, payload, maximum, resource);
+    auto bytes = make_http2_frame(0xa, streamId, 2 + origin.size() + value.size(), resource);
+    if (bytes) {
+        appendLength(*bytes, origin.size());
+        bytes->insert(bytes->end(), origin.begin(), origin.end());
+        bytes->insert(bytes->end(), value.begin(), value.end());
+    }
+    return bytes;
 }
 }  // namespace ruvia
