@@ -289,7 +289,8 @@ private:
 }
 
 [[nodiscard]] bool is_quic_stream_closed(ruvia::quic_operation_status status) noexcept {
-    return status == ruvia::quic_operation_status::closing ||
+    return status == ruvia::quic_operation_status::stream_closed ||
+           status == ruvia::quic_operation_status::closing ||
            status == ruvia::quic_operation_status::draining ||
            status == ruvia::quic_operation_status::retired;
 }

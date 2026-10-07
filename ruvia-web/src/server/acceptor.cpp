@@ -34,12 +34,11 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
       listeners_(processResource()),
       targets_(targets.begin(), targets.end(), processResource()),
       quic_channels_(processResource()),
-      udp_(nullptr, PmrObjectDeleter<Http3DatagramEndpoint>{processResource()}),
+      udp_(nullptr, PmrObjectDeleter<http3_acceptor_datagram_endpoint>{processResource()}),
       quic_notification_(runtime_.context()),
       quic_retirement_(io_context_),
       failure_target_(failure_target),
-      failure_callback_(failure),
-      sending_worker_(targets.size()) {
+      failure_callback_(failure) {
     if (listeners.empty()) {
         throw std::invalid_argument("acceptor requires at least one TCP listener");
     }
@@ -78,6 +77,7 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
             close_listeners();
             udp_.reset();
             quic_channels_.clear();
+            quic_pool_.reset();
             const std::lock_guard lock(mutex_);
             condition_.notify_all(); },
     });
@@ -95,9 +95,16 @@ void acceptor::prepare_quic() {
         return;
     }
     const auto& tcp = (*configured)->endpoint;
-    udp_ = makePmrObject<Http3DatagramEndpoint>(processResource(), io_context_,
+    constexpr auto worker_blocks = http3_datagram_channel::default_input_capacity +
+                                   http3_datagram_channel::default_output_window;
+    if (targets_.size() > (std::numeric_limits<std::size_t>::max() - 1) / worker_blocks) {
+        throw std::invalid_argument("QUIC datagram pool budget is not representable");
+    }
+    quic_pool_.emplace(1 + targets_.size() * worker_blocks,
+        http3_datagram_channel::packet_capacity, processResource());
+    udp_ = makePmrObject<http3_acceptor_datagram_endpoint>(processResource(), io_context_,
         asio::ip::udp::endpoint(tcp.address(), tcp.port()),
-        Http3DatagramEndpoint::notification{this, &datagram_ready});
+        http3_acceptor_datagram_endpoint::notification{this, &datagram_ready}, *quic_pool_);
     udp_->prepare();
     const asio::ip::udp::endpoint endpoint(tcp.address(), udp_->bound_port());
     quic_running_ = true;
@@ -123,7 +130,7 @@ void acceptor::prepare_quic() {
     }
     for (std::size_t worker = 0; worker < targets_.size(); ++worker) {
         auto channel = makePmrObject<http3_datagram_channel>(processResource(),
-            quic_notification_, processResource());
+            *quic_pool_, quic_notification_, processResource());
         // A staging failure must not leave an unowned channel waiting for an ACK.
         try {
             targets_[worker].stage_quic(targets_[worker].object, *channel, endpoint,
@@ -132,6 +139,9 @@ void acceptor::prepare_quic() {
         } catch (...) {
             channel->acceptor_close();
             channel->abandon_worker();
+            if (!channel->acceptor_finalize()) {
+                std::terminate();
+            }
             throw;
         }
         quic_channels_.push_back(std::move(channel));
@@ -169,17 +179,23 @@ Task<void> acceptor::run_quic() {
 }
 
 bool acceptor::quic_retired() noexcept {
-    if (!quic_stopping_ ||
-        !std::ranges::all_of(quic_channels_,
-            [](const auto& channel) { return channel->worker_closed(); })) {
+    if (!quic_stopping_) {
         return false;
     }
-    // ACKs fence the last publication, including a send racing acceptor_close.
+    // Drain both normal and cold-abandoned owners before examining final ACKs.
     pump_quic();
-    return udp_->socket_done() && sending_worker_ == targets_.size();
+    if (!udp_->endpoint_retired()) {
+        return false;
+    }
+    for (auto& channel : quic_channels_) {
+        if (!channel->acceptor_finalize()) {
+            return false;
+        }
+    }
+    return quic_pool_->outstanding() == 0;
 }
 
-void acceptor::datagram_ready(void* object, Http3DatagramEndpoint::notification_kind) noexcept {
+void acceptor::datagram_ready(void* object, http3_acceptor_datagram_endpoint::notification_kind) noexcept {
     auto& self = *static_cast<acceptor*>(object);
     (void)self.quic_notification_.notify();
 }
@@ -193,47 +209,46 @@ void acceptor::pump_quic() noexcept {
         }
         stop_on_owner();
     }
-    if (sending_worker_ != targets_.size() && !udp_->send_in_flight()) {
-        quic_channels_[sending_worker_]->acceptor_consume_output(udp_->error());
-        sending_worker_ = targets_.size();
+    // Every wake scans all owners. Each credit lane uses one bounded two-wrap
+    // batch and republishes the aggregate latch when more credits remain.
+    for (auto& channel : quic_channels_) {
+        channel->acceptor_poll();
     }
     if (quic_stopping_) {
         for (auto& channel : quic_channels_) {
-            // No packet can be sent after the socket stop. Return any remaining
-            // producer-owned output before the worker detaches and acknowledges.
-            if (sending_worker_ == targets_.size() && channel->acceptor_output()) {
-                channel->acceptor_consume_output();
+            // Queued descriptors retire here; a descriptor already submitted to
+            // native UDP remains inside the endpoint until its callback.
+            for (std::size_t count = 0;
+                count < http3_datagram_channel::default_output_window; ++count) {
+                auto packet = channel->acceptor_take_output();
+                if (!packet) {
+                    break;
+                }
             }
         }
         return;
     }
-    if (const auto packet = udp_->receive_slot()) {
-        const auto worker = ruvia::quic_datagram_partition(packet->bytes,
+    if (auto packet = udp_->take_receive()) {
+        const auto worker = ruvia::quic_datagram_partition(packet->view().bytes,
             static_cast<std::uint32_t>(targets_.size()));
         if (worker) {
-            (void)quic_channels_[*worker]->acceptor_push(packet->bytes,
-                packet->local_destination, packet->peer);
-        }
-        if (udp_->consume_receive() == Http3DatagramEndpoint::pump_result::error) {
-            (void)quic_notification_.notify();
+            (void)quic_channels_[*worker]->acceptor_push(std::move(*packet));
         }
     }
-    if (udp_->send_in_flight()) {
+    // A route/drop above or an independent RX credit return can make storage
+    // available. No second receive pool and no packet copy exist at this edge.
+    udp_->poll_receive();
+    if (udp_->outbound_pending()) {
         return;
     }
     for (std::size_t offset = 0; offset < quic_channels_.size(); ++offset) {
         const auto worker = (next_output_ + offset) % quic_channels_.size();
-        const auto packet = quic_channels_[worker]->acceptor_output();
+        auto packet = quic_channels_[worker]->acceptor_take_output();
         if (!packet) {
             continue;
         }
-        const auto sent = udp_->send_borrowed_datagram(packet->bytes, packet->local_destination, packet->peer);
-        if (sent == Http3DatagramEndpoint::pump_result::pending) {
-            sending_worker_ = worker;
-            next_output_ = (worker + 1) % quic_channels_.size();
-        } else {
-            quic_channels_[worker]->acceptor_consume_output(udp_->error());
-        }
+        (void)udp_->send_owned_datagram(std::move(*packet));
+        next_output_ = (worker + 1) % quic_channels_.size();
         break;
     }
 }
@@ -302,7 +317,7 @@ void acceptor::request_serve() {
             return;
         }
         try {
-            if (udp_ && udp_->start() == Http3DatagramEndpoint::pump_result::error) {
+            if (udp_ && udp_->start() == http3_acceptor_datagram_endpoint::pump_result::error) {
                 throw std::system_error(udp_->error(), "start QUIC acceptor UDP listener");
             }
             for (std::size_t i = 0; i < listeners_.size(); ++i) {

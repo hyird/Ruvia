@@ -113,7 +113,7 @@ private:
 Http3BufferedRequestDispatch::Http3BufferedRequestDispatch(
     Http3SansIoSessionEngine& session, const RouteTable& routes, WorkerMemory& worker,
     ContextServices services, const HttpServerOptions& options,
-    Http3StreamMailbox& outbound, Http3StreamMessageId messageId,
+    http3_stream_buffer& outbound, http3_stream_id messageId,
     ConnectionScanner::Entry& scannerEntry, asio::any_io_executor executor,
     Http3TunnelCallbacks tunnelCallbacks, std::uint64_t responsePreludeBytes)
     : session_(session),
@@ -142,10 +142,10 @@ Http3BufferedRequestDispatch::Http3BufferedRequestDispatch(
           co_return; }, nullptr),
       pushOutput_(worker_.resource(), this, [](void* raw, HttpPushRequestView request) -> Task<bool> {
           auto& dispatch = *static_cast<Http3BufferedRequestDispatch*>(raw);
-          if (dispatch.tunnelCallbacks_.push == nullptr || dispatch.messageId_.pushId || dispatch.responseAborted() || dispatch.streamOutputEnded_) {
+          if (dispatch.tunnelCallbacks_.push == nullptr || dispatch.messageId_.push_id || dispatch.responseAborted() || dispatch.streamOutputEnded_) {
               co_return false;
           }
-          co_return co_await dispatch.tunnelCallbacks_.push(dispatch.tunnelCallbacks_.context, dispatch.messageId_.streamId, request); }) {
+          co_return co_await dispatch.tunnelCallbacks_.push(dispatch.tunnelCallbacks_.context, dispatch.messageId_.stream_id, request); }) {
     streamOutputActive_ = responsePreludeBytes != 0;
     publishedWireBytes_ = responsePreludeBytes;
     streamPublishedWireBytes_ = responsePreludeBytes;
@@ -175,7 +175,7 @@ Task<Http3BufferedRequestDispatch::PrepareStatus> Http3BufferedRequestDispatch::
     }
 
     state_ = State::kPreparing;
-    auto acquired = session_.acquireRequest(messageId_.streamId);
+    auto acquired = session_.acquireRequest(messageId_.stream_id);
     if (!acquired) {
         state_ = State::kFailed;
         co_return PrepareStatus::kRequestUnavailable;
@@ -208,16 +208,16 @@ Task<Http3BufferedRequestDispatch::PrepareStatus> Http3BufferedRequestDispatch::
                 .withConnectionAdvertisements(connectionAdvertisements_)
                 .with_early_data_info({messageId_.received_early_data,
                     upstreamDeclaredEarlyData}));
-        if (tunnelCallbacks_.push != nullptr && !messageId_.pushId) {
+        if (tunnelCallbacks_.push != nullptr && !messageId_.push_id) {
             *requestServices_ = requestServices_->withPushOutput(pushOutput_);
         }
-        if (const auto* trailers = session_.requestTrailers(messageId_.streamId)) {
+        if (const auto* trailers = session_.requestTrailers(messageId_.stream_id)) {
             *requestServices_ = requestServices_->withRequestTrailers(*trailers);
         }
-        if (const auto* priority = session_.requestPriorityUpdate(messageId_.streamId)) {
+        if (const auto* priority = session_.requestPriorityUpdate(messageId_.stream_id)) {
             *requestServices_ = requestServices_->withRequestPriorityUpdate(*priority);
         }
-        if (session_.streamingRequest(messageId_.streamId)) {
+        if (session_.streamingRequest(messageId_.stream_id)) {
             StreamingAccess::emplaceBodyReader(requestBodyReader_, this,
                 [](void* raw) -> Task<std::optional<std::span<const std::byte>>> { co_return co_await static_cast<Http3BufferedRequestDispatch*>(raw)->readRequestBody(); });
             *requestServices_ = requestServices_->withStreamingRequestBody(*requestBodyReader_);
@@ -387,7 +387,7 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
     auto response = std::move(*selectedResponse);
     // WebSocket rejection does not consume the tunnel body or enter the file /
     // interim response drivers; only its uncommitted buffered preparation joins here.
-    if (!web_socket_response && session_.streamingRequest(messageId_.streamId)) {
+    if (!web_socket_response && session_.streamingRequest(messageId_.stream_id)) {
         co_await drainRequestBody();
     }
     if (!web_socket_response && cancellationRequested()) {
@@ -454,7 +454,7 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
     if (!web_socket_response && streamOutputActive_) {
         co_return co_await writeBufferedAfterInterim(preparation.writePlan());
     }
-    auto encodedHead = session_.encodeResponseHead(messageId_.streamId, *response_, preparation.writePlan());
+    auto encodedHead = session_.encodeResponseHead(messageId_.stream_id, *response_, preparation.writePlan());
     if (!encodedHead) {
         co_return encodedHead.error().kind == Http3ResponseHeadError::peer_field_section_limit
             ? RunStatus::peer_field_section_limit
@@ -477,14 +477,14 @@ Task<std::optional<std::span<const std::byte>>> Http3BufferedRequestDispatch::re
         if (responseAborted()) {
             throw std::system_error(std::make_error_code(std::errc::operation_canceled));
         }
-        const auto failure = session_.streamingBodyFailure(messageId_.streamId);
+        const auto failure = session_.streamingBodyFailure(messageId_.stream_id);
         if (failure != Http3SansIoSessionEngine::Rejection::kNone) {
             throw HttpError({.status = failure == Http3SansIoSessionEngine::Rejection::kBodyTooLarge ? http_status::kContentTooLarge : http_status::kServiceUnavailable,
                 .code = "request_body_unavailable",
                 .message = "HTTP/3 request body limit exceeded"});
         }
         activeRequestBody_.resize(16 * 1024);
-        const auto read = session_.readTunnelData(messageId_.streamId, std::span<char>(activeRequestBody_.data(), activeRequestBody_.size()));
+        const auto read = session_.readTunnelData(messageId_.stream_id, std::span<char>(activeRequestBody_.data(), activeRequestBody_.size()));
         activeRequestBody_.resize(read.bytes);
         if (read.reset) {
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
@@ -508,7 +508,7 @@ Task<void> Http3BufferedRequestDispatch::drainRequestBody() {
             throw std::system_error(std::make_error_code(std::errc::operation_canceled));
         }
         std::array<char, 4096> bytes{};
-        const auto read = session_.readTunnelData(messageId_.streamId, bytes);
+        const auto read = session_.readTunnelData(messageId_.stream_id, bytes);
         if (read.reset) {
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
         }
@@ -533,7 +533,7 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writ
     if (pool == nullptr) {
         throw HttpError({.status = http_status::kServiceUnavailable, .code = "file_io_unavailable", .message = "file output requires the server blocking pool"});
     }
-    auto encoded = session_.encodeResponseHead(messageId_.streamId, *response_, plan);
+    auto encoded = session_.encodeResponseHead(messageId_.stream_id, *response_, plan);
     if (!encoded) {
         if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
@@ -649,7 +649,7 @@ Task<std::optional<HttpResponse>> Http3BufferedRequestDispatch::runTunnelHandler
             }
             response = std::move(*negotiated);
         }
-        auto head = session_.encodeConnectResponseHead(messageId_.streamId, response);
+        auto head = session_.encodeConnectResponseHead(messageId_.stream_id, response);
         if (!head) {
             if (head.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
                 reject_peer_field_section();
@@ -666,7 +666,7 @@ Task<std::optional<HttpResponse>> Http3BufferedRequestDispatch::runTunnelHandler
         }
         framed.resize(*frameSize);
         if (tunnelCallbacks_.attachScanner == nullptr ||
-            !tunnelCallbacks_.attachScanner(tunnelCallbacks_.context, messageId_.streamId, scannerEntry_)) {
+            !tunnelCallbacks_.attachScanner(tunnelCallbacks_.context, messageId_.stream_id, scannerEntry_)) {
             throw std::runtime_error("HTTP/3 tunnel scanner attachment failed");
         }
         ContextAccess::markTunnelHandshakeStarted(context);
@@ -709,7 +709,7 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
     peerTransportFinTimeout_ = endpoint.lifecycle().peerTransportFinTimeout;
     const auto protocol = lease_->request().extendedConnectProtocol();
     const auto validation = validateHttp3WebSocketHandshake(
-        request, protocol, !session_.tunnelReceiveEnded(messageId_.streamId));
+        request, protocol, !session_.tunnelReceiveEnded(messageId_.stream_id));
 
     if (!validation) {
         const auto& failure = validation.error();
@@ -748,7 +748,7 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
         }
         if (tunnelCallbacks_.attachScanner == nullptr ||
             !tunnelCallbacks_.attachScanner(
-                tunnelCallbacks_.context, messageId_.streamId, scannerEntry_)) {
+                tunnelCallbacks_.context, messageId_.stream_id, scannerEntry_)) {
             throw std::runtime_error("HTTP/3 WebSocket scanner attachment failed");
         }
         ContextAccess::markWebSocketHandshakeStarted(context);
@@ -807,7 +807,7 @@ Http3BufferedRequestDispatch::publicationDemand() const noexcept {
             return PublicationDemand::kLocalComplete;
         }
         if (outbound_.stopped()) {
-            return PublicationDemand::kLocalMailboxStopped;
+            return PublicationDemand::local_buffer_stopped;
         }
         if (streamFrameOffset_ < streamFrame_.size() || tunnelDataPending_) {
             return PublicationDemand::kData;
@@ -839,7 +839,7 @@ Http3BufferedRequestDispatch::publicationDemand() const noexcept {
         return PublicationDemand::kLocalCancelled;
     }
     if (outbound_.stopped()) {
-        return PublicationDemand::kLocalMailboxStopped;
+        return PublicationDemand::local_buffer_stopped;
     }
     if (!output_) {
         return PublicationDemand::kLocalFailed;
@@ -877,7 +877,7 @@ Http3BufferedRequestDispatch::PublishResult Http3BufferedRequestDispatch::publis
         case PublicationDemand::kLocalCancelled:
             cancel();
             return {PublishStatus::kCancelled};
-        case PublicationDemand::kLocalMailboxStopped:
+        case PublicationDemand::local_buffer_stopped:
             fail();
             return {PublishStatus::kFailed};
         case PublicationDemand::kLocalPeerLimitRejected:
@@ -885,7 +885,6 @@ Http3BufferedRequestDispatch::PublishResult Http3BufferedRequestDispatch::publis
                 return {PublishStatus::kPeerLimitRejected};
             }
             state_ = State::kPublishing;
-            (void)outbound_.drainReturns();
             state_ = State::kPeerLimitRejected;
             releaseDispatchStorage();
             return {PublishStatus::kPeerLimitRejected};
@@ -904,14 +903,13 @@ Http3BufferedRequestDispatch::PublishResult Http3BufferedRequestDispatch::publis
     publishedWireBytes_ += publication.bytesAccepted;
     switch (publication.status) {
         case Http3BufferedResponseOutput::Status::kBytes:
-            return {PublishStatus::kBytesPublished, publication.bytesAccepted,
-                publication.notifyPeer};
+            return {PublishStatus::kBytesPublished, publication.bytesAccepted};
         case Http3BufferedResponseOutput::Status::kFin:
             state_ = State::kComplete;
             releaseDispatchStorage();
-            return {PublishStatus::kFinPublished, 0, publication.notifyPeer};
+            return {PublishStatus::kFinPublished};
         case Http3BufferedResponseOutput::Status::kBackpressured:
-            return {PublishStatus::kBackpressured, 0, publication.notifyPeer,
+            return {PublishStatus::kBackpressured, 0,
                 publication.blockReason == Http3BufferedResponseOutput::BlockReason::kData
                     ? PublishBlockReason::kData
                 : publication.blockReason == Http3BufferedResponseOutput::BlockReason::kControl
@@ -920,14 +918,13 @@ Http3BufferedRequestDispatch::PublishResult Http3BufferedRequestDispatch::publis
         case Http3BufferedResponseOutput::Status::kComplete:
             state_ = State::kComplete;
             releaseDispatchStorage();
-            return {PublishStatus::kComplete, 0, publication.notifyPeer};
+            return {PublishStatus::kComplete};
         case Http3BufferedResponseOutput::Status::kFailed:
             fail();
-            return {PublishStatus::kFailed, publication.bytesAccepted,
-                publication.notifyPeer};
+            return {PublishStatus::kFailed, publication.bytesAccepted};
     }
     fail();
-    return {PublishStatus::kFailed, publication.bytesAccepted, publication.notifyPeer};
+    return {PublishStatus::kFailed, publication.bytesAccepted};
 }
 
 Http3BufferedRequestDispatch::PublishResult
@@ -939,7 +936,7 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         cancel();
         return {PublishStatus::kCancelled};
     }
-    if (demand == PublicationDemand::kLocalMailboxStopped) {
+    if (demand == PublicationDemand::local_buffer_stopped) {
         cancel();
         return {PublishStatus::kCancelled};
     }
@@ -947,11 +944,10 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         return {PublishStatus::kNotReady};
     }
 
-    bool notifyPeer = false;
     if (demand == PublicationDemand::kData) {
         std::span<const std::byte> bytes;
         if (streamFrameOffset_ < streamFrame_.size()) {
-            const auto count = (std::min)(Http3StreamMailbox::kMaxBlockBytes,
+            const auto count = (std::min)(http3_stream_buffer::max_block_bytes,
                 streamFrame_.size() - streamFrameOffset_);
             bytes = std::as_bytes(std::span<const char>(
                 streamFrame_.data() + streamFrameOffset_, count));
@@ -964,15 +960,13 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         if (bytes.size() > kHttp3VarIntMax - streamPublishedWireBytes_) {
             return {PublishStatus::kFailed};
         }
-        const auto result = outbound_.trySend(messageId_, bytes);
-        if (result == Http3StreamMailbox::SendResult::kFull || result == Http3StreamMailbox::SendResult::kNoBlock) {
-            return {PublishStatus::kBackpressured, 0, false, PublishBlockReason::kData};
+        const auto result = outbound_.try_send(messageId_, bytes);
+        if (result == http3_stream_buffer::send_result::full || result == http3_stream_buffer::send_result::no_block) {
+            return {PublishStatus::kBackpressured, 0, PublishBlockReason::kData};
         }
-        if (result != Http3StreamMailbox::SendResult::kSent &&
-            result != Http3StreamMailbox::SendResult::kSentNotifyPeer) {
+        if (result != http3_stream_buffer::send_result::sent) {
             return {PublishStatus::kFailed};
         }
-        notifyPeer = result == Http3StreamMailbox::SendResult::kSentNotifyPeer;
         streamPublishedWireBytes_ += bytes.size();
         publishedWireBytes_ += bytes.size();
         if (streamFrameOffset_ < streamFrame_.size()) {
@@ -985,29 +979,27 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
             tunnelDataFrame_.clear();
             tunnelOutputAvailable_.notify();
         }
-        return {PublishStatus::kBytesPublished, bytes.size(), notifyPeer};
+        return {PublishStatus::kBytesPublished, bytes.size()};
     }
 
     const bool establishingTunnel = tunnelEstablishedPending_;
-    Http3StreamControl event{
-        .kind = establishingTunnel ? Http3StreamControl::Kind::kTunnelEstablished
-                                   : Http3StreamControl::Kind::kStreamFin,
+    http3_stream_control event{
+        .kind = establishingTunnel ? http3_stream_control::kind::tunnel_established
+                                   : http3_stream_control::kind::stream_fin,
         .id = messageId_,
         .value = streamPublishedWireBytes_};
-    const auto result = outbound_.trySendControl(event);
-    if (result == Http3StreamMailbox::ControlResult::kFull) {
-        return {PublishStatus::kBackpressured, 0, false, PublishBlockReason::kControl};
+    const auto result = outbound_.try_send_control(event);
+    if (result == http3_stream_buffer::control_result::full) {
+        return {PublishStatus::kBackpressured, 0, PublishBlockReason::kControl};
     }
-    if (result != Http3StreamMailbox::ControlResult::kSent &&
-        result != Http3StreamMailbox::ControlResult::kSentNotifyPeer) {
+    if (result != http3_stream_buffer::control_result::sent) {
         return {PublishStatus::kFailed};
     }
-    notifyPeer = result == Http3StreamMailbox::ControlResult::kSentNotifyPeer;
     if (establishingTunnel) {
         tunnelEstablishedPending_ = false;
         tunnelEstablishedPublished_ = true;
         tunnelOutputAvailable_.notify();
-        return {PublishStatus::kControlPublished, 0, notifyPeer};
+        return {PublishStatus::kControlPublished};
     }
     tunnelFinPending_ = false;
     streamOutputEnded_ = true;
@@ -1015,7 +1007,7 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         armPeerTransportFinTimeout();
     }
     tunnelOutputAvailable_.notify();
-    return {PublishStatus::kFinPublished, 0, notifyPeer};
+    return {PublishStatus::kFinPublished};
 }
 
 bool Http3BufferedRequestDispatch::registerPublicationDeadlineCallback(
@@ -1102,7 +1094,7 @@ Task<std::error_code> Http3BufferedRequestDispatch::publishTunnelHandshake(
 }
 
 Task<void> Http3BufferedRequestDispatch::writeInterimResponse(const HttpInterimResponseHead& head) {
-    auto encoded = session_.encodeInterimResponseHead(messageId_.streamId, head);
+    auto encoded = session_.encodeInterimResponseHead(messageId_.stream_id, head);
     if (!encoded) {
         if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
@@ -1116,7 +1108,7 @@ Task<void> Http3BufferedRequestDispatch::writeInterimResponse(const HttpInterimR
 }
 
 Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::writeBufferedAfterInterim(HttpBufferedResponseWritePlan plan) {
-    auto encoded = session_.encodeResponseHead(messageId_.streamId, *response_, plan);
+    auto encoded = session_.encodeResponseHead(messageId_.stream_id, *response_, plan);
     if (!encoded) {
         if (encoded.error().kind == Http3ResponseHeadError::peer_field_section_limit) {
             reject_peer_field_section();
@@ -1230,11 +1222,11 @@ Task<std::optional<HttpDatagramInput>> Http3BufferedRequestDispatch::readDatagra
         if (cancellationRequested() || tunnelAborted_) {
             throw std::system_error(std::make_error_code(std::errc::operation_canceled));
         }
-        if (auto native = session_.takeDatagram(messageId_.streamId)) {
+        if (auto native = session_.takeDatagram(messageId_.stream_id)) {
             co_return HttpDatagramInput{std::move(*native), true};
         }
         std::array<char, 4096> bytes{};
-        const auto result = session_.readTunnelData(messageId_.streamId, bytes);
+        const auto result = session_.readTunnelData(messageId_.stream_id, bytes);
         if (result.reset || result.ended) {
             disarmPeerTransportFinTimeout();
         }
@@ -1261,7 +1253,7 @@ void Http3BufferedRequestDispatch::sendDatagram(std::span<const std::byte> bytes
     if (!onWorker() || !streamOutputActive_ || streamOutputEnded_ || cancellationRequested() || tunnelAborted_ || !tunnelCallbacks_.sendDatagram) {
         throw std::runtime_error("HTTP Datagram sending direction is closed");
     }
-    tunnelCallbacks_.sendDatagram(tunnelCallbacks_.context, messageId_.streamId, bytes);
+    tunnelCallbacks_.sendDatagram(tunnelCallbacks_.context, messageId_.stream_id, bytes);
 }
 
 Task<HttpStreamReadResult> Http3BufferedRequestDispatch::readTunnel(
@@ -1276,7 +1268,7 @@ Task<HttpStreamReadResult> Http3BufferedRequestDispatch::readTunnel(
                 std::make_error_code(std::errc::operation_canceled));
         }
         std::array<char, 4096> bytes{};
-        const auto result = session_.readTunnelData(messageId_.streamId, bytes);
+        const auto result = session_.readTunnelData(messageId_.stream_id, bytes);
         if (result.reset || result.ended) {
             disarmPeerTransportFinTimeout();
         }
@@ -1309,7 +1301,7 @@ Task<std::error_code> Http3BufferedRequestDispatch::writeTunnel(
         co_return std::make_error_code(std::errc::operation_not_permitted);
     }
     constexpr auto maxFrameHeader = kHttp3FrameHeaderMaxBytes;
-    constexpr auto maxPayload = Http3StreamMailbox::kMaxBlockBytes - maxFrameHeader;
+    constexpr auto maxPayload = http3_stream_buffer::max_block_bytes - maxFrameHeader;
     std::size_t offset = 0;
     while (offset < bytes.size()) {
         if (cancellationRequested() || tunnelAborted_) {
@@ -1364,7 +1356,7 @@ Task<bool> Http3BufferedRequestDispatch::waitTunnelReceiveEnd() {
         if (cancellationRequested() || tunnelAborted_) {
             co_return false;
         }
-        const auto result = session_.readTunnelData(messageId_.streamId, {});
+        const auto result = session_.readTunnelData(messageId_.stream_id, {});
         if (result.reset || result.overflow) {
             disarmPeerTransportFinTimeout();
             co_return false;
@@ -1383,7 +1375,7 @@ void Http3BufferedRequestDispatch::peerTransportFinTimeoutTick(
     if (!dispatch.onWorker()) {
         std::terminate();
     }
-    const auto peerState = dispatch.session_.readTunnelData(dispatch.messageId_.streamId, {});
+    const auto peerState = dispatch.session_.readTunnelData(dispatch.messageId_.stream_id, {});
     if (peerState.ended || peerState.reset || peerState.overflow) {
         dispatch.disarmPeerTransportFinTimeout();
         return;
@@ -1398,7 +1390,7 @@ void Http3BufferedRequestDispatch::armPeerTransportFinTimeout() noexcept {
         peerTransportFinTimeout_ <= std::chrono::milliseconds::zero()) {
         return;
     }
-    const auto peerState = session_.readTunnelData(messageId_.streamId, {});
+    const auto peerState = session_.readTunnelData(messageId_.stream_id, {});
     if (peerState.ended || peerState.reset || peerState.overflow) {
         return;
     }
@@ -1430,7 +1422,7 @@ void Http3BufferedRequestDispatch::abortTunnel() noexcept {
     tunnelInputAvailable_.notify();
     tunnelOutputAvailable_.notify();
     if (tunnelCallbacks_.abort != nullptr) {
-        tunnelCallbacks_.abort(tunnelCallbacks_.context, messageId_.streamId);
+        tunnelCallbacks_.abort(tunnelCallbacks_.context, messageId_.stream_id);
     }
 }
 
@@ -1439,7 +1431,7 @@ void Http3BufferedRequestDispatch::notifyTunnelOutput() noexcept {
         std::terminate();
     }
     if (tunnelCallbacks_.outputReady != nullptr) {
-        tunnelCallbacks_.outputReady(tunnelCallbacks_.context, messageId_.streamId);
+        tunnelCallbacks_.outputReady(tunnelCallbacks_.context, messageId_.stream_id);
     }
 }
 
@@ -1524,16 +1516,16 @@ void Http3BufferedRequestDispatch::releaseDispatchStorage() noexcept {
 
     const bool hadLease = lease_.has_value();
     if (hadLease && (tunnelAborted_ || peer_field_section_rejected_)) {
-        // A local abort can finish before peer FIN reaches the input mailbox.
+        // A local abort can finish before peer FIN reaches the input buffer.
         // Retire the protocol request while its lease still pins the head; the
         // lease then frees this stream without waiting for more peer input.
-        (void)session_.cancelRequest(messageId_.streamId);
+        (void)session_.cancelRequest(messageId_.stream_id);
     }
     lease_.reset();
     if (hadLease) {
         // Response FIN completes only the send direction. The input owner keeps
         // an open receive direction alive until validated FIN or cancellation.
-        (void)session_.release(messageId_.streamId);
+        (void)session_.release(messageId_.stream_id);
     }
 }
 

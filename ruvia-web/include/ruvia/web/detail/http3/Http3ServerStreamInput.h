@@ -4,12 +4,13 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
-#include "ruvia/web/detail/http3/Http3StreamMailbox.h"
+#include "ruvia/web/detail/http3/http3_stream_buffer.h"
 
 namespace ruvia {
 class WorkerMemory;
@@ -17,12 +18,12 @@ class WorkerMemory;
 
 namespace ruvia::detail {
 
-// Worker-affine receive adapter for one QUIC connection. The mailbox owner
+// Worker-affine receive adapter for one QUIC connection. The buffer owner
 // routes each block/control here individually; this class never drains shared
 // queues. DATA byte counts include HTTP/3 frame bytes, not just request body.
 // Terminal stream entries stay as tombstones until this connection is retired.
 // Streaming consumers are paced by the connection owner before acceptData();
-// it retains bounded mailbox blocks while the worker body backlog is full.
+// it retains bounded buffer blocks while the worker body backlog is full.
 class Http3ServerStreamInput final {
     enum class StreamPhase : std::uint8_t { kOpen,
         kFinished,
@@ -109,18 +110,23 @@ public:
     [[nodiscard]] bool receivedEarlyData(std::uint64_t streamId) const noexcept;
     [[nodiscard]] std::optional<ResumedInput> resumeQpack() noexcept;
 
-    // Call once for each routed mailbox block. A mismatched identity is
+    // Call once for each routed buffer block. A mismatched identity is
     // reported without touching input or session state. The borrowed block is
     // not retained and can be released as soon as this call returns. Final-size
     // inconsistency or tracking-capacity exhaustion stops this input/session;
     // the transport owner must close that connection, not retry the message.
-    [[nodiscard]] Result acceptData(const Http3StreamMailbox::BorrowedBlock& block) noexcept;
-    // kStreamFin.value is the final cumulative wire-byte count. It may precede
-    // queued DATA. Peer RESET.value is the server network's cumulative successfully
+    [[nodiscard]] Result acceptData(const http3_stream_buffer::borrowed_block& block) noexcept;
+    // Peer unidirectional input is consumed synchronously by the same protocol
+    // owner, independently of request DATA credits. The HTTP parser owns any
+    // incomplete stream-type, control-frame or QPACK instruction fragments.
+    // bytes is borrowed only for this call and never retained by this adapter.
+    [[nodiscard]] Result accept_peer_stream_data(http3_stream_id id, std::span<const std::byte> bytes) noexcept;
+    // stream_fin.value is the final cumulative wire-byte count. It may precede
+    // queued DATA. Peer RESET.value is the transport owner's cumulative successfully
     // published DATA-byte count, not QUIC Final Size; RESET is deferred until
     // that barrier is consumed. Local cancellation/connection-close controls
     // never synthesize a peer RESET. Callers may route controls before DATA.
-    [[nodiscard]] Result acceptControl(const Http3StreamControl& control) noexcept;
+    [[nodiscard]] Result acceptControl(const http3_stream_control& control) noexcept;
 
     // After transport termination, route local cancellation through this input
     // (not directly through the session) so queued DATA cannot recreate state.
@@ -138,8 +144,9 @@ public:
     [[nodiscard]] bool stopped() const noexcept;
 
 private:
-    [[nodiscard]] Status identityStatus(const Http3StreamMessageId& id) const noexcept;
-    [[nodiscard]] Result acceptFin(const Http3StreamControl& control) noexcept;
+    [[nodiscard]] Status identityStatus(const http3_stream_id& id) const noexcept;
+    [[nodiscard]] Result accept_bytes(http3_stream_id id, std::span<const std::byte> bytes) noexcept;
+    [[nodiscard]] Result acceptFin(const http3_stream_control& control) noexcept;
     [[nodiscard]] Result applyPeerReset(std::uint64_t streamId, StreamState& state) noexcept;
     [[nodiscard]] Result finalSizeFailure() noexcept;
     [[nodiscard]] Result feedSession(std::uint64_t streamId, std::string_view bytes,

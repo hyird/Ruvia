@@ -143,10 +143,10 @@ socket to one worker exactly once, and forwards QUIC datagrams by destination
 connection ID (CID). It does not own QUIC/TLS or HTTP/3 connection state.
 
 Each TCP or QUIC connection stays on its assigned worker until retirement.
-That worker owns TCP I/O, TLS contexts, QUIC handshakes and timers, HTTP/3
-streams, and connection admission, shutdown and reclamation. All requests on
-the connection execute on the same worker. Standalone server workers compose
-the same Acceptor rather than running a separate worker-local accept path.
+That worker owns TLS contexts, QUIC handshakes and timers, HTTP/3 streams,
+connection admission and handler shutdown/reclamation. All requests on a
+connection execute on the same worker. Single-worker servers compose the same
+Acceptor rather than a separate worker-local socket-accept path.
 
 The client's Initial destination CID selects a fixed worker partition; every
 server-issued CID, including rotated CIDs, preserves that partition across
@@ -160,7 +160,8 @@ connections.
 
 Shutdown first stops ingress and closes datagram publication. Workers retire
 their protocol state and acknowledge that no channel borrow remains. Acceptor
-joins only after these acknowledgements and all UDP send loans are returned;
+joins only after both endpoints finalize and all block leases and UDP callbacks
+are returned. Its 1ms cold close check covers notification-before-final-ACK;
 core keeps the owner event loops alive through final resource retirement.
 
 `ServerConfig::maxRequestsPerConnection = N` limits the cumulative number of
@@ -169,9 +170,118 @@ admitted requests on each HTTP/1, HTTP/2, or HTTP/3 connection. The default is
 cutoff is `4*N`. If a request stream at or above that cutoff arrives before N
 requests are admitted, the server announces `GOAWAY(4*N)` early and rejects that
 stream; request streams at or above the cutoff are rejected individually. That
-announcement does not seal admission of lower IDs: undecided requests below the
-cutoff may still be admitted until the connection reaches N admitted requests.
-At N, admission is sealed and already-admitted requests are drained.
+announcement does not seal lower-ID admission before N requests are admitted.
+At N, admission is sealed and already-admitted requests drain. Output bytes and
+retained response blocks must be accepted or invalidated by transport, and the
+local handler tasks must finish before the connection generation is retired.
+
+The Acceptor-to-worker `http3_datagram_channel` remains the bounded cross-thread
+datagram boundary. It composes core SPSC queues, linear buffer leases, channel
+lifecycle and native cross-thread notification. The removed components are the
+worker-local `Http3StreamMailbox` and mailbox-server handoff, not the Acceptor
+datagram channels or core's general-purpose mailbox facilities.
+
+The two final endpoint roles are explicit: `http3_acceptor_datagram_endpoint` owns
+the UDP socket and borrows the Acceptor's packet pool;
+`http3_worker_datagram_endpoint` owns no socket and uses only its worker channel.
+The worker-local `Http3QuicWireOwner` consumes the latter and drives QUIC/TLS
+through public HTTP sans-I/O APIs.
+
+Acceptor remains the sole UDP socket and datagram storage owner: receive I/O
+writes directly into its preallocated core pool before CID routing, and the
+selected worker borrows that lease without another payload copy.
+
+For each worker, input budget `I` bounds all routed input loans, including
+pending credit returns; output budget `O` bounds all issued output loans,
+including available, unpublished and in-flight TX storage. Credit-return
+capacity is checked against `I + O`. With `W` workers, the Acceptor's global
+packet pool is exactly `1 + W * (I + O)` blocks: one native RX staging block plus
+the workers' independently bounded input and output loans.
+
+Worker-returned credits have an independent bounded lane; a full packet queue
+cannot suppress control, close or credit return.
+
+The worker-local `http3_stream_buffer`, `http3_connection_state` and
+`http3_ready_scheduler` compose the same core storage/linear-lease primitives
+without cross-thread atomics, return queues or local handoff ACKs. Independent
+DATA/CONTROL backpressure, retained output blocks, QPACK blocking, same-stream
+ordering and FIN/RESET byte barriers are preserved. The scheduler retains fair
+ready lists and receives explicit local capacity changes. Its
+`acknowledge_intent()` settles the connection's exact offered operation only
+after actual transport execution; it is not a thread-handoff acknowledgment.
+Aborting an unpublished local reservation returns its storage without creating a
+capacity wake; consuming a block and returning its borrow activate blocked work.
+
+`http3_connection_state` is the worker-local authority for reservation, binding,
+handler attachment, admission sealing, transport retirement, worker finalization
+and generation reuse. Its synchronous input and intent calls fence the exact
+epoch/generation; an attached handler remains alive through scheduler retirement.
+`http3_connection_driver` owns the QUIC token, critical-stream output, response
+output, admission planner, input forwarding, tunnel barriers and deadlines.
+Installing its executor makes the driver immovable; generation reset clears it
+in place. The worker runtime only routes datagrams, enforces budgets and schedules
+timers and driver work.
+
+Peer unidirectional input bypasses request DATA storage: the driver feeds a
+synchronous worker-local borrow through the same authoritative HTTP input/session
+parser, which owns bounded incomplete stream-type, control and QPACK instruction
+fragments. Thus a QPACK-blocked request holding every DATA loan cannot prevent
+the encoder stream from advancing. Before handler attachment, QUIC retains input
+and terminal events; FIN/RESET and protocol errors still enter the same parser
+and connection-close authority. Request bytes retain their ordinary borrowed
+block lifecycle. The driver also observes the first wire HEADERS boundary with
+a non-authoritative framer solely to choose the header/body timeout phase.
+
+`WebWorkerRuntime::start_http3()` transfers the cold channel into the runtime,
+stages and installs transport, and starts the handler and datagram runners in
+one structured task scope. Startup failure follows the same
+`stop_http3()` stop/join path, including reservations created by a started handler
+before transport startup. Fully retired runtime calls are idempotent.
+The wire owner releases its endpoint's channel borrow only after I/O loans and
+timer handlers retire; the runtime releases its own borrow before the worker's
+final ACK. Returned UDP loans and that ACK precede channel destruction, so later
+worker finalization cannot query destroyed Acceptor storage. Stop requests alone
+never imply completed retirement.
+
+Each worker has one native `WorkerNotification` waiter for its datagram
+boundary; protocol/handler/scheduler progress uses worker-local `WorkerSignal`.
+Acceptor has one aggregate native notification shared by all worker channels and
+scans related queues in bounded batches. Core notification wait registration
+rechecks the pending latch, so notify-before-wait does not lose readiness.
+
+Packet generation first reserves a TX buffer and descriptor-queue credit, then
+calls the public sans-I/O HTTP/QUIC packet writer. Its bounded TX window may fill
+while UDP completions are pending: only further packet production pauses, while
+RX, QUIC expiry and local HTTP/3 progress continue. A TX lease stays alive through
+UDP completion and I/O-handler retirement, including Windows overlapped I/O.
+Enqueue, UDP completion and peer QUIC ACK are distinct events; pacing, congestion,
+loss recovery and retransmission storage remain owned by HTTP/ngtcp2.
+Cancelling an unpublished TX reservation keeps its lease in a worker-local
+cache until reuse or shutdown, instead of creating an Acceptor credit round trip
+and waking an idle protocol driver.
+
+Validated coverage for this cutover includes exact-generation and stale-intent
+functional tests; native UDP, independent `I`/`O` credits and retained-loan
+retirement; byte-fragmented QPACK encoder progress with every request DATA credit
+borrowed; and cold reservation retirement through handler join and actual channel
+destruction. Two isolated real-App failure scenarios exercise the interval before
+transport startup and the interval after constructing an unstarted lazy datagram
+task, before its second runner launch. A scratch-only internal pre-ready hook uses
+owner-posted confirmation of both worker timer suspensions before main-thread
+`App.stop()`. Both waits return `kStopRequested`, the expected startup-cancellation
+exception is reported, serving hooks remain uncalled, and both channels retire
+with zero outstanding packet-pool loans. These diagnostics are neither a public
+`onWorkerStart` API nor an actual TaskScope node allocation-failure seam.
+
+The unmodified two-worker H3Only loopback smoke passed four connections with
+16 large echo requests per connection, exact completed echoes, request-seven
+cancellation recovery, fixed worker identity, orderly client shutdown and clean
+server SIGINT shutdown.
+The configured Debug libraries, examples and enabled JWT/MariaDB/PostgreSQL/Redis
+features build, and all 18 configured CTest targets pass. The state tests and
+driver's in-place generation lifetime are not a real delayed old-generation
+UDP-packet experiment; no throughput or allocation benchmark numbers are claimed.
+
 `Http3ListenConfig::handshakeTimeout` (default 10 seconds) bounds completion of
 the QUIC/TLS handshake for each new QUIC connection. The
 `Http3ListenConfig::drainTimeout` (default 30 seconds) limits the HTTP/3 drain
@@ -187,6 +297,9 @@ WebSocket CONNECT can return its complete buffered error response before the
 client sends FIN; an open receive direction is not a response-publication
 failure and does not close the connection. The server retains that stream's
 receive state until client FIN, RESET, or connection shutdown retires it.
+`quic_operation_status::stream_closed` reports a closed stream send direction,
+not a closing connection. Cancelling a response retires that stream's output
+without closing sibling streams or preventing another request on the connection.
 
 The HTTP/3 server supports buffered and streaming request routes, byte and file
 responses, response streams, SSE, ordinary CONNECT and Extended CONNECT. The
@@ -1018,6 +1131,46 @@ joining a raw `worker_runtime` does not rethrow them.
 Mailbox abandonment and publication rollback use one node-recycling path:
 release the reservation, destroy user closures outside the dispatcher mutex,
 then notify queued idle waiters. Destructors may reenter the dispatcher.
+
+### Bounded storage and endpoint retirement
+
+`<ruvia/core/spsc_ring_queue.h>` provides `spsc_ring_queue<T>` and
+`local_ring_queue<T>` through one `basic_ring_queue` storage/index implementation.
+Both preallocate PMR slots; only cursor synchronization differs. The SPSC policy
+separates published cursors by cache line and caches the peer cursor. Batch
+preparation/consumption returns `first` and `second` spans across wrap-around;
+`commit_push(n)` publishes a prefix and cancels the remainder, and `pop(n)`
+publishes a single consumed-cursor update. Prepared slots cannot be prepared
+again, and spans expire on commit/cancel/consume. Notification is a separate
+boundary, not a property of the stored payload.
+
+`<ruvia/core/buffer_pool.h>` supplies the single byte-storage/free-index
+implementation. A stable `buffer_pool` preallocates fixed slots in its supplied
+owner PMR resource (null normalizes to core's process resource).
+Owner-affine `try_acquire()` returns a move-only `buffer_lease`; `bytes()` is
+borrowed until its lease is returned. Destruction or `reset()` invokes the bound
+allocation-free `return_callback`. Local defaults reclaim on the pool owner.
+Across owners the callback publishes a move-only `buffer_credit` into an
+independent SPSC credit lane, sized to hold every potentially leased slot; only
+the pool owner drains that lane and calls `reclaim()`. Returning out of order is
+valid. The current linear holder may use `set_return_callback()` to rebind the
+holder-affine return endpoint before transfer, without touching pool/free-list
+state. `release_credit()` clears the lease and explicitly transfers its return
+obligation. Neither another thread nor an arbitrary destructor may operate the
+owner's PMR/free indices.
+
+`<ruvia/core/channel_lifecycle.h>` provides local/SPSC policies for the same
+admission-close algorithm. A producer's linear `try_admit()` token brackets
+prepare/commit/cancel or asynchronous I/O. `request_stop()` rejects new admission
+but does not revoke already admitted work. `close()` publishes `producer_closed`
+only after every admitted token retires. The consumer observes that publication,
+drains descriptors, returns leases and joins I/O before `finalize()` publishes
+the final acknowledgment. Destruction additionally requires empty queues,
+observed finalization and `pool.outstanding() == 0`; a notification is not that
+proof. `WorkerNotification` coalesces cross-thread readiness, while
+`WorkerSignal` handles local cooperation. Control and final acknowledgments do
+not borrow data queue capacity. These SPSC/local primitives do not change core's
+existing multi-producer worker submission or `Channel` contracts.
 
 ## Blocking Work
 

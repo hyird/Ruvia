@@ -10,10 +10,10 @@
 namespace ruvia::detail {
 
 Http3BufferedResponseOutput::Http3BufferedResponseOutput(const HttpResponse& response,
-    Http3StreamMailbox& mailbox, MessageId messageId,
+    http3_stream_buffer& buffer, MessageId messageId,
     ruvia::http3_buffered_response_cursor cursor, std::uint64_t initialPublishedWireBytes) noexcept
     : response_(&response),
-      mailbox_(mailbox),
+      buffer_(buffer),
       messageId_(messageId),
       cursor_(std::move(cursor)),
       publishedWireBytes_(initialPublishedWireBytes) {}
@@ -21,7 +21,7 @@ Http3BufferedResponseOutput::Http3BufferedResponseOutput(const HttpResponse& res
 std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response,
     const HttpBufferedResponseWritePlan& writePlan, WorkerMemory& worker,
-    Http3StreamMailbox& mailbox, MessageId messageId,
+    http3_stream_buffer& buffer, MessageId messageId,
     std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
     auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, worker.resource());
     if (!cursor) {
@@ -32,12 +32,12 @@ Http3BufferedResponseOutput::create(const HttpResponse& response,
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
     return Http3BufferedResponseOutput(
-        response, mailbox, messageId, std::move(*cursor), initialPublishedWireBytes);
+        response, buffer, messageId, std::move(*cursor), initialPublishedWireBytes);
 }
 
 std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
-    WorkerMemory& worker, Http3StreamMailbox& mailbox, MessageId messageId, std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
+    WorkerMemory& worker, http3_stream_buffer& buffer, MessageId messageId, std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
     if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.field_section.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
@@ -45,7 +45,7 @@ Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBuff
     if (!cursor) {
         return std::unexpected(cursorError(cursor.error()));
     }
-    return Http3BufferedResponseOutput(response, mailbox, messageId, std::move(*cursor), initialPublishedWireBytes);
+    return Http3BufferedResponseOutput(response, buffer, messageId, std::move(*cursor), initialPublishedWireBytes);
 }
 
 Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() noexcept {
@@ -58,11 +58,10 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
     if (response_ == nullptr || !cursor_) {
         return fail(Error::kInvalidCursorState);
     }
-    if (mailbox_.stopped()) {
-        return fail(Error::kMailboxStopped);
+    if (buffer_.stopped()) {
+        return fail(Error::buffer_stopped);
     }
 
-    (void)mailbox_.drainReturns();
     switch (cursor_->next_step()) {
         case ruvia::http3_buffered_response_cursor::step::complete:
             state_ = State::kComplete;
@@ -75,24 +74,23 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
             if (publishedWireBytes_ > kHttp3VarIntMax) {
                 return fail(Error::kWireByteCountOverflow);
             }
-            const Http3StreamControl fin{Http3StreamControl::Kind::kStreamFin,
+            const http3_stream_control fin{http3_stream_control::kind::stream_fin,
                 messageId_, publishedWireBytes_};
-            const auto sent = mailbox_.trySendControl(fin);
-            if (sent == Http3StreamMailbox::ControlResult::kFull) {
+            const auto sent = buffer_.try_send_control(fin);
+            if (sent == http3_stream_buffer::control_result::full) {
                 return result(Status::kBackpressured, BlockReason::kControl);
             }
-            if (sent == Http3StreamMailbox::ControlResult::kStopped) {
-                return fail(Error::kMailboxStopped);
+            if (sent == http3_stream_buffer::control_result::stopped) {
+                return fail(Error::buffer_stopped);
             }
-            const bool notifyPeer = sent == Http3StreamMailbox::ControlResult::kSentNotifyPeer;
             const auto acknowledged = cursor_->acknowledge_fin(true);
             if (!acknowledged) {
-                return fail(cursorError(acknowledged.error()), 0, notifyPeer);
+                return fail(cursorError(acknowledged.error()));
             }
             state_ = State::kComplete;
             cursor_.reset();
             response_ = nullptr;
-            return result(Status::kFin, BlockReason::kNone, Error::kNone, 0, notifyPeer);
+            return result(Status::kFin);
         }
         case ruvia::http3_buffered_response_cursor::step::bytes:
             break;
@@ -102,31 +100,29 @@ Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::publishStep() n
     if (!segment || segment->empty()) {
         return fail(segment ? Error::kInvalidCursorState : cursorError(segment.error()));
     }
-    const auto count = std::min(segment->size(), Http3StreamMailbox::kMaxBlockBytes);
+    const auto count = std::min(segment->size(), http3_stream_buffer::max_block_bytes);
     if (count == 0 || publishedWireBytes_ > kHttp3VarIntMax - count) {
         return fail(Error::kWireByteCountOverflow);
     }
     const auto* bytes = reinterpret_cast<const std::byte*>(segment->data());
-    const auto sent = mailbox_.trySend(messageId_, std::span<const std::byte>(bytes, count));
-    if (sent == Http3StreamMailbox::SendResult::kFull ||
-        sent == Http3StreamMailbox::SendResult::kNoBlock) {
+    const auto sent = buffer_.try_send(messageId_, std::span<const std::byte>(bytes, count));
+    if (sent == http3_stream_buffer::send_result::full ||
+        sent == http3_stream_buffer::send_result::no_block) {
         return result(Status::kBackpressured, BlockReason::kData);
     }
-    if (sent == Http3StreamMailbox::SendResult::kStopped) {
-        return fail(Error::kMailboxStopped);
+    if (sent == http3_stream_buffer::send_result::stopped) {
+        return fail(Error::buffer_stopped);
     }
-    if (sent != Http3StreamMailbox::SendResult::kSent &&
-        sent != Http3StreamMailbox::SendResult::kSentNotifyPeer) {
+    if (sent != http3_stream_buffer::send_result::sent) {
         return fail(Error::kInvalidCursorState);
     }
 
-    const bool notifyPeer = sent == Http3StreamMailbox::SendResult::kSentNotifyPeer;
     publishedWireBytes_ += count;
     const auto acknowledged = cursor_->acknowledge(count);
     if (!acknowledged) {
-        return fail(cursorError(acknowledged.error()), count, notifyPeer);
+        return fail(cursorError(acknowledged.error()), count);
     }
-    return result(Status::kBytes, BlockReason::kNone, Error::kNone, count, notifyPeer);
+    return result(Status::kBytes, BlockReason::kNone, Error::kNone, count);
 }
 
 void Http3BufferedResponseOutput::stop() noexcept {
@@ -187,25 +183,23 @@ Http3BufferedResponseOutput::Error Http3BufferedResponseOutput::cursorError(
 }
 
 Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::fail(
-    Error error, std::size_t bytesAccepted, bool notifyPeer) noexcept {
+    Error error, std::size_t bytesAccepted) noexcept {
     if (state_ == State::kPublishing) {
         failure_ = error;
         state_ = State::kFailed;
         cursor_.reset();
         response_ = nullptr;
     }
-    return result(Status::kFailed, BlockReason::kNone, failure_, bytesAccepted, notifyPeer);
+    return result(Status::kFailed, BlockReason::kNone, failure_, bytesAccepted);
 }
 
 Http3BufferedResponseOutput::Result Http3BufferedResponseOutput::result(Status status,
-    BlockReason blockReason, Error error, std::size_t bytesAccepted,
-    bool notifyPeer) const noexcept {
+    BlockReason blockReason, Error error, std::size_t bytesAccepted) const noexcept {
     return {.status = status,
         .blockReason = blockReason,
         .error = error,
         .bytesAccepted = bytesAccepted,
-        .publishedWireBytes = publishedWireBytes_,
-        .notifyPeer = notifyPeer};
+        .publishedWireBytes = publishedWireBytes_};
 }
 
 }  // namespace ruvia::detail

@@ -51,9 +51,9 @@ namespace {
 using Dispatch = ruvia::detail::Http3BufferedRequestDispatch;
 using Engine = ruvia::detail::Http3SansIoSessionEngine;
 using Input = ruvia::detail::Http3ServerStreamInput;
-using Mailbox = ruvia::detail::Http3StreamMailbox;
-using MessageId = ruvia::detail::Http3StreamMessageId;
-using Control = ruvia::detail::Http3StreamControl;
+using Mailbox = ruvia::detail::http3_stream_buffer;
+using MessageId = ruvia::detail::http3_stream_id;
+using Control = ruvia::detail::http3_stream_control;
 using BlockReason = Dispatch::PublishBlockReason;
 using PublicationDemand = Dispatch::PublicationDemand;
 
@@ -542,14 +542,12 @@ void feedPeerSettings(Fixture& fixture, std::optional<std::uint64_t> maxFieldSec
     }
 }
 
-bool sendAccepted(Mailbox::SendResult result) noexcept {
-    return result == Mailbox::SendResult::kSent ||
-           result == Mailbox::SendResult::kSentNotifyPeer;
+bool sendAccepted(Mailbox::send_result result) noexcept {
+    return result == Mailbox::send_result::sent;
 }
 
-bool controlAccepted(Mailbox::ControlResult result) noexcept {
-    return result == Mailbox::ControlResult::kSent ||
-           result == Mailbox::ControlResult::kSentNotifyPeer;
+bool controlAccepted(Mailbox::control_result result) noexcept {
+    return result == Mailbox::control_result::sent;
 }
 
 void feedWebSocketRequest(Engine& session, ruvia::WorkerMemory& worker,
@@ -640,30 +638,28 @@ void feedRequest(Fixture& fixture, std::uint64_t streamId, std::string_view meth
     bool receivedEarlyData = false) {
     const MessageId id{kEpoch, kGeneration, streamId, {}, receivedEarlyData};
     const auto wire = requestWire(fixture.worker, method, path, body, fields);
-    if (wire.size() > Mailbox::kMaxBlockBytes) {
+    if (wire.size() > Mailbox::max_block_bytes) {
         throw std::runtime_error("HTTP/3 fixture request exceeds one mailbox block");
     }
     const auto bytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(wire.data()), wire.size());
-    if (!sendAccepted(fixture.inbound.trySend(id, bytes)) ||
-        !controlAccepted(fixture.inbound.trySendControl(
-            {Control::Kind::kStreamFin, id, wire.size()}))) {
+    if (!sendAccepted(fixture.inbound.try_send(id, bytes)) ||
+        !controlAccepted(fixture.inbound.try_send_control(
+            {Control::kind::stream_fin, id, wire.size()}))) {
         throw std::runtime_error("HTTP/3 fixture inbound mailbox is full");
     }
 
     Control fin;
-    if (!fixture.inbound.tryReceiveControl(fin) ||
+    if (!fixture.inbound.try_receive_control(fin) ||
         fixture.input.acceptControl(fin).status != Input::Status::kDeferredFin) {
         throw std::runtime_error("HTTP/3 fixture FIN was not deferred");
     }
-    Mailbox::BorrowedBlock block;
-    if (!fixture.inbound.tryReceive(block) || block.id().streamId != streamId) {
+    Mailbox::borrowed_block block;
+    if (!fixture.inbound.try_receive(block) || block.id().stream_id != streamId) {
         throw std::runtime_error("HTTP/3 fixture DATA block is unavailable");
     }
     const auto fed = fixture.input.acceptData(block);
     block.release();
-    (void)fixture.inbound.drainReturns();
-    (void)fixture.inbound.finishDrain();
     if (fed.status != Input::Status::kFinished ||
         fixture.session.streamState(streamId) != Engine::StreamState::kReady) {
         throw std::runtime_error("HTTP/3 fixture request did not become ready");
@@ -679,11 +675,11 @@ struct PublishedWire final {
 
 std::size_t drainDataOnly(Mailbox& mailbox, const MessageId& expected, PublishedWire& output) {
     std::size_t received = 0;
-    Mailbox::BorrowedBlock block;
-    while (mailbox.tryReceive(block)) {
+    Mailbox::borrowed_block block;
+    while (mailbox.try_receive(block)) {
         if (block.id().epoch != expected.epoch ||
-            block.id().connectionGeneration != expected.connectionGeneration ||
-            block.id().streamId != expected.streamId) {
+            block.id().connection_generation != expected.connection_generation ||
+            block.id().stream_id != expected.stream_id) {
             output.identityMatched = false;
         }
         const auto bytes = block.bytes();
@@ -692,7 +688,6 @@ std::size_t drainDataOnly(Mailbox& mailbox, const MessageId& expected, Published
         ++received;
         block.release();
     }
-    (void)mailbox.drainReturns();
     return received;
 }
 
@@ -700,18 +695,17 @@ void drainMailbox(Mailbox& mailbox, const MessageId& expected, PublishedWire& ou
     bool again = false;
     do {
         Control control;
-        while (mailbox.tryReceiveControl(control)) {
-            if (control.kind == Control::Kind::kStreamFin &&
+        while (mailbox.try_receive_control(control)) {
+            if (control.kind == Control::kind::stream_fin &&
                 control.id.epoch == expected.epoch &&
-                control.id.connectionGeneration == expected.connectionGeneration &&
-                control.id.streamId == expected.streamId) {
+                control.id.connection_generation == expected.connection_generation &&
+                control.id.stream_id == expected.stream_id) {
                 output.finalWireBytes = control.value;
             }
         }
         (void)drainDataOnly(mailbox, expected, output);
-        again = mailbox.finishDrain();
+        again = mailbox.has_pending();
     } while (again);
-    (void)mailbox.drainReturns();
 }
 
 struct DecodedResponse final {
@@ -823,7 +817,6 @@ void publishAndDrain(Dispatch& dispatch, Fixture& fixture, std::uint64_t streamI
                 if (blocked.status == Dispatch::PublishStatus::kBackpressured) {
                     sawDataBackpressure = true;
                     RUVIA_CHECK(blocked.blockReason == BlockReason::kData);
-                    RUVIA_CHECK(!blocked.notifyPeer);
                     RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), before);
                 }
             }
@@ -1077,16 +1070,16 @@ ruvia::Task<void> exerciseCancellationAndJoin(
     RUVIA_CHECK(!dispatch.handlerActive());
     RUVIA_CHECK(!dispatch.responseReady());
     RUVIA_CHECK(fixture.session.request(0) == nullptr);
-    Mailbox::BorrowedBlock block;
-    RUVIA_CHECK(!fixture.outbound.tryReceive(block));
+    Mailbox::borrowed_block block;
+    RUVIA_CHECK(!fixture.outbound.try_receive(block));
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive_control(control));
 
     feedRequest(fixture, 4, "GET", "/large");
     auto partial = fixture.makeDispatch(4, fixture.services);
     RUVIA_CHECK(co_await partial.runHandler() == Dispatch::RunStatus::kResponseReady);
     const auto published = partial.publishStep();
-    RUVIA_CHECK(published.status == Dispatch::PublishStatus::kBytesPublished && published.notifyPeer);
+    RUVIA_CHECK(published.status == Dispatch::PublishStatus::kBytesPublished);
     RUVIA_CHECK(partial.publicationDemand() == PublicationDemand::kData);
     const auto dataBlocked = partial.publishStep();
     RUVIA_CHECK(dataBlocked.status == Dispatch::PublishStatus::kBackpressured);
@@ -1141,10 +1134,10 @@ ruvia::Task<void> exerciseSuspendingHandlerStop(Fixture& fixture,
     RUVIA_CHECK(dispatch.cancellationReason() ==
                 (stopWorker ? Dispatch::CancellationReason::kWorkerStop
                             : Dispatch::CancellationReason::kDeadline));
-    Mailbox::BorrowedBlock block;
+    Mailbox::borrowed_block block;
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceive(block));
-    RUVIA_CHECK(!fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive(block));
+    RUVIA_CHECK(!fixture.outbound.try_receive_control(control));
 }
 
 ruvia::Task<void> warmDispatch(Fixture& fixture,
@@ -1193,7 +1186,7 @@ ruvia::Task<void> exerciseMailboxCloseDuringData(
 
     const auto beforeFailure = dispatch.publishedWireBytes();
     RUVIA_CHECK(fixture.outbound.stop());
-    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kLocalMailboxStopped);
+    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::local_buffer_stopped);
     const auto failure = dispatch.publishStep();
     RUVIA_CHECK(failure.status == Dispatch::PublishStatus::kFailed);
     RUVIA_CHECK(failure.blockReason == BlockReason::kNone);
@@ -1202,7 +1195,7 @@ ruvia::Task<void> exerciseMailboxCloseDuringData(
     drainMailbox(fixture.outbound, id, wire);
     RUVIA_CHECK(!wire.finalWireBytes.has_value());
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive_control(control));
     RUVIA_CHECK(fixture.session.request(4) == nullptr);
 }
 
@@ -1249,17 +1242,16 @@ ruvia::Task<void> exerciseMailboxCloseDuringFin(
     RUVIA_CHECK(!dispatch.complete());
     RUVIA_CHECK(!wire.finalWireBytes.has_value());
 
-    const auto controlFiller = fixture.outbound.trySendControl(
-        {Control::Kind::kWritable, id, 0});
+    const auto controlFiller = fixture.outbound.try_send_control(
+        {Control::kind::writable, id, 0});
     RUVIA_CHECK(controlAccepted(controlFiller));
     const auto blockedFin = dispatch.publishStep();
     RUVIA_CHECK(blockedFin.status == Dispatch::PublishStatus::kBackpressured);
     RUVIA_CHECK(blockedFin.blockReason == BlockReason::kControl);
-    RUVIA_CHECK(!blockedFin.notifyPeer);
 
     const auto beforeFailure = dispatch.publishedWireBytes();
     RUVIA_CHECK(fixture.outbound.stop());
-    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kLocalMailboxStopped);
+    RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::local_buffer_stopped);
     const auto failure = dispatch.publishStep();
     RUVIA_CHECK(failure.status == Dispatch::PublishStatus::kFailed);
     RUVIA_CHECK(failure.blockReason == BlockReason::kNone);
@@ -1268,7 +1260,7 @@ ruvia::Task<void> exerciseMailboxCloseDuringFin(
     drainMailbox(fixture.outbound, id, wire);
     RUVIA_CHECK(!wire.finalWireBytes.has_value());
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive_control(control));
     RUVIA_CHECK(fixture.session.request(4) == nullptr);
 }
 
@@ -1303,9 +1295,9 @@ ruvia::Task<void> exerciseEscapingFailure(Fixture& fixture,
         RUVIA_CHECK(fixture.session.request(4) == nullptr);
     }
 #endif
-    Mailbox::BorrowedBlock block;
+    Mailbox::borrowed_block block;
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceive(block) && !fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive(block) && !fixture.outbound.try_receive_control(control));
     RUVIA_CHECK(!fixture.session.terminated());
 }
 
@@ -1320,21 +1312,20 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     const MessageId id{kEpoch, kGeneration, 0};
 
     const auto first = dispatch.publishStep();
-    RUVIA_CHECK(first.status == Dispatch::PublishStatus::kBytesPublished && first.notifyPeer);
+    RUVIA_CHECK(first.status == Dispatch::PublishStatus::kBytesPublished);
     RUVIA_CHECK(first.blockReason == BlockReason::kNone);
     RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kData);
     const auto firstSize = dispatch.publishedWireBytes();
     const auto blockedData = dispatch.publishStep();
     RUVIA_CHECK(blockedData.status == Dispatch::PublishStatus::kBackpressured);
     RUVIA_CHECK(blockedData.blockReason == BlockReason::kData);
-    RUVIA_CHECK(!blockedData.notifyPeer);
     RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kData);
     RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), firstSize);
     RUVIA_CHECK(drainDataOnly(fixture.outbound, id, wire) == 1);
 
     // Keep the independent control lane full until the response cursor reaches FIN.
-    const auto filler = fixture.outbound.trySendControl(
-        {Control::Kind::kWritable, id, 0});
+    const auto filler = fixture.outbound.try_send_control(
+        {Control::kind::writable, id, 0});
     RUVIA_CHECK(controlAccepted(filler));
     bool blockedFin = false;
     std::size_t attempts = 0;
@@ -1346,7 +1337,7 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
         if (result.status == Dispatch::PublishStatus::kBytesPublished) {
             RUVIA_CHECK(demand == PublicationDemand::kData);
             RUVIA_CHECK(result.blockReason == BlockReason::kNone);
-            RUVIA_CHECK(result.bytesPublished <= Mailbox::kMaxBlockBytes);
+            RUVIA_CHECK(result.bytesPublished <= Mailbox::max_block_bytes);
             RUVIA_CHECK(drainDataOnly(fixture.outbound, id, wire) == 1);
         } else if (result.status == Dispatch::PublishStatus::kBackpressured) {
             const auto received = drainDataOnly(fixture.outbound, id, wire);
@@ -1354,7 +1345,6 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
                 blockedFin = true;
                 RUVIA_CHECK(demand == PublicationDemand::kControl);
                 RUVIA_CHECK(result.blockReason == BlockReason::kControl);
-                RUVIA_CHECK(!result.notifyPeer);
                 RUVIA_CHECK(!dispatch.complete());
             } else {
                 RUVIA_CHECK(demand == PublicationDemand::kData);
@@ -1372,14 +1362,12 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kControl);
     const auto beforeFin = dispatch.publishedWireBytes();
     Control queuedFiller;
-    RUVIA_CHECK(fixture.outbound.tryReceiveControl(queuedFiller));
-    RUVIA_CHECK(queuedFiller.kind == Control::Kind::kWritable);
-    (void)fixture.outbound.finishDrain();
+    RUVIA_CHECK(fixture.outbound.try_receive_control(queuedFiller));
+    RUVIA_CHECK(queuedFiller.kind == Control::kind::writable);
 
     RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kControl);
     const auto fin = dispatch.publishStep();
     RUVIA_CHECK(fin.status == Dispatch::PublishStatus::kFinPublished);
-    RUVIA_CHECK(fin.notifyPeer);
     RUVIA_CHECK(fin.blockReason == BlockReason::kNone);
     RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), beforeFin);
     drainMailbox(fixture.outbound, id, wire);
@@ -1403,8 +1391,8 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     RUVIA_CHECK(cancelledAtControl.publishStep().status ==
                 Dispatch::PublishStatus::kBytesPublished);
     RUVIA_CHECK(cancelledAtControl.publicationDemand() == PublicationDemand::kControl);
-    const auto controlFiller = fixture.outbound.trySendControl(
-        {Control::Kind::kWritable, {kEpoch, kGeneration, 4}, 0});
+    const auto controlFiller = fixture.outbound.try_send_control(
+        {Control::kind::writable, {kEpoch, kGeneration, 4}, 0});
     RUVIA_CHECK(controlAccepted(controlFiller));
     const auto blockedControl = cancelledAtControl.publishStep();
     RUVIA_CHECK(blockedControl.status == Dispatch::PublishStatus::kBackpressured);
@@ -1416,9 +1404,8 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     RUVIA_CHECK(cancelledAtControl.publishStep().status ==
                 Dispatch::PublishStatus::kCancelled);
     Control preservedFiller;
-    RUVIA_CHECK(fixture.outbound.tryReceiveControl(preservedFiller));
-    RUVIA_CHECK(preservedFiller.kind == Control::Kind::kWritable);
-    (void)fixture.outbound.finishDrain();
+    RUVIA_CHECK(fixture.outbound.try_receive_control(preservedFiller));
+    RUVIA_CHECK(preservedFiller.kind == Control::kind::writable);
     PublishedWire cancelledWire;
     drainMailbox(fixture.outbound, {kEpoch, kGeneration, 4}, cancelledWire);
     RUVIA_CHECK(!cancelledWire.finalWireBytes.has_value());
@@ -1430,7 +1417,6 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     RUVIA_CHECK(stopAfterBlock.publicationDemand() == PublicationDemand::kData);
     const auto queued = stopAfterBlock.publishStep();
     RUVIA_CHECK(queued.status == Dispatch::PublishStatus::kBytesPublished);
-    RUVIA_CHECK(queued.notifyPeer);
     RUVIA_CHECK(queued.blockReason == BlockReason::kNone);
     RUVIA_CHECK(stopAfterBlock.publicationDemand() == PublicationDemand::kData);
     const auto blockedBeforeStop = stopAfterBlock.publishStep();
@@ -1443,7 +1429,7 @@ ruvia::Task<void> exerciseBackpressure(Fixture& fixture,
     const auto returnsAtStop = fixture.upstream.deallocationCount();
     const auto liveAtStop = fixture.upstream.liveAllocations();
     RUVIA_CHECK(stopAfterBlock.publicationDemand() ==
-                PublicationDemand::kLocalMailboxStopped);
+                PublicationDemand::local_buffer_stopped);
     RUVIA_CHECK_EQ(fixture.upstream.allocationCount(), allocationsAtStop);
     RUVIA_CHECK_EQ(fixture.upstream.deallocationCount(), returnsAtStop);
     RUVIA_CHECK_EQ(fixture.upstream.liveAllocations(), liveAtStop);
@@ -1564,10 +1550,10 @@ ruvia::Task<void> exercise_nonbuffered_peer_refusal(
         RUVIA_CHECK(fixture.session.request(0) == nullptr);
         RUVIA_CHECK_EQ(fixture.session.activeStreamCount(), std::size_t{0});
         RUVIA_CHECK(!fixture.session.terminated());
-        Mailbox::BorrowedBlock block;
+        Mailbox::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!fixture.outbound.tryReceive(block));
-        RUVIA_CHECK(!fixture.outbound.tryReceiveControl(control));
+        RUVIA_CHECK(!fixture.outbound.try_receive(block));
+        RUVIA_CHECK(!fixture.outbound.try_receive_control(control));
     }
 }
 
@@ -1620,10 +1606,10 @@ ruvia::Task<void> exerciseDecodedPeerFieldSectionLimit(
         RUVIA_CHECK(!belowLimit.session.terminated());
         const auto repeated = dispatch.publishStep();
         RUVIA_CHECK(repeated.status == Dispatch::PublishStatus::kPeerLimitRejected);
-        Mailbox::BorrowedBlock block;
+        Mailbox::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!belowLimit.outbound.tryReceive(block));
-        RUVIA_CHECK(!belowLimit.outbound.tryReceiveControl(control));
+        RUVIA_CHECK(!belowLimit.outbound.try_receive(block));
+        RUVIA_CHECK(!belowLimit.outbound.try_receive_control(control));
     }
 }
 
@@ -1639,9 +1625,9 @@ ruvia::Task<void> exerciseLatePeerFieldSectionLimit(
         RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
         const MessageId fillerId{kEpoch, kGeneration, 100};
         const std::array<std::byte, 1> fillerBytes{std::byte{0x5a}};
-        RUVIA_CHECK(sendAccepted(beforeHandoff.outbound.trySend(fillerId, fillerBytes)));
-        RUVIA_CHECK(controlAccepted(beforeHandoff.outbound.trySendControl(
-            {Control::Kind::kWritable, fillerId, 0})));
+        RUVIA_CHECK(sendAccepted(beforeHandoff.outbound.try_send(fillerId, fillerBytes)));
+        RUVIA_CHECK(controlAccepted(beforeHandoff.outbound.try_send_control(
+            {Control::kind::writable, fillerId, 0})));
         feedPeerSettings(beforeHandoff, 0);
         RUVIA_CHECK(beforeHandoff.session.peerMaxFieldSectionSize() == 0);
         const auto allocations = beforeHandoffMemory.allocationCount();
@@ -1656,18 +1642,16 @@ ruvia::Task<void> exerciseLatePeerFieldSectionLimit(
         RUVIA_CHECK(beforeHandoff.session.request(0) == nullptr);
         RUVIA_CHECK_EQ(beforeHandoff.session.activeStreamCount(), std::size_t{0});
         RUVIA_CHECK(!beforeHandoff.session.terminated());
-        Mailbox::BorrowedBlock preservedBlock;
-        RUVIA_CHECK(beforeHandoff.outbound.tryReceive(preservedBlock));
-        RUVIA_CHECK(preservedBlock.id().streamId == fillerId.streamId);
+        Mailbox::borrowed_block preservedBlock;
+        RUVIA_CHECK(beforeHandoff.outbound.try_receive(preservedBlock));
+        RUVIA_CHECK(preservedBlock.id().stream_id == fillerId.stream_id);
         RUVIA_CHECK(preservedBlock.bytes().size() == fillerBytes.size());
         RUVIA_CHECK(preservedBlock.bytes().front() == fillerBytes.front());
         preservedBlock.release();
         Control preservedControl;
-        RUVIA_CHECK(beforeHandoff.outbound.tryReceiveControl(preservedControl));
-        RUVIA_CHECK(preservedControl.kind == Control::Kind::kWritable);
-        RUVIA_CHECK(preservedControl.id.streamId == fillerId.streamId);
-        (void)beforeHandoff.outbound.drainReturns();
-        (void)beforeHandoff.outbound.finishDrain();
+        RUVIA_CHECK(beforeHandoff.outbound.try_receive_control(preservedControl));
+        RUVIA_CHECK(preservedControl.kind == Control::kind::writable);
+        RUVIA_CHECK(preservedControl.id.stream_id == fillerId.stream_id);
 
         feedRequest(beforeHandoff, 4, "GET", "/large");
         auto cancelled = beforeHandoff.makeDispatch(4, beforeHandoff.services);
@@ -1679,10 +1663,10 @@ ruvia::Task<void> exerciseLatePeerFieldSectionLimit(
         RUVIA_CHECK(beforeHandoff.session.request(4) == nullptr);
         RUVIA_CHECK_EQ(beforeHandoff.session.activeStreamCount(), std::size_t{0});
 
-        Mailbox::BorrowedBlock block;
+        Mailbox::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!beforeHandoff.outbound.tryReceive(block));
-        RUVIA_CHECK(!beforeHandoff.outbound.tryReceiveControl(control));
+        RUVIA_CHECK(!beforeHandoff.outbound.try_receive(block));
+        RUVIA_CHECK(!beforeHandoff.outbound.try_receive_control(control));
     }
 
     {
@@ -1696,10 +1680,10 @@ ruvia::Task<void> exerciseLatePeerFieldSectionLimit(
         const MessageId id{kEpoch, kGeneration, 0};
         const auto prefix = dispatch.publishStep();
         RUVIA_CHECK(prefix.status == Dispatch::PublishStatus::kBytesPublished);
-        RUVIA_CHECK_EQ(prefix.bytesPublished, Mailbox::kMaxBlockBytes);
-        RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), Mailbox::kMaxBlockBytes);
+        RUVIA_CHECK_EQ(prefix.bytesPublished, Mailbox::max_block_bytes);
+        RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), Mailbox::max_block_bytes);
         drainMailbox(committed.outbound, id, wire);
-        RUVIA_CHECK_EQ(wire.bytes.size(), Mailbox::kMaxBlockBytes);
+        RUVIA_CHECK_EQ(wire.bytes.size(), Mailbox::max_block_bytes);
         feedPeerSettings(committed, 0);
         RUVIA_CHECK(dispatch.publicationDemand() == PublicationDemand::kData);
 
@@ -1730,16 +1714,16 @@ ruvia::Task<void> exerciseLatePeerFieldSectionLimit(
         auto shuttingDown = committed.makeDispatch(8, committed.services);
         RUVIA_CHECK(co_await shuttingDown.runHandler() == Dispatch::RunStatus::peer_field_section_limit);
         RUVIA_CHECK(committed.outbound.stop());
-        // A later mailbox shutdown does not overwrite the already committed
+        // A later buffer shutdown does not overwrite the already committed
         // encoding refusal or require a second retirement of its request.
         RUVIA_CHECK(shuttingDown.publishStep().status == Dispatch::PublishStatus::kPeerLimitRejected);
         RUVIA_CHECK(committed.session.request(8) == nullptr);
         RUVIA_CHECK_EQ(committed.session.activeStreamCount(), std::size_t{0});
 
-        Mailbox::BorrowedBlock block;
+        Mailbox::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!committed.outbound.tryReceive(block));
-        RUVIA_CHECK(!committed.outbound.tryReceiveControl(control));
+        RUVIA_CHECK(!committed.outbound.try_receive(block));
+        RUVIA_CHECK(!committed.outbound.try_receive_control(control));
     }
 }
 
@@ -1839,19 +1823,18 @@ ruvia::Task<void> exerciseWebSocketDataFinBackpressure(Fixture& fixture,
     const auto established = dispatch.publishStep();
     RUVIA_CHECK(established.status == Dispatch::PublishStatus::kControlPublished);
     Control establishedControl;
-    RUVIA_CHECK(fixture.outbound.tryReceiveControl(establishedControl));
-    RUVIA_CHECK(establishedControl.kind == Control::Kind::kTunnelEstablished);
+    RUVIA_CHECK(fixture.outbound.try_receive_control(establishedControl));
+    RUVIA_CHECK(establishedControl.kind == Control::kind::tunnel_established);
     RUVIA_CHECK(establishedControl.id.epoch == id.epoch);
-    RUVIA_CHECK(establishedControl.id.connectionGeneration == id.connectionGeneration);
-    RUVIA_CHECK(establishedControl.id.streamId == id.streamId);
+    RUVIA_CHECK(establishedControl.id.connection_generation == id.connection_generation);
+    RUVIA_CHECK(establishedControl.id.stream_id == id.stream_id);
     RUVIA_CHECK_EQ(establishedControl.value, static_cast<std::uint64_t>(wire.bytes.size()));
-    (void)fixture.outbound.finishDrain();
     co_await handlerStarted.wait();
     RUVIA_CHECK(callbacks.scannerAttached);
 
     const MessageId fillerId{kEpoch, kGeneration, streamId + 1000};
     constexpr std::array<std::byte, 1> fillerBytes{std::byte{0x7f}};
-    RUVIA_CHECK(sendAccepted(fixture.outbound.trySend(fillerId, fillerBytes)));
+    RUVIA_CHECK(sendAccepted(fixture.outbound.try_send(fillerId, fillerBytes)));
     feedTunnelData(fixture, dispatch, streamId, "first");
     co_await messageReceived.wait();
     co_await callbacks.outputReady.wait();
@@ -1859,16 +1842,13 @@ ruvia::Task<void> exerciseWebSocketDataFinBackpressure(Fixture& fixture,
     const auto blocked = dispatch.publishStep();
     RUVIA_CHECK(blocked.status == Dispatch::PublishStatus::kBackpressured);
     RUVIA_CHECK(blocked.blockReason == BlockReason::kData);
-    RUVIA_CHECK(!blocked.notifyPeer);
     RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), wire.bytes.size());
 
-    Mailbox::BorrowedBlock filler;
-    RUVIA_CHECK(fixture.outbound.tryReceive(filler));
-    RUVIA_CHECK(filler.id().streamId == fillerId.streamId);
+    Mailbox::borrowed_block filler;
+    RUVIA_CHECK(fixture.outbound.try_receive(filler));
+    RUVIA_CHECK(filler.id().stream_id == fillerId.stream_id);
     RUVIA_CHECK(filler.bytes().size() == fillerBytes.size());
     filler.release();
-    (void)fixture.outbound.drainReturns();
-    (void)fixture.outbound.finishDrain();
     const auto firstEcho = dispatch.publishStep();
     RUVIA_CHECK(firstEcho.status == Dispatch::PublishStatus::kBytesPublished);
     drainMailbox(fixture.outbound, id, wire);
@@ -2020,9 +2000,8 @@ ruvia::Task<void> exercisePeerTransportFinWait(Fixture& fixture,
     co_await callbacks.outputReady.wait();
     RUVIA_CHECK(dispatch.publishStep().status == Dispatch::PublishStatus::kControlPublished);
     Control established;
-    RUVIA_CHECK(fixture.outbound.tryReceiveControl(established));
-    RUVIA_CHECK(established.kind == Control::Kind::kTunnelEstablished);
-    (void)fixture.outbound.finishDrain();
+    RUVIA_CHECK(fixture.outbound.try_receive_control(established));
+    RUVIA_CHECK(established.kind == Control::kind::tunnel_established);
     co_await handlerStarted.wait();
 
     // No peer WebSocket Close means no local QUIC FIN deadline yet, even while
@@ -2049,15 +2028,13 @@ ruvia::Task<void> exercisePeerTransportFinWait(Fixture& fixture,
         const auto result = dispatch.publishStep();
         if (result.status == Dispatch::PublishStatus::kControlPublished) {
             Control control;
-            RUVIA_CHECK(fixture.outbound.tryReceiveControl(control));
-            (void)fixture.outbound.finishDrain();
+            RUVIA_CHECK(fixture.outbound.try_receive_control(control));
             continue;
         }
         RUVIA_CHECK(result.status == Dispatch::PublishStatus::kFinPublished);
         Control fin;
-        RUVIA_CHECK(fixture.outbound.tryReceiveControl(fin));
-        RUVIA_CHECK(fin.kind == Control::Kind::kStreamFin);
-        (void)fixture.outbound.finishDrain();
+        RUVIA_CHECK(fixture.outbound.try_receive_control(fin));
+        RUVIA_CHECK(fin.kind == Control::kind::stream_fin);
         break;
     }
 
@@ -2247,7 +2224,7 @@ ruvia::Task<void> exercisePublicationDeadlineRegistration(
                 Dispatch::CancellationReason::kExplicit);
     RUVIA_CHECK(explicitlyCancelled.publishStep().status ==
                 Dispatch::PublishStatus::kCancelled);
-    const auto explicitFin = fixture.input.acceptControl({Control::Kind::kStreamFin,
+    const auto explicitFin = fixture.input.acceptControl({Control::kind::stream_fin,
         {kEpoch, kGeneration, 0}, requestWire(fixture.worker, "GET", "/large").size()});
     RUVIA_CHECK(explicitFin.status == Input::Status::kDuplicateFin);
 
@@ -2264,7 +2241,7 @@ ruvia::Task<void> exercisePublicationDeadlineRegistration(
     RUVIA_CHECK(alreadyStopped.cancellationReason() ==
                 Dispatch::CancellationReason::kDeadline);
     RUVIA_CHECK(alreadyStopped.publishStep().status == Dispatch::PublishStatus::kCancelled);
-    const auto expiredFin = fixture.input.acceptControl({Control::Kind::kStreamFin,
+    const auto expiredFin = fixture.input.acceptControl({Control::kind::stream_fin,
         {kEpoch, kGeneration, 4}, requestWire(fixture.worker, "GET", "/large").size()});
     RUVIA_CHECK(expiredFin.status == Input::Status::kDuplicateFin);
 
@@ -2632,9 +2609,9 @@ ruvia::Task<void> exercise_buffered_recovery_cancellation(Fixture& fixture,
     RUVIA_CHECK(joined && status == Dispatch::RunStatus::kCancelled);
     RUVIA_CHECK(!dispatch.handlerActive() && !dispatch.responseReady());
     RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), std::uint64_t{0});
-    Mailbox::BorrowedBlock block;
+    Mailbox::borrowed_block block;
     Control control;
-    RUVIA_CHECK(!fixture.outbound.tryReceive(block) && !fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(!fixture.outbound.try_receive(block) && !fixture.outbound.try_receive_control(control));
     RUVIA_CHECK(fixture.session.request(0) == nullptr);
 }
 

@@ -10,7 +10,7 @@
 
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/quic_connection.h"
-#include "ruvia/web/detail/http3/Http3StreamMailbox.h"
+#include "ruvia/web/detail/http3/http3_stream_buffer.h"
 
 namespace ruvia {
 class WorkerMemory;
@@ -21,7 +21,7 @@ namespace ruvia::detail {
 struct Http3ServerStreamOutputConfig final {
     // Bounds active stream slots plus retained tombstones; entries are not recycled.
     std::size_t maxTrackedStreams{32};
-    // Bound retained BorrowedBlock nodes; size to the producer mailbox's block capacity.
+    // Bound retained borrowed_block nodes; size to the local buffer's block capacity.
     std::size_t maxQueuedBlocks{32};
     // Bounds service operations per scheduler turn; each scan visits at most one table.
     std::size_t maxDriveWorkItems{16};
@@ -30,7 +30,7 @@ struct Http3ServerStreamOutputConfig final {
 };
 
 // Worker-affine response egress for the wire half that already routed
-// mailbox messages for one QUIC connection. It never drains the shared mailbox.
+// buffer messages for one QUIC connection. It never drains the shared buffer.
 // Accepted blocks remain borrowed until all bytes are accepted by SSL or the
 // corresponding stream/connection SSL owner has been retired. The transport and
 // worker-owned memory resource must outlive this object; destruction with live streams or
@@ -145,13 +145,13 @@ public:
     // must retain or explicitly release it. IDs outside ordinary client bidi
     // and explicitly bound push streams fail the connection closed. Mismatched
     // identities are detected before any transport operation.
-    [[nodiscard]] Result acceptData(Http3StreamMailbox::BorrowedBlock& block);
+    [[nodiscard]] Result acceptData(http3_stream_buffer::borrowed_block& block);
 
     // Bind only a server UNI stream actually opened by this wire half.
     // The binding is immutable and must precede handler response publication.
     [[nodiscard]] Result registerPushStream(StreamId streamId, std::uint64_t pushId);
-    [[nodiscard]] Result acceptCriticalData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId);
-    [[nodiscard]] Result acceptControl(const Http3StreamControl& control);
+    [[nodiscard]] Result acceptCriticalData(http3_stream_buffer::borrowed_block& block, StreamId streamId);
+    [[nodiscard]] Result acceptControl(const http3_stream_control& control);
     [[nodiscard]] Result cancelStream(StreamId streamId,
         std::uint64_t errorCode = static_cast<std::uint64_t>(Http3ConnectionErrorCode::kRequestCancelled));
 
@@ -189,7 +189,7 @@ public:
     [[nodiscard]] bool connectionRetired() const;
 
 private:
-    [[nodiscard]] Result acceptAddressedData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId, std::uint64_t epoch, std::uint64_t generation);
+    [[nodiscard]] Result acceptAddressedData(http3_stream_buffer::borrowed_block& block, StreamId streamId, std::uint64_t epoch, std::uint64_t generation);
     static constexpr std::uint32_t kNoNode = UINT32_MAX;
 
     enum class IdentityStatus : std::uint8_t { kMatch,
@@ -205,13 +205,13 @@ private:
     };
 
     struct BlockNode final {
-        Http3StreamMailbox::BorrowedBlock block{};
+        http3_stream_buffer::borrowed_block block{};
         std::uint32_t next{kNoNode};
         std::size_t offset{};
     };
 
     void requireOwnerThread() const;
-    [[nodiscard]] IdentityStatus identityStatus(const Http3StreamMessageId& id) const noexcept;
+    [[nodiscard]] IdentityStatus identityStatus(const http3_stream_id& id) const noexcept;
     [[nodiscard]] bool validResponseStreamId(StreamId streamId) const noexcept;
     [[nodiscard]] StreamSlot* findStream(StreamId streamId) noexcept;
     [[nodiscard]] const StreamSlot* findStream(StreamId streamId) const noexcept;

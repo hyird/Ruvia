@@ -242,7 +242,7 @@ struct Http3ServerConnection::RequestRetirement final {
 
 Http3ServerConnection::Http3ServerConnection(
     const RouteTable& routes, WorkerMemory& worker, ContextServices services,
-    const HttpServerOptions& options, Http3StreamMailbox& outbound,
+    const HttpServerOptions& options, http3_stream_buffer& outbound,
     ActivationRef activation, Http3ServerConnectionConfig config)
     : services_(services.withRoutes(routes)),
       worker_(worker),
@@ -265,7 +265,7 @@ Http3ServerConnection::Http3ServerConnection(
 
 Http3ServerConnection::Http3ServerConnection(
     const RouteTable& routes, WorkerMemory& worker, ContextServices services,
-    const HttpServerOptions& options, Http3StreamMailbox& outbound,
+    const HttpServerOptions& options, http3_stream_buffer& outbound,
     ActivationRef activation, Http3ServerBodyBudget& bodyBudget,
     Http3ServerConnectionConfig config)
     : services_(services.withRoutes(routes)),
@@ -375,7 +375,7 @@ bool Http3ServerConnection::canAcceptInput(std::uint64_t streamId, std::size_t w
 }
 
 Http3ServerConnection::EventResult Http3ServerConnection::acceptData(
-    const Http3StreamMailbox::BorrowedBlock& block) & {
+    const http3_stream_buffer::borrowed_block& block) & {
     if (!onWorker()) {
         return {.status = EventStatus::kWrongWorker};
     }
@@ -384,24 +384,39 @@ Http3ServerConnection::EventResult Http3ServerConnection::acceptData(
             .input = {Input::Status::kStopped},
             .connectionCloseRequired = transportCloseRequired_};
     }
-    const auto streamId = block.id().streamId;
+    const auto streamId = block.id().stream_id;
     auto result = handleInputResult(streamId, input_.acceptData(block), false);
     notifyActivation();
     return result;
 }
 
-Http3ServerConnection::EventResult Http3ServerConnection::acceptControl(
-    const Http3StreamControl& control) & {
+Http3ServerConnection::EventResult Http3ServerConnection::accept_peer_stream_data(
+    http3_stream_id id, std::span<const std::byte> bytes) & {
     if (!onWorker()) {
         return {.status = EventStatus::kWrongWorker};
     }
-    if (control.id.pushId) {
-        if (control.id.epoch != epoch_ || control.id.connectionGeneration != connectionGeneration_ ||
-            control.kind != Http3StreamControl::Kind::kStreamReset) {
+    if (admissionClosed_) {
+        return {.status = EventStatus::kAdmissionClosed,
+            .input = {Input::Status::kStopped},
+            .connectionCloseRequired = transportCloseRequired_};
+    }
+    auto result = handleInputResult(id.stream_id, input_.accept_peer_stream_data(id, bytes), false);
+    notifyActivation();
+    return result;
+}
+
+Http3ServerConnection::EventResult Http3ServerConnection::acceptControl(
+    const http3_stream_control& control) & {
+    if (!onWorker()) {
+        return {.status = EventStatus::kWrongWorker};
+    }
+    if (control.id.push_id) {
+        if (control.id.epoch != epoch_ || control.id.connection_generation != connectionGeneration_ ||
+            control.kind != http3_stream_control::kind::stream_reset) {
             return {.status = EventStatus::kInputRejected};
         }
-        auto* slot = findRequestSlot(control.id.streamId);
-        if (slot == nullptr || slot->pushId != control.id.pushId) {
+        auto* slot = findRequestSlot(control.id.stream_id);
+        if (slot == nullptr || slot->pushId != control.id.push_id) {
             return {.status = EventStatus::kInputRejected};
         }
         slot->pushCancelled = true;
@@ -412,9 +427,9 @@ Http3ServerConnection::EventResult Http3ServerConnection::acceptControl(
         }
         return {.status = EventStatus::kStreamCancelled};
     }
-    if (control.kind == Http3StreamControl::Kind::kConnectionClosed &&
+    if (control.kind == http3_stream_control::kind::connection_closed &&
         control.id.epoch == epoch_ &&
-        control.id.connectionGeneration == connectionGeneration_ && admissionClosed_) {
+        control.id.connection_generation == connectionGeneration_ && admissionClosed_) {
         (void)confirmTransportRetired(
             {.epoch = epoch_, .connectionGeneration = connectionGeneration_});
         return {.status = EventStatus::kConnectionClosed,
@@ -430,10 +445,10 @@ Http3ServerConnection::EventResult Http3ServerConnection::acceptControl(
     // Identity mismatches must not affect a current request with the same stream ID.
     RequestEntry* resetEntry = nullptr;
     RejectionEntry* resetRejection = nullptr;
-    if (control.kind == Http3StreamControl::Kind::kStreamReset &&
+    if (control.kind == http3_stream_control::kind::stream_reset &&
         control.id.epoch == epoch_ &&
-        control.id.connectionGeneration == connectionGeneration_) {
-        auto* slot = findRequestSlot(control.id.streamId);
+        control.id.connection_generation == connectionGeneration_) {
+        auto* slot = findRequestSlot(control.id.stream_id);
         if (slot != nullptr && slot->entry != nullptr && !slot->entry->cancelRequested) {
             resetEntry = slot->entry;
             resetEntry->outputEnabled = false;
@@ -471,8 +486,8 @@ Http3ServerConnection::EventResult Http3ServerConnection::acceptControl(
         resetRejection->outputEnabled = true;
         enqueueForDemand(resetRejection->slot, true);
     }
-    return handleInputResult(control.id.streamId, result,
-        control.kind == Http3StreamControl::Kind::kStreamReset);
+    return handleInputResult(control.id.stream_id, result,
+        control.kind == http3_stream_control::kind::stream_reset);
 }
 
 Http3ServerConnection::WorkState
@@ -573,21 +588,20 @@ Http3ServerConnection::publishOne(WorkLanes eligibleLanes) & noexcept {
         nextCriticalOutput_ = (index + 1) % pending.size();
         const auto kind = index == 0 ? ruvia::http3_critical_stream_output::stream_kind::qpack_encoder : index == 1 ? ruvia::http3_critical_stream_output::stream_kind::qpack_decoder
                                                                                                                     : ruvia::http3_critical_stream_output::stream_kind::control;
-        const auto bytes = pending[index].first(std::min(Http3StreamMailbox::kMaxBlockBytes, pending[index].size()));
-        const auto sent = outbound_.trySendCritical({epoch_, connectionGeneration_, kind}, std::as_bytes(bytes));
+        const auto bytes = pending[index].first(std::min(http3_stream_buffer::max_block_bytes, pending[index].size()));
+        const auto sent = outbound_.try_send_critical({epoch_, connectionGeneration_, kind}, std::as_bytes(bytes));
         Dispatch::PublishResult result;
         switch (sent) {
-            case Http3StreamMailbox::SendResult::kSent:
-            case Http3StreamMailbox::SendResult::kSentNotifyPeer:
-                // The reliable mailbox now owns a copy through QUIC acceptance.
+            case http3_stream_buffer::send_result::sent:
+                // The reliable buffer now owns a copy through QUIC acceptance.
                 if (!(index == 0 ? session_.consumeQpackEncoderOutput(bytes.size()) : index == 1 ? session_.consumeQpackDecoderOutput(bytes.size())
                                                                                                  : session_.consumeControlOutput(bytes.size()))) {
                     std::terminate();
                 }
-                result = {.status = Dispatch::PublishStatus::kBytesPublished, .bytesPublished = bytes.size(), .notifyPeer = sent == Http3StreamMailbox::SendResult::kSentNotifyPeer};
+                result = {.status = Dispatch::PublishStatus::kBytesPublished, .bytesPublished = bytes.size()};
                 break;
-            case Http3StreamMailbox::SendResult::kFull:
-            case Http3StreamMailbox::SendResult::kNoBlock:
+            case http3_stream_buffer::send_result::full:
+            case http3_stream_buffer::send_result::no_block:
                 criticalOutputBlocked_ = true;
                 result = {.status = Dispatch::PublishStatus::kBackpressured, .blockReason = Dispatch::PublishBlockReason::kData};
                 break;
@@ -845,11 +859,11 @@ Http3ServerConnection::peekTransportIntent() const noexcept {
 bool Http3ServerConnection::ackTransportIntent(
     const TransportIntentToken& token, std::optional<PushStreamOpenResult> opened) & noexcept {
     if (!onWorker() || token.id.epoch != epoch_ ||
-        token.id.connectionGeneration != connectionGeneration_) {
+        token.id.connection_generation != connectionGeneration_) {
         return false;
     }
     if (token.kind == TransportIntentKind::kConnectionClose) {
-        if (opened || token.id.pushId || !closeIntentPending_ || token.id.streamId != 0 ||
+        if (opened || token.id.push_id || !closeIntentPending_ || token.id.stream_id != 0 ||
             token.sequence != kReservedCloseIntentSequence) {
             return false;
         }
@@ -859,7 +873,7 @@ bool Http3ServerConnection::ackTransportIntent(
         return true;
     }
     if (token.kind == TransportIntentKind::kOpenPushStream) {
-        if (!opened || !token.id.pushId ||
+        if (!opened || !token.id.push_id ||
             (opened->status == PushStreamOpenResult::Status::kOpened &&
                 http3StreamIdType(opened->streamId) != Http3StreamIdType::kServerUnidirectional)) {
             return false;
@@ -876,8 +890,8 @@ bool Http3ServerConnection::ackTransportIntent(
     if (token.kind != TransportIntentKind::kStreamReset || opened) {
         return false;
     }
-    auto* slot = findRequestSlot(token.id.streamId);
-    if (slot == nullptr || slot->pushId != token.id.pushId || !slot->resetIntentPending || token.sequence == 0 ||
+    auto* slot = findRequestSlot(token.id.stream_id);
+    if (slot == nullptr || slot->pushId != token.id.push_id || !slot->resetIntentPending || token.sequence == 0 ||
         token.sequence > slot->resetIntentSequence) {
         return false;
     }
@@ -1157,7 +1171,7 @@ Task<bool> Http3ServerConnection::pushRequest(std::uint64_t parentStreamId, Http
 
 void Http3ServerConnection::observePushCancellation(std::uint64_t pushId) noexcept {
     for (auto* pending = pendingPushHead_; pending != nullptr; pending = pending->next) {
-        if (pending != nullptr && pending->token.id.pushId == pushId) {
+        if (pending != nullptr && pending->token.id.push_id == pushId) {
             pending->cancelled = true;
         }
     }
@@ -1441,14 +1455,13 @@ Http3ServerConnection::PublishAttempt Http3ServerConnection::publishInterimRespo
     removeQueued(slot);
     auto& pending = *slot.interimResponse;
     const auto bytes = std::span<const char>(pending.frame).subspan(pending.offset);
-    const auto sent = outbound_.trySend({epoch_, connectionGeneration_, slot.streamId}, std::as_bytes(bytes.first(std::min(bytes.size(), Http3StreamMailbox::kMaxBlockBytes))));
+    const auto sent = outbound_.try_send({epoch_, connectionGeneration_, slot.streamId}, std::as_bytes(bytes.first(std::min(bytes.size(), http3_stream_buffer::max_block_bytes))));
     Dispatch::PublishResult result;
     switch (sent) {
-        case Http3StreamMailbox::SendResult::kSent:
-        case Http3StreamMailbox::SendResult::kSentNotifyPeer: {
-            const auto count = std::min(bytes.size(), Http3StreamMailbox::kMaxBlockBytes);
+        case http3_stream_buffer::send_result::sent: {
+            const auto count = std::min(bytes.size(), http3_stream_buffer::max_block_bytes);
             pending.offset += count;
-            result = {.status = Dispatch::PublishStatus::kBytesPublished, .bytesPublished = count, .notifyPeer = sent == Http3StreamMailbox::SendResult::kSentNotifyPeer};
+            result = {.status = Dispatch::PublishStatus::kBytesPublished, .bytesPublished = count};
             if (pending.offset == pending.frame.size()) {
                 slot.interimResponse.reset();
             }
@@ -1457,8 +1470,8 @@ Http3ServerConnection::PublishAttempt Http3ServerConnection::publishInterimRespo
             }
             break;
         }
-        case Http3StreamMailbox::SendResult::kFull:
-        case Http3StreamMailbox::SendResult::kNoBlock:
+        case http3_stream_buffer::send_result::full:
+        case http3_stream_buffer::send_result::no_block:
             result = {.status = Dispatch::PublishStatus::kBackpressured, .blockReason = Dispatch::PublishBlockReason::kData};
             enqueueBlocked(slot, result.blockReason);
             break;
@@ -1602,12 +1615,11 @@ Http3ServerConnection::publishRejection(RequestIndexSlot& slot,
     Dispatch::PublishResult publication{};
     switch (result.status) {
         case Http3BufferedResponseOutput::Status::kBytes:
-            publication = {Dispatch::PublishStatus::kBytesPublished,
-                result.bytesAccepted, result.notifyPeer};
+            publication = {Dispatch::PublishStatus::kBytesPublished, result.bytesAccepted};
             enqueueForDemand(slot, false);
             break;
         case Http3BufferedResponseOutput::Status::kFin:
-            publication = {Dispatch::PublishStatus::kFinPublished, 0, result.notifyPeer};
+            publication = {Dispatch::PublishStatus::kFinPublished};
             entry.outputTerminal = true;
             slot.status = RequestStatus::kPublished;
             entry.output.reset();
@@ -1616,7 +1628,6 @@ Http3ServerConnection::publishRejection(RequestIndexSlot& slot,
             break;
         case Http3BufferedResponseOutput::Status::kBackpressured: {
             publication.status = Dispatch::PublishStatus::kBackpressured;
-            publication.notifyPeer = result.notifyPeer;
             switch (result.blockReason) {
                 case Http3BufferedResponseOutput::BlockReason::kData:
                     publication.blockReason = Dispatch::PublishBlockReason::kData;
@@ -1638,7 +1649,7 @@ Http3ServerConnection::publishRejection(RequestIndexSlot& slot,
             break;
         }
         case Http3BufferedResponseOutput::Status::kComplete:
-            publication = {Dispatch::PublishStatus::kComplete, 0, result.notifyPeer};
+            publication = {Dispatch::PublishStatus::kComplete};
             entry.outputTerminal = true;
             slot.status = RequestStatus::kPublished;
             entry.output.reset();
@@ -1646,8 +1657,7 @@ Http3ServerConnection::publishRejection(RequestIndexSlot& slot,
             finishRejection(entry);
             break;
         case Http3BufferedResponseOutput::Status::kFailed:
-            publication = {Dispatch::PublishStatus::kFailed,
-                result.bytesAccepted, result.notifyPeer};
+            publication = {Dispatch::PublishStatus::kFailed, result.bytesAccepted};
             slot.status = RequestStatus::kFailed;
             entry.outputTerminal = true;
             requireConnectionClose(TransportCloseReason::kPublishFailure,
@@ -1899,7 +1909,7 @@ void Http3ServerConnection::enqueueForDemand(
                 break;
             case Dispatch::PublicationDemand::kLocalComplete:
             case Dispatch::PublicationDemand::kLocalCancelled:
-            case Dispatch::PublicationDemand::kLocalMailboxStopped:
+            case Dispatch::PublicationDemand::local_buffer_stopped:
             case Dispatch::PublicationDemand::kLocalPeerLimitRejected:
             case Dispatch::PublicationDemand::kLocalFailed:
             case Dispatch::PublicationDemand::kNotReady:
@@ -2030,13 +2040,13 @@ void Http3ServerConnection::cancelDeadlineEntry(RequestEntry& entry) noexcept {
         return;
     }
     // Fence output before installing the receive tombstone. A published FIN is
-    // already accepted by QUIC; the network owner decides whether its send state
+    // already accepted by QUIC; the transport owner decides whether its send state
     // still requires a reset, so the worker must not guess by publishing one.
     entry.outputEnabled = false;
     entry.cancelRequested = true;
     removeQueued(entry.slot);
     (void)retireRequestInput(entry.streamId);
-    // FIN publication only closes the local send direction. The network owner
+    // FIN publication only closes the local send direction. The transport owner
     // still needs a per-stream retirement token to stop receiving if the peer
     // never finishes its direction.
     (void)enqueueResetIntent(entry.slot);
@@ -2327,7 +2337,7 @@ void Http3ServerConnection::abortTunnel(std::uint64_t streamId) noexcept {
     entry.cancelRequested = true;
     removeQueued(entry.slot);
     (void)retireRequestInput(streamId);
-    // Preserve a retirement intent after local FIN; the network owner chooses
+    // Preserve a retirement intent after local FIN; the transport owner chooses
     // STOP_SENDING versus RESET_STREAM from the actual transport send state.
     (void)enqueueResetIntent(*slot);
     cancelEntry(entry, RequestStatus::kCancelled);

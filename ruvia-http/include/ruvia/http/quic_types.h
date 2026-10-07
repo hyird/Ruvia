@@ -46,6 +46,8 @@ enum class quic_operation_status : std::uint8_t {
     would_block,
     need_input,
     completed,
+    // The stream's send direction is closed; the connection may remain active.
+    stream_closed,
     closing,
     draining,
     retired
