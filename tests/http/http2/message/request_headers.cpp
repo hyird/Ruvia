@@ -504,6 +504,11 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "origin", "https://app.example"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "access-control-request-method", "POST"));
     RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, "access-control-request-headers", "x-one"));
+    for (const std::string_view name : {"upgrade", "transfer-encoding", "proxy-connection",
+             "accept-ranges", "proxy-authenticate", "proxy-authorization", "cache-control",
+             "max-forwards", "set-cookie"}) {
+        RUVIA_CHECK(!http2OnDecodedRequestTrailer(ctx, name, "value"));
+    }
 }
 
 RUVIA_TEST(h2_headers_validate_initial_trailer_field_names) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -47,26 +48,13 @@ private:
         return source;
     }
 
+    // Public configuration validation and allocator-rebound copies enter the
+    // same owning construction path; no intermediate string copies or views.
+    template <typename source_type>
+        requires(std::same_as<source_type, RedisConfig> ||
+                    std::same_as<source_type, RedisConfigStorage>)
     RedisConfigStorage(
-        ValidatedConfigTag, const RedisConfig& source, std::pmr::memory_resource* resource)
-        : host(source.host, resource),
-          port(source.port),
-          username(source.username, resource),
-          password(source.password, resource),
-          tls(source.tls, resource),
-          database(source.database),
-          poolSizePerWorker(source.poolSizePerWorker),
-          blockingPoolSizePerWorker(source.blockingPoolSizePerWorker),
-          connectTimeout(source.connectTimeout),
-          commandTimeout(source.commandTimeout),
-          acquireTimeout(source.acquireTimeout),
-          maxReplyBytes(source.maxReplyBytes),
-          maxArrayDepth(source.maxArrayDepth),
-          tcpNoDelay(source.tcpNoDelay),
-          tcpKeepAlive(source.tcpKeepAlive) {}
-
-    RedisConfigStorage(
-        ValidatedConfigTag, const RedisConfigStorage& source, std::pmr::memory_resource* resource)
+        ValidatedConfigTag, const source_type& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           port(source.port),
           username(source.username, resource),

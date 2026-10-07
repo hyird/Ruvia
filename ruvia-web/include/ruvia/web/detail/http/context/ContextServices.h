@@ -33,7 +33,10 @@ class Env;
 
 namespace ruvia::detail {
 
-class RateLimiter;
+struct SteadyRateLimiterClock;
+template <typename Clock>
+class rate_limiter;
+using RateLimiter = rate_limiter<SteadyRateLimiterClock>;
 class HttpInterimResponseOutput;
 class HttpConnectionAdvertisementOutput;
 class HttpPushOutput;

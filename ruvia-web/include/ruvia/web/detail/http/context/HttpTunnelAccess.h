@@ -21,7 +21,7 @@ struct HttpTunnelAccess final {
     // The transport must be stopped before joining if an operation remains
     // suspended. Cold operations expire while their borrowed owner is alive.
     [[nodiscard]] static Task<void> closeAndJoin(HttpTunnel& tunnel) {
-        return tunnel.operations_.closeAndJoin();
+        return tunnel.operations_.close_and_join();
     }
 };
 }  // namespace ruvia::detail

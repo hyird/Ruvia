@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/Model.h"
 #include "ruvia/web/Validation.h"
@@ -68,6 +69,14 @@ RUVIA_MODEL(CodecRootTypes,
 RUVIA_MODEL(CodecArrayDefault,
     RUVIA_REQUIRED_FIELD(name, ruvia::String),
     RUVIA_OPTIONAL_FIELD(value, ruvia::String, RUVIA_DEFAULT(nestedDefault())));
+
+struct forward_branch;
+RUVIA_MODEL(forward_root,
+    RUVIA_REQUIRED_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(branches, ruvia::Array<forward_branch>));
+RUVIA_MODEL(forward_branch,
+    RUVIA_REQUIRED_FIELD(name, ruvia::String),
+    RUVIA_OPTIONAL_FIELD(roots, ruvia::BoxedArray<forward_root>));
 
 class FailingResource final : public std::pmr::memory_resource {
 public:
@@ -185,6 +194,34 @@ RUVIA_TEST(model_json_codec_root_model_arrays_validate_and_roundtrip_recursively
         RUVIA_CHECK(!ruvia::fromJson<ruvia::Array<CodecNode>>(bad));
         RUVIA_CHECK(!ruvia::fromJson<ruvia::BoxedArray<CodecNode>>(bad));
     }
+}
+
+RUVIA_TEST(model_json_codec_forward_declared_graph_owns_nested_destination_values) {
+    ruvia::test::CountingMemoryResource destination;
+    forward_root retained({.resource = &destination});
+    constexpr std::string_view input =
+        R"({"name":"root","branches":[{"name":"branch","roots":[{"name":"leaf"}]}]})";
+    {
+        std::pmr::monotonic_buffer_resource source;
+        auto parsed = ruvia::fromJson<forward_root>(input, {.resource = &source});
+        RUVIA_CHECK(parsed.has_value());
+        if (!parsed) {
+            return;
+        }
+        retained = std::move(*parsed);
+    }
+    const auto& branches = *retained.get<"branches">();
+    const auto& branch = branches.front();
+    const auto& roots = *branch.get<"roots">();
+    const auto& leaf = roots.front();
+    RUVIA_CHECK_EQ(retained.resource(), &destination);
+    RUVIA_CHECK_EQ(branches.resource(), &destination);
+    RUVIA_CHECK_EQ(branch.resource(), &destination);
+    RUVIA_CHECK_EQ(branch.get<"name">().resource(), &destination);
+    RUVIA_CHECK_EQ(roots.resource(), &destination);
+    RUVIA_CHECK_EQ(leaf.resource(), &destination);
+    RUVIA_CHECK_EQ(leaf.get<"name">().resource(), &destination);
+    RUVIA_CHECK_EQ(std::string_view(ruvia::toJson(retained)), input);
 }
 
 RUVIA_TEST(model_json_codec_array_default_exception_releases_previous_elements) {

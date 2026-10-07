@@ -19,7 +19,7 @@ ScopedOperation<void> HttpInterimResponseOutput::inform(const HttpInterimRespons
     if (finalCommitted_) {
         throw std::logic_error("the final response has already started");
     }
-    if (scope_.hasPendingOperations()) {
+    if (scope_.has_pending_operations()) {
         throw std::logic_error("interim response output is already active");
     }
     std::pmr::vector<HttpHeader> owned(resource_);
@@ -27,7 +27,7 @@ ScopedOperation<void> HttpInterimResponseOutput::inform(const HttpInterimRespons
     for (const auto& field : response.headers()) {
         owned.push_back(HttpHeader::copyOf(field.name(), field.value(), resource_));
     }
-    return makeScopedOperation(scope_, writeOwned(response.status(), std::move(owned)));
+    return ::ruvia::make_scoped_operation(scope_, writeOwned(response.status(), std::move(owned)));
 }
 Task<void> HttpInterimResponseOutput::writeOwned(HttpStatusCode status, std::pmr::vector<HttpHeader> fields) {
     if (finalCommitted_) {

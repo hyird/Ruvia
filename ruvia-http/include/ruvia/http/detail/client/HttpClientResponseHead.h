@@ -43,7 +43,7 @@ struct Http1ClientParsedResponseHead final {
     bool nonEmptyTrailerHeaderPresent{false};
     HttpConnectionOptions connectionOptions;
     HttpUpgradeProtocols upgradeProtocols;
-    HttpContentLengthState contentLength;
+    HttpContentLengthState<> contentLength;
     HttpTransferEncodingState transferEncoding;
 };
 

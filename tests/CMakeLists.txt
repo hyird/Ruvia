@@ -68,6 +68,8 @@ if(RUVIA_BUILD_CORE)
         core/pool_waiter_queue.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp
+        core/worker_mailbox.cpp
+        core/worker_runtime.cpp
         support/test_main.cpp)
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
     ruvia_add_test(ruvia_connection_scanner_lifetime ruvia::core SOURCES
@@ -112,6 +114,7 @@ endif()
 if(RUVIA_BUILD_WEB)
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/unit/*.cpp)
     list(REMOVE_ITEM _ruvia_web_unit_sources
+        web/unit/app/startup.cpp
         web/unit/auth/jwt.cpp
         web/unit/db/client.cpp
         web/unit/db/entity.cpp
@@ -169,6 +172,10 @@ if(RUVIA_BUILD_WEB)
 
     list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
     list(SORT _ruvia_web_unit_sources)
+    # App startup uses the real process singleton and sealed controller registry.
+    ruvia_add_test(ruvia_app_startup ruvia::web TIMEOUT 30 SOURCES
+        web/unit/app/startup.cpp
+        support/test_main.cpp)
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
     if(WIN32)

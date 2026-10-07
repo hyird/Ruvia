@@ -16,12 +16,13 @@
 #include <asio/executor_work_guard.hpp>
 
 #include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/RuntimeLifecycle.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/core/detail/RuntimeLifecycle.h"
 #include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/detail/worker/WorkerSelection.h"
 #include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/core/worker_runtime.h"
 
 namespace ruvia {
 namespace {
@@ -117,16 +118,17 @@ public:
         }
     }
 
-    [[nodiscard]] std::shared_ptr<void> tryAcquire() {
+    [[nodiscard]] std::shared_ptr<void> tryAcquire(bool root_admission = true) {
         {
             const std::lock_guard lock(mutex_);
-            if (rootAdmissionClosed_ || sealed_ || finalized_) {
+            if (finalized_ || (root_admission && (rootAdmissionClosed_ || sealed_))) {
                 return {};
             }
             ++pending_;
         }
         try {
-            auto token = std::make_shared<LeaseToken>(this);
+            auto token = std::allocate_shared<LeaseToken>(
+                std::pmr::polymorphic_allocator<LeaseToken>(detail::processResource()), this);
             return std::shared_ptr<void>(std::move(token), this);
         } catch (...) {
             finish();
@@ -285,27 +287,26 @@ namespace detail {
 
 struct EventLoopState final : WorkerShutdownListener,
                               std::enable_shared_from_this<EventLoopState> {
-    using ContextOwnership = std::variant<std::unique_ptr<asio::io_context>, ExternalContextClaim>;
+    using ContextOwnership = std::variant<worker_runtime, ExternalContextClaim>;
 
     explicit EventLoopState(std::size_t mailboxCapacity)
-        : contextOwnership(std::in_place_type<std::unique_ptr<asio::io_context>>,
-              std::make_unique<asio::io_context>()),
-          ioContext(
-              std::addressof(**std::get_if<std::unique_ptr<asio::io_context>>(&contextOwnership))),
+        : contextOwnership(std::in_place_type<worker_runtime>,
+              worker_runtime_options{.mailbox_capacity = mailboxCapacity}),
+          ioContext(&owned_runtime().context().ioContext()),
           executor(ioContext->get_executor()),
-          work(asio::make_work_guard(*ioContext)),
-          runtime(*ioContext, mailboxCapacity) {}
+          runtime(owned_runtime().context()) {}
 
     EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
         : contextOwnership(std::in_place_type<ExternalContextClaim>, externalContext),
           ioContext(std::addressof(externalContext)),
           executor(externalContext.get_executor()),
           work(asio::make_work_guard(*ioContext)),
-          // WorkerDispatcher::Impl is the single authority that validates the
-          // mailbox capacity: it throws std::invalid_argument for a zero
-          // capacity while this member is constructed, before any body check
-          // here could run. The owned-context constructor relies on the same.
-          runtime(*ioContext, mailboxCapacity) {}
+          attached_runtime(std::in_place, *ioContext, mailboxCapacity),
+          runtime(*attached_runtime) {}
+
+    [[nodiscard]] worker_runtime& owned_runtime() noexcept {
+        return *std::get_if<worker_runtime>(&contextOwnership);
+    }
 
     void retainExternalContext(const std::shared_ptr<EventLoopState>& self) noexcept {
         if (auto* claim = std::get_if<ExternalContextClaim>(&contextOwnership)) {
@@ -390,16 +391,20 @@ struct EventLoopState final : WorkerShutdownListener,
                 state->failTeardownStart(std::current_exception());
             }
         });
-        runtime.close();
-        if (!runtimeStarted || runtime.handle().isCurrent()) {
-            runtime.stopTimers();
-        } else {
-            try {
-                detail::WorkerHandleAccess::defer(runtime.handle(),
-                    [keepAlive = std::move(keepAlive)] { keepAlive->runtime.stopTimers(); });
-            } catch (...) {
-                failTeardownStart(std::current_exception());
+        if (std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+            runtime.close();
+            if (!runtimeStarted || runtime.handle().isCurrent()) {
+                runtime.stopTimers();
+            } else {
+                try {
+                    detail::WorkerHandleAccess::defer(runtime.handle(),
+                        [keepAlive = std::move(keepAlive)] { keepAlive->runtime.stopTimers(); });
+                } catch (...) {
+                    failTeardownStart(std::current_exception());
+                }
             }
+        } else {
+            owned_runtime().request_stop();
         }
         // close() can lose the race to a dispatcher that already set
         // accepting=false but has not yet called every shutdown listener. Do
@@ -417,10 +422,12 @@ struct EventLoopState final : WorkerShutdownListener,
     }
 
     void finalizeStop() noexcept {
-        work.reset();
         if (std::holds_alternative<ExternalContextClaim>(contextOwnership)) {
+            work->reset();
             runtime.detach();
             std::get<ExternalContextClaim>(contextOwnership).service()->releaseState(this);
+        } else {
+            owned_runtime().finalize();
         }
     }
 
@@ -434,7 +441,7 @@ struct EventLoopState final : WorkerShutdownListener,
         }
         stopping.store(true, std::memory_order_release);
         runtime.stopTimers();
-        work.reset();
+        work->reset();
         runtime.detach();
         detail::WorkerHandleAccess::waitForReservations(runtime.handle());
     }
@@ -442,9 +449,9 @@ struct EventLoopState final : WorkerShutdownListener,
     ContextOwnership contextOwnership;
     asio::io_context* const ioContext;
     asio::io_context::executor_type executor;
-    asio::executor_work_guard<asio::io_context::executor_type> work;
-    WorkerRuntimeContext runtime;
-    std::thread thread;
+    std::optional<asio::executor_work_guard<asio::io_context::executor_type>> work;
+    std::optional<WorkerRuntimeContext> attached_runtime;
+    WorkerRuntimeContext& runtime;
     std::atomic_bool stopping{false};
     // Bound once before publication to the stable pool owner or weak attachment
     // owner. Failure reporting and stop registration only read this channel.
@@ -564,7 +571,7 @@ public:
     }
 
     void stop() noexcept {
-        const bool runtimeStarted = lifecycle_.state() != detail::RuntimeLifecycle::State::kReady;
+        const bool runtimeStarted = lifecycle_.state() != RuntimeLifecycle::State::kReady;
         if (!lifecycle_.requestStop()) {
             return;
         }
@@ -575,24 +582,8 @@ public:
         }
     }
 
-    void run(const std::shared_ptr<detail::EventLoopState>& loop) noexcept {
-        const auto self = shared_from_this();
-        try {
-            loop->runtime.run([self](std::exception_ptr failure) noexcept {
-                self->reportFailure(std::move(failure));
-            });
-        } catch (...) {
-            reportFailure(std::current_exception());
-        }
-        loop->runtime.detach();
-    }
-
     [[nodiscard]] bool start() noexcept {
         return lifecycle_.start();
-    }
-
-    [[nodiscard]] detail::RuntimeLifecycle::State state() const noexcept {
-        return lifecycle_.state();
     }
 
     void completeStop() noexcept {
@@ -609,7 +600,7 @@ public:
 
 private:
     std::pmr::vector<std::weak_ptr<detail::EventLoopState>> loops_{detail::processResource()};
-    detail::RuntimeLifecycle lifecycle_;
+    RuntimeLifecycle lifecycle_;
     FailureRecord failureRecord_;
 };
 
@@ -694,6 +685,28 @@ std::shared_ptr<void> EventLoop::acquireRootLease() const {
         return {};
     }
     return state_->acquireRootLease();
+}
+
+bool EventLoop::defer_cleanup_task(MoveOnlyFunction<void()> task) const {
+    if (!task) {
+        throw std::invalid_argument("event loop cleanup must be callable");
+    }
+    if (!state_) {
+        return false;
+    }
+    auto lease = state_->retirement->tryAcquire(false);
+    if (!lease) {
+        return false;
+    }
+    struct cleanup_control final {
+        // Destroy inputs and the retirement lease before releasing the context
+        // owner. Do not rely on lambda capture member destruction order.
+        std::shared_ptr<detail::EventLoopState> state_;
+        std::shared_ptr<void> lease_;
+        MoveOnlyFunction<void()> task_;
+    };
+    return detail::WorkerHandleAccess::deferIfAttached(state_->runtime.handle(),
+        [control = cleanup_control{state_, std::move(lease), std::move(task)}]() mutable { control.task_(); });
 }
 
 EventLoopStopRegistration EventLoop::registerStopCallback(
@@ -783,6 +796,19 @@ struct EventLoopPool::Impl {
             loops.back()->failureSink = [stableOwner = owner](std::exception_ptr failure) {
                 stableOwner->reportFailure(std::move(failure));
             };
+            const std::weak_ptr<detail::EventLoopState> weak = loops.back();
+            auto* const stable_runtime = &loops.back()->owned_runtime();
+            stable_runtime->configure({
+                .stop_admission = [weak, stable_runtime] {
+                    if (auto loop = weak.lock()) {
+                        loop->stop(true, std::move(loop));
+                    } else {
+                        // Construction rollback can destroy an unpublished
+                        // state before its core owner drains this control.
+                        stable_runtime->finalize();
+                    } },
+                .failure = [stableOwner = owner](std::exception_ptr failure) noexcept { stableOwner->reportFailure(std::move(failure)); },
+            });
         }
     }
 
@@ -790,19 +816,9 @@ struct EventLoopPool::Impl {
         owner->stop();
     }
 
-    void launch(const std::shared_ptr<detail::EventLoopState>& loop) {
-        auto stableOwner = owner;
-        loop->thread = std::thread(
-            [stableOwner = std::move(stableOwner), loop] { stableOwner->run(loop); });
-    }
-
-    void drainUnlaunched() noexcept {
-        // A partial thread-launch failure must not strand accepted mailbox work
-        // or owner-affine cleanup; missing workers are drained synchronously.
+    void join_loops() {
         for (const auto& loop : loops) {
-            if (!loop->thread.joinable()) {
-                owner->run(loop);
-            }
+            loop->owned_runtime().join();
         }
     }
 
@@ -833,17 +849,12 @@ void EventLoopPool::start() {
     }
     try {
         for (const auto& loop : impl_->loops) {
-            impl_->launch(loop);
+            loop->owned_runtime().start();
         }
     } catch (...) {
         const auto launchFailure = std::current_exception();
         impl_->stop();
-        impl_->drainUnlaunched();
-        for (const auto& loop : impl_->loops) {
-            if (loop->thread.joinable()) {
-                loop->thread.join();
-            }
-        }
+        impl_->join_loops();
         impl_->owner->completeStop();
         std::rethrow_exception(launchFailure);
     }
@@ -859,27 +870,9 @@ void EventLoopPool::join() {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();
-    if (impl_->owner->state() == detail::RuntimeLifecycle::State::kStopping) {
-        try {
-            // stop() before start() still owes accepted mailbox work and
-            // owner-affine stop callbacks a real execution context. Launch
-            // only the missing worker threads so join performs that drain.
-            for (const auto& loop : impl_->loops) {
-                if (!loop->thread.joinable()) {
-                    impl_->launch(loop);
-                }
-            }
-        } catch (...) {
-            impl_->owner->recordFailure(std::current_exception());
-            impl_->drainUnlaunched();
-        }
-    }
+    impl_->join_loops();
     for (const auto& loop : impl_->loops) {
-        if (loop->thread.joinable()) {
-            loop->thread.join();
-        }
         detail::WorkerHandleAccess::waitForReservations(loop->runtime.handle());
-        loop->runtime.detach();
     }
     impl_->owner->completeStop();
 

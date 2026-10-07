@@ -1,25 +1,34 @@
+#include "ruvia/web/redis/RedisTransaction.h"
+
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/redis/Redis.h"
 
 namespace ruvia {
 
-RedisTransaction::RedisTransaction(RedisPipeline pipeline) noexcept
-    : detail::ScopedCapabilityNode(pipeline.operationScope(), &RedisTransaction::expireCapability),
-      pipeline_(std::move(pipeline)),
-      watches_(pipeline_.resource()) {}
+RedisTransaction::RedisTransaction(detail::RedisPool& pool, OperationOptions options,
+    std::pmr::memory_resource* resource, operation_scope& scope) noexcept
+    : batch_(pool, std::move(options), resource),
+      watches_(batch_.resource()),
+      registration_(scope, this, &RedisTransaction::expire_capability) {}
 
-void RedisTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    auto& transaction = static_cast<RedisTransaction&>(capability);
-    std::pmr::vector<RedisPipeline::Command> empty(transaction.watches_.get_allocator().resource());
+RedisTransaction::RedisTransaction(RedisTransaction&& other) noexcept
+    : batch_(std::move(other.batch_)),
+      watches_(std::move(other.watches_)),
+      registration_(std::move(other.registration_), this) {}
+
+void RedisTransaction::expire_capability(void* target) noexcept {
+    auto& transaction = *static_cast<RedisTransaction*>(target);
+    transaction.batch_.expire();
+    std::pmr::vector<detail::redis_owned_command> empty(transaction.watches_.get_allocator().resource());
     transaction.watches_.swap(empty);
 }
 
 RedisTransaction& RedisTransaction::command(std::span<const std::string_view> args) {
-    pipeline_.command(args);
+    registration_.require_active();
+    batch_.command(args);
     return *this;
 }
 
@@ -28,42 +37,43 @@ RedisTransaction& RedisTransaction::watch(std::string_view key) {
 }
 
 RedisTransaction& RedisTransaction::watch(std::span<const std::string_view> keys) {
-    pipeline_.requireActive();
+    registration_.require_active();
+    batch_.require_ready();
     if (keys.empty()) {
         return *this;
     }
-    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "WATCH", keys);
+    watches_.emplace_back(detail::make_owned_redis_command(batch_.resource(), "WATCH", keys));
     return *this;
 }
 
 RedisTransaction& RedisTransaction::unwatch() {
-    pipeline_.requireActive();
-    RedisPipeline::appendCommand(watches_, pipeline_.resource(), "UNWATCH");
+    registration_.require_active();
+    batch_.require_ready();
+    watches_.emplace_back(detail::make_owned_redis_command(batch_.resource(), "UNWATCH"));
     return *this;
 }
 
-Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisPool& pool,
-    OperationOptions options, std::pmr::memory_resource* resource,
-    std::pmr::vector<RedisPipeline::Command> watches,
-    std::pmr::vector<RedisPipeline::Command> commands) {
+Task<std::pmr::vector<RedisValue>> RedisTransaction::execute_owned(
+    detail::redis_command_payload payload, std::pmr::vector<detail::redis_owned_command> watches) {
+    auto* resource = payload.commands.get_allocator().resource();
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
-    framed.reserve(watches.size() + commands.size() + 2);
-    auto appendCommandView = [&framed](const RedisPipeline::Command& command) {
+    framed.reserve(watches.size() + payload.commands.size() + 2);
+    auto append_command_view = [&framed](const detail::redis_owned_command& command) {
         framed.emplace_back(command.args);
     };
-    auto multi = RedisPipeline::makeCommand(resource, "MULTI");
-    auto exec = RedisPipeline::makeCommand(resource, "EXEC");
+    auto multi = detail::make_owned_redis_command(resource, "MULTI");
+    auto exec = detail::make_owned_redis_command(resource, "EXEC");
     for (const auto& command : watches) {
-        appendCommandView(command);
+        append_command_view(command);
     }
-    appendCommandView(multi);
-    for (const auto& command : commands) {
-        appendCommandView(command);
+    append_command_view(multi);
+    for (const auto& command : payload.commands) {
+        append_command_view(command);
     }
-    appendCommandView(exec);
+    append_command_view(exec);
 
-    auto replies = co_await pool.executePipeline(
-        std::span<const detail::RedisCommandArgsView>(framed), std::move(options), resource);
+    auto replies = co_await payload.pool.get().executePipeline(
+        std::span<const detail::RedisCommandArgsView>(framed), std::move(payload.options), resource);
     if (replies.empty()) {
         throw RedisError(RedisError::Code::kProtocolError, "redis transaction returned no replies");
     }
@@ -87,11 +97,9 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::executeOwned(detail::RedisP
 }
 
 ScopedOperation<std::pmr::vector<RedisValue>> RedisTransaction::exec() && {
-    auto* commandResource = pipeline_.resource();
-    auto& pool = pipeline_.consumePool();
-    return detail::makeScopedOperation(
-        pipeline_.operationScope(), executeOwned(pool, pipeline_.operationOptions_, commandResource,
-                                        std::move(watches_), std::move(pipeline_.commands_)));
+    auto& scope = registration_.scope();
+    auto payload = batch_.consume();
+    return make_scoped_operation(scope, execute_owned(std::move(payload), std::move(watches_)));
 }
 
 }  // namespace ruvia

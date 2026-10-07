@@ -2,7 +2,6 @@
 
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -17,7 +16,6 @@ class HttpUdpTunnel;
 namespace detail {
 class HttpClientPool;
 class HttpCapsuleStreamState;
-struct HttpClientTunnelWriteInput;
 }  // namespace detail
 
 // Owns an established CONNECT byte stream on its client worker. Metadata borrows
@@ -82,8 +80,6 @@ private:
     friend class HttpDatagramStream;
     explicit HttpClientTunnel(HttpClientResponse response) noexcept;
     void release() noexcept;
-    static Task<void> writeOwned(detail::HttpClientTunnelWriteInput input);
-    static Task<void> finishOwned(HttpClientResponse pin);
     HttpClientResponse response_;
 };
 

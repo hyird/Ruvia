@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
@@ -65,10 +66,9 @@ public:
 
     // Body algorithms run on the address-stable storage owner. The public
     // facade wraps them in bodyOperationScope to enforce the linear lane.
-    template <typename View>
-    [[nodiscard]] Task<std::optional<View>> read();
+    template <typename view>
+    [[nodiscard]] Task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(ResponseStreamWriter* output = nullptr);
     [[nodiscard]] Task<HttpClientResponseBytes> readAll(std::size_t maxBytes);
-    [[nodiscard]] Task<void> pipeTo(ResponseStreamWriter& output);
     void retainReference() noexcept;
     void releaseReference() noexcept;
     [[nodiscard]] HttpClientResponseMemoryDomain* memoryDomain() const noexcept {
@@ -90,9 +90,9 @@ public:
 
     void retainInformational(HttpStatusCode status, std::span<const HttpHeaderView> fields);
 
-    [[nodiscard]] HttpClientOutputQueue* output() noexcept {
-        return tunnel ? static_cast<HttpClientOutputQueue*>(&*tunnel) : upload ? static_cast<HttpClientOutputQueue*>(&*upload)
-                                                                               : nullptr;
+    [[nodiscard]] http_client_output_queue* output() noexcept {
+        return tunnel ? &tunnel->output : upload ? &upload->output
+                                                 : nullptr;
     }
     [[nodiscard]] bool receiveComplete() const noexcept {
         return complete || (tunnel && tunnel->accepted && tunnel->receiveEnded);
@@ -146,10 +146,10 @@ public:
     std::uint64_t streamId{0};
     // Declared last so the operation scope closes while every field borrowed
     // by a body coroutine is alive.
-    ScopedOperationScope bodyOperationScope;
+    ::ruvia::operation_scope bodyOperationScope;
     std::optional<HttpPushRequest> promisedRequest{};
     bool pushResponseTaken{false};
-    ScopedOperationScope pushResponseScope;
+    ::ruvia::operation_scope pushResponseScope;
 
 private:
     void promotePendingData();

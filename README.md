@@ -100,6 +100,10 @@ validated extension codes.
 Public configuration types are ordinary C++ aggregates. Configure them with
 designated initializers. Passing a config to an optional App feature enables or
 replaces it, and passing `nullptr` disables it.
+HTTP and Redis client configurations own their runtime strings through one
+field-construction path for both public values and worker-resource copies.
+Origin defaults are resolved before storage; rebinding preserves those values
+and copies credentials, TLS data and cookies into the destination resource.
 
 Call `listen()` explicitly before `run()`; the App does not create a default
 listener or choose a default port. Calling `run()` without a listener throws
@@ -132,9 +136,32 @@ preparation is atomic: startup fails instead of serving HTTPS while advertising
 an unavailable HTTP/3 endpoint.
 
 `ServerConfig::workerCount` is the number of business workers. The runtime also
-uses one dedicated server network thread (in addition to any `BlockingPool` and
-signal threads). It binds the configured HTTP/HTTPS TCP ports and the automatic
-HTTP/3 UDP endpoint. There is no separate configurable UDP packet-rate limit.
+uses one dedicated Acceptor ingress thread (in addition to any `BlockingPool`
+and signal threads). The internal `ruvia::detail::acceptor` binds the configured
+TCP listeners and HTTP/3 UDP endpoint, accepts TCP connections, hands each TCP
+socket to one worker exactly once, and forwards QUIC datagrams by destination
+connection ID (CID). It does not own QUIC/TLS or HTTP/3 connection state.
+
+Each TCP or QUIC connection stays on its assigned worker until retirement.
+That worker owns TCP I/O, TLS contexts, QUIC handshakes and timers, HTTP/3
+streams, and connection admission, shutdown and reclamation. All requests on
+the connection execute on the same worker. Standalone server workers compose
+the same Acceptor rather than running a separate worker-local accept path.
+
+The client's Initial destination CID selects a fixed worker partition; every
+server-issued CID, including rotated CIDs, preserves that partition across
+path changes. CID registration and retirement remain in the HTTP protocol
+layer on the worker. A full worker is not bypassed by rebinding its connection.
+Acceptor-to-worker datagram queues are bounded; overflow drops packets for that
+partition. There is no separate configurable UDP packet-rate limit. The
+partition tag is observable: it permits migration correlation and targeted
+worker load, rather than providing load balancing between established
+connections.
+
+Shutdown first stops ingress and closes datagram publication. Workers retire
+their protocol state and acknowledge that no channel borrow remains. Acceptor
+joins only after these acknowledgements and all UDP send loans are returned;
+core keeps the owner event loops alive through final resource retirement.
 
 `ServerConfig::maxRequestsPerConnection = N` limits the cumulative number of
 admitted requests on each HTTP/1, HTTP/2, or HTTP/3 connection. The default is
@@ -154,6 +181,12 @@ a WebSocket CONNECT response is accepted by QUIC, request-body timeout no
 longer applies to its tunnel; write timeout applies only while output is
 pending. WebSocket heartbeat and close-handshake settings govern its liveness.
 The idle timeout applies to the QUIC connection.
+
+An HTTP/3 response FIN closes only the server's send direction. A rejected
+WebSocket CONNECT can return its complete buffered error response before the
+client sends FIN; an open receive direction is not a response-publication
+failure and does not close the connection. The server retains that stream's
+receive state until client FIN, RESET, or connection shutdown retires it.
 
 The HTTP/3 server supports buffered and streaming request routes, byte and file
 responses, response streams, SSE, ordinary CONNECT and Extended CONNECT. The
@@ -500,6 +533,9 @@ GET/HEAD requests through normal routing and middleware when the peer permits
 push. `advertiseOrigins()` and `advertiseAlternativeService()` publish explicit
 connection advertisements, and request trailers are available through
 `c.req().trailers()` after body completion.
+Request parsing, descriptor tags and cached header lookup share one field
+classification and slot mapping. Named lookup stays case-insensitive and returns
+the last field value; unknown names remain distinct from known cache entries.
 
 Every response has one linear body reader. `read()` consumes one borrowed
 `std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
@@ -797,6 +833,14 @@ path; no separate manual shutdown is required merely to stop the loop. An
 internal teardown failure is terminal and is reported to the loop even without
 a shutdown waiter. Explicit `shutdown()` still rethrows that same failure;
 ordinary request or connection-attempt errors are not teardown failures.
+HTTP, database and Redis pool clients compose one lifecycle implementation for
+startup ownership, cancellation, operation scopes and asynchronous retirement.
+Backend connection and join behavior remain typed policies; HTTP still connects
+lazily, while SQL and Redis require explicit `connect()`. Owner-thread cleanup
+uses core's retirement-protected `EventLoop::defer_cleanup()`, so closing business
+admission does not reject existing-resource cleanup or retire its inputs early.
+WebSocket composes the same owner-preserving cleanup/completion bridge; its
+wire-close and close-handshake phases remain protocol-specific.
 
 Database clients are first-class event-loop objects. They do not require an HTTP
 `App`, request `Context`, server worker, or an aggregate worker service. Bind
@@ -933,19 +977,54 @@ Web job contract:
 provided by `ruvia::core`; their deadlines share the worker's single timer
 queue. Standalone operations can create a `StopSource`, pass its `token()` to
 channel, one-shot, timer, or blocking waits, and call `requestStop()` from any
-thread. `App::onStart()` runs only after every business worker has initialized its
-worker-local capabilities and the server network runtime has entered serving state.
-`App::onStop()` runs once for explicitly enabled process signal handlers, direct
-`App::stop()`, and worker failure. Both hook sets execute on the
-thread inside `App::run()`; stop callers, worker threads, and the server network
-runtime only request shutdown and never run application hooks themselves.
+thread. `App::onStart()` is the pre-serving initialization barrier: every
+business worker has initialized its worker-local capabilities and protocol/TLS
+state and can execute posted jobs, but Acceptor has not enabled TCP acceptance
+or QUIC datagram forwarding. Hooks run in registration order; only after every
+hook returns successfully does the App open request admission. A hook exception
+rolls back the prepared runtime and is rethrown by `App::run()` without serving
+requests. A stop request during startup skips the remaining start hooks and
+prevents admission. It does not interrupt a currently executing synchronous hook.
+A hook that posts asynchronous initialization must wait for that job's completion
+before returning; an accepted post alone does not extend the startup barrier.
+Such a wait belongs on the lifecycle caller, never on a worker event loop, and
+the worker operation must observe cancellation so a stop request can wake it.
+`App::onStop()` runs once after a runtime has been published, including startup
+hook failure/cancellation, explicitly enabled process signal handlers, direct
+`App::stop()`, and worker failure. Stop hooks run after admission is closed and
+before runtime join; they are not a notification that teardown has finished.
+Both hook sets execute on the thread inside `App::run()`; stop callers, worker
+threads, and Acceptor only request shutdown and never run application hooks
+themselves.
+
+Composition is preferred to implementation inheritance throughout the project.
+`EventLoopPool`, Web business workers, Acceptor and process signal handling
+compose core's `worker_runtime`: it alone owns each thread, `io_context`, work
+guard, dispatcher and generic startup/stop/drain/join chain.
+`TestApp` uses the same pool rather than creating a separate runtime.
+`WorkerRuntimeContext` remains the dispatcher endpoint for caller-owned contexts
+and is borrowed from `worker_runtime` by protocol drivers; borrowing does not
+transfer thread or execution-context ownership.
+
+Runtime hooks run on the owner. Stopping closes admission and cancels timers but
+keeps the loop alive until policy-specific retirement calls `finalize()`. The
+pool waits for root tasks and stop callbacks; Web first quiesces the network and
+completes HTTP/3's two-owner acknowledgment before retiring worker capabilities.
+Finalization releases the work guard rather than stopping the context, so I/O
+and completion handlers drain before terminal cleanup and escaped-handle
+detachment. `join()` establishes the thread barrier, including draining accepted
+work when stopped before launch. Run failures are inspected after owners join;
+joining a raw `worker_runtime` does not rethrow them.
+Mailbox abandonment and publication rollback use one node-recycling path:
+release the reservation, destroy user closures outside the dispatcher mutex,
+then notify queued idle waiters. Destructors may reenter the dispatcher.
 
 ## Blocking Work
 
-Each business worker runs its event loop and serves TCP connections dispatched
-to it by the server network runtime, so a handler that blocks — password
-hashing, a synchronous third-party SDK, template rendering, or a slow file —
-freezes all of them for as long as it blocks. `BlockingPool` is the
+Each business worker runs its event loop and owns the TCP and QUIC connections
+assigned to it by Acceptor, so a handler that blocks — password hashing, a
+synchronous third-party SDK, template rendering, or a slow file — freezes their
+I/O and protocol timers for as long as it blocks. `BlockingPool` is the
 offload path: a fixed set of long-lived threads with a bounded queue, started
 once by `App::run()` and shared by every worker. Offloading enqueues a task and
 wakes a waiting thread; it never spawns one per call.
@@ -1017,6 +1096,11 @@ If the pool is explicitly disabled, bodies through `maxBytes` are compressed
 synchronously instead. Rejection by an enabled pool falls back to identity.
 Whenever a policy fallback would use identity but the client forbids it, the
 result is `406 Not Acceptable`.
+Streaming coding and buffered replacement share one staged metadata update.
+Only changed descriptors are prepared; unrelated headers are not cloned.
+Preparation failure preserves the original body and field values, and releases
+staged storage. Streaming drops the identity length; buffered replacement
+publishes the encoded length. Both weaken applicable strong ETags.
 
 `DocumentRootConfig` builds a static-root index at startup and always refreshes
 it, once per second by default. The refresh cannot be disabled; a positive
@@ -1152,6 +1236,13 @@ cmake --build build --config Release --parallel
 Add `-DRUVIA_BUILD_TESTS=ON` and `-DRUVIA_BUILD_EXAMPLES=ON` when needed,
 then run `ctest --test-dir build -C Release --output-on-failure`.
 
+All MSVC targets export `_ITERATOR_DEBUG_LEVEL=0`, including Debug builds.
+MSVC checked iterators allocate proxy storage during otherwise allocation-free,
+`noexcept` container operations. Disabling those proxies preserves Ruvia's PMR
+allocation and failure contracts. The setting propagates to linked consumers;
+MSVC C++ dependencies must use the same level for STL ABI compatibility. Debug
+CRT and application assertions remain enabled.
+
 ### Build options
 
 | Option | Default | Meaning |
@@ -1216,6 +1307,11 @@ configuration time. This keeps the connector's identity check compatible with
 nonblocking address resolution. For a deliberately plaintext local service,
 explicitly set `.tls = {.mode = ruvia::client_tls_mode::disabled}`. TLS failures
 never silently downgrade to plaintext.
+
+MariaDB and PostgreSQL pools compose one worker-affine lifecycle policy for
+slot admission, release and cancellation. Driver-specific connect, I/O and
+socket teardown stay in their respective backends; neither pool inherits its
+implementation from the other or from a lifecycle base.
 
 The selected driver must be enabled at build time. PostgreSQL parameters use
 `$1`, `$2`, and so on; MariaDB parameters use `?`. A `?` inside a string literal, a quoted
@@ -2089,8 +2185,10 @@ operations and must be destroyed before that worker resource expires.
 
 [redis_orm.cpp](examples/web/redis_orm.cpp) demonstrates validated JSON input,
 insertion with TTL, primary-key lookup, indexed queries and typed models.
-Build `ruvia_example_redis_orm`; run once with `--create-index` against Redis Search,
-then without arguments to serve on `127.0.0.1:8091`. It reads `RUVIA_REDIS_HOST`,
+Build `ruvia_example_redis_orm`; run once with `--create-index` against Redis Search.
+That mode waits for the worker's index operation inside the startup hook, then
+stops without opening request admission. Run without arguments to serve on
+`127.0.0.1:8091`. It reads `RUVIA_REDIS_HOST`,
 `RUVIA_REDIS_PORT`, `RUVIA_REDIS_USER` and `RUVIA_REDIS_PASSWORD` from environment
 variables or `.env`.
 
@@ -2303,6 +2401,10 @@ counters — active and shed connections, connection failures, transient accept
 failures, worker failures, document-root refresh failures — so a deployment can
 be monitored by polling instead of by installing callbacks.
 Self-contained callbacks passed to App are owned and destroyed with the App.
+Ordinary and `noexcept` callbacks share one PMR owner composed with a borrowed
+invocation view. Copies clone the callable; moves transfer its storage. Runtime
+views do not extend that storage's lifetime, and captured references still need
+to outlive the owning callback.
 
 Redis time APIs avoid exposing wire-level sentinel values in application code:
 `expireAt()` accepts `std::chrono::system_clock::time_point`, `ttl()` and
@@ -2374,7 +2476,10 @@ selecting what is safe to expose deliberately.
 A model's allocation resource stays fixed. Public field assignment and collection
 insertion own strings and recursively normalize nested values to that resource.
 `Array<T>` and `BoxedArray<T>` also use their resource for newly constructed
-elements. Move construction transfers the complete value; move assignment keeps
+elements through one shared construction and ownership-normalization path.
+Inline vector storage and address-stable boxed storage remain separate policies.
+Borrowed and const inputs are cloned; only mutable rvalues can transfer ownership.
+Move construction transfers the complete value; move assignment keeps
 the destination resource and can allocate. Moving never extends the lifetime of
 a PMR resource or borrowed input.
 
@@ -2469,6 +2574,10 @@ Their ownership contract is explicit:
   to the destination model resource. Move assignment of a dynamic value keeps
   the destination resource, transfers compatible owned storage, and copies
   borrowed or incompatible storage.
+- `String`, `JsonValue`, and `JsonObject` compose one text-storage implementation
+  for borrowing, cloning, transfer and publication. Failed assignment leaves the
+  destination unchanged; aliased input is copied before the old token is retired.
+  Ordinary string semantics and JSON token validation remain separate.
 
 URL-encoded form binding stays schema-based. Raw `bytes()` /
 `text()` remain available for custom formats. Buffered `multipart()` and
@@ -2504,8 +2613,13 @@ for other matching logic. Routes select the source with
 bindings perform the explicit validation step. A handler returns
 `Task<HttpResponse>` and serializes the same model with `c.json(model)`.
 Core and Web use the same `Task<T>` with an explicit result type;
-operations without a result use `Task<void>`. Ordinary route
-handlers return HTTP responses, while services can return typed model values:
+operations without a result use `Task<void>`. Both promise signatures compose
+one frame-ownership, continuation and failure-storage implementation; only the
+language-required value/void return hook differs. Cold frames can be discarded,
+but started operations must finish and be awaited or joined. Exceptions from
+constructing a returned value follow the same failure path as body exceptions.
+Ordinary route handlers return HTTP responses, while services can return typed
+model values:
 
 ```cpp
 ruvia::Task<User> getUser(std::uint64_t id,
@@ -2828,6 +2942,13 @@ The single-coding zlib stage is private; there is no separate public decoder.
 provides zero-copy chunk framing. Its aggregate configuration selects payload
 limits and request or response trailer semantics. Failures report neutral
 framing or limit categories; request-side status mapping remains HTTP-owned.
+Request and response trailers share one framing/authentication restriction
+policy; direction-specific permissions remain separate (for example,
+`Accept-Ranges` is permitted only in response trailers). Trailer advertisements
+and terminal sections apply their respective direction's same rules.
+HTTP/3 request and response trailers share one PMR-owned section collector and
+lowercase wire-name check, with separate direction policies. Fields are delivered
+only after the entire section is valid; temporary storage is released on failure.
 `HttpResponseChunkedBodyDecoder` fixes the response role and returns the same
 exclusive typed result. Consume body and trailer views before modifying input,
 retain unconsumed wire bytes, and use a positive per-step body-output budget.
@@ -2850,6 +2971,11 @@ backpressure, merge credits from the same stream without allocation, and
 acknowledge or destroy them when their bytes have been consumed.
 The supplied PMR resource must outlive the connection and all retained events,
 credits, response heads, and trailers allocated from it.
+Request submission uses the single `Http2RequestHeadSubmitResult` contract in
+`<ruvia/http/Http2RequestHeadSubmitResult.h>` throughout the engine and public
+connection. Success owns a valid odd client stream ID; refusal owns only its
+reason. The public connection still pins accepted streams before returning;
+pinning failure attempts a CANCEL reset and preserves the original exception.
 
 HTTP/1 persistence uses `Http1RequestConnectionPlan` from
 `<ruvia/http/Http1RequestConnectionPlan.h>`. Parsing establishes its version and

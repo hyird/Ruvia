@@ -51,7 +51,7 @@ public:
         if (!worker.isCurrent()) {
             throw std::logic_error("capsule stream requires its owner worker");
         }
-        if ((output ? outputScope : readScope).hasPendingOperations()) {
+        if ((output ? outputScope : readScope).has_pending_operations()) {
             throw std::logic_error("capsule stream operation is already active");
         }
     }
@@ -207,7 +207,7 @@ public:
             co_await server->sendDatagram(bytes);
         } else {
             auto& state = *client->response_.state_;
-            if (state.tunnel->stopped || state.tunnel->ended || state.tunnel->endRequested || state.abandoned || !state.http3Connection) {
+            if (state.tunnel->output.stopped || state.tunnel->output.ended || state.tunnel->output.endRequested || state.abandoned || !state.http3Connection) {
                 throw std::runtime_error("HTTP Datagram sending direction is closed");
             }
             static_cast<void>(state.http3Connection->sendDatagram(state.http3RequestId, std::as_bytes(std::span(bytes.data(), bytes.size()))));
@@ -230,8 +230,8 @@ public:
     bool closed{};
     unsigned running{};
     std::size_t references{1};
-    ScopedOperationScope readScope;
-    ScopedOperationScope outputScope;
+    ::ruvia::operation_scope readScope;
+    ::ruvia::operation_scope outputScope;
 };
 class CapsuleStatePin final {
 public:

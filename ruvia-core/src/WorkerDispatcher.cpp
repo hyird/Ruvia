@@ -142,19 +142,7 @@ void WorkerDispatcher::publish(std::size_t index) {
         }
     }
     if (abandon) {
-        auto abandoned = std::move(impl_->nodes[index].task);
-        IdleCallbacks callbacks{processResource()};
-        {
-            std::lock_guard lock(impl_->mutex);
-            impl_->nodes[index].state = Impl::NodeState::kFree;
-            impl_->nodes[index].next = impl_->freeHead;
-            impl_->freeHead = index;
-            --impl_->pendingCount;
-            callbacks = takeIdleCallbacksLocked();
-        }
-        abandoned = nullptr;
-        notifyIdle(std::move(callbacks));
-        impl_->pendingChanged.notify_all();
+        release_abandoned_node(index);
     }
 }
 
@@ -166,6 +154,13 @@ void WorkerDispatcher::rollbackReserved(std::size_t index) noexcept {
         }
         impl_->nodes[index].state = Impl::NodeState::kReleasing;
     }
+    release_abandoned_node(index);
+}
+
+void WorkerDispatcher::release_abandoned_node(std::size_t index) noexcept {
+    // The caller exclusively claimed this node as kReleasing. Move its payload
+    // out before returning the slot; user destruction can reenter admission or
+    // reconcile higher-level work, and must run unlocked before idle callbacks.
     auto abandoned = std::move(impl_->nodes[index].task);
     IdleCallbacks callbacks{processResource()};
     {
@@ -458,21 +453,7 @@ void WorkerDispatcher::abandonQueued() noexcept {
             }
             impl_->nodes[index].state = Impl::NodeState::kReleasing;
         }
-        auto abandoned = std::move(impl_->nodes[index].task);
-        IdleCallbacks callbacks{processResource()};
-        {
-            std::lock_guard lock(impl_->mutex);
-            impl_->nodes[index].state = Impl::NodeState::kFree;
-            impl_->nodes[index].next = impl_->freeHead;
-            impl_->freeHead = index;
-            --impl_->pendingCount;
-            callbacks = takeIdleCallbacksLocked();
-        }
-        // Destroy user closures outside the dispatcher mutex. Their destructors
-        // may reconcile higher-level outstanding-work reservations.
-        abandoned = nullptr;
-        notifyIdle(std::move(callbacks));
-        impl_->pendingChanged.notify_all();
+        release_abandoned_node(index);
     }
 }
 

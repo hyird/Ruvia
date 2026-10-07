@@ -7,6 +7,7 @@ namespace ruvia {
 
 class HttpClientHandle;
 class StopToken;
+class operation_scope;
 
 #ifdef RUVIA_ENABLE_DATABASE
 class DbHandle;
@@ -21,7 +22,6 @@ namespace detail {
 class DbRegistry;
 class HttpClientRegistry;
 class RedisRegistry;
-class ScopedOperationScope;
 
 // A copyable view of the complete client registry set owned by one worker.
 // The only states are fully attached and explicitly detached: partial registry
@@ -48,22 +48,22 @@ public:
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db(
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] DbHandle db(std::string_view alias, ScopedOperationScope& operationScope,
+        ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] DbHandle db(std::string_view alias, ::ruvia::operation_scope& operationScope,
         const StopToken& stopToken) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] RedisHandle redis(
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
-    [[nodiscard]] RedisHandle redis(std::string_view alias, ScopedOperationScope& operationScope,
+        ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const;
+    [[nodiscard]] RedisHandle redis(std::string_view alias, ::ruvia::operation_scope& operationScope,
         const StopToken& stopToken) const;
 #endif
 
     [[nodiscard]] HttpClientHandle httpClient(
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+        ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const;
     [[nodiscard]] HttpClientHandle httpClient(std::string_view alias,
-        ScopedOperationScope& operationScope, const StopToken& stopToken) const;
+        ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const;
 
 private:
     explicit constexpr WorkerClientRegistryView(std::nullptr_t) noexcept {}

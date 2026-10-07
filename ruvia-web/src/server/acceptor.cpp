@@ -1,0 +1,504 @@
+#include "ruvia/web/detail/server/acceptor.h"
+
+#include <algorithm>
+#include <chrono>
+#include <limits>
+#include <stdexcept>
+#include <system_error>
+
+#include <asio/bind_allocator.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/recycling_allocator.hpp>
+#include <asio/socket_base.hpp>
+
+#include "ruvia/core/Async.h"
+#include "ruvia/core/memory/ProcessResource.h"
+#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+
+namespace ruvia::detail {
+namespace {
+
+bool recoverable_accept_error(const asio::error_code& error) noexcept {
+    return error == asio::error::connection_aborted || error == asio::error::connection_reset ||
+           error == asio::error::eof || error == asio::error::try_again ||
+           error == asio::error::would_block || error == asio::error::no_descriptors ||
+           error == asio::error::no_buffer_space;
+}
+
+}  // namespace
+
+acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
+    std::span<const worker_target> targets, void* failure_target, failure_callback failure)
+    : runtime_({.mailbox_capacity = 128, .io_policy = worker_io_policy::single_owner}),
+      io_context_(runtime_.context().ioContext()),
+      listeners_(processResource()),
+      targets_(targets.begin(), targets.end(), processResource()),
+      quic_channels_(processResource()),
+      udp_(nullptr, PmrObjectDeleter<Http3DatagramEndpoint>{processResource()}),
+      quic_notification_(runtime_.context()),
+      quic_retirement_(io_context_),
+      failure_target_(failure_target),
+      failure_callback_(failure),
+      sending_worker_(targets.size()) {
+    if (listeners.empty()) {
+        throw std::invalid_argument("acceptor requires at least one TCP listener");
+    }
+    const auto quic_count = std::ranges::count_if(listeners,
+        [](const auto& configured) { return configured.http3.has_value(); });
+    if (quic_count > 1) {
+        throw std::invalid_argument("acceptor supports one QUIC listener");
+    }
+    if (quic_count != 0 && (targets.empty() ||
+                               targets.size() > std::numeric_limits<std::uint32_t>::max())) {
+        throw std::invalid_argument("QUIC acceptor requires representable worker targets");
+    }
+    for (const auto& target : targets_) {
+        if (!target.submission.valid() || target.object == nullptr || target.available == nullptr ||
+            target.accept == nullptr || (quic_count != 0 && target.stage_quic == nullptr)) {
+            throw std::invalid_argument("acceptor worker target is incomplete");
+        }
+    }
+    listeners_.reserve(listeners.size());
+    quic_channels_.reserve(quic_count != 0 ? targets.size() : 0);
+    for (const auto& configured : listeners) {
+        listeners_.push_back(makePmrObject<listener>(processResource(), io_context_,
+            configured.endpoint, configured.http3.has_value()));
+    }
+    runtime_.configure({
+        .startup = [this] {
+            prepare_quic();
+            const std::lock_guard lock(mutex_);
+            if (failure_ == nullptr && runtime_.state() == RuntimeLifecycle::State::kRunning) {
+                ready_ = true;
+            }
+            condition_.notify_all(); },
+        .stop_admission = [this] { stop_on_owner(); },
+        .failure = [this](std::exception_ptr error) noexcept { fail(std::move(error)); },
+        .shutdown = [this]() noexcept {
+            close_listeners();
+            udp_.reset();
+            quic_channels_.clear();
+            const std::lock_guard lock(mutex_);
+            condition_.notify_all(); },
+    });
+}
+
+acceptor::~acceptor() {
+    stop();
+    join();
+}
+
+void acceptor::prepare_quic() {
+    const auto configured = std::ranges::find_if(listeners_,
+        [](const auto& bound) { return bound->quic; });
+    if (configured == listeners_.end()) {
+        return;
+    }
+    const auto& tcp = (*configured)->endpoint;
+    udp_ = makePmrObject<Http3DatagramEndpoint>(processResource(), io_context_,
+        asio::ip::udp::endpoint(tcp.address(), tcp.port()),
+        Http3DatagramEndpoint::notification{this, &datagram_ready});
+    udp_->prepare();
+    const asio::ip::udp::endpoint endpoint(tcp.address(), udp_->bound_port());
+    quic_running_ = true;
+    try {
+        asio::co_spawn(io_context_, ruvia::asAwaitable(run_quic()),
+            asio::bind_allocator(asio::recycling_allocator<void>(),
+                [this](std::exception_ptr error) noexcept {
+                    quic_running_ = false;
+                    if (error) {
+                        fail(std::move(error));
+                        // An unrecoverable runner error must not bypass leases.
+                        stop_on_owner();
+                        if (!quic_retired()) {
+                            std::terminate();
+                        }
+                        quic_notification_.close();
+                    }
+                    runtime_.finalize();
+                }));
+    } catch (...) {
+        quic_running_ = false;
+        throw;
+    }
+    for (std::size_t worker = 0; worker < targets_.size(); ++worker) {
+        auto channel = makePmrObject<http3_datagram_channel>(processResource(),
+            quic_notification_, processResource());
+        // A staging failure must not leave an unowned channel waiting for an ACK.
+        try {
+            targets_[worker].stage_quic(targets_[worker].object, *channel, endpoint,
+                {.index = static_cast<std::uint32_t>(worker),
+                    .count = static_cast<std::uint32_t>(targets_.size())});
+        } catch (...) {
+            channel->acceptor_close();
+            channel->abandon_worker();
+            throw;
+        }
+        quic_channels_.push_back(std::move(channel));
+    }
+}
+
+Task<void> acceptor::run_quic() {
+    for (;;) {
+        pump_quic();
+        if (quic_retired()) {
+            quic_notification_.close();
+            co_return;
+        }
+        if (quic_stopping_) {
+            // ACK publication follows the last cross-thread notification call.
+            // A cold timer covers wake-before-ACK without hot-path polling.
+            quic_retirement_.expires_after(std::chrono::milliseconds(1));
+            const auto completed = co_await ruvia::asyncAsio([this](auto handler) {
+                quic_retirement_.async_wait(std::move(handler));
+            });
+            if (completed.errorCode()) {
+                throw std::system_error(completed.errorCode(), "QUIC acceptor retirement wait");
+            }
+        } else {
+            try {
+                if (co_await quic_notification_.wait() == WorkerNotificationWaitStatus::kClosed) {
+                    stop_on_owner();
+                }
+            } catch (...) {
+                fail(std::current_exception());
+                stop_on_owner();
+            }
+        }
+    }
+}
+
+bool acceptor::quic_retired() noexcept {
+    if (!quic_stopping_ ||
+        !std::ranges::all_of(quic_channels_,
+            [](const auto& channel) { return channel->worker_closed(); })) {
+        return false;
+    }
+    // ACKs fence the last publication, including a send racing acceptor_close.
+    pump_quic();
+    return udp_->socket_done() && sending_worker_ == targets_.size();
+}
+
+void acceptor::datagram_ready(void* object, Http3DatagramEndpoint::notification_kind) noexcept {
+    auto& self = *static_cast<acceptor*>(object);
+    (void)self.quic_notification_.notify();
+}
+
+void acceptor::pump_quic() noexcept {
+    if (const auto error = udp_->error()) {
+        try {
+            throw std::system_error(error, "QUIC acceptor UDP I/O");
+        } catch (...) {
+            fail(std::current_exception());
+        }
+        stop_on_owner();
+    }
+    if (sending_worker_ != targets_.size() && !udp_->send_in_flight()) {
+        quic_channels_[sending_worker_]->acceptor_consume_output(udp_->error());
+        sending_worker_ = targets_.size();
+    }
+    if (quic_stopping_) {
+        for (auto& channel : quic_channels_) {
+            // No packet can be sent after the socket stop. Return any remaining
+            // producer-owned output before the worker detaches and acknowledges.
+            if (sending_worker_ == targets_.size() && channel->acceptor_output()) {
+                channel->acceptor_consume_output();
+            }
+        }
+        return;
+    }
+    if (const auto packet = udp_->receive_slot()) {
+        const auto worker = ruvia::quic_datagram_partition(packet->bytes,
+            static_cast<std::uint32_t>(targets_.size()));
+        if (worker) {
+            (void)quic_channels_[*worker]->acceptor_push(packet->bytes,
+                packet->local_destination, packet->peer);
+        }
+        if (udp_->consume_receive() == Http3DatagramEndpoint::pump_result::error) {
+            (void)quic_notification_.notify();
+        }
+    }
+    if (udp_->send_in_flight()) {
+        return;
+    }
+    for (std::size_t offset = 0; offset < quic_channels_.size(); ++offset) {
+        const auto worker = (next_output_ + offset) % quic_channels_.size();
+        const auto packet = quic_channels_[worker]->acceptor_output();
+        if (!packet) {
+            continue;
+        }
+        const auto sent = udp_->send_borrowed_datagram(packet->bytes, packet->local_destination, packet->peer);
+        if (sent == Http3DatagramEndpoint::pump_result::pending) {
+            sending_worker_ = worker;
+            next_output_ = (worker + 1) % quic_channels_.size();
+        } else {
+            quic_channels_[worker]->acceptor_consume_output(udp_->error());
+        }
+        break;
+    }
+}
+
+void acceptor::prepare() {
+    if (prepared_ || runtime_.state() != RuntimeLifecycle::State::kReady) {
+        throw std::logic_error("acceptor can only be prepared once before launch");
+    }
+    for (auto& configured : listeners_) {
+        auto& socket = configured->socket;
+        asio::error_code error;
+        socket.open(configured->endpoint.protocol(), error);
+        if (!error) {
+            socket.set_option(asio::socket_base::reuse_address(true), error);
+        }
+        if (!error) {
+            socket.bind(configured->endpoint, error);
+        }
+        if (!error) {
+            socket.listen(asio::socket_base::max_listen_connections, error);
+        }
+        if (!error) {
+            configured->endpoint = socket.local_endpoint(error);
+        }
+        if (error) {
+            close_listeners();
+            throw std::system_error(error, "failed to prepare TCP acceptor listener");
+        }
+    }
+    prepared_ = true;
+}
+
+void acceptor::launch() {
+    const std::lock_guard lock(mutex_);
+    if (!prepared_) {
+        throw std::logic_error("acceptor must be prepared before launch");
+    }
+    try {
+        runtime_.start();
+    } catch (...) {
+        condition_.notify_all();
+        throw;
+    }
+}
+
+void acceptor::wait_until_ready() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] {
+        const auto current = runtime_.state();
+        return ready_ || current == RuntimeLifecycle::State::kStopping || current == RuntimeLifecycle::State::kStopped;
+    });
+}
+
+void acceptor::request_serve() {
+    {
+        const std::lock_guard lock(mutex_);
+        if (runtime_.state() != RuntimeLifecycle::State::kRunning || serve_requested_) {
+            return;
+        }
+        serve_requested_ = true;
+    }
+    const auto posted = runtime_.post_control([this] {
+        if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+            const std::lock_guard lock(mutex_);
+            condition_.notify_all();
+            return;
+        }
+        try {
+            if (udp_ && udp_->start() == Http3DatagramEndpoint::pump_result::error) {
+                throw std::system_error(udp_->error(), "start QUIC acceptor UDP listener");
+            }
+            for (std::size_t i = 0; i < listeners_.size(); ++i) {
+                begin_accept(i);
+            }
+            const std::lock_guard lock(mutex_);
+            if (runtime_.state() == RuntimeLifecycle::State::kRunning && failure_ == nullptr) {
+                serving_ = true;
+            }
+            condition_.notify_all();
+        } catch (...) {
+            fail(std::current_exception());
+        }
+    });
+    if (!posted) {
+        stop();
+    }
+}
+
+bool acceptor::wait_until_serving() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] {
+        const auto current = runtime_.state();
+        return serving_ || failure_ != nullptr || current == RuntimeLifecycle::State::kStopping || current == RuntimeLifecycle::State::kStopped;
+    });
+    return serving_ && failure_ == nullptr;
+}
+
+void acceptor::stop() noexcept {
+    runtime_.request_stop();
+    const std::lock_guard lock(mutex_);
+    condition_.notify_all();
+}
+
+void acceptor::stop_on_owner() noexcept {
+    close_listeners();
+    quic_stopping_ = true;
+    if (udp_) {
+        udp_->request_stop();
+    }
+    for (auto& channel : quic_channels_) {
+        channel->acceptor_close(udp_ ? udp_->error() : std::error_code{});
+    }
+    if (quic_running_) {
+        (void)quic_notification_.notify();
+    } else {
+        quic_notification_.close();
+        runtime_.finalize();
+    }
+    const std::lock_guard lock(mutex_);
+    condition_.notify_all();
+}
+
+void acceptor::join() {
+    runtime_.join();
+    const std::lock_guard lock(mutex_);
+    condition_.notify_all();
+}
+
+asio::ip::tcp::endpoint acceptor::local_endpoint(std::size_t index) const {
+    return listeners_.at(index)->endpoint;
+}
+
+std::exception_ptr acceptor::failure() const noexcept {
+    const std::lock_guard lock(mutex_);
+    return failure_;
+}
+
+void acceptor::rethrow_failure() const {
+    if (const auto error = failure()) {
+        std::rethrow_exception(error);
+    }
+    runtime_.rethrow_failure();
+}
+
+void acceptor::begin_accept(std::size_t index) noexcept {
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning || targets_.empty()) {
+        return;
+    }
+    auto& socket = listeners_[index]->socket;
+    if (!socket.is_open()) {
+        return;
+    }
+    try {
+        socket.async_accept([this, index](const asio::error_code& error, asio::ip::tcp::socket accepted_socket) mutable {
+            accepted(index, error, std::move(accepted_socket));
+        });
+    } catch (...) {
+        fail(std::current_exception());
+    }
+}
+
+void acceptor::accepted(std::size_t index, const asio::error_code& error,
+    asio::ip::tcp::socket socket) noexcept {
+    if (error) {
+        if (error == asio::error::operation_aborted && runtime_.state() != RuntimeLifecycle::State::kRunning) {
+            return;
+        }
+        if (!recoverable_accept_error(error)) {
+            try {
+                throw std::system_error(error, "fatal TCP accept error");
+            } catch (...) {
+                fail(std::current_exception());
+            }
+            return;
+        }
+        schedule_retry(index);
+        return;
+    }
+    asio::error_code release_error;
+    const auto native = socket.release(release_error);
+    if (release_error) {
+        try {
+            throw std::system_error(release_error, "failed to detach accepted TCP socket");
+        } catch (...) {
+            fail(std::current_exception());
+        }
+        return;
+    }
+    NativeAcceptedSocketTicket ticket(listeners_[index]->endpoint.protocol(), index, native);
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning || targets_.empty()) {
+        return;
+    }
+    auto selected = targets_.size();
+    for (std::size_t offset = 0; offset < targets_.size(); ++offset) {
+        const auto worker = (next_target_ + offset) % targets_.size();
+        if (targets_[worker].available(targets_[worker].object) && targets_[worker].submission.accepting()) {
+            selected = worker;
+            next_target_ = (worker + 1) % targets_.size();
+            break;
+        }
+    }
+    if (selected == targets_.size()) {
+        schedule_retry(index);
+        return;
+    }
+    const auto target = targets_[selected];
+    try {
+        auto posted = target.submission.post([target, ticket = std::move(ticket)]() mutable noexcept {
+            if (target.available(target.object)) {
+                target.accept(target.object, std::move(ticket));
+            }
+        });
+        if (!posted.accepted()) {
+            auto rejected = std::move(posted).takeRejected();
+            rejected = {};
+        }
+    } catch (...) {
+        fail(std::current_exception());
+        return;
+    }
+    if (runtime_.state() == RuntimeLifecycle::State::kRunning) {
+        begin_accept(index);
+    }
+}
+
+void acceptor::schedule_retry(std::size_t index) noexcept {
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+        return;
+    }
+    try {
+        auto& timer = listeners_[index]->retry;
+        timer.expires_after(std::chrono::milliseconds(25));
+        timer.async_wait([this, index](const asio::error_code& error) {
+            if (!error) {
+                begin_accept(index);
+            }
+        });
+    } catch (...) {
+        fail(std::current_exception());
+    }
+}
+
+void acceptor::fail(std::exception_ptr error) noexcept {
+    {
+        const std::lock_guard lock(mutex_);
+        if (failure_ == nullptr) {
+            failure_ = std::move(error);
+        }
+        condition_.notify_all();
+    }
+    runtime_.request_stop();
+    if (failure_callback_ != nullptr) {
+        failure_callback_(failure_target_);
+    }
+}
+
+void acceptor::close_listeners() noexcept {
+    for (auto& configured : listeners_) {
+        asio::error_code ignored;
+        configured->retry.cancel(ignored);
+        ignored.clear();
+        configured->socket.cancel(ignored);
+        ignored.clear();
+        configured->socket.close(ignored);
+    }
+}
+
+}  // namespace ruvia::detail

@@ -27,6 +27,10 @@ RUVIA_REDIS_ENTITY(IntegerRedisUser, "integer_user",
     RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::RedisColumnOptions{.primaryKey = true}),
     RUVIA_REDIS_COLUMN(name, ruvia::String));
 
+RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::RedisColumnOptions{.primaryKey = true}),
+    RUVIA_REDIS_COLUMN(text, ruvia::String, ruvia::RedisColumnOptions{.nullable = true}));
+
 template <typename Fn>
 bool throwsRedisProtocolError(Fn&& function) {
     try {
@@ -92,6 +96,32 @@ RUVIA_TEST(redis_entity_move_preserves_owned_values_and_resource) {
         RUVIA_CHECK(resource.liveAllocations() > 0);
     }
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(redis_entity_failed_owning_assignment_preserves_each_column_state) {
+    const std::string replacement(256, 'x');
+    for (int state = 0; state < 3; ++state) {
+        ruvia::test::RejectingMemoryResource resource;
+        nullable_redis_text entity(&resource);
+        entity.set<"id">(7);
+        if (state == 1) {
+            entity.setNull<"text">();
+        } else if (state == 2) {
+            entity.set<"text">("retained");
+        }
+        resource.rejectAllocations();
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] { entity.set<"text">(replacement); }));
+        resource.rejectAllocations(false);
+        RUVIA_CHECK_EQ(entity.isSet<"text">(), state != 0);
+        RUVIA_CHECK_EQ(entity.isNull<"text">(), state == 1);
+        RUVIA_CHECK_EQ(entity.get<"id">(), 7);
+        if (state == 2) {
+            RUVIA_CHECK_EQ(entity.get<"text">().view(), std::string_view("retained"));
+            RUVIA_CHECK(entity.get<"text">().resource() == &resource);
+        } else {
+            RUVIA_CHECK(ruvia::testing::throwsOn([&] { (void)entity.get<"text">(); }));
+        }
+    }
 }
 
 RUVIA_TEST(redis_entity_codec_round_trips_scalars_and_binary_text) {

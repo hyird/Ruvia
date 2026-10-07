@@ -42,7 +42,7 @@ void verifiesOwnerResourceAndColdDiscard(ruvia::test::CountingMemoryResource& ow
     ruvia::testing::TestContext& ruvia_ctx, MakeOperation&& makeOperation) {
     const auto baseline = owner.liveAllocations();
     {
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         auto operation = makeOperation(scope);
         RUVIA_CHECK(owner.liveAllocations() > baseline);
         scope.close();
@@ -56,7 +56,7 @@ void verifiesColdDiscard(ruvia::test::CountingMemoryResource& owner,
     ruvia::testing::TestContext& ruvia_ctx, MakeOperation&& makeOperation) {
     const auto baseline = owner.liveAllocations();
     {
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         auto operation = makeOperation(scope);
         RUVIA_CHECK(owner.liveAllocations() > baseline);
     }
@@ -66,7 +66,7 @@ void verifiesColdDiscard(ruvia::test::CountingMemoryResource& owner,
 template <typename MakeOperation>
 void verifiesClosedScopeRejectsColdOperation(ruvia::testing::TestContext& ruvia_ctx,
     MakeOperation&& makeOperation) {
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     scope.close();
     bool rejected = false;
     try {
@@ -162,7 +162,7 @@ RUVIA_TEST(http_registry_direct_options_are_owned_and_expired_handles_keep_prior
     {
         ruvia::detail::HttpClientRegistry registry(
             ioContext, worker.handle(), &owner, std::span(definitions));
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         ruvia::StopSource stop;
         auto handle = registry.get(scope, {.timeout = std::chrono::seconds(4),
                                               .stopToken = stop.token()});
@@ -197,7 +197,7 @@ RUVIA_TEST(http_registry_direct_options_are_owned_and_expired_handles_keep_prior
 
         const auto baseline = owner.liveAllocations();
         {
-            ruvia::detail::ScopedOperationScope coldScope;
+            ruvia::operation_scope coldScope;
             auto cold = registry.get(coldScope, {.timeout = std::chrono::seconds(3)});
             const std::string target = "/" + std::string(4096, 'c');
             auto operation = cold.send({.target = target});
@@ -211,7 +211,7 @@ RUVIA_TEST(http_registry_direct_options_are_owned_and_expired_handles_keep_prior
     {
         ruvia::detail::HttpClientRegistry missingDefault(
             ioContext, worker.handle(), std::pmr::get_default_resource(), std::span(onlyNamed));
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         bool missingWins = false;
         try {
             (void)missingDefault.get(scope, {.timeout = std::chrono::milliseconds::zero()});
@@ -225,7 +225,7 @@ RUVIA_TEST(http_registry_direct_options_are_owned_and_expired_handles_keep_prior
         ruvia::detail::HttpClientRegistry closingRegistry(
             ioContext, worker.handle(), std::pmr::get_default_resource(), std::span(configured));
         closingRegistry.closeNow();
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         bool closingWins = false;
         try {
             (void)closingRegistry.get(scope, {.timeout = std::chrono::milliseconds::zero()});

@@ -44,9 +44,8 @@
 #include "ruvia/web/Task.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/integration/BlockingCapability.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
-#include "ruvia/web/detail/integration/WorkerStateCapability.h"
+#include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/model/Traits.h"
 
 namespace ruvia {
@@ -64,7 +63,10 @@ class DbHandle;
 class RedisHandle;
 #endif
 namespace detail {
-class RateLimiter;
+struct SteadyRateLimiterClock;
+template <typename Clock>
+class rate_limiter;
+using RateLimiter = rate_limiter<SteadyRateLimiterClock>;
 class RouteTable;
 class WorkerStateRegistry;
 class ContextRequestStorage;
@@ -122,8 +124,7 @@ struct FileResponseOptions final {
     BorrowedText contentType{};
 };
 
-class Context final : public detail::BlockingCapability<Context>,
-                      public detail::WorkerStateCapability<Context> {
+class Context final {
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
@@ -193,7 +194,41 @@ public:
     // Borrowed for this request. Copy the returned handle when it must outlive
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
     [[nodiscard]] const WorkerHandle& worker() const noexcept {
-        return worker_;
+        return capabilities_.worker();
+    }
+
+    // Borrows this worker's registered instance; never hand it to another
+    // worker. An unregistered type throws std::logic_error.
+    template <typename state_type>
+    [[nodiscard]] state_type& workerState() const {
+        return capabilities_.worker_state<state_type>();
+    }
+
+    // The callable executes on the blocking pool and must own everything it
+    // touches. Completion resumes on this worker; timeout or shutdown stops
+    // the wait without joining a still-running foreign callable.
+    template <typename callable_type>
+    [[nodiscard]] Task<std::invoke_result_t<callable_type&>> runBlocking(callable_type callable) const {
+        return capabilities_.run_blocking(std::move(callable));
+    }
+
+    template <typename rep_type, typename period_type, typename callable_type>
+    [[nodiscard]] Task<std::invoke_result_t<callable_type&>> runBlocking(
+        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
+        return capabilities_.run_blocking(timeout, std::move(callable));
+    }
+
+    // Pool rejection is returned as a status; exceptions from the callable
+    // still propagate. A disabled pool is a configuration error and throws.
+    template <typename callable_type>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<callable_type&>>> tryRunBlocking(callable_type callable) const {
+        return capabilities_.try_run_blocking(std::move(callable));
+    }
+
+    template <typename rep_type, typename period_type, typename callable_type>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<callable_type&>>> tryRunBlocking(
+        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
+        return capabilities_.try_run_blocking(timeout, std::move(callable));
     }
 
     // Whether this request's handler deadline elapsed. The token alone cannot
@@ -220,7 +255,7 @@ public:
     // client-disconnect detection.
     //
     [[nodiscard]] StopToken stopToken() const noexcept {
-        return stopToken_;
+        return capabilities_.stop_token();
     }
 
     // Present only while SessionMiddleware is bound for this request.
@@ -448,16 +483,6 @@ private:
     }
     [[nodiscard]] bool hasResponse() const noexcept;
     [[nodiscard]] HttpResponse takeResponse();
-    [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
-    friend class detail::BlockingCapability<Context>;
-    friend class detail::WorkerStateCapability<Context>;
-    [[nodiscard]] BlockingPool& blockingPool() const;
-    [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
-        return worker_;
-    }
-    [[nodiscard]] StopToken blockingStopToken() const noexcept {
-        return stopToken_;
-    }
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -470,8 +495,7 @@ private:
     ConnInfo connInfo_;
     // Context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.
-    const WorkerHandle& worker_;
-    const StopToken& stopToken_;
+    detail::worker_context_capabilities capabilities_;
     const detail::RequestDeadline* requestDeadline_{nullptr};
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
@@ -483,8 +507,6 @@ private:
     detail::HttpErrorHandlerRef errorHandler_{nullptr};
     detail::HttpNotFoundHandlerRef notFoundHandler_{nullptr};
     const detail::RouteTable* routes_{nullptr};
-    const detail::WorkerStateRegistry* workerStates_{nullptr};
-    BlockingPool* blockingPool_{nullptr};
     bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
     std::size_t maxDecodedBodyBytes_{0};
@@ -512,7 +534,7 @@ private:
 
     // Declared last so it closes first, while every request-owned object and its
     // memory resource are still alive.
-    mutable detail::ScopedOperationScope operationScope_;
+    mutable ::ruvia::operation_scope operationScope_;
 };
 
 namespace detail {

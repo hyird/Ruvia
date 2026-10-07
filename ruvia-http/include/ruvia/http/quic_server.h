@@ -13,6 +13,7 @@ struct quic_server_config {
     quic_version version{quic_version::v1};
     quic_transport_parameters local_transport_parameters{};
     quic_limits limits{};
+    quic_cid_partition cid_partition{};
     std::size_t max_active_connections{4096};
     std::size_t max_pending_connections{256};
     std::size_t max_pending_datagram_bytes{1U << 20};
@@ -23,9 +24,16 @@ struct quic_server_admit_result {
     quic_connection_token connection{};
 };
 
+// Stateless destination-CID routing using the same header parser as quic_server.
+// Client-chosen Initial DCIDs select a worker once; all server-issued CIDs keep
+// that worker across CID rotation and address migration. Invalid headers or a
+// zero partition count return nullopt. Short headers use the server's 16-byte CID.
+[[nodiscard]] std::optional<std::uint32_t> quic_datagram_partition(
+    std::span<const std::byte> packet, std::uint32_t partition_count) noexcept;
+
 // Sans-I/O Initial classifier, CID router, and owner of pending/admitted protocol
-// connections. route_datagram parses all QUIC packet headers and never asks Web to
-// decode a CID. Each admission stores its own TLS driver view/context until retire.
+// connections. Stateless partition routing and route_datagram share HTTP-owned
+// header decoding; Web never decodes CIDs. Each admission retains its TLS borrow.
 class quic_server {
 public:
     quic_server(quic_server_config config, quic_crypto_provider_view crypto,

@@ -63,12 +63,8 @@ Http3ServerConnectionChannel::reserveAndPublishGrant(
     hasLastIdentity_.store(true, std::memory_order_release);
     lastEpoch_ = epoch;
     lastConnectionGeneration_ = connectionGeneration;
-    bindTaken_ = false;
-    revokeTaken_ = false;
     transportRetiredTaken_ = false;
-    networkFinalizedTaken_ = false;
     closingGeneration_ = false;
-    attachSucceeded_.store(false, std::memory_order_relaxed);
     hasLastResetSequence_ = false;
     lastResetSequence_ = 0;
     closeIntentAckTaken_ = false;
@@ -179,12 +175,11 @@ Http3ServerConnectionChannel::receiveRevoke(Identity& identity) noexcept {
     if (workerPublicationsClosed_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
-    if (lifecycle_.load(std::memory_order_acquire) != Lifecycle::kRevokeRequested ||
-        revokeTaken_) {
+    if (lifecycle_.load(std::memory_order_acquire) != Lifecycle::kRevokeRequested) {
         return Status::kEmpty;
     }
     identity = identity_;
-    revokeTaken_ = true;
+    lifecycle_.store(Lifecycle::revoke_received, std::memory_order_release);
     return Status::kReceived;
 }
 
@@ -196,8 +191,7 @@ Http3ServerConnectionChannel::acknowledgeRevoke(
         return Status::kWrongOwner;
     }
     if (workerPublicationsClosed_.load(std::memory_order_acquire) ||
-        lifecycle_.load(std::memory_order_acquire) != Lifecycle::kRevokeRequested ||
-        !revokeTaken_) {
+        lifecycle_.load(std::memory_order_acquire) != Lifecycle::revoke_received) {
         return Status::kWrongState;
     }
     if (!registrationMatches(registration, identity_)) {
@@ -212,6 +206,7 @@ Http3ServerConnectionChannel::acknowledgeRevoke(
 
     beginNotification();
     revokeAck_ = {.identity = identity_};
+    lifecycle_.store(Lifecycle::revocation_pending, std::memory_order_release);
     revokeAckPublished_.store(true, std::memory_order_release);
     notifyNetworkBorrowed();
     return Status::kPublished;
@@ -231,7 +226,7 @@ Http3ServerConnectionChannel::receiveRevokeAck(RevokeAck& acknowledgement) noexc
     acknowledgement = revokeAck_;
     const bool current = matches(acknowledgement.identity) &&
                          lifecycle_.load(std::memory_order_acquire) ==
-                             Lifecycle::kRevokeRequested;
+                             Lifecycle::revocation_pending;
     beginNotification();
     revokeAckPublished_.store(false, std::memory_order_release);
     if (current) {
@@ -258,7 +253,7 @@ Http3ServerConnectionChannel::receiveBind(Bind& bind) noexcept {
     beginNotification();
     bindPublished_.store(false, std::memory_order_release);
     if (current) {
-        bindTaken_ = true;
+        lifecycle_.store(Lifecycle::bound, std::memory_order_release);
     }
     notifyNetworkBorrowed();
     return current ? Status::kReceived : Status::kStale;
@@ -275,16 +270,15 @@ Http3ServerConnectionChannel::attach(Http3WorkerMailboxScheduler& scheduler,
         !registrationMatches(registration, identity_)) {
         return Status::kStale;
     }
-    if (!bindTaken_ || lifecycle_.load(std::memory_order_acquire) != Lifecycle::kBinding ||
-        attachResultPublished_.load(std::memory_order_acquire)) {
+    if (lifecycle_.load(std::memory_order_acquire) != Lifecycle::bound) {
         return Status::kWrongState;
     }
     if (!scheduler.attach(registration.token, connection)) {
         return Status::kUnavailable;
     }
-    attachSucceeded_.store(true, std::memory_order_release);
     beginNotification();
     attachResult_ = AttachAck{.identity = identity_};
+    lifecycle_.store(Lifecycle::attaching, std::memory_order_release);
     attachResultPublished_.store(true, std::memory_order_release);
     notifyNetworkBorrowed();
     return Status::kPublished;
@@ -301,8 +295,7 @@ Http3ServerConnectionChannel::reject(Http3WorkerMailboxScheduler& scheduler,
         !registrationMatches(registration, identity_)) {
         return Status::kStale;
     }
-    if (!bindTaken_ || lifecycle_.load(std::memory_order_acquire) != Lifecycle::kBinding ||
-        attachResultPublished_.load(std::memory_order_acquire)) {
+    if (lifecycle_.load(std::memory_order_acquire) != Lifecycle::bound) {
         return Status::kWrongState;
     }
     if (!scheduler.abandon(registration.token)) {
@@ -310,6 +303,7 @@ Http3ServerConnectionChannel::reject(Http3WorkerMailboxScheduler& scheduler,
     }
     beginNotification();
     attachResult_ = AttachRejected{.identity = identity_, .reason = reason};
+    lifecycle_.store(Lifecycle::rejecting, std::memory_order_release);
     attachResultPublished_.store(true, std::memory_order_release);
     notifyNetworkBorrowed();
     return Status::kPublished;
@@ -330,7 +324,8 @@ Http3ServerConnectionChannel::receiveAttachResult(AttachResult& result) noexcept
     const auto identity = std::visit([](const auto& item) { return item.identity; }, result);
     const bool attached = std::holds_alternative<AttachAck>(result);
     const bool current = matches(identity) &&
-                         lifecycle_.load(std::memory_order_acquire) == Lifecycle::kBinding;
+                         lifecycle_.load(std::memory_order_acquire) ==
+                             (attached ? Lifecycle::attaching : Lifecycle::rejecting);
     beginNotification();
     if (current) {
         lifecycle_.store(attached ? Lifecycle::kAttached : Lifecycle::kRejected,
@@ -348,22 +343,16 @@ Http3ServerConnectionChannel::publishIntent(Identity identity,
         return Status::kWrongOwner;
     }
     if (workerPublicationsClosed_.load(std::memory_order_acquire) ||
-        networkPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedPublished_.load(std::memory_order_acquire)) {
+        networkPublicationsClosed_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     if (!matches(identity) || !intentMatchesIdentity(intent, identity)) {
         return Status::kStale;
     }
     const auto lifecycle = lifecycle_.load(std::memory_order_acquire);
-    // attach() is worker-affine and only sets this after scheduler.attach()
-    // succeeds. Permit both close and reset intents while its AttachAck awaits
-    // network consumption; otherwise the next scheduler turn can terminate on
-    // a valid intent in this short publication window.
-    const bool attachAckPending = lifecycle == Lifecycle::kBinding &&
-                                  attachSucceeded_.load(std::memory_order_acquire);
-    if (!isAttached() && !attachAckPending) {
+    // The attaching phase starts only after scheduler.attach() succeeds. Its
+    // handler may publish intents before the network consumes AttachAck.
+    if (lifecycle != Lifecycle::kAttached && lifecycle != Lifecycle::attaching) {
         return Status::kWrongState;
     }
 
@@ -420,9 +409,7 @@ Http3ServerConnectionChannel::receiveIntent(TransportIntent& intent) noexcept {
         return Status::kWrongOwner;
     }
     if (networkPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedPublished_.load(std::memory_order_acquire)) {
+        workerPublicationsClosed_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     if (closeIntentPublished_.load(std::memory_order_acquire) && !closeIntentReceived_) {
@@ -468,9 +455,7 @@ Http3ServerConnectionChannel::acknowledgeIntentAfterHandoff(Identity identity,
         return Status::kWrongOwner;
     }
     if (networkPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedPublished_.load(std::memory_order_acquire)) {
+        workerPublicationsClosed_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     if (!matches(identity) || token.id.epoch != identity.epoch ||
@@ -535,9 +520,7 @@ Http3ServerConnectionChannel::receiveIntentAck(
     if (!onWorkerOwner()) {
         return Status::kWrongOwner;
     }
-    if (workerPublicationsClosed_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedPublished_.load(std::memory_order_acquire)) {
+    if (workerPublicationsClosed_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     if (closeIntentAckPublished_.load(std::memory_order_acquire) && !closeIntentAckTaken_) {
@@ -624,8 +607,7 @@ Http3ServerConnectionChannel::publishAdmissionSealed(Identity identity,
     if (networkPublicationsClosed_.load(std::memory_order_acquire) ||
         !matches(identity) || lifecycle_.load(std::memory_order_acquire) != Lifecycle::kAttached ||
         admissionSealedPublished_.load(std::memory_order_acquire) ||
-        transportRetiredPublished_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire)) {
+        transportRetiredPublished_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     beginNotification();
@@ -665,8 +647,7 @@ Http3ServerConnectionChannel::publishDrainComplete(Identity identity) noexcept {
         networkPublicationsClosed_.load(std::memory_order_acquire) ||
         !matches(identity) || !admissionSealedPublished_.load(std::memory_order_acquire) ||
         !admissionSealedTaken_ || drainCompletePublished_.load(std::memory_order_acquire) ||
-        transportRetiredPublished_.load(std::memory_order_acquire) ||
-        workerFinalizedPublished_.load(std::memory_order_acquire)) {
+        transportRetiredPublished_.load(std::memory_order_acquire)) {
         return Status::kWrongState;
     }
     beginNotification();
@@ -704,9 +685,9 @@ Http3ServerConnectionChannel::closeWorkerPublications(Identity identity) noexcep
     const bool idleRearmed = lifecycle == Lifecycle::kVacant &&
                              hasLastIdentity_.load(std::memory_order_acquire) &&
                              identity_ == identity;
-    // Pending intents are server-network-owned and may still be changing. Worker
-    // retirement checks its own outstanding tokens; network checks pending
-    // tokens only after observing the closed worker publication gate.
+    // Pending intents are wire-half-owned and may still be changing. Handler
+    // retirement checks its own outstanding tokens; the wire half checks pending
+    // tokens only after observing the closed handler publication gate.
     if ((!idleRearmed && !matches(identity)) ||
         (!idleRearmed && lifecycle != Lifecycle::kAttached &&
             lifecycle != Lifecycle::kRejected && lifecycle != Lifecycle::kRevoked) ||
@@ -775,15 +756,14 @@ Http3ServerConnectionChannel::publishWorkerFinalized(Identity identity) noexcept
     }
     if (!workerPublicationsClosed_.load(std::memory_order_acquire) ||
         !networkPublicationsClosed_.load(std::memory_order_acquire) || !matches(identity) ||
-        !transportRetired(identity) || workerFinalizedPublished_.load(std::memory_order_acquire) ||
+        !transportRetired(identity) || worker_finalization_.published() ||
         !workerToNetworkControl_.empty() || !networkToWorkerControl_.empty() ||
         !outstandingIntentsEmpty() || notificationBorrows_.load(std::memory_order_acquire) != 0) {
         return Status::kWrongState;
     }
     beginNotification();
     discardDatagrams(true);
-    workerFinalizedIdentity_ = identity;
-    workerFinalizedPublished_.store(true, std::memory_order_release);
+    worker_finalization_.publish();
     notifyNetworkBorrowed();
     return Status::kPublished;
 }
@@ -795,16 +775,14 @@ Http3ServerConnectionChannel::publishNetworkFinalized(Identity identity) noexcep
     }
     if (!networkPublicationsClosed_.load(std::memory_order_acquire) || !matches(identity) ||
         !transportRetired(identity) ||
-        !workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedPublished_.load(std::memory_order_acquire) ||
+        !worker_finalization_.published() || network_finalization_.published() ||
         !workerToNetworkControl_.empty() || !networkToWorkerControl_.empty() ||
         !pendingIntentsEmpty() || notificationBorrows_.load(std::memory_order_acquire) != 0) {
         return Status::kWrongState;
     }
     beginNotification();
     discardDatagrams(false);
-    networkFinalizedIdentity_ = identity;
-    networkFinalizedPublished_.store(true, std::memory_order_release);
+    network_finalization_.publish();
     notifyWorkerBorrowed();
     return Status::kPublished;
 }
@@ -814,15 +792,11 @@ Http3ServerConnectionChannel::receiveWorkerFinalized(WorkerFinalized& finalized)
     if (!onNetworkOwner()) {
         return Status::kWrongOwner;
     }
-    if (!workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        workerFinalizedTaken_) {
+    if (!worker_finalization_.available()) {
         return Status::kEmpty;
     }
-    finalized = {.identity = workerFinalizedIdentity_};
-    if (!matches(finalized.identity)) {
-        return Status::kStale;
-    }
-    workerFinalizedTaken_ = true;
+    finalized = {.identity = identity_};
+    worker_finalization_.receive();
     return Status::kReceived;
 }
 
@@ -831,13 +805,11 @@ Http3ServerConnectionChannel::acknowledgeWorkerFinalized(Identity identity) noex
     if (!onNetworkOwner()) {
         return Status::kWrongOwner;
     }
-    if (!workerFinalizedPublished_.load(std::memory_order_acquire) ||
-        workerFinalizedIdentity_ != identity || !matches(identity) || !workerFinalizedTaken_ ||
-        workerFinalizedAcknowledged_.load(std::memory_order_acquire)) {
+    if (!worker_finalization_.received() || !matches(identity)) {
         return Status::kStale;
     }
     beginNotification();
-    workerFinalizedAcknowledged_.store(true, std::memory_order_release);
+    worker_finalization_.acknowledge();
     notifyWorkerBorrowed();
     return Status::kPublished;
 }
@@ -847,15 +819,11 @@ Http3ServerConnectionChannel::receiveNetworkFinalized(NetworkFinalized& finalize
     if (!onWorkerOwner()) {
         return Status::kWrongOwner;
     }
-    if (!networkFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedTaken_) {
+    if (!network_finalization_.available()) {
         return Status::kEmpty;
     }
-    finalized = {.identity = networkFinalizedIdentity_};
-    if (!matches(finalized.identity)) {
-        return Status::kStale;
-    }
-    networkFinalizedTaken_ = true;
+    finalized = {.identity = identity_};
+    network_finalization_.receive();
     return Status::kReceived;
 }
 
@@ -864,13 +832,11 @@ Http3ServerConnectionChannel::acknowledgeNetworkFinalized(Identity identity) noe
     if (!onWorkerOwner()) {
         return Status::kWrongOwner;
     }
-    if (!networkFinalizedPublished_.load(std::memory_order_acquire) ||
-        networkFinalizedIdentity_ != identity || !matches(identity) || !networkFinalizedTaken_ ||
-        networkFinalizedAcknowledged_.load(std::memory_order_acquire)) {
+    if (!network_finalization_.received() || !matches(identity)) {
         return Status::kStale;
     }
     beginNotification();
-    networkFinalizedAcknowledged_.store(true, std::memory_order_release);
+    network_finalization_.acknowledge();
     notifyNetworkBorrowed();
     return Status::kPublished;
 }
@@ -884,12 +850,7 @@ bool Http3ServerConnectionChannel::readyToRearm() const noexcept {
     return !workerStopping_.load(std::memory_order_acquire) &&
            (revoked || ((lifecycle == Lifecycle::kAttached || lifecycle == Lifecycle::kRejected) &&
                            terminalRecordsComplete())) &&
-           workerPublicationsClosed_.load(std::memory_order_acquire) &&
-           networkPublicationsClosed_.load(std::memory_order_acquire) && allControlEmpty() &&
-           !bindPublished_.load(std::memory_order_acquire) &&
-           !attachResultPublished_.load(std::memory_order_acquire) &&
-           !revokeAckPublished_.load(std::memory_order_acquire) &&
-           notificationBorrows_.load(std::memory_order_acquire) == 0;
+           generation_quiesced();
 }
 
 Http3ServerConnectionChannel::Status
@@ -907,13 +868,8 @@ Http3ServerConnectionChannel::rearm() noexcept {
     closeIntentAckPublished_.store(false, std::memory_order_relaxed);
     transportRetiredIdentity_ = {};
     transportRetiredPublished_.store(false, std::memory_order_relaxed);
-    workerFinalizedIdentity_ = {};
-    workerFinalizedPublished_.store(false, std::memory_order_relaxed);
-    workerFinalizedAcknowledged_.store(false, std::memory_order_relaxed);
-    networkFinalizedIdentity_ = {};
-    networkFinalizedPublished_.store(false, std::memory_order_relaxed);
-    networkFinalizedAcknowledged_.store(false, std::memory_order_relaxed);
-    workerFinalizedTaken_ = false;
+    worker_finalization_.reset();
+    network_finalization_.reset();
     admissionSealed_ = {};
     admissionSealedPublished_.store(false, std::memory_order_relaxed);
     admissionSealedTaken_ = false;
@@ -940,19 +896,10 @@ bool Http3ServerConnectionChannel::readyToDestroy() const noexcept {
                            allControlEmpty() &&
                            notificationBorrows_.load(std::memory_order_acquire) == 0;
     const bool idleRearmed = lifecycle == Lifecycle::kVacant && hasLastIdentity &&
-                             workerPublicationsClosed_.load(std::memory_order_acquire) &&
-                             networkPublicationsClosed_.load(std::memory_order_acquire) &&
-                             allControlEmpty() &&
-                             !bindPublished_.load(std::memory_order_acquire) &&
-                             !attachResultPublished_.load(std::memory_order_acquire) &&
-                             !revokeAckPublished_.load(std::memory_order_acquire) &&
                              !transportRetiredPublished_.load(std::memory_order_acquire) &&
-                             !workerFinalizedPublished_.load(std::memory_order_acquire) &&
-                             !networkFinalizedPublished_.load(std::memory_order_acquire) &&
-                             !workerFinalizedAcknowledged_.load(std::memory_order_acquire) &&
-                             !networkFinalizedAcknowledged_.load(std::memory_order_acquire) &&
-                             notificationBorrows_.load(std::memory_order_acquire) == 0;
-    return neverUsed || idleRearmed || ((revoked || finalized) && workerPublicationsClosed_.load(std::memory_order_acquire) && networkPublicationsClosed_.load(std::memory_order_acquire) && allControlEmpty() && !bindPublished_.load(std::memory_order_acquire) && !attachResultPublished_.load(std::memory_order_acquire) && !revokeAckPublished_.load(std::memory_order_acquire) && notificationBorrows_.load(std::memory_order_acquire) == 0);
+                             !worker_finalization_.published() &&
+                             !network_finalization_.published();
+    return neverUsed || ((idleRearmed || revoked || finalized) && generation_quiesced());
 }
 
 std::uint32_t Http3ServerConnectionChannel::notificationBorrows() const noexcept {
@@ -992,16 +939,22 @@ bool Http3ServerConnectionChannel::allControlEmpty() const noexcept {
            (!drainCompletePublished_.load(std::memory_order_acquire) || drainCompleteTaken_);
 }
 
+bool Http3ServerConnectionChannel::generation_quiesced() const noexcept {
+    return workerPublicationsClosed_.load(std::memory_order_acquire) &&
+           networkPublicationsClosed_.load(std::memory_order_acquire) && allControlEmpty() &&
+           !bindPublished_.load(std::memory_order_acquire) &&
+           !attachResultPublished_.load(std::memory_order_acquire) &&
+           !revokeAckPublished_.load(std::memory_order_acquire) &&
+           notificationBorrows_.load(std::memory_order_acquire) == 0;
+}
+
 bool Http3ServerConnectionChannel::terminalRecordsComplete() const noexcept {
     return transportRetiredPublished_.load(std::memory_order_acquire) &&
-           workerFinalizedPublished_.load(std::memory_order_acquire) &&
-           networkFinalizedPublished_.load(std::memory_order_acquire) &&
-           workerFinalizedAcknowledged_.load(std::memory_order_acquire) &&
-           networkFinalizedAcknowledged_.load(std::memory_order_acquire) &&
+           worker_finalization_.acknowledged() &&
+           network_finalization_.acknowledged() &&
            (!admissionSealedPublished_.load(std::memory_order_acquire) || admissionSealedTaken_) &&
            (!drainCompletePublished_.load(std::memory_order_acquire) || drainCompleteTaken_) &&
-           transportRetiredIdentity_ == workerFinalizedIdentity_ &&
-           transportRetiredIdentity_ == networkFinalizedIdentity_;
+           transportRetiredIdentity_ == identity_;
 }
 
 bool Http3ServerConnectionChannel::hasOutstandingIntent(Identity identity,

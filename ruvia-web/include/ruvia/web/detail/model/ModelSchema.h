@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -67,6 +69,31 @@ struct ModelFieldDescriptor final {
 template <typename... DescriptorTs>
 struct ModelSchema final {};
 
+struct empty_model_tag final {};
+
+struct model_access final {
+    template <typename model_type>
+    [[nodiscard]] static constexpr auto schema() noexcept {
+        return typename std::remove_cvref_t<model_type>::RuviaModelSchema{};
+    }
+
+    template <std::size_t index, typename model_type>
+    [[nodiscard]] static decltype(auto) slot(model_type& value) noexcept {
+        return value.fields_.template slot<index>();
+    }
+
+    template <typename model_type>
+    [[nodiscard]] static model_type empty(std::pmr::memory_resource* resource) {
+        return model_type(empty_model_tag{}, ::ruvia::ModelOptions{.resource = resource});
+    }
+};
+
+template <typename... descriptor_types>
+consteval void validate_model_schema(ModelSchema<descriptor_types...>) {
+    static_assert((detail::isModelField<typename descriptor_types::value_type> && ...),
+        "model fields must use Ruvia values or nested models");
+}
+
 template <FixedString Field, typename... DescriptorTs>
 [[nodiscard]] consteval std::size_t modelFieldIndex() {
     constexpr std::size_t matches = (std::size_t{Field == DescriptorTs::sourceName} + ... + 0);
@@ -114,7 +141,7 @@ template <typename ModelT, typename... DescriptorTs, typename VisitorT, std::siz
 constexpr void visitModelFieldsImpl(ModelT& model, ModelSchema<DescriptorTs...>, VisitorT&& visitor,
     std::index_sequence<Indices...>) {
     auto& visitorRef = visitor;
-    (visitorRef(DescriptorTs{}, model.template ruviaSlot<Indices>()), ...);
+    (visitorRef(DescriptorTs{}, model_access::slot<Indices>(model)), ...);
 }
 
 template <typename ModelT, typename... DescriptorTs, typename VisitorT>
@@ -129,7 +156,7 @@ template <std::size_t Index, typename DescriptorT, typename... RemainingTs, type
 [[nodiscard]] bool visitModelFieldByWireNameImpl(ModelT& model, std::uint64_t wireHash,
     std::string_view wireName, bool& visitResult, VisitorT& visitor) {
     if (wireHash == DescriptorT::wireHash && wireName == DescriptorT::wireName.view()) {
-        visitResult = visitor(model.template ruviaSlot<Index>());
+        visitResult = visitor(model_access::slot<Index>(model));
         return true;
     }
     if constexpr (sizeof...(RemainingTs) > 0) {
@@ -155,7 +182,13 @@ template <typename ModelT, typename... DescriptorTs, typename VisitorT>
 template <FixedString Field, typename ModelT, typename... DescriptorTs>
 [[nodiscard]] ModelFieldState modelFieldState(const ModelT& model, ModelSchema<DescriptorTs...>) {
     constexpr auto index = modelFieldIndex<Field, DescriptorTs...>();
-    return model.template ruviaSlot<index>().state();
+    return model_access::slot<index>(model).state();
+}
+
+template <typename model_type>
+void initialize_model(model_type& value) {
+    visitModelFields(value, model_access::schema<model_type>(),
+        [resource = value.resource()](const auto&, auto& slot) { slot.applyInitial(resource); });
 }
 
 }  // namespace ruvia::detail::model

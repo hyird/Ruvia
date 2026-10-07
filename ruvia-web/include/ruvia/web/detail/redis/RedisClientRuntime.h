@@ -31,8 +31,8 @@ public:
 
     [[nodiscard]] Task<void> connect();
     void closeNow() noexcept;
-    [[nodiscard]] RedisHandle handle(ScopedOperationScope& scope) const;
-    [[nodiscard]] RedisHandle handle(ScopedOperationScope& scope, OperationOptions options) const;
+    [[nodiscard]] RedisHandle handle(::ruvia::operation_scope& scope) const;
+    [[nodiscard]] RedisHandle handle(::ruvia::operation_scope& scope, OperationOptions options) const;
 
 private:
     RedisConfigStorage config_;

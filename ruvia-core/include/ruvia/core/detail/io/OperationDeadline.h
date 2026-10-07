@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "ruvia/core/OperationTimeout.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 
 namespace ruvia::detail {
 

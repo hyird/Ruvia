@@ -16,6 +16,7 @@
 #include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
+#include "ruvia/web/detail/db/DbValueAccess.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -40,6 +41,47 @@ DbRows sample(std::pmr::memory_resource* resource, std::string_view value = "a\0
     Access::rows(result).push_back(std::move(row));
     return result;
 }
+RUVIA_TEST(db_query_plan_owns_compiled_statements_and_rejects_non_row_sequences) {
+    for (auto driver : {DbDriver::kMariaDb, DbDriver::kPostgreSql}) {
+        test::CountingMemoryResource source, resource;
+        {
+            auto plan = [&] {
+                DbQuery query(&source);
+                query.select(query.value(std::string(500, 'x'))).cache(50ms);
+                DbQuery count(&source);
+                count.select(count.value(7)).cache(100ms);
+                return detail::db_query_plan::prepare(query, &count, driver, &resource, nullptr);
+            }();
+            RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(plan.first.sql, driver == DbDriver::kMariaDb ? "SELECT ?" : "SELECT $1");
+            RUVIA_CHECK_EQ(plan.first.params.size(), std::size_t{1});
+            RUVIA_CHECK_EQ(detail::DbValueAccess::text(plan.first.params[0]), std::string(500, 'x'));
+            RUVIA_CHECK_EQ(plan.first.cache_duration, std::optional{50ms});
+            RUVIA_CHECK(!plan.first.cache_key.has_value());
+            RUVIA_CHECK(plan.second.has_value());
+            RUVIA_CHECK_EQ(plan.second->cache_duration, std::optional{100ms});
+            RUVIA_CHECK_EQ(detail::DbValueAccess::signedValue(plan.second->params[0]), 7);
+            DbQuery rows(&source);
+            rows.select(rows.value(1));
+            DbQuery write(&source);
+            write.deleteFrom("records");
+            RUVIA_CHECK(testing::throwsOn([&] {
+                (void)detail::db_query_plan::prepare(write, nullptr, driver, &resource, nullptr);
+            }));
+            RUVIA_CHECK(testing::throwsOn([&] {
+                (void)detail::db_query_plan::prepare(rows, &write, driver, &resource, nullptr);
+            }));
+            RUVIA_CHECK(testing::throwsOn([&] {
+                (void)detail::db_query_plan::prepare(write, &rows, driver, &resource, nullptr);
+            }));
+            auto single = detail::db_query_plan::prepare(rows, nullptr, driver, &resource, nullptr);
+            RUVIA_CHECK(!single.second.has_value());
+        }
+        RUVIA_CHECK_EQ(source.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
 RUVIA_TEST(db_cache_scope_separates_alias_backend_endpoint_database_and_role) {
     auto* resource = std::pmr::get_default_resource();
 #ifdef RUVIA_ENABLE_MARIADB
@@ -267,9 +309,9 @@ Task<DbRows> operation(StoreState& state, bool ignore = false,
         Database{&state, std::pmr::string(500, 'x', state.resource)}, state.resource,
         OperationOptions{.timeout = timeout});
 }
-template <typename Callback>
-asio::awaitable<void> awaitTask(Task<DbRows> task, Callback callback) {
-    std::optional<DbRows> result;
+template <typename result_type, typename callback_type>
+asio::awaitable<void> awaitTask(Task<result_type> task, callback_type callback) {
+    std::optional<result_type> result;
     std::exception_ptr failure;
     try {
         result.emplace(co_await asAwaitable(std::move(task)));
@@ -279,17 +321,18 @@ asio::awaitable<void> awaitTask(Task<DbRows> task, Callback callback) {
     callback(std::move(failure), std::move(result));
     co_return;
 }
-template <typename Callback>
-void startTask(asio::io_context& context, Task<DbRows> task, Callback callback) {
+template <typename result_type, typename callback_type>
+void startTask(asio::io_context& context, Task<result_type> task, callback_type callback) {
     asio::co_spawn(context, awaitTask(std::move(task), std::move(callback)), asio::detached);
     context.poll();
     context.restart();
 }
-DbRows run(Task<DbRows> task) {
+template <typename result_type>
+result_type run(Task<result_type> task) {
     asio::io_context context;
-    std::optional<DbRows> result;
+    std::optional<result_type> result;
     std::exception_ptr failure;
-    startTask(context, std::move(task), [&](std::exception_ptr error, std::optional<DbRows> rows) {
+    startTask(context, std::move(task), [&](std::exception_ptr error, std::optional<result_type> rows) {
         failure = std::move(error);
         if (rows) {
             result.emplace(std::move(*rows));
@@ -301,6 +344,202 @@ DbRows run(Task<DbRows> task) {
     }
     return std::move(result.value());
 }
+struct sequence_backend {
+    StoreState* first;
+    StoreState* second;
+
+    Task<DbRows> operator()(detail::db_query_step step, OperationOptions options,
+        const OperationTimeout& deadline) const {
+        auto* state = step.sql.front() == 'x' ? first : second;
+        Database database{state, std::move(step.sql)};
+        if (step.cache_key) {
+            co_return co_await detail::queryDbCache(Store{state}, std::move(*step.cache_key),
+                *step.cache_duration, false, std::move(database), state->resource,
+                std::move(options), deadline);
+        }
+        co_return co_await std::move(database)(std::move(options));
+    }
+};
+
+detail::db_query_plan sequence_plan(std::pmr::memory_resource* resource, bool cached) {
+    const auto step = [&](char value) {
+        return detail::db_query_step{std::pmr::string(500, value, resource),
+            std::pmr::vector<DbValue>(resource),
+            cached ? std::optional{std::pmr::string(100, value, resource)} : std::nullopt,
+            60s};
+    };
+    return detail::db_query_plan{step('x'), step('y')};
+}
+
+Task<std::pair<DbRows, DbRows>> sequence_operation(StoreState& first, StoreState& second,
+    bool cached, std::optional<std::chrono::milliseconds> timeout = std::nullopt) {
+    return detail::execute_db_query_plan<true>(sequence_plan(first.resource, cached),
+        sequence_backend{&first, &second}, OperationOptions{.timeout = timeout});
+}
+
+RUVIA_TEST(db_single_query_plan_uses_the_same_cache_and_direct_execution_chain) {
+    for (bool cached : {false, true}) {
+        test::CountingMemoryResource resource;
+        {
+            StoreState first{.resource = &resource};
+            StoreState second{.resource = &resource};
+            const auto operation = [&] {
+                auto plan = sequence_plan(&resource, cached);
+                plan.second.reset();
+                return detail::execute_db_query_plan<false>(std::move(plan),
+                    sequence_backend{&first, &second}, OperationOptions{});
+            };
+            {
+                auto cold = operation();
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+            auto retained = run(operation());
+            {
+                auto next = run(operation());
+                RUVIA_CHECK_EQ(*next[0]["value"].value(), std::string(500, 'x'));
+            }
+            RUVIA_CHECK_EQ(first.queries, cached ? 1 : 2);
+            RUVIA_CHECK_EQ(second.queries + second.reads + second.writes, 0);
+            RUVIA_CHECK_EQ(*retained[0]["value"].value(), std::string(500, 'x'));
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    }
+}
+
+RUVIA_TEST(db_query_sequence_direct_misses_and_mixed_cache_hits_retain_results) {
+    for (bool cached : {false, true}) {
+        test::CountingMemoryResource resource;
+        {
+            StoreState first{.resource = &resource};
+            StoreState second{.resource = &resource};
+            {
+                auto cold = sequence_operation(first, second, cached);
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+            RUVIA_CHECK_EQ(first.reads + second.reads + first.queries + second.queries, 0);
+            auto retained = run(sequence_operation(first, second, cached));
+            RUVIA_CHECK_EQ(first.queries, 1);
+            RUVIA_CHECK_EQ(second.queries, 1);
+            RUVIA_CHECK_EQ(first.reads, cached ? 1 : 0);
+            RUVIA_CHECK_EQ(second.reads, cached ? 1 : 0);
+            if (cached) {
+                second.value.reset();
+                {
+                    auto mixed = run(sequence_operation(first, second, true));
+                    RUVIA_CHECK_EQ(first.queries, 1);
+                    RUVIA_CHECK_EQ(second.queries, 2);
+                }
+                const auto baseline = resource.liveAllocations();
+                for (int index = 0; index < 10; ++index) {
+                    {
+                        auto hits = run(sequence_operation(first, second, true));
+                        RUVIA_CHECK_EQ(first.queries, 1);
+                        RUVIA_CHECK_EQ(second.queries, 2);
+                    }
+                    RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
+                }
+            }
+            RUVIA_CHECK_EQ(*retained.first[0]["value"].value(), std::string(500, 'x'));
+            RUVIA_CHECK_EQ(*retained.second[0]["value"].value(), std::string(500, 'y'));
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    }
+}
+
+RUVIA_TEST(db_query_sequence_first_failure_never_starts_count) {
+    for (bool cached : {false, true}) {
+        for (bool cache_failure : {false, true}) {
+            test::CountingMemoryResource resource;
+            {
+                StoreState first{.resource = &resource};
+                StoreState second{.resource = &resource};
+                if (cached && cache_failure) {
+                    first.getError = RedisError::Code::kIoError;
+                } else {
+                    first.dbError = true;
+                }
+                RUVIA_CHECK(testing::throwsOn([&] {
+                    auto rows = run(sequence_operation(first, second, cached));
+                }));
+                RUVIA_CHECK_EQ(second.reads, 0);
+                RUVIA_CHECK_EQ(second.queries, 0);
+                RUVIA_CHECK_EQ(second.writes, 0);
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        }
+    }
+}
+
+RUVIA_TEST(db_query_sequence_count_receives_only_remaining_overall_timeout) {
+    for (bool cached : {false, true}) {
+        test::CountingMemoryResource resource;
+        asio::io_context context;
+        TimerGate first_gate(context, 10ms);
+        StoreState first{.timerDbGate = &first_gate, .resource = &resource};
+        StoreState second{.resource = &resource};
+        std::exception_ptr failure;
+        bool finished = false;
+        startTask(context, sequence_operation(first, second, cached, 500ms),
+            [&](std::exception_ptr error, std::optional<std::pair<DbRows, DbRows>> rows) {
+                failure = std::move(error);
+                finished = rows.has_value();
+            });
+        context.run();
+        RUVIA_CHECK(failure == nullptr);
+        RUVIA_CHECK(finished);
+        RUVIA_CHECK(first.sqlTimeout.has_value());
+        RUVIA_CHECK(second.sqlTimeout.has_value());
+        RUVIA_CHECK(*second.sqlTimeout > 0ms);
+        RUVIA_CHECK(*second.sqlTimeout < *first.sqlTimeout);
+        if (cached) {
+            RUVIA_CHECK(second.getTimeout.has_value());
+            RUVIA_CHECK(*second.getTimeout < *first.sqlTimeout);
+        }
+    }
+}
+
+RUVIA_TEST(db_query_sequence_expiration_and_cancellation_do_not_start_count) {
+    for (bool cached : {false, true}) {
+        for (bool cancel : {false, true}) {
+            test::CountingMemoryResource resource;
+            {
+                asio::io_context context;
+                TimerGate expired_gate(context, 30ms);
+                Gate cancel_gate;
+                StoreState first{.resource = &resource};
+                StoreState second{.resource = &resource};
+                if (cancel) {
+                    first.dbGate = &cancel_gate;
+                    first.cancelDb = true;
+                } else {
+                    first.timerDbGate = &expired_gate;
+                }
+                std::exception_ptr failure;
+                startTask(context, sequence_operation(first, second, cached, cancel ? 500ms : 5ms),
+                    [&](std::exception_ptr error, std::optional<std::pair<DbRows, DbRows>>) {
+                        failure = std::move(error);
+                    });
+                if (cancel) {
+                    RUVIA_CHECK(cancel_gate.continuation != nullptr);
+                    cancel_gate.resume();
+                }
+                context.run();
+                RUVIA_CHECK(failure != nullptr);
+                try {
+                    std::rethrow_exception(failure);
+                } catch (const DbError& error) {
+                    RUVIA_CHECK_EQ(error.code(), cancel ? DbError::Code::kCancelled : DbError::Code::kTimeout);
+                }
+                RUVIA_CHECK_EQ(second.reads, 0);
+                RUVIA_CHECK_EQ(second.queries, 0);
+                RUVIA_CHECK_EQ(second.writes, 0);
+            }
+            RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        }
+    }
+}
+
 RUVIA_TEST(db_cache_hit_skips_database_and_repeated_operations_release_temporaries) {
     test::CountingMemoryResource resource;
     {

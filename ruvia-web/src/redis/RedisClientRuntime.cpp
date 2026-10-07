@@ -29,11 +29,11 @@ void RedisClientRuntime::closeNow() noexcept {
     blocking_->closeNow();
 }
 
-RedisHandle RedisClientRuntime::handle(ScopedOperationScope& scope) const {
+RedisHandle RedisClientRuntime::handle(::ruvia::operation_scope& scope) const {
     return RedisHandle(*general_, *blocking_, resource_, scope);
 }
 
-RedisHandle RedisClientRuntime::handle(ScopedOperationScope& scope, OperationOptions options) const {
+RedisHandle RedisClientRuntime::handle(::ruvia::operation_scope& scope, OperationOptions options) const {
     validateOperationOptions(options);
     return RedisHandle(*general_, *blocking_, resource_, scope, std::move(options));
 }

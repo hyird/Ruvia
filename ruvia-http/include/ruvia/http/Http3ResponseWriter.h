@@ -25,7 +25,7 @@ enum class Http3ResponseHeadError : std::uint8_t {
     peer_field_section_limit,
 };
 
-struct Http3ResponseFieldSection {
+struct Http3ResponseFieldSection final {
     // Owned by the supplied PMR resource; that resource must outlive this value.
     std::pmr::vector<char> fieldSection;
 
@@ -63,13 +63,15 @@ private:
     std::size_t decodedFieldSectionSize_;
 };
 
-struct Http3ResponseHead final : Http3ResponseFieldSection {
+struct Http3ResponseHead final {
+    // The encoded section can be moved independently of the body metadata.
+    Http3ResponseFieldSection field_section;
     HttpResponseBodyPlan bodyPlan;
     std::optional<std::uint64_t> declaredContentLength{};
 
     Http3ResponseHead(std::pmr::vector<char> bytes, HttpResponseBodyPlan plan,
         std::size_t decodedSize, std::optional<std::uint64_t> length = {})
-        : Http3ResponseFieldSection(std::move(bytes), decodedSize),
+        : field_section(std::move(bytes), decodedSize),
           bodyPlan(plan),
           declaredContentLength(length) {}
     Http3ResponseHead(const Http3ResponseHead&) = delete;

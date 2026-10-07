@@ -24,7 +24,7 @@ struct PmrCloseFailure final {
 };
 
 struct CloseStateProbe final {
-    CloseStateProbe(ruvia::EventLoop loop, bool& destroyed)
+    explicit CloseStateProbe(ruvia::EventLoop loop, bool* destroyed = nullptr)
         : loop_(std::move(loop)),
           worker_(loop_.handle()),
           state(std::make_unique<ruvia::detail::ClientCloseState>(loop_, worker_)),
@@ -32,13 +32,15 @@ struct CloseStateProbe final {
 
     ~CloseStateProbe() {
         state.reset();
-        destroyed_ = true;
+        if (destroyed_ != nullptr) {
+            *destroyed_ = true;
+        }
     }
 
     ruvia::EventLoop loop_;
     ruvia::WorkerHandle worker_;
     std::unique_ptr<ruvia::detail::ClientCloseState> state;
-    bool& destroyed_;
+    bool* destroyed_;
 };
 
 [[nodiscard]] std::exception_ptr makeFailure(std::pmr::memory_resource* resource) {
@@ -49,55 +51,67 @@ struct CloseStateProbe final {
     }
 }
 
+ruvia::Task<void> cleanup(std::exception_ptr failure = {}) {
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
+    co_return;
+}
+
 ruvia::Task<void> finishFailedClose(ruvia::EventLoop loop,
     std::pmr::memory_resource* resource, std::exception_ptr& original, bool& stateDestroyed,
     bool& callerObservedSameFailure, ruvia::testing::TestContext& ruvia_ctx) {
-    CloseStateProbe probe(std::move(loop), stateDestroyed);
-    auto& state = *probe.state;
-    RUVIA_CHECK(state.startTask());
+    const auto probe = std::make_shared<CloseStateProbe>(std::move(loop), &stateDestroyed);
+    auto& state = *probe->state;
     original = makeFailure(resource);
-    state.finish(original);
+    state.start_cleanup(probe, [failure = original] { return cleanup(failure); }, [probe](std::exception_ptr failure) { probe->state->finish(std::move(failure)); });
+    // Retirement awaits the actual root task without re-reporting its failure.
+    co_await state.shutdown_owned(probe, [] {}, ruvia::detail::ClientCloseState::ObservationMode::kRetirement);
     RUVIA_CHECK(state.complete());
+    RUVIA_CHECK(state.taskStarted());
 
-    // Retirement must confirm completion without throwing the already-reported
-    // teardown failure back through the stop callback.
-    state.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kRetirement);
     callerObservedSameFailure = true;
     for (unsigned attempt = 0; attempt != 2; ++attempt) {
         bool observed = false;
         try {
-            state.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kCaller);
+            co_await state.shutdown_owned(probe, [] {}, ruvia::detail::ClientCloseState::ObservationMode::kCaller);
         } catch (const PmrCloseFailure& failure) {
             // rethrow_exception may copy its exception on some platforms.
-            // Preserve the failure's payload and allocator, not object identity.
             observed = failure.payload.get_allocator().resource() == resource &&
                        failure.payload.size() == 512 && failure.payload.front() == 'x';
         }
         callerObservedSameFailure = callerObservedSameFailure && observed;
     }
-    RUVIA_CHECK(!state.startTask());
-    co_return;
+    bool restarted = false;
+    state.start_cleanup(probe, [&restarted] {
+        restarted = true;
+        return cleanup(); }, [](std::exception_ptr) { std::terminate(); });
+    RUVIA_CHECK(!restarted);
 }
 
 ruvia::Task<void> finishSuccessfulClose(ruvia::EventLoop loop, bool& coldStayedCold,
     bool& closeRemainedOneShot) {
-    const auto worker = loop.handle();
     {
-        ruvia::detail::ClientCloseState cold(loop, worker);
-        cold.completeBeforePublication();
-        coldStayedCold = !cold.startTask();
-        cold.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kCaller);
-        cold.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kRetirement);
+        const auto probe = std::make_shared<CloseStateProbe>(loop);
+        auto& state = *probe->state;
+        state.completeBeforePublication();
+        coldStayedCold = true;
+        state.start_cleanup(probe, [&coldStayedCold] {
+            coldStayedCold = false;
+            return cleanup(); }, [](std::exception_ptr) { std::terminate(); });
+        state.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kCaller);
+        state.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kRetirement);
     }
     {
-        ruvia::detail::ClientCloseState completed(loop, worker);
-        closeRemainedOneShot = completed.startTask();
-        completed.finish({});
-        completed.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kCaller);
-        completed.observeFailure(ruvia::detail::ClientCloseState::ObservationMode::kRetirement);
-        closeRemainedOneShot = closeRemainedOneShot && !completed.startTask();
+        const auto probe = std::make_shared<CloseStateProbe>(loop);
+        auto& state = *probe->state;
+        state.start_cleanup(probe, [] { return cleanup(); }, [probe](std::exception_ptr failure) { probe->state->finish(std::move(failure)); });
+        co_await state.shutdown_owned(probe, [] {}, ruvia::detail::ClientCloseState::ObservationMode::kCaller);
+        closeRemainedOneShot = state.taskStarted() && state.complete();
+        state.start_cleanup(probe, [&closeRemainedOneShot] {
+            closeRemainedOneShot = false;
+            return cleanup(); }, [](std::exception_ptr) { std::terminate(); });
     }
-    co_return;
 }
 
 }  // namespace
@@ -114,7 +128,6 @@ RUVIA_TEST(client_close_state_reports_unobserved_failure_and_rethrows_to_callers
         loop.start(finishFailedClose(
                        loop, &memory, original, stateDestroyed, callerObservedSameFailure, ruvia_ctx))
             .get();
-        RUVIA_CHECK(stateDestroyed);
         RUVIA_CHECK(callerObservedSameFailure);
         RUVIA_CHECK(memory.liveAllocations() > 0);
 
@@ -125,6 +138,7 @@ RUVIA_TEST(client_close_state_reports_unobserved_failure_and_rethrows_to_callers
             poolObservedFailure = true;
         }
         RUVIA_CHECK(poolObservedFailure);
+        RUVIA_CHECK(stateDestroyed);
     }
     original = {};
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});

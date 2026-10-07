@@ -12,7 +12,7 @@
 
 namespace ruvia {
 
-class MultipartReader final : private detail::ScopedCapabilityNode {
+class MultipartReader final {
 public:
     MultipartReader(BodyReader& bodyReader, MultipartParseOptions options)
         : bodyReader_(nullptr),
@@ -20,7 +20,7 @@ public:
         if (bodyReader.operationScope_.active()) {
             state_.emplace<ReceivingState>(options);
             bodyReader_ = &bodyReader;
-            bind(bodyReader.operationScope_, &MultipartReader::expireCapability);
+            registration_.bind(bodyReader.operationScope_, this, &MultipartReader::expire_capability);
         }
     }
 
@@ -69,11 +69,12 @@ private:
     };
 
     [[nodiscard]] BodyReader& bodyReader() const;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    static void expire_capability(void* target) noexcept;
 
     BodyReader* bodyReader_;
     State state_;
-    detail::ScopedOperationScope operationScope_;
+    ::ruvia::operation_scope operationScope_;
+    scoped_capability_registration registration_;
 
     [[nodiscard]] Task<std::optional<MultipartStreamPart>> readTask();
 };

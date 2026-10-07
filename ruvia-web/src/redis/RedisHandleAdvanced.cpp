@@ -101,55 +101,55 @@ Task<std::optional<RedisXReadGroupResult>> executeRedisXReadGroup(detail::RedisP
 }  // namespace
 
 ScopedOperation<RedisScanResult> RedisHandle::scan(RedisScanOptions options) const {
-    requireActive();
+    registration_.require_active();
     return scoped(
         executeRedisScan(executor(), redisScanArgs("SCAN", options, resource_), resource_));
 }
 
 ScopedOperation<RedisHashScanResult> RedisHandle::hscan(
     std::string_view key, RedisScanOptions options) const {
-    requireActive();
+    registration_.require_active();
     return scoped(executeRedisHashScan(
         executor(), redisKeyScanArgs("HSCAN", key, options, resource_), resource_));
 }
 
 ScopedOperation<RedisScanResult> RedisHandle::sscan(
     std::string_view key, RedisScanOptions options) const {
-    requireActive();
+    registration_.require_active();
     return scoped(executeRedisScan(
         executor(), redisKeyScanArgs("SSCAN", key, options, resource_), resource_));
 }
 
 ScopedOperation<RedisZScanResult> RedisHandle::zscan(
     std::string_view key, RedisScanOptions options) const {
-    requireActive();
+    registration_.require_active();
     return scoped(executeRedisZScan(
         executor(), redisKeyScanArgs("ZSCAN", key, options, resource_), resource_));
 }
 
 ScopedOperation<RedisValue> RedisHandle::eval(std::string_view script,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
-    requireActive();
+    registration_.require_active();
     return scoped(detail::executeOwnedRedisCommand(
         executor(), detail::redisEvalArgs("EVAL", script, keys, args, resource_), resource_));
 }
 
 ScopedOperation<RedisValue> RedisHandle::evalSha(std::string_view sha1,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
-    requireActive();
+    registration_.require_active();
     return scoped(detail::executeOwnedRedisCommand(
         executor(), detail::redisEvalArgs("EVALSHA", sha1, keys, args, resource_), resource_));
 }
 
 ScopedOperation<std::pmr::string> RedisHandle::scriptLoad(std::string_view script) const {
-    requireActive();
+    registration_.require_active();
     return scoped(detail::redisStatusCommand(
         executor(), detail::ownRedisArgs({"SCRIPT", "LOAD", script}, resource_), resource_));
 }
 
 ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(
     std::span<const std::string_view> sha1s) const {
-    requireActive();
+    registration_.require_active();
     if (sha1s.empty()) {
         throw std::invalid_argument("redis script exists requires at least one sha1");
     }
@@ -165,7 +165,7 @@ ScopedOperation<std::pmr::vector<bool>> RedisHandle::scriptExists(
 
 ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(
     std::span<const std::string_view> keys, RedisBlockWait wait) const {
-    requireActive();
+    registration_.require_active();
     return scoped(executeRedisBlockingPop(*blockingPool_,
         detail::redisBlockingPopArgs("BLPOP", keys, wait, resource_),
         redisBlockingOperationOptions(operationOptions_, wait), resource_));
@@ -173,7 +173,7 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::blpop(
 
 ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(
     std::span<const std::string_view> keys, RedisBlockWait wait) const {
-    requireActive();
+    registration_.require_active();
     return scoped(executeRedisBlockingPop(*blockingPool_,
         detail::redisBlockingPopArgs("BRPOP", keys, wait, resource_),
         redisBlockingOperationOptions(operationOptions_, wait), resource_));
@@ -182,7 +182,7 @@ ScopedOperation<std::optional<RedisKeyValue>> RedisHandle::brpop(
 ScopedOperation<std::optional<RedisXReadGroupResult>> RedisHandle::xreadGroup(
     std::string_view group, std::string_view consumer, std::span<const RedisStreamReadView> streams,
     RedisXReadGroupOptions options) const {
-    requireActive();
+    registration_.require_active();
     auto operation = operationOptions_;
     auto args = detail::redisXReadGroupArgs(group, consumer, streams, options, resource_);
     auto* selectedPool = pool_;
@@ -195,12 +195,13 @@ ScopedOperation<std::optional<RedisXReadGroupResult>> RedisHandle::xreadGroup(
 }
 
 RedisPipeline RedisHandle::pipeline() const {
-    requireActive();
-    return RedisPipeline(*pool_, operationOptions_, resource_, operationScope());
+    registration_.require_active();
+    return RedisPipeline(*pool_, operationOptions_, resource_, registration_.scope());
 }
 
 RedisTransaction RedisHandle::transaction() const {
-    return RedisTransaction(pipeline());
+    registration_.require_active();
+    return RedisTransaction(*pool_, operationOptions_, resource_, registration_.scope());
 }
 
 }  // namespace ruvia

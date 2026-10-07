@@ -20,6 +20,7 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
+#include "ruvia/http/detail/http3/http3_trailer_collector.h"
 
 namespace ruvia {
 namespace {
@@ -74,17 +75,9 @@ Http3ConnectionErrorCode mapControlError(Http3ControlStreamStatus status) noexce
     return Http3ConnectionErrorCode::kNoError;
 }
 
-bool isValidTrailer(Http3FieldSectionFieldView field) {
-    if (field.name.empty() || field.name.front() == ':' || !isValidHttpHeaderName(field.name) ||
-        !isValidHttpHeaderValue(field.value) || detail::isForbiddenHttpRequestTrailerName(field.name)) {
-        return false;
-    }
-    for (const unsigned char ch : field.name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            return false;
-        }
-    }
-    return true;
+bool valid_request_trailer(Http3FieldSectionFieldView field) noexcept {
+    return isValidHttpHeaderName(field.name) && isValidHttpHeaderValue(field.value) &&
+           !detail::isForbiddenHttpRequestTrailerName(field.name);
 }
 
 }  // namespace
@@ -128,22 +121,7 @@ struct Http3Connection::Impl final {
         void* callbackContext{nullptr};
     };
 
-    struct TrailerField final {
-        TrailerField(Http3FieldSectionFieldView field, std::pmr::memory_resource* resource)
-            : name(field.name, resource),
-              value(field.value, resource),
-              neverIndexed(field.neverIndexed) {}
-        std::pmr::string name;
-        std::pmr::string value;
-        bool neverIndexed;
-    };
-
-    struct TrailerCollector final {
-        explicit TrailerCollector(std::pmr::memory_resource* resource)
-            : fields(resource) {}
-        std::pmr::vector<TrailerField> fields;
-        bool valid{true};
-    };
+    using trailer_collector = detail::http3_trailer_collector<valid_request_trailer>;
 
     struct FeedGuard final {
         explicit FeedGuard(Impl& impl)
@@ -158,16 +136,6 @@ struct Http3Connection::Impl final {
         }
         Impl& impl;
     };
-
-    static bool collectTrailer(void* opaque, Http3FieldSectionFieldView field) {
-        auto& collector = *static_cast<TrailerCollector*>(opaque);
-        if (!isValidTrailer(field)) {
-            collector.valid = false;
-            return false;
-        }
-        collector.fields.emplace_back(field, collector.fields.get_allocator().resource());
-        return true;
-    }
 
     Impl(Http3PeerRole role, std::pmr::memory_resource* resource, Http3ConnectionConfig limits)
         : role(role),
@@ -301,13 +269,13 @@ struct Http3Connection::Impl final {
             request.terminal = true;
             return;
         }
-        TrailerCollector collector(request.resource);
-        const auto decoded = request.decoder.decode(request.streamId, frame.payload, collectTrailer, &collector);
+        trailer_collector collector(request.resource);
+        const auto decoded = request.decoder.decode(request.streamId, frame.payload, trailer_collector::collect, &collector);
         if (decoded && decoded->status == Http3QpackDecodeStatus::kBlocked) {
             request.frames.pause();
             return;
         }
-        if (!decoded || !collector.valid) {
+        if (!decoded || !collector.valid_) {
             request.callbackResult = requestError(!decoded
                                                       ? (decoded.error() == Http3QpackConnectionError::kLimit ? Http3ConnectionErrorCode::kExcessiveLoad
                                                                                                               : Http3ConnectionErrorCode::kQpackDecompressionFailed)
@@ -315,10 +283,10 @@ struct Http3Connection::Impl final {
             request.terminal = true;
             return;
         }
-        for (const auto& field : collector.fields) {
+        for (const auto& field : collector.fields_) {
             const Http3ConnectionEvent event{.kind = Http3ConnectionEventKind::kTrailerField,
                 .streamId = request.streamId,
-                .trailer = {field.name, field.value, field.neverIndexed}};
+                .trailer = {field.name_, field.value_, field.never_indexed_}};
             request.callback(request.callbackContext, event);
         }
     }

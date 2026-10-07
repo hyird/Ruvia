@@ -7,6 +7,7 @@
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3StreamFrames.h"
 #include "ruvia/http/Http3VarInt.h"
+#include "ruvia/http/detail/http3/http3_trailer_collector.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace ruvia {
@@ -20,37 +21,14 @@ Http3ClientResponseResult connectionError(Http3ConnectionErrorCode code) noexcep
     return {Http3ClientResponseStatus::kConnectionError, Http3ConnectionErrorScope::kConnection, code};
 }
 
-bool validTrailer(Http3FieldSectionFieldView field) noexcept {
-    if (field.name.empty() || field.name.front() == ':') {
-        return false;
-    }
-    for (const unsigned char ch : field.name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            return false;
-        }
-    }
+bool valid_response_trailer(Http3FieldSectionFieldView field) noexcept {
     return detail::responseTrailerFieldValid(field.name, field.value);
 }
 
 }  // namespace
 
 struct Http3ClientResponse::Impl final {
-    struct TrailerField final {
-        TrailerField(Http3FieldSectionFieldView field, std::pmr::memory_resource* resource)
-            : name(field.name, resource),
-              value(field.value, resource),
-              neverIndexed(field.neverIndexed) {}
-        std::pmr::string name;
-        std::pmr::string value;
-        bool neverIndexed;
-    };
-
-    struct TrailerCollector final {
-        explicit TrailerCollector(std::pmr::memory_resource* resource)
-            : fields(resource) {}
-        std::pmr::vector<TrailerField> fields;
-        bool valid{true};
-    };
+    using trailer_collector = detail::http3_trailer_collector<valid_response_trailer>;
 
     Impl(std::uint64_t stream, HttpKnownMethod method, std::pmr::memory_resource* resource,
         Http3ClientResponseLimits configured, Http3QpackDecoder* sharedDecoder)
@@ -81,16 +59,6 @@ struct Http3ClientResponse::Impl final {
     bool tunnel{false};
     bool terminal{false};
     bool feeding{false};
-
-    static bool collectTrailer(void* opaque, Http3FieldSectionFieldView field) {
-        auto& collector = *static_cast<TrailerCollector*>(opaque);
-        if (!validTrailer(field)) {
-            collector.valid = false;
-            return false;
-        }
-        collector.fields.emplace_back(field, collector.fields.get_allocator().resource());
-        return true;
-    }
 
     static void onFrame(void* opaque, Http3StreamFrameEvent frame) {
         auto& self = *static_cast<Impl*>(opaque);
@@ -183,16 +151,16 @@ struct Http3ClientResponse::Impl final {
                 self.result = streamError(Http3ConnectionErrorCode::kMessageError);
                 return;
             }
-            TrailerCollector collector(self.memory);
+            trailer_collector collector(self.memory);
             const Http3FieldSectionLimits fieldLimits{self.limits.maxEncodedFieldSectionBytes,
                 self.limits.maxFieldSectionSize, self.limits.maxFields};
             if (self.decoder) {
-                const auto decoded = self.decoder->decode(self.streamId, frame.payload, collectTrailer, &collector);
+                const auto decoded = self.decoder->decode(self.streamId, frame.payload, trailer_collector::collect, &collector);
                 if (decoded && decoded->status == Http3QpackDecodeStatus::kBlocked) {
                     self.frames.pause();
                     return;
                 }
-                if (!decoded || !collector.valid) {
+                if (!decoded || !collector.valid_) {
                     self.result = !decoded ? connectionError(decoded.error() == Http3QpackConnectionError::kLimit
                                                                  ? Http3ConnectionErrorCode::kExcessiveLoad
                                                                  : Http3ConnectionErrorCode::kQpackDecompressionFailed)
@@ -200,21 +168,21 @@ struct Http3ClientResponse::Impl final {
                     return;
                 }
             } else {
-                const auto decoded = decodeHttp3FieldSection(frame.payload, collectTrailer, &collector, fieldLimits, self.memory);
-                if (!decoded || !collector.valid) {
-                    self.result = collector.valid ? connectionError(decoded.error() == Http3FieldSectionError::kFieldListTooLarge ||
-                                                                            decoded.error() == Http3FieldSectionError::kFieldSectionTooLarge || decoded.error() == Http3FieldSectionError::kTooManyFields
-                                                                        ? Http3ConnectionErrorCode::kExcessiveLoad
-                                                                        : Http3ConnectionErrorCode::kQpackDecompressionFailed)
-                                                  : streamError(Http3ConnectionErrorCode::kMessageError);
+                const auto decoded = decodeHttp3FieldSection(frame.payload, trailer_collector::collect, &collector, fieldLimits, self.memory);
+                if (!decoded || !collector.valid_) {
+                    self.result = collector.valid_ ? connectionError(decoded.error() == Http3FieldSectionError::kFieldListTooLarge ||
+                                                                             decoded.error() == Http3FieldSectionError::kFieldSectionTooLarge || decoded.error() == Http3FieldSectionError::kTooManyFields
+                                                                         ? Http3ConnectionErrorCode::kExcessiveLoad
+                                                                         : Http3ConnectionErrorCode::kQpackDecompressionFailed)
+                                                   : streamError(Http3ConnectionErrorCode::kMessageError);
                     return;
                 }
             }
             self.trailers = true;
-            for (const auto& field : collector.fields) {
+            for (const auto& field : collector.fields_) {
                 const Http3ClientResponseEvent event{.kind = Http3ClientResponseEventKind::kTrailerField,
                     .streamId = self.streamId,
-                    .trailer = {field.name, field.value, field.neverIndexed}};
+                    .trailer = {field.name_, field.value_, field.never_indexed_}};
                 self.callback(self.callbackContext, event);
             }
             return;

@@ -64,7 +64,7 @@ private:
 
     void start() noexcept {
         if (handle_ != nullptr) {
-            handle_.promise().markStarted();
+            handle_.promise().control_.mark_started();
             handle_.resume();
         }
     }
@@ -72,7 +72,7 @@ private:
     void reset() noexcept {
         if (handle_ != nullptr) {
             auto handle = std::exchange(handle_, {});
-            if (!handle.done() && handle.promise().started()) {
+            if (!handle.done() && handle.promise().control_.started()) {
                 std::terminate();
             }
             handle.destroy();

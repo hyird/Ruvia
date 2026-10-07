@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
 #include <algorithm>
-#include <cerrno>
+#include <array>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -10,14 +10,8 @@
 #include <system_error>
 #include <utility>
 
-#if !defined(_WIN32)
-#include <sys/socket.h>
-#endif
-
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/post.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <asio/ssl/context.hpp>
 #include <openssl/ssl.h>
@@ -28,8 +22,11 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/http/static/StaticRootIndex.h"
+#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+#include "ruvia/web/detail/http3/http3_worker_runtime.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/server/acceptor.h"
 #include "ruvia/web/detail/server/tls/HttpServerTlsIdentity.h"
 
 namespace ruvia::detail {
@@ -41,8 +38,8 @@ namespace {
 int selectAlpnProtocol(SSL*, const unsigned char** out, unsigned char* outLength,
     const unsigned char* in, unsigned int inLength, void*) noexcept {
     // This is the TCP TLS context, so it offers only h2 and http/1.1. HTTP/3
-    // negotiates "h3" on the separately owned UDP/QUIC server network context and is
-    // never advertised through this callback.
+    // negotiates "h3" on this worker's separate QUIC/TLS context and is never
+    // advertised through this TCP callback.
     static constexpr unsigned char protocols[] = {
         2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), outLength, protocols,
@@ -107,41 +104,37 @@ WebWorkerRuntime::WebWorkerRuntime(HttpServerListenerDefinition listener, const 
 WebWorkerRuntime::WebWorkerRuntime(std::span<const HttpServerListenerDefinition> listeners,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities, HttpServerOptions options)
     : WebWorkerRuntime(validateHttpServerConfiguration(listeners, std::move(options)), routes,
-          capabilities, ConnectionOwnershipMode::kOwnListeners) {}
+          capabilities, true) {}
 
 WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities)
-    : WebWorkerRuntime(configuration, routes, capabilities,
-          ConnectionOwnershipMode::kTransferredSessions) {}
+    : WebWorkerRuntime(configuration, routes, capabilities, false) {}
 
 WebWorkerRuntime::WebWorkerRuntime(const ValidatedHttpServerConfiguration& configuration,
     const RouteTable& routes, WorkerCapabilityDefinitions capabilities,
-    ConnectionOwnershipMode connectionOwnershipMode)
+    bool own_acceptor)
     : WebWorkerRuntime(ValidatedConfigurationTag{}, configuration.listeners(), routes, capabilities,
-          configuration.options(), connectionOwnershipMode) {}
+          configuration.options(), own_acceptor) {}
 
 WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     std::span<const HttpServerListenerDefinition> listeners, const RouteTable& routes,
     WorkerCapabilityDefinitions capabilities, HttpServerOptions validatedOptions,
-    ConnectionOwnershipMode connectionOwnershipMode)
-    // One worker thread runs all I/O on this context; cross-thread access is
-    // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
-    // reactor's per-descriptor I/O locking is elided.
-    : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
-      workerRuntime_(ioContext_, validatedOptions.workerMailboxCapacity),
-      finalizeGuard_(asio::make_work_guard(ioContext_)),
+    bool own_acceptor)
+    : runtime_({.mailbox_capacity = validatedOptions.workerMailboxCapacity,
+          .io_policy = ruvia::worker_io_policy::single_owner}),
+      ioContext_(runtime_.context().ioContext()),
+      workerRuntime_(runtime_.context()),
       serveSignal_(workerRuntime_.handle()),
       finalizeSignal_(workerRuntime_.handle()),
       routes_(routes),
       memory_(validatedOptions.memoryConfig),
       inbound_buffers_(memory_.resource(), validatedOptions.max_inbound_buffer_bytes_per_worker),
       listeners_(memory_.resource()),
-      acceptors_(memory_.resource()),
+      owned_acceptor_(nullptr, PmrObjectDeleter<acceptor>{memory_.resource()}),
       backgroundTasks_(workerRuntime_.handle(), {.resource = memory_.resource()}),
       ownedDocumentRoot_(nullptr, PmrObjectDeleter<StaticRoot>{processResource()}),
       retiredDocumentRoots_(memory_.resource()),
       options_(std::move(validatedOptions)),
-      connectionOwnershipMode_(connectionOwnershipMode),
       connectionScanner_(workerRuntime_.handle(), makeConnectionScannerOptions(options_)),
       capabilities_(ioContext_, workerRuntime_.handle(), memory_.resource(), capabilities,
           WorkerCapabilityOptions{
@@ -158,6 +151,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
               .precompressedStaticFiles = options_.compression.has_value(),
           }),
       http3Server_(nullptr, PmrObjectDeleter<Http3WorkerServer>{memory_.resource()}),
+      http3_transport_(nullptr, PmrObjectDeleter<http3_worker_runtime>{memory_.resource()}),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(),
           workerRuntime_.handle(), memory_.resource(), capabilities_,
           [this](const std::exception_ptr& failure) { failWorker(failure); })),
@@ -166,6 +160,8 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     const auto http3Listener = std::ranges::find_if(listeners,
         [](const HttpServerListenerDefinition& listener) { return listener.http3.has_value(); });
     if (http3Listener != listeners.end()) {
+        http3_config_ = http3Listener->http3;
+        http3_listener_index_ = static_cast<std::size_t>(http3Listener - listeners.begin());
         if (!options_.maxConnections.has_value() ||
             options_.workerMailboxCapacity > std::numeric_limits<std::uint32_t>::max()) {
             throw std::invalid_argument("HTTP/3 worker limits are not representable");
@@ -179,16 +175,22 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     }
 
     listeners_.reserve(listeners.size());
-    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-        acceptors_.reserve(listeners.size());
-    }
     for (const auto& listener : listeners) {
         listeners_.push_back(makePmrObject<HttpServerSessionConfig>(
             memory_.resource(), listener, memory_.resource()));
-        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-            acceptors_.push_back(makePmrObject<HttpServerAcceptor>(
-                memory_.resource(), ioContext_, listener));
-        }
+    }
+    if (own_acceptor) {
+        const std::array targets{acceptor::worker_target{
+            .submission = networkSubmission(),
+            .object = this,
+            .available = [](void* object) noexcept { return static_cast<WebWorkerRuntime*>(object)->availableForNetworkDispatch(); },
+            .accept = [](void* object, NativeAcceptedSocketTicket&& ticket) noexcept { static_cast<WebWorkerRuntime*>(object)->acceptTransferredConnection(std::move(ticket)); },
+            .stage_quic = http3_config_ ? +[](void* object, http3_datagram_channel& channel,
+                                               asio::ip::udp::endpoint endpoint, quic_cid_partition partition) { static_cast<WebWorkerRuntime*>(object)->stage_quic(channel, endpoint, partition); }
+                                        : nullptr,
+        }};
+        owned_acceptor_ = makePmrObject<acceptor>(memory_.resource(), listeners, targets, this,
+            [](void* object) noexcept { static_cast<WebWorkerRuntime*>(object)->stopAdmission(); });
     }
     if (options_.documentRoot.refreshOptions() != nullptr) {
         const auto* configuredRoot = options_.documentRoot.root();
@@ -206,6 +208,38 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
     // Claim the failure sink's counter. Every reporting site shares this one
     // options_ instance, so the count cannot drift from what the callback saw.
     options_.connectionFailure.counter = &connectionFailures_;
+    runtime_.configure({
+        .startup = [this] {
+            workerState_ = HttpServerWorkerState::kRunning;
+            capabilities_.initializeWorkerState();
+            asio::co_spawn(ioContext_, ruvia::asAwaitable(runWorker()),
+                asio::bind_allocator(asio::recycling_allocator<void>(),
+                    [this](std::exception_ptr failure) noexcept {
+                        if (failure) {
+                            failWorker(failure);
+                        }
+                    })); },
+        .stop_admission = [this] { stopAdmissionOnContext(); },
+        .failure = [this](std::exception_ptr failure) noexcept {
+            (void)workerCompletion_.markStartupFailed(failure);
+            failWorker(failure); },
+        .shutdown = [this]() noexcept {
+            if (http3_transport_ != nullptr) {
+                if (!http3_transport_->drained()) {
+                    std::terminate();
+                }
+                http3_transport_.reset();
+            }
+            for (auto& listener : listeners_) {
+                listener->tlsContext.reset();
+                listener->sniLookup.clear();
+                listener->sniContexts.clear();
+            }
+            capabilities_.shutdownWorkerState();
+            workerState_ = HttpServerWorkerState::kStopped;
+            (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
+                std::runtime_error("http server worker stopped before startup completed"))); },
+    });
 }
 
 WebWorkerRuntime::~WebWorkerRuntime() {
@@ -219,14 +253,8 @@ WebWorkerRuntime::~WebWorkerRuntime() {
         // reason with it.
         ruvia::reportUnhandledFailure("web server worker", std::current_exception());
     }
-    // Retire the execution context first. Failure shutdown already releases
-    // abandoned mailbox tasks on the worker; detach defensively releases any
-    // task left by a context that stopped outside the managed run loop. A post
-    // producer can still be inside core's factory at this point; retire waits
-    // only for started callbacks, while that producer later abandons its own
-    // reservation. Public handles may outlive this server, so detach also
-    // leaves them a terminal endpoint before Asio objects are destroyed.
-    workerRuntime_.detach();
+    // Core has detached escaped endpoints before retiring the execution
+    // context. Domain callback state can now be retired without a live producer.
     webWorkerDispatch_->retire();
 }
 
@@ -241,14 +269,11 @@ void WebWorkerRuntime::start() {
 }
 
 void WebWorkerRuntime::prepare() {
-    if (prepared_ || lifecycle_.state() != RuntimeLifecycle::State::kReady) {
+    if (prepared_ || runtime_.state() != RuntimeLifecycle::State::kReady) {
         throw std::logic_error("web worker runtime can only be prepared once");
     }
-    for (std::size_t i = 0; i < listeners_.size(); ++i) {
-        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-            configureAcceptor(*acceptors_[i]);
-        }
-        configureTlsContext(*listeners_[i]);
+    if (owned_acceptor_) {
+        owned_acceptor_->prepare();
     }
     prepared_ = true;
 }
@@ -257,52 +282,44 @@ void WebWorkerRuntime::launch() {
     if (!prepared_) {
         throw std::logic_error("web worker runtime must be prepared before launch");
     }
-    std::lock_guard threadStateLock(threadStateMutex_);
-    if (!lifecycle_.start()) {
-        throw std::logic_error("web worker runtime cannot be launched twice");
-    }
-    workerState_ = HttpServerWorkerState::kRunning;
-
     try {
-        workerThread_ = std::thread([this] { runIoContext(); });
-        threadLaunched_ = true;
+        if (owned_acceptor_) {
+            owned_acceptor_->launch();
+            owned_acceptor_->wait_until_ready();
+            owned_acceptor_->rethrow_failure();
+        }
+        runtime_.start();
     } catch (...) {
         const auto failure = std::current_exception();
-        struct UnstartedRuntimeCleanup final {
-            WebWorkerRuntime& runtime;
-
-            ~UnstartedRuntimeCleanup() {
-                for (const auto& acceptor : runtime.acceptors_) {
-                    asio::error_code ignored;
-                    acceptor->acceptor.close(ignored);
-                }
-                runtime.webWorkerDispatch_->close();
-                runtime.webWorkerDispatch_->retire();
-                runtime.workerRuntime_.close();
-                runtime.workerRuntime_.detach();
-                runtime.finalizeGuard_.reset();
-                (void)runtime.lifecycle_.requestStop();
-                runtime.lifecycle_.completeStop();
-            }
-        } cleanup{*this};
+        if (runtime_.failure() != failure) {
+            throw;  // A rejected lifecycle call is not a worker failure.
+        }
         (void)workerCompletion_.markStartupFailed(failure);
         (void)workerCompletion_.recordWorkerFailure(failure);
+        // Core still owes owner-affine draining. App performs the external
+        // producer barrier before requesting phase-two finalization.
+        if (!runtime_.started() && http3Server_ != nullptr) {
+            http3Server_->abandonBeforeLaunch();
+            if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+                channel->abandon_worker();
+            }
+        }
         throw;
     }
 }
 
 void WebWorkerRuntime::waitUntilReady() {
-    if (lifecycle_.state() == RuntimeLifecycle::State::kReady) {
+    if (runtime_.state() == RuntimeLifecycle::State::kReady) {
         throw std::logic_error("web worker runtime has not been launched");
     }
     workerCompletion_.waitForStartup();
 }
 
 void WebWorkerRuntime::requestServe() {
-    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning) {
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
         return;
     }
-    asio::post(ioContext_, [this] {
+    (void)runtime_.post_control([this] {
         if (!httpServerWorkerRunning(workerState_) || serveRequested_ ||
             stopToken_.stopRequested()) {
             return;
@@ -313,83 +330,73 @@ void WebWorkerRuntime::requestServe() {
 }
 
 bool WebWorkerRuntime::waitUntilServing() {
-    return workerCompletion_.waitForServing();
+    const bool ready = workerCompletion_.waitForServing();
+    if (!ready || !owned_acceptor_) {
+        return ready;
+    }
+    owned_acceptor_->request_serve();
+    if (!owned_acceptor_->wait_until_serving()) {
+        owned_acceptor_->rethrow_failure();
+        return false;
+    }
+    return true;
 }
 
 void WebWorkerRuntime::stop() noexcept {
-    if (lifecycle_.state() == RuntimeLifecycle::State::kStopped) {
+    if (runtime_.state() == RuntimeLifecycle::State::kStopped) {
         return;
     }
     stopAdmission();
-    finalizeAfterNetworkQuiesced();
+    if (!owned_acceptor_) {
+        finalizeAfterNetworkQuiesced();
+    }
 }
 
 void WebWorkerRuntime::stopAdmission() noexcept {
-    (void)lifecycle_.requestStop();
-    workerRuntime_.close();
-
-    bool threadLaunched = false;
-    {
-        std::lock_guard lock(threadStateMutex_);
-        threadLaunched = threadLaunched_;
+    if (owned_acceptor_) {
+        owned_acceptor_->stop();
     }
-    if (!threadLaunched) {
-        if (http3Server_ != nullptr) {
-            http3Server_->abandonBeforeLaunch();
+    runtime_.request_stop();
+    if (!runtime_.started() && http3Server_ != nullptr) {
+        http3Server_->abandonBeforeLaunch();
+        if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+            channel->abandon_worker();
         }
-        return;
     }
-    // This internal control remains available after dispatcher admission closes.
-    // Even calls made on the owner thread are deferred so StopToken callbacks do
-    // not run inline on App::stop()'s caller stack.
-    workerRuntime_.deferOrTerminate([this] { stopAdmissionOnContext(); });
 }
 
 void WebWorkerRuntime::finalizeAfterNetworkQuiesced() noexcept {
-    {
-        std::lock_guard lock(threadStateMutex_);
-        if (!threadLaunched_) {
-            // No worker owner exists yet; startup/prepare resources can be retired
-            // by the external lifecycle owner.
-            finalizeGuard_.reset();
-            return;
-        }
-    }
-    // Dispatcher defer remains reliable after close(): it bypasses bounded
-    // admission while still targeting the attached owner context.
-    workerRuntime_.deferOrTerminate([this] { stopOnContext(); });
+    runtime_.finalize([this] { stopOnContext(); });
 }
 
 void WebWorkerRuntime::join() {
     if (workerRuntime_.handle().isCurrent()) {
-        throw std::logic_error("cannot join a Web worker runtime from its worker");
+        throw std::logic_error("web worker cannot join itself");
     }
-    std::thread joiningThread;
-    {
-        std::lock_guard lock(threadStateMutex_);
-        if (workerThread_.joinable()) {
-            joiningThread = std::move(workerThread_);
-        }
+    if (owned_acceptor_) {
+        owned_acceptor_->join();
+        finalizeAfterNetworkQuiesced();
     }
-    if (joiningThread.joinable()) {
-        joiningThread.join();
-    }
-    lifecycle_.completeStop();
+    runtime_.join();
     const auto failure = workerCompletion_.workerFailure();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
+    runtime_.rethrow_failure();
+    if (owned_acceptor_) {
+        owned_acceptor_->rethrow_failure();
+    }
 }
 
 TcpEndpoint WebWorkerRuntime::localEndpoint(std::size_t listenerIndex) const {
-    if (listenerIndex >= acceptors_.size()) {
+    if (!owned_acceptor_) {
         throw std::out_of_range("listener acceptor is not configured on this worker");
     }
-    return acceptors_[listenerIndex]->endpoint;
+    return owned_acceptor_->local_endpoint(listenerIndex);
 }
 
 bool WebWorkerRuntime::availableForNetworkDispatch() const noexcept {
-    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning ||
         !networkServing_.load(std::memory_order_acquire)) {
         return false;
     }
@@ -412,43 +419,22 @@ HttpServerStats WebWorkerRuntime::stats() const noexcept {
 WebWorkerHandle WebWorkerRuntime::webWorker() const {
     return webWorkerDispatch_->handle();
 }
-void WebWorkerRuntime::configureAcceptor(HttpServerAcceptor& listener) {
-    std::error_code ec;
 
-    (void)listener.acceptor.open(listener.endpoint.protocol(), ec);
-    if (ec) {
-        throw std::runtime_error("failed to open acceptor: " + ec.message());
+void WebWorkerRuntime::stage_quic(http3_datagram_channel& channel,
+    asio::ip::udp::endpoint endpoint, ruvia::quic_cid_partition partition) {
+    if (!http3_config_ || runtime_.started() ||
+        quic_channel_.load(std::memory_order_acquire) != nullptr) {
+        throw std::logic_error("worker QUIC channel cannot be staged in this state");
     }
-
-    (void)listener.acceptor.set_option(asio::socket_base::reuse_address(true), ec);
-    if (ec) {
-        throw std::runtime_error("failed to enable SO_REUSEADDR: " + ec.message());
-    }
-
-#if defined(SO_REUSEPORT) && !defined(_WIN32)
-    int enabled = 1;
-    if (::setsockopt(listener.acceptor.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled,
-            sizeof(enabled)) != 0) {
-        throw std::system_error(errno, std::generic_category(), "failed to enable SO_REUSEPORT");
-    }
-#elif !defined(_WIN32)
-    throw std::runtime_error(
-        "SO_REUSEPORT is required but not available on this platform/toolchain");
-#endif
-
-    (void)listener.acceptor.bind(listener.endpoint, ec);
-    if (ec) {
-        throw std::runtime_error("failed to bind acceptor: " + ec.message());
-    }
-
-    (void)listener.acceptor.listen(asio::socket_base::max_listen_connections, ec);
-    if (ec) {
-        throw std::runtime_error("failed to listen: " + ec.message());
-    }
-
-    listener.endpoint = listener.acceptor.local_endpoint(ec);
-    if (ec) {
-        throw std::runtime_error("failed to read local endpoint: " + ec.message());
+    channel.stage_worker(workerRuntime_);
+    quic_endpoint_ = std::move(endpoint);
+    cid_partition_ = partition;
+    quic_channel_.store(&channel, std::memory_order_release);
+    // stopAdmission may have won before staging published its channel.
+    if (runtime_.state() != RuntimeLifecycle::State::kReady) {
+        if (auto* staged = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+            staged->abandon_worker();
+        }
     }
 }
 
@@ -497,39 +483,33 @@ void WebWorkerRuntime::stopAdmissionOnContext() noexcept {
     webWorkerDispatch_->close();
     workerRuntime_.close();
 
-    std::error_code ignored;
-    for (const auto& listener : acceptors_) {
-        (void)listener->acceptor.cancel(ignored);
-        ignored.clear();
-        (void)listener->acceptor.close(ignored);
-        ignored.clear();
-    }
     serveSignal_.notify();
     if (http3Server_ != nullptr) {
+        if (http3_transport_ != nullptr) {
+            http3_transport_->stop();
+        } else {
+            http3Server_->abandonBeforeLaunch();
+            if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+                channel->abandon_worker();
+            }
+        }
         http3Server_->requestStop();
     }
     connectionScanner_.stop();
     connectionScanner_.closeAll();
-    workerRuntime_.stopTimers();
 }
 
 void WebWorkerRuntime::stopOnContext() noexcept {
     if (!httpServerWorkerRunning(workerState_)) {
         capabilities_.closeNow();
-        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
-            finalizeSignal_.notify();
-        }
-        finalizeGuard_.reset();
+        finalizeSignal_.notify();
         return;
     }
 
     stopAdmissionOnContext();
     capabilities_.closeNow();
     workerState_ = HttpServerWorkerState::kStopped;
-    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
-        finalizeSignal_.notify();
-    }
-    finalizeGuard_.reset();
+    finalizeSignal_.notify();
 }
 
 void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
@@ -538,76 +518,81 @@ void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
     }
     // Counted after the dedupe above, so a worker failing once counts once.
     workerFailures_.fetch_add(1, std::memory_order_relaxed);
-    (void)lifecycle_.requestStop();
-    workerRuntime_.close();
-    stopAdmissionOnContext();
-    // A standalone worker has no external network producer to quiesce. App
-    // workers defer owner-thread teardown until the App has joined network.
-    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-        stopOnContext();
+    runtime_.request_stop();
+    if (owned_acceptor_) {
+        owned_acceptor_->stop();
     }
     options_.workerFailure.notify(failure);
-}
-
-void WebWorkerRuntime::runIoContext() noexcept {
-    bool workerFailed = false;
-    try {
-        workerRuntime_.run(
-            [this] {
-                capabilities_.initializeWorkerState();
-                asio::co_spawn(ioContext_, ruvia::asAwaitable(runWorker()),
-                    asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
-            },
-            [this, &workerFailed](const std::exception_ptr& failure) noexcept {
-                workerFailed = true;
-                (void)workerCompletion_.markStartupFailed(failure);
-                failWorker(failure);
-                if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-                    lifecycle_.completeStop();
-                    workerState_ = HttpServerWorkerState::kStopped;
-                }
-            },
-            [this]() noexcept { capabilities_.shutdownWorkerState(); });
-    } catch (...) {
-        const auto failure = std::current_exception();
-        (void)workerCompletion_.markStartupFailed(failure);
-        failWorker(failure);
-        if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-            lifecycle_.completeStop();
-            workerState_ = HttpServerWorkerState::kStopped;
-        }
-        return;
-    }
-    if (workerFailed) {
-        return;
-    }
-
-    lifecycle_.completeStop();
-    workerState_ = HttpServerWorkerState::kStopped;
-    (void)workerCompletion_.markStartupFailed(std::make_exception_ptr(
-        std::runtime_error("http server worker stopped before startup completed")));
 }
 
 Task<void> WebWorkerRuntime::runWorker() {
     if (!httpServerWorkerRunning(workerState_)) {
         co_return;
     }
-    bool backgroundJoinStarted = false;
     try {
+        for (auto& listener : listeners_) {
+            configureTlsContext(*listener);
+        }
         connectionScanner_.start();
         co_await capabilities_.connect();
         if (http3Server_ != nullptr && !stopToken_.stopRequested()) {
+            auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel);
+            if (channel == nullptr) {
+                http3Server_->abandonBeforeLaunch();
+                throw std::logic_error("HTTP/3 worker has no staged acceptor channel");
+            }
+            try {
+                http3_transport_ = makePmrObject<http3_worker_runtime>(memory_.resource(),
+                    workerRuntime_, quic_endpoint_, *listeners_[http3_listener_index_]->tls(),
+                    *http3_config_, http3_worker_runtime::worker_target{
+                                        .server = http3Server_.get(),
+                                        .max_connections = *options_.maxConnections,
+                                        .mailbox_capacity = static_cast<std::uint32_t>(options_.workerMailboxCapacity),
+                                        .max_requests_per_connection = *options_.maxRequestsPerConnection,
+                                        .idle_timeout = options_.idleTimeout,
+                                        .request_header_timeout = options_.requestHeaderTimeout,
+                                        .request_body_timeout = options_.requestBodyTimeout,
+                                        .write_timeout = options_.writeTimeout,
+                                    },
+                    *channel, cid_partition_, http3_worker_runtime::failure_notification{this, [](void* object, std::exception_ptr failure) noexcept {
+                                                                                             static_cast<WebWorkerRuntime*>(object)->failWorker(failure);
+                                                                                         }});
+                http3_transport_->stage();
+            } catch (...) {
+                http3Server_->abandonBeforeLaunch();
+                if (http3_transport_ != nullptr) {
+                    http3_transport_->abandon_before_launch();
+                } else {
+                    channel->abandon_worker();
+                }
+                throw;
+            }
             // install() prepares all worker-side state before TaskScope synchronously
             // starts run(). If either activation or task registration fails, no
             // run coroutine owns this bridge, so retire it before unwinding.
             if (!http3Server_->install()) {
                 http3Server_->abandonBeforeLaunch();
+                http3_transport_->abandon_before_launch();
                 throw std::runtime_error("failed to install HTTP/3 worker bridge");
             }
             try {
                 backgroundTasks_.spawn(http3Server_->run());
             } catch (...) {
                 http3Server_->abandonBeforeLaunch();
+                http3_transport_->abandon_before_launch();
+                throw;
+            }
+            try {
+                // run_datagrams can synchronously retire and ACK its channel.
+                // Do not borrow channel after TaskScope starts that coroutine.
+                if (!stopToken_.stopRequested() && !channel->acceptor_closed()) {
+                    http3_transport_->start();
+                } else {
+                    http3_transport_->stop();
+                }
+                backgroundTasks_.spawn(http3_transport_->run_datagrams());
+            } catch (...) {
+                http3_transport_->abandon_before_launch();
                 throw;
             }
         }
@@ -624,46 +609,32 @@ Task<void> WebWorkerRuntime::runWorker() {
             if (options_.documentRoot.refreshOptions() != nullptr) {
                 backgroundTasks_.spawn(staticRootRefreshLoop());
             }
-            if (connectionOwnershipMode_ == ConnectionOwnershipMode::kOwnListeners) {
-                for (std::size_t i = 0; i < listeners_.size(); ++i) {
-                    backgroundTasks_.spawn(superviseListener(i, *acceptors_[i]));
-                }
-            }
             networkServing_.store(true, std::memory_order_release);
             (void)workerCompletion_.markServing();
-            if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
-                // App workers remain alive until network has joined and the run
-                // thread sends the reliable finalization control.
-                if (!stopToken_.stopRequested()) {
-                    co_await serveSignal_.wait();
-                }
-            } else {
-                backgroundJoinStarted = true;
-                co_await backgroundTasks_.join();
+            // Retain worker-local state until the lifecycle caller has joined
+            // ingress and sends the finalization control.
+            if (!stopToken_.stopRequested()) {
+                co_await serveSignal_.wait();
             }
         }
 
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
+        if (http3_transport_ != nullptr) {
+            http3_transport_->stop();
+        } else if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+            channel->abandon_worker();
+        }
         failWorker(failure);
     }
-    if (connectionOwnershipMode_ == ConnectionOwnershipMode::kTransferredSessions) {
-        // Preserve the owner coroutine and worker-local capabilities until the
-        // network-quiesced barrier. Admission cancellation above may finish work,
-        // but must not join/retire its owner before phase two.
-        co_await finalizeSignal_.wait();
-    }
-    // A completed child leaves an open scope even when size() is already zero.
-    // Join exactly once regardless of whether its last completion beat stop.
-    if (!backgroundJoinStarted) {
-        try {
-            co_await backgroundTasks_.join();
-        } catch (...) {
-            const auto failure = std::current_exception();
-            (void)workerCompletion_.markStartupFailed(failure);
-            failWorker(failure);
-        }
+    co_await finalizeSignal_.wait();
+    try {
+        co_await backgroundTasks_.join();
+    } catch (...) {
+        const auto failure = std::current_exception();
+        (void)workerCompletion_.markStartupFailed(failure);
+        failWorker(failure);
     }
     try {
         co_await capabilities_.join();

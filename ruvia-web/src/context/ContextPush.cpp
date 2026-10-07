@@ -17,7 +17,7 @@ ScopedOperation<bool> Context::push(HttpPushRequestView request) {
 
 namespace ruvia::detail {
 ScopedOperation<bool> HttpPushOutput::push(HttpPushRequestView request) {
-    if (scope_.hasPendingOperations()) {
+    if (scope_.has_pending_operations()) {
         throw std::logic_error("server push output is already active");
     }
     std::size_t bytes = 0;
@@ -52,7 +52,7 @@ ScopedOperation<bool> HttpPushOutput::push(HttpPushRequestView request) {
         }
         owned.headers.push_back(HttpHeader::copyOf(name, field.value(), resource_));
     }
-    return makeScopedOperation(scope_, pushOwned(std::move(owned)));
+    return ::ruvia::make_scoped_operation(scope_, pushOwned(std::move(owned)));
 }
 Task<bool> HttpPushOutput::pushOwned(HttpPushRequest request) {
     std::pmr::vector<HttpHeaderView> fields(resource_);

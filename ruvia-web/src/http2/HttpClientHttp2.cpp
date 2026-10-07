@@ -173,12 +173,11 @@ Task<void> HttpClientPool::runHttp2Push(std::unique_ptr<Http2PushDriver, PmrObje
     WorkerTimerRegistration timer;
     try {
         if (const auto remaining = driver->timeout.remaining()) {
-            WorkerHandleAccess::scheduleTimer(worker_, timer, workerTimerDeadlineAfter(*remaining),
-                [this, raw = driver.get()](WorkerTimerOutcome outcome) noexcept {
-                    if (outcome == WorkerTimerOutcome::kExpired) {
-                        cancelHttp2Stream(raw->connection, raw->pending.requestId, AbortReason::kTimeout);
-                    }
-                });
+            (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*remaining), [this, raw = driver.get()](WorkerTimerOutcome outcome) noexcept {
+                if (outcome == WorkerTimerOutcome::kExpired) {
+                    cancelHttp2Stream(raw->connection, raw->pending.requestId, AbortReason::kTimeout);
+                }
+            });
         }
         while (!pending.complete && !pending.failed()) {
             co_await pending.signal.wait();
@@ -254,8 +253,8 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
             try {
                 auto responseHead = std::move(*head).takeHead();
                 auto& state = *pending->response->state_;
-                if (state.upload && !state.upload->ended) {
-                    state.upload->stop();
+                if (state.upload && !state.upload->output.ended) {
+                    state.upload->output.stop();
                 }
                 state.status = responseHead.status();
                 state.protocolVersion = responseHead.protocolVersion();
@@ -279,7 +278,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                         }
                     }
                     if (!state.tunnel->accepted) {
-                        state.tunnel->stop();
+                        state.tunnel->output.stop();
                     }
                     pending->signal.notify();
                 }
@@ -390,7 +389,7 @@ void HttpClientPool::drainHttp2Events(Connection& connection) {
                 pending != nullptr && !pending->complete && !pending->failed() &&
                 !pending->retryable) {
                 const auto& state = *pending->response->state_;
-                if (!state.tunnel || !state.tunnel->accepted || !state.tunnel->receiveEnded || !state.tunnel->endRequested) {
+                if (!state.tunnel || !state.tunnel->accepted || !state.tunnel->receiveEnded || !state.tunnel->output.endRequested) {
                     pending->error = HttpClientError::Code::kProtocolError;
                     pending->signal.notify();
                 }
@@ -662,12 +661,11 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
             throw HttpClientError(
                 HttpClientError::Code::kTimeout, "HTTP/2 session shutdown wait timed out");
         }
-        WorkerHandleAccess::scheduleTimer(worker_, deadlineTimer,
-            workerTimerDeadlineAfter(*remaining), [&runtime](WorkerTimerOutcome outcome) noexcept {
-                if (outcome == WorkerTimerOutcome::kExpired) {
-                    runtime.stateSignal.notify();
-                }
-            });
+        (worker_).schedule_timer(deadlineTimer, workerTimerDeadlineAfter(*remaining), [&runtime](WorkerTimerOutcome outcome) noexcept {
+            if (outcome == WorkerTimerOutcome::kExpired) {
+                runtime.stateSignal.notify();
+            }
+        });
     }
     std::uint64_t cancellationId = 0;
     StopRegistration stopRegistration;
@@ -757,14 +755,11 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
         Http2PendingRegistration pendingRegistration(*this, connection, pending);
         WorkerTimerRegistration deadlineTimer;
         if (const auto remaining = timeout.remaining()) {
-            WorkerHandleAccess::scheduleTimer(worker_, deadlineTimer,
-                workerTimerDeadlineAfter(*remaining),
-                [this, &connection, requestId = pending.requestId](
-                    WorkerTimerOutcome outcome) noexcept {
-                    if (outcome == WorkerTimerOutcome::kExpired) {
-                        cancelHttp2Stream(connection, requestId, AbortReason::kTimeout);
-                    }
-                });
+            (worker_).schedule_timer(deadlineTimer, workerTimerDeadlineAfter(*remaining), [this, &connection, requestId = pending.requestId](WorkerTimerOutcome outcome) noexcept {
+                if (outcome == WorkerTimerOutcome::kExpired) {
+                    cancelHttp2Stream(connection, requestId, AbortReason::kTimeout);
+                }
+            });
         }
         std::uint64_t cancellationId = 0;
         StopRegistration stopRegistration;
@@ -847,7 +842,7 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             upload->wakeTarget = &pending.signal;
             upload->wake = [](void* target) noexcept { static_cast<WorkerSignal*>(target)->notify(); };
             struct UploadWakeGuard {
-                HttpClientOutputQueue& upload;
+                http_client_output_queue& upload;
                 ~UploadWakeGuard() {
                     upload.wake = nullptr;
                     upload.wakeTarget = nullptr;
@@ -855,7 +850,7 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             } wakeGuard{*upload};
             WorkerTimerRegistration continueTimer;
             if (request.upload() != nullptr && !request.upload()->contentReleased) {
-                WorkerHandleAccess::scheduleTimer(worker_, continueTimer, workerTimerDeadlineAfter(request.upload()->config.continueTimeout), [upload, policy = request.upload()](WorkerTimerOutcome outcome) noexcept {
+                (worker_).schedule_timer(continueTimer, workerTimerDeadlineAfter(request.upload()->config.continueTimeout), [upload, policy = request.upload()](WorkerTimerOutcome outcome) noexcept {
                     if (outcome == WorkerTimerOutcome::kExpired && !upload->stopped) {
                         policy->contentReleased = true;
                         upload->notifyData();
@@ -923,7 +918,7 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
             }
         }
         while (!pending.complete && !pending.failed() && !pending.retryable) {
-            if (request.tunnel() != nullptr && request.tunnel()->accepted && request.tunnel()->receiveEnded && request.tunnel()->ended) {
+            if (request.tunnel() != nullptr && request.tunnel()->accepted && request.tunnel()->receiveEnded && request.tunnel()->output.ended) {
                 pending.complete = true;
                 break;
             }

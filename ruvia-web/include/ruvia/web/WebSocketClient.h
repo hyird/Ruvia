@@ -97,7 +97,7 @@ namespace detail {
 class WebSocketClientState;
 }
 
-class WebSocketClientHandle final : private detail::ScopedCapabilityNode {
+class WebSocketClientHandle final {
 public:
     WebSocketClientHandle(const WebSocketClientHandle& other) noexcept;
     WebSocketClientHandle& operator=(const WebSocketClientHandle&) = delete;
@@ -114,11 +114,12 @@ public:
 private:
     friend class detail::WebSocketClientState;
     WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state,
-        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+        ::ruvia::operation_scope& scope, OperationOptions options) noexcept;
+    static void expire_capability(void* target) noexcept;
 
     std::shared_ptr<detail::WebSocketClientState> state_;
     OperationOptions options_;
+    scoped_capability_registration registration_;
 };
 
 // One WebSocket connection bound to one Ruvia event loop. Construction performs

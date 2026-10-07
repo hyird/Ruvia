@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/db/DbSql.h"
 
-#include <mysql/mysql.h>
+#include <mysql.h>
 
 #include <cstddef>
 #include <cstdint>

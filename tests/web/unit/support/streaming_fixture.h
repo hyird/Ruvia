@@ -35,31 +35,32 @@ namespace streaming_test {
 
 constexpr ruvia::SseMessage kLiteralSseMessage{.data = "data", .event = "event", .id = "id"};
 
-class TestScopedCapability final : private ruvia::detail::ScopedCapabilityNode {
+class TestScopedCapability final {
 public:
-    TestScopedCapability(ruvia::detail::ScopedOperationScope& scope, int& expiredCount) noexcept
-        : ScopedCapabilityNode(scope, &TestScopedCapability::expire),
-          expiredCount_(&expiredCount) {}
+    TestScopedCapability(ruvia::operation_scope& scope, int& expiredCount) noexcept
+        : expiredCount_(&expiredCount),
+          registration_(scope, this, &TestScopedCapability::expire) {}
 
     TestScopedCapability(const TestScopedCapability& other) noexcept
-        : ScopedCapabilityNode(other),
-          expiredCount_(other.expiredCount_) {}
+        : expiredCount_(other.expiredCount_),
+          registration_(other.registration_, this) {}
 
     TestScopedCapability(TestScopedCapability&& other) noexcept
-        : ScopedCapabilityNode(std::move(other)),
-          expiredCount_(std::exchange(other.expiredCount_, nullptr)) {}
+        : expiredCount_(std::exchange(other.expiredCount_, nullptr)),
+          registration_(std::move(other.registration_), this) {}
 
     void use() const {
-        requireActive();
+        registration_.require_active();
     }
 
 private:
-    static void expire(ruvia::detail::ScopedCapabilityNode& node) noexcept {
-        auto& capability = static_cast<TestScopedCapability&>(node);
+    static void expire(void* target) noexcept {
+        auto& capability = *static_cast<TestScopedCapability*>(target);
         ++*capability.expiredCount_;
     }
 
     int* expiredCount_;
+    ruvia::scoped_capability_registration registration_;
 };
 
 struct ColdFrameProbe final {

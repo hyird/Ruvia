@@ -9,7 +9,6 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextResponseState.h"
 #include "ruvia/web/detail/http/error/HttpErrorResponse.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 
 namespace ruvia {
@@ -35,22 +34,6 @@ void finalizeContextResponse(detail::ContextResponseState& state, HttpResponse&&
 
 void Context::status(HttpStatusCode statusCode) {
     responseState().activeResponse().status(statusCode);
-}
-
-void* Context::workerStateInstance(const void* typeKey) const {
-    auto* instance = workerStates_ == nullptr ? nullptr : workerStates_->instance(typeKey);
-    if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
-    }
-    return instance;
-}
-
-BlockingPool& Context::blockingPool() const {
-    if (blockingPool_ == nullptr) {
-        throw std::logic_error("blocking pool is disabled");
-    }
-    return *blockingPool_;
 }
 
 std::pmr::string Context::urlFor(
@@ -181,7 +164,7 @@ HttpResponse Context::error(HttpErrorInfoOptions options) const {
 }
 
 ScopedOperation<HttpResponse> Context::notFound() {
-    return detail::makeScopedOperation(operationScope_, notFoundTask());
+    return ::ruvia::make_scoped_operation(operationScope_, notFoundTask());
 }
 
 Task<HttpResponse> Context::notFoundTask() {

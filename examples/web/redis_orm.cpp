@@ -1,11 +1,13 @@
 // HASH CRUD works with ordinary Redis. Run once with --create-index against
 // Redis Search before using GET /users. Index creation is explicit and errors
 // if the index already exists; this example never drops existing data/indexes.
-#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <future>
 #include <iostream>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
@@ -97,7 +99,7 @@ private:
 
 int main(int argc, char** argv) {
     const bool createIndex = argc == 2 && std::string_view(argv[1]) == "--create-index";
-    std::atomic<bool> failed{false};
+    bool failed = false;
     auto& app = ruvia::app();
     app.loadDotenv();
     ruvia::RedisConfig config;
@@ -113,21 +115,33 @@ int main(int argc, char** argv) {
                 return;
             }
             const auto workers = ruvia::app().workers();
-            const auto posted = workers.front().post([&failed](ruvia::WebWorkerContext& worker) -> ruvia::Task<void> {
+            std::promise<void> completion;
+            auto result = completion.get_future();
+            const auto posted = workers.front().post([completion = std::move(completion)](ruvia::WebWorkerContext& worker) mutable -> ruvia::Task<void> {
                 try {
                     co_await worker.redis().getRepository<CachedUser>(userRedisConfig).createIndex();
+                    completion.set_value();
+                } catch (...) {
+                    completion.set_exception(std::current_exception());
+                }
+            });
+            if (posted != ruvia::PostStatus::kAccepted) {
+                failed = true;
+            } else {
+                // Only the lifecycle caller blocks. Workers are ready before
+                // onStart; request admission stays closed until this returns.
+                // Abandoning an unstarted job destroys its promise and wakes get().
+                try {
+                    result.get();
                     std::cout << "Redis user index created.\n";
                 } catch (const std::exception& error) {
                     std::cerr << error.what() << '\n';
-                    failed.store(true);
+                    failed = true;
                 }
-                ruvia::app().stop();
-            });
-            if (posted != ruvia::PostStatus::kAccepted) {
-                failed.store(true);
-                ruvia::app().stop();
             }
+            // --create-index is a one-shot operation, never a serving mode.
+            ruvia::app().stop();
         })
         .run();
-    return failed.load() ? 1 : 0;
+    return failed ? 1 : 0;
 }

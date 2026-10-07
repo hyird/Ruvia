@@ -4,8 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/worker/WorkerTimer.h"
-
+#include "ruvia/core/WorkerTimer.h"
 namespace ruvia {
 namespace {
 
@@ -21,28 +20,26 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_,
-            detail::workerTimerDeadlineAfter(duration_),
-            [this](detail::WorkerTimerOutcome outcome) {
-                outcome_ = outcome;
-                continuation_.resume();
-            });
+        (worker_).schedule_timer(registration_, ::ruvia::workerTimerDeadlineAfter(duration_), [this](::ruvia::WorkerTimerOutcome outcome) {
+            outcome_ = outcome;
+            continuation_.resume();
+        });
         return true;
     }
 
     // A zero/negative duration never suspends and reports elapsed (the default),
     // so the caller sees a consistent result either way.
     TimerSleepResult await_resume() const noexcept {
-        return outcome_ == detail::WorkerTimerOutcome::kExpired ? TimerSleepResult::kElapsed
-                                                                : TimerSleepResult::kStopRequested;
+        return outcome_ == ::ruvia::WorkerTimerOutcome::kExpired ? TimerSleepResult::kElapsed
+                                                                 : TimerSleepResult::kStopRequested;
     }
 
 private:
     const WorkerHandle& worker_;
     std::chrono::steady_clock::duration duration_;
     std::coroutine_handle<> continuation_{};
-    detail::WorkerTimerRegistration registration_;
-    detail::WorkerTimerOutcome outcome_{detail::WorkerTimerOutcome::kExpired};
+    ::ruvia::WorkerTimerRegistration registration_;
+    ::ruvia::WorkerTimerOutcome outcome_{::ruvia::WorkerTimerOutcome::kExpired};
 };
 
 class StoppableSleepAwaiter final {
@@ -60,12 +57,10 @@ public:
 
     bool await_suspend(std::coroutine_handle<> continuation) {
         continuation_ = continuation;
-        detail::WorkerHandleAccess::scheduleTimer(worker_, registration_,
-            detail::workerTimerDeadlineAfter(duration_),
-            [this](detail::WorkerTimerOutcome outcome) {
-                outcome_ = outcome;
-                continuation_.resume();
-            });
+        (worker_).schedule_timer(registration_, ::ruvia::workerTimerDeadlineAfter(duration_), [this](::ruvia::WorkerTimerOutcome outcome) {
+            outcome_ = outcome;
+            continuation_.resume();
+        });
         stopToken_.registerCallback(stopRegistration_,
             [cancellation = registration_.cancellation()] { cancellation.cancel(); });
         return true;
@@ -76,7 +71,7 @@ public:
             !stopToken_.stopRequested()) {
             return TimerSleepResult::kElapsed;
         }
-        return outcome_ == detail::WorkerTimerOutcome::kExpired && !stopToken_.stopRequested()
+        return outcome_ == ::ruvia::WorkerTimerOutcome::kExpired && !stopToken_.stopRequested()
                    ? TimerSleepResult::kElapsed
                    : TimerSleepResult::kStopRequested;
     }
@@ -86,8 +81,8 @@ private:
     std::chrono::steady_clock::duration duration_;
     StopToken stopToken_;
     std::coroutine_handle<> continuation_{};
-    detail::WorkerTimerOutcome outcome_{detail::WorkerTimerOutcome::kExpired};
-    detail::WorkerTimerRegistration registration_;
+    ::ruvia::WorkerTimerOutcome outcome_{::ruvia::WorkerTimerOutcome::kExpired};
+    ::ruvia::WorkerTimerRegistration registration_;
     // Declared last so callback teardown completes before the timer registration
     // and the borrowed worker begin destruction.
     StopRegistration stopRegistration_;

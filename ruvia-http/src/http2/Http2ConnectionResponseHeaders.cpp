@@ -118,7 +118,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return false;
     }
     if (responseKnownBit == kResponseHeaderContentLength) {
-        HttpContentLengthState contentLength;
+        HttpContentLengthState<> contentLength;
         if (contentLength.parseField(value) != HttpContentLengthParseStatus::kOk) {
             return false;
         }

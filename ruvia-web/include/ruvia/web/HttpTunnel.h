@@ -90,6 +90,6 @@ private:
     bool writeActive_{false};
     bool sendEnded_{false};
     unsigned runningOperations_{0};
-    detail::ScopedOperationScope operations_;
+    ::ruvia::operation_scope operations_;
 };
 }  // namespace ruvia

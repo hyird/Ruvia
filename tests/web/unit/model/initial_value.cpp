@@ -13,6 +13,12 @@
 namespace {
 
 std::size_t evaluations{0};
+std::size_t default_evaluations{0};
+
+int counted_default() {
+    ++default_evaluations;
+    return 11;
+}
 
 int initialNumber() {
     ++evaluations;
@@ -48,6 +54,10 @@ RUVIA_MODEL(NullInitialModel,
 RUVIA_MODEL(NestedInitialModel,
     RUVIA_OPTIONAL_FIELD(child, InitialModel),
     RUVIA_OPTIONAL_FIELD(children, ruvia::Array<InitialModel>));
+
+RUVIA_MODEL(counted_lifecycle,
+    RUVIA_OPTIONAL_FIELD(value, ruvia::Int32, RUVIA_INITIAL(initialNumber()),
+        RUVIA_DEFAULT(counted_default())));
 
 }  // namespace
 
@@ -148,4 +158,37 @@ RUVIA_TEST(model_initial_does_not_recur_in_nested_move_or_array_emplace) {
     parent.ensure<"children">().emplace_back(std::move(arrayChild));
     RUVIA_CHECK_EQ(evaluations, std::size_t{4});
     RUVIA_CHECK_EQ(parent.get<"children">()->size(), std::size_t{1});
+}
+
+RUVIA_TEST(model_initial_and_default_modes_are_evaluated_once_across_codecs_and_rebind) {
+    evaluations = 0;
+    default_evaluations = 0;
+    ruvia::test::CountingMemoryResource source;
+    ruvia::test::CountingMemoryResource destination;
+    counted_lifecycle explicit_value({.resource = &source});
+    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
+    RUVIA_CHECK_EQ(default_evaluations, std::size_t{0});
+
+    auto json = ruvia::fromJson<counted_lifecycle>("{}", {.resource = &source});
+    auto form = ruvia::fromForm<counted_lifecycle>("", {.resource = &source});
+    RUVIA_CHECK(json && form);
+    if (!json || !form) {
+        return;
+    }
+    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
+    RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
+    counted_lifecycle moved(std::move(*json));
+    RUVIA_CHECK(!json->get<"value">());
+    auto owned = ruvia::detail::ModelValueRebindAccess::own(std::move(moved), &destination);
+    auto copied = ruvia::detail::ModelValueRebindAccess::own(std::as_const(*form), &destination);
+    RUVIA_CHECK_EQ(owned.get<"value">()->value, 11);
+    RUVIA_CHECK_EQ(copied.get<"value">()->value, 11);
+    RUVIA_CHECK(!owned.isPresent<"value">());
+    RUVIA_CHECK(!copied.isPresent<"value">());
+    RUVIA_CHECK(!moved.get<"value">());
+    RUVIA_CHECK_EQ(owned.resource(), &destination);
+    RUVIA_CHECK_EQ(copied.resource(), &destination);
+    RUVIA_CHECK_EQ(std::string_view(ruvia::toJson(owned)), std::string_view(R"({"value":11})"));
+    RUVIA_CHECK_EQ(evaluations, std::size_t{1});
+    RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
 }

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdlib>
+#include <exception>
 #include <memory_resource>
 #include <stdexcept>
 #include <type_traits>
@@ -13,119 +13,111 @@
 
 namespace ruvia::detail {
 
-// Value-semantic, PMR-owned type-erased callback. This is the single template
-// behind the App callback surface (HttpErrorHandler, HttpNotFoundHandler,
-// AppHook, AccessLogCallback, ConnectionFailureCallback): self-contained
-// callables are copied into process-owned storage, and the public owner keeps
-// no borrowing API. A self-contained callable is owned by the callback value;
-// references captured by that callable must still outlive the callback.
-//
-// The ordinary specialization invokes a throwing callable; the noexcept
-// specialization requires a nothrow-invocable callable and marks its own
-// invocation noexcept. Calling an empty callback is a programming error: the
-// ordinary form throws std::logic_error, the noexcept form terminates.
-template <typename Signature>
-class Callback;
-
-template <typename Result, typename... Args>
-class Callback<Result(Args...)> final {
+// Value-semantic PMR owner composed with the allocation-free invocation view.
+// Copy/move/clone/destruction have one implementation for both signature
+// policies. Captured references must still outlive the owning callback.
+template <typename result_type, bool is_noexcept, typename... args_types>
+class callback_owner final {
 public:
-    constexpr Callback() noexcept = default;
+    constexpr callback_owner() noexcept = default;
+    constexpr callback_owner(std::nullptr_t) noexcept {}
 
-    constexpr Callback(std::nullptr_t) noexcept {}
-
-    template <typename Callable, typename Stored = std::decay_t<Callable>>
-        requires(!std::is_same_v<Stored, Callback> &&
-                    std::is_invocable_r_v<Result, Stored&, Args...> &&
-                    std::is_copy_constructible_v<Stored>)
-    Callback(Callable&& callable)
-        : target_(constructPmrObject<Stored>(processResource(), std::forward<Callable>(callable))),
-          invoke_([](void* target, Args... args) -> Result {
-              return (*static_cast<Stored*>(target))(std::forward<Args>(args)...);
-          }),
+    template <typename callable_type, typename stored_type = std::decay_t<callable_type>>
+        requires(!std::is_same_v<stored_type, callback_owner> &&
+                    std::is_invocable_r_v<result_type, stored_type&, args_types...> &&
+                    std::is_copy_constructible_v<stored_type> &&
+                    (!is_noexcept || (!std::is_lvalue_reference_v<callable_type> &&
+                                         std::is_nothrow_invocable_r_v<result_type, stored_type&, args_types...>)))
+    callback_owner(callable_type&& callable)
+        : view_(constructPmrObject<stored_type>(processResource(), std::forward<callable_type>(callable)),
+              [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
+                  return (*static_cast<stored_type*>(target))(std::forward<args_types>(args)...);
+              }),
           destroy_([](void* target, std::pmr::memory_resource* resource) noexcept {
-              destroyPmrObject(static_cast<Stored*>(target), resource);
+              destroyPmrObject(static_cast<stored_type*>(target), resource);
           }),
           clone_([](const void* target, std::pmr::memory_resource* resource) -> void* {
-              return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target));
+              return constructPmrObject<stored_type>(resource, *static_cast<const stored_type*>(target));
           }),
           resource_(processResource()) {}
 
-    Callback(const Callback& other) {
-        copyFrom(other);
+    callback_owner(const callback_owner& other) {
+        copy_from(other);
     }
 
-    Callback& operator=(const Callback& other) {
+    callback_owner& operator=(const callback_owner& other) {
         if (this != &other) {
-            Callback copy(other);
+            callback_owner copy(other);
             swap(copy);
         }
         return *this;
     }
 
-    Callback(Callback&& other) noexcept {
-        moveFrom(other);
+    callback_owner(callback_owner&& other) noexcept {
+        move_from(other);
     }
 
-    Callback& operator=(Callback&& other) noexcept {
+    callback_owner& operator=(callback_owner&& other) noexcept {
         if (this != &other) {
             reset();
-            moveFrom(other);
+            move_from(other);
         }
         return *this;
     }
 
-    ~Callback() {
+    ~callback_owner() {
         reset();
     }
 
-    [[nodiscard]] Result operator()(Args... args) const {
-        if (invoke_ == nullptr) {
-            throw std::logic_error("callback is empty");
+    [[nodiscard]] result_type operator()(args_types... args) const noexcept(is_noexcept) {
+        if (!view_) {
+            if constexpr (is_noexcept) {
+                std::terminate();
+            } else {
+                throw std::logic_error("callback is empty");
+            }
         }
-        return invoke_(target_, std::forward<Args>(args)...);
+        return view_.invoke_target(std::forward<args_types>(args)...);
     }
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
-        return invoke_ != nullptr;
+        return static_cast<bool>(view_);
     }
 
     [[nodiscard]] friend constexpr bool operator==(
-        const Callback& left, const Callback& right) noexcept {
-        return left.target_ == right.target_ && left.invoke_ == right.invoke_;
+        const callback_owner& left, const callback_owner& right) noexcept {
+        return left.view_ == right.view_;
     }
 
 private:
     friend struct CallbackAccess;
+    using view_type = callback_ref<result_type, is_noexcept, args_types...>;
+    using destroy_type = void (*)(void*, std::pmr::memory_resource*) noexcept;
+    using clone_type = void* (*)(const void*, std::pmr::memory_resource*);
 
-    using Invoke = Result (*)(void*, Args...);
-    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
-    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
-
-    [[nodiscard]] constexpr CallbackRef<Result(Args...)> callbackRef() const noexcept {
-        return CallbackAccess::make<Result(Args...)>(target_, invoke_);
+    [[nodiscard]] constexpr view_type callback_ref_view() const noexcept {
+        return view_;
     }
 
-    void copyFrom(const Callback& other) {
-        target_ =
-            other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
-        invoke_ = other.invoke_;
+    void copy_from(const callback_owner& other) {
+        auto* const target = other.clone_ == nullptr
+                                 ? other.view_.target_
+                                 : other.clone_(other.view_.target_, other.resource_);
+        view_ = view_type(target, other.view_.invoke_);
         destroy_ = other.destroy_;
         clone_ = other.clone_;
         resource_ = other.resource_;
     }
 
-    void moveFrom(Callback& other) noexcept {
-        target_ = std::exchange(other.target_, nullptr);
-        invoke_ = std::exchange(other.invoke_, nullptr);
+    void move_from(callback_owner& other) noexcept {
+        view_ = std::exchange(other.view_, {});
         destroy_ = std::exchange(other.destroy_, nullptr);
         clone_ = std::exchange(other.clone_, nullptr);
         resource_ = std::exchange(other.resource_, nullptr);
     }
 
-    void swap(Callback& other) noexcept {
-        std::swap(target_, other.target_);
-        std::swap(invoke_, other.invoke_);
+    void swap(callback_owner& other) noexcept {
+        std::swap(view_, other.view_);
         std::swap(destroy_, other.destroy_);
         std::swap(clone_, other.clone_);
         std::swap(resource_, other.resource_);
@@ -133,142 +125,21 @@ private:
 
     void reset() noexcept {
         if (destroy_ != nullptr) {
-            destroy_(target_, resource_);
+            destroy_(view_.target_, resource_);
         }
-        target_ = nullptr;
-        invoke_ = nullptr;
+        view_ = {};
         destroy_ = nullptr;
         clone_ = nullptr;
         resource_ = nullptr;
     }
 
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-    Destroy destroy_{nullptr};
-    Clone clone_{nullptr};
+    view_type view_;
+    destroy_type destroy_{nullptr};
+    clone_type clone_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
 };
 
-template <typename Result, typename... Args>
-class Callback<Result(Args...) noexcept> final {
-public:
-    constexpr Callback() noexcept = default;
-
-    constexpr Callback(std::nullptr_t) noexcept {}
-
-    template <typename Callable, typename Stored = std::decay_t<Callable>>
-        requires(!std::is_same_v<Stored, Callback> && !std::is_lvalue_reference_v<Callable> &&
-                    std::is_nothrow_invocable_r_v<Result, Stored&, Args...> &&
-                    std::is_copy_constructible_v<Stored>)
-    Callback(Callable&& callable)
-        : target_(constructPmrObject<Stored>(processResource(), std::forward<Callable>(callable))),
-          invoke_([](void* target, Args... args) noexcept -> Result {
-              return (*static_cast<Stored*>(target))(std::forward<Args>(args)...);
-          }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept {
-              destroyPmrObject(static_cast<Stored*>(target), resource);
-          }),
-          clone_([](const void* target, std::pmr::memory_resource* resource) -> void* {
-              return constructPmrObject<Stored>(resource, *static_cast<const Stored*>(target));
-          }),
-          resource_(processResource()) {}
-
-    Callback(const Callback& other) {
-        copyFrom(other);
-    }
-
-    Callback& operator=(const Callback& other) {
-        if (this != &other) {
-            Callback copy(other);
-            swap(copy);
-        }
-        return *this;
-    }
-
-    Callback(Callback&& other) noexcept {
-        moveFrom(other);
-    }
-
-    Callback& operator=(Callback&& other) noexcept {
-        if (this != &other) {
-            reset();
-            moveFrom(other);
-        }
-        return *this;
-    }
-
-    ~Callback() {
-        reset();
-    }
-
-    [[nodiscard]] Result operator()(Args... args) const noexcept {
-        if (invoke_ == nullptr) {
-            std::terminate();
-        }
-        return invoke_(target_, std::forward<Args>(args)...);
-    }
-
-    [[nodiscard]] constexpr explicit operator bool() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] friend constexpr bool operator==(
-        const Callback& left, const Callback& right) noexcept {
-        return left.target_ == right.target_ && left.invoke_ == right.invoke_;
-    }
-
-private:
-    friend struct CallbackAccess;
-
-    using Invoke = Result (*)(void*, Args...) noexcept;
-    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
-    using Clone = void* (*)(const void*, std::pmr::memory_resource*);
-
-    [[nodiscard]] constexpr CallbackRef<Result(Args...) noexcept> callbackRef() const noexcept {
-        return CallbackAccess::make<Result(Args...) noexcept>(target_, invoke_);
-    }
-
-    void copyFrom(const Callback& other) {
-        target_ =
-            other.clone_ == nullptr ? other.target_ : other.clone_(other.target_, other.resource_);
-        invoke_ = other.invoke_;
-        destroy_ = other.destroy_;
-        clone_ = other.clone_;
-        resource_ = other.resource_;
-    }
-
-    void moveFrom(Callback& other) noexcept {
-        target_ = std::exchange(other.target_, nullptr);
-        invoke_ = std::exchange(other.invoke_, nullptr);
-        destroy_ = std::exchange(other.destroy_, nullptr);
-        clone_ = std::exchange(other.clone_, nullptr);
-        resource_ = std::exchange(other.resource_, nullptr);
-    }
-
-    void swap(Callback& other) noexcept {
-        std::swap(target_, other.target_);
-        std::swap(invoke_, other.invoke_);
-        std::swap(destroy_, other.destroy_);
-        std::swap(clone_, other.clone_);
-        std::swap(resource_, other.resource_);
-    }
-
-    void reset() noexcept {
-        if (destroy_ != nullptr) {
-            destroy_(target_, resource_);
-        }
-        target_ = nullptr;
-        invoke_ = nullptr;
-        destroy_ = nullptr;
-        clone_ = nullptr;
-        resource_ = nullptr;
-    }
-
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-    Destroy destroy_{nullptr};
-    Clone clone_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
-};
+template <typename signature_type>
+using Callback = typename callback_signature<signature_type>::template apply<callback_owner>;
 
 }  // namespace ruvia::detail

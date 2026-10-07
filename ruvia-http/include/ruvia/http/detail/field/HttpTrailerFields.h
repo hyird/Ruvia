@@ -8,12 +8,12 @@
 
 namespace ruvia::detail {
 
-// Trailer = #field-name (RFC 9110 section 6.6.2). The names listed here are the
-// request-trailer fields this protocol layer will later reject if they appear in
-// an actual trailer section, so a sender/recipient must not accept an initial
-// Trailer header that advertises them.
-[[nodiscard]] inline bool isForbiddenHttpRequestTrailerName(std::string_view name) noexcept {
-    switch (classifyRequestHeader(name)) {
+// Shared request/response restrictions (RFC 9110 section 6.5.1): fields that
+// control framing, routing, authentication or representation interpretation.
+// Direction-specific permissions are composed below and by response policy.
+[[nodiscard]] inline bool is_forbidden_common_trailer_name(
+    std::string_view name, RequestHeaderKind kind) noexcept {
+    switch (kind) {
         case RequestHeaderKind::kHost:
         case RequestHeaderKind::kContentLength:
         case RequestHeaderKind::kTransferEncoding:
@@ -30,13 +30,13 @@ namespace ruvia::detail {
         case RequestHeaderKind::kRange:
         case RequestHeaderKind::kUpgrade:
         case RequestHeaderKind::kAuthorization:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
-        case RequestHeaderKind::kOrigin:
             return true;
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kUserAgent:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
@@ -60,11 +60,9 @@ namespace ruvia::detail {
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
             return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                   httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
                    httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 16:
-            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding") ||
-                   httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
             return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
@@ -72,6 +70,19 @@ namespace ruvia::detail {
         default:
             return false;
     }
+}
+
+// Trailer advertisements and actual request sections use the same policy.
+// Accept-Ranges is permitted in response trailers, not request trailers.
+[[nodiscard]] inline bool isForbiddenHttpRequestTrailerName(std::string_view name) noexcept {
+    const auto kind = classifyRequestHeader(name);
+    if (is_forbidden_common_trailer_name(name, kind)) {
+        return true;
+    }
+    return kind == RequestHeaderKind::kAccessControlRequestHeaders ||
+           kind == RequestHeaderKind::kAccessControlRequestMethod ||
+           kind == RequestHeaderKind::kOrigin ||
+           httpAsciiEqualsIgnoreCase(name, "Accept-Ranges");
 }
 
 template <typename ForbiddenName>

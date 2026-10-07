@@ -2,17 +2,17 @@
 
 #include <cstddef>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/HttpFieldWhitespace.h"
 
 namespace ruvia {
+namespace detail {
 
-// Visits comma-separated field members, treating commas inside quoted strings
-// (including escaped quotes) as data. Empty members are reported. Returning
-// false from the visitor stops traversal. Views borrow the input field.
-template <typename Visitor>
-inline void httpVisitCommaSeparatedQuotedFieldItems(
-    std::string_view value, Visitor&& visitor) {
+// Shared delimiter scanner. Quoted-pair bytes are data; protocol-specific
+// interpretation of a segment belongs to the composed visitor.
+template <char separator, typename visitor_type>
+inline void visit_quoted_field_segments(std::string_view value, visitor_type&& visitor) {
     std::size_t start = 0;
     while (start <= value.size()) {
         bool quoted = false;
@@ -27,7 +27,7 @@ inline void httpVisitCommaSeparatedQuotedFieldItems(
                 }
             } else if (c == '"') {
                 quoted = true;
-            } else if (c == ',') {
+            } else if (c == separator) {
                 break;
             }
         }
@@ -39,42 +39,28 @@ inline void httpVisitCommaSeparatedQuotedFieldItems(
     }
 }
 
+}  // namespace detail
+
+// Visits comma-separated field members, treating commas inside quoted strings
+// (including escaped quotes) as data. Empty members are reported. Returning
+// false from the visitor stops traversal. Views borrow the input field.
+template <typename visitor_type>
+inline void httpVisitCommaSeparatedQuotedFieldItems(
+    std::string_view value, visitor_type&& visitor) {
+    detail::visit_quoted_field_segments<','>(value, std::forward<visitor_type>(visitor));
+}
+
 // Visits semicolon-separated field parameters while treating semicolons inside
 // quoted strings (including escaped quotes) as data. Parameter names and values
 // are trimmed of OWS; segments without '=' are ignored. Views borrow the input.
-template <typename Visitor>
+template <typename visitor_type>
 inline void httpVisitSemicolonParametersQuotedField(
-    std::string_view value, Visitor&& visitor) {
-    std::size_t start = 0;
-    while (start <= value.size()) {
-        bool quoted = false;
-        std::size_t end = start;
-        for (; end < value.size(); ++end) {
-            const char c = value[end];
-            if (quoted) {
-                if (c == '\\' && end + 1 < value.size()) {
-                    ++end;
-                } else if (c == '"') {
-                    quoted = false;
-                }
-            } else if (c == '"') {
-                quoted = true;
-            } else if (c == ';') {
-                break;
-            }
-        }
-        const auto part = httpTrimOws(value.substr(start, end - start));
+    std::string_view value, visitor_type&& visitor) {
+    detail::visit_quoted_field_segments<';'>(value, [&visitor](std::string_view part) {
         const auto equals = part.find('=');
-        if (equals != std::string_view::npos &&
-            !visitor(httpTrimOws(part.substr(0, equals)),
-                httpTrimOws(part.substr(equals + 1)))) {
-            return;
-        }
-        if (end == value.size()) {
-            return;
-        }
-        start = end + 1;
-    }
+        return equals == std::string_view::npos ||
+               visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)));
+    });
 }
 
 // Removes a surrounding pair of DQUOTE bytes when present; does not unescape

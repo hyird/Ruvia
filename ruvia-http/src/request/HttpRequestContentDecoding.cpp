@@ -12,7 +12,7 @@ namespace ruvia {
 HttpContentCodingFieldResult requestContentCoding(
     const HttpRequest& request, std::pmr::memory_resource* resource) {
     detail::HttpContentCodingFieldParser parser(detail::HttpFieldListRole::kRecipient, resource);
-    if (!detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kContentEncoding)) {
+    if (!detail::requestHasKnownHeader(request, detail::RequestHeaderKind::kContentEncoding)) {
         return std::move(parser).finish();
     }
     const auto headers = request.headers();

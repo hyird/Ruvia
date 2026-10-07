@@ -1,5 +1,6 @@
 #include <string_view>
 
+#include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 
 #include "test_harness.h"
@@ -8,11 +9,11 @@ namespace {
 
 using ruvia::detail::http2FieldValueHasLeadingOrTrailingWhitespace;
 using ruvia::detail::http2HeaderNameHasUppercase;
-using ruvia::detail::http2IsForbiddenConnectionHeader;
-using ruvia::detail::http2IsForbiddenRequestTrailerHeader;
-using ruvia::detail::http2IsForbiddenResponseConnectionField;
 using ruvia::detail::http2IsValidDecodedResponseHeader;
 using ruvia::detail::http2IsValidRegularHeader;
+using ruvia::detail::is_forbidden_http_binary_connection_field;
+using ruvia::detail::is_forbidden_http_binary_response_field;
+using ruvia::detail::isForbiddenHttpRequestTrailerName;
 
 }  // namespace
 
@@ -26,23 +27,24 @@ RUVIA_TEST(http2_header_name_uppercase_detection) {
 
 RUVIA_TEST(http2_forbidden_connection_headers) {
     // Connection-specific fields must not appear in HTTP/2 (RFC 9113 §8.2.2).
-    RUVIA_CHECK(http2IsForbiddenConnectionHeader("connection"));
-    RUVIA_CHECK(http2IsForbiddenConnectionHeader("keep-alive"));
-    RUVIA_CHECK(http2IsForbiddenConnectionHeader("proxy-connection"));
-    RUVIA_CHECK(http2IsForbiddenConnectionHeader("transfer-encoding"));
-    RUVIA_CHECK(http2IsForbiddenConnectionHeader("upgrade"));
-    RUVIA_CHECK(!http2IsForbiddenConnectionHeader("content-type"));
-    // The HTTP/2 check is exact-lowercase; an uppercase form is caught separately.
-    RUVIA_CHECK(!http2IsForbiddenConnectionHeader("Connection"));
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("connection"));
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("keep-alive"));
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("proxy-connection"));
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("transfer-encoding"));
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("upgrade"));
+    RUVIA_CHECK(!is_forbidden_http_binary_connection_field("content-type"));
+    // The shared policy accepts application casing; decoded HTTP/2 names are
+    // independently required to be lowercase.
+    RUVIA_CHECK(is_forbidden_http_binary_connection_field("Connection"));
 
     // Application response models are version-neutral, so the final-response
     // gate owns a case-insensitive check and forbids TE as well (the trailers
     // exception in RFC 9113 applies only to requests).
     for (const auto name :
         {"Connection", "keep-alive", "PROXY-CONNECTION", "te", "Transfer-Encoding", "Upgrade"}) {
-        RUVIA_CHECK(http2IsForbiddenResponseConnectionField(name));
+        RUVIA_CHECK(is_forbidden_http_binary_response_field(name));
     }
-    RUVIA_CHECK(!http2IsForbiddenResponseConnectionField("content-type"));
+    RUVIA_CHECK(!is_forbidden_http_binary_response_field("content-type"));
 }
 
 RUVIA_TEST(http2_valid_regular_header) {
@@ -89,10 +91,10 @@ RUVIA_TEST(http2_forbidden_request_trailer_headers) {
              "if-modified-since", "if-unmodified-since", "if-range", "expect", "te", "trailer",
              "keep-alive", "set-cookie", "max-forwards", "cache-control", "accept-ranges",
              "content-range", "proxy-authenticate", "proxy-authorization"}) {
-        RUVIA_CHECK(http2IsForbiddenRequestTrailerHeader(name));
+        RUVIA_CHECK(isForbiddenHttpRequestTrailerName(name));
     }
     // Ordinary content trailers (a checksum, a signature, a trace id) are permitted.
-    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("x-checksum"));
-    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("accept"));
-    RUVIA_CHECK(!http2IsForbiddenRequestTrailerHeader("user-agent"));
+    RUVIA_CHECK(!isForbiddenHttpRequestTrailerName("x-checksum"));
+    RUVIA_CHECK(!isForbiddenHttpRequestTrailerName("accept"));
+    RUVIA_CHECK(!isForbiddenHttpRequestTrailerName("user-agent"));
 }

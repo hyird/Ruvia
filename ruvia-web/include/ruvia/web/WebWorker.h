@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -15,8 +16,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/HttpClientHandle.h"
-#include "ruvia/web/detail/integration/BlockingCapability.h"
-#include "ruvia/web/detail/integration/WorkerStateCapability.h"
+#include "ruvia/web/detail/integration/worker_context_capabilities.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbHandle.h"
@@ -34,8 +34,7 @@ class WorkerClientRegistryView;
 class WorkerStateRegistry;
 }  // namespace detail
 
-class WebWorkerContext final : public detail::BlockingCapability<WebWorkerContext>,
-                               public detail::WorkerStateCapability<WebWorkerContext> {
+class WebWorkerContext final {
 public:
     WebWorkerContext(const WebWorkerContext&) = delete;
     WebWorkerContext& operator=(const WebWorkerContext&) = delete;
@@ -50,6 +49,33 @@ public:
     // extend the lifetime of objects or borrowed views.
     [[nodiscard]] std::pmr::memory_resource* pool() const noexcept;
     [[nodiscard]] StopToken stopToken() const noexcept;
+
+    template <typename state_type>
+    [[nodiscard]] state_type& workerState() const {
+        return capabilities_.worker_state<state_type>();
+    }
+
+    template <typename callable_type>
+    [[nodiscard]] Task<std::invoke_result_t<callable_type&>> runBlocking(callable_type callable) const {
+        return capabilities_.run_blocking(std::move(callable));
+    }
+
+    template <typename rep_type, typename period_type, typename callable_type>
+    [[nodiscard]] Task<std::invoke_result_t<callable_type&>> runBlocking(
+        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
+        return capabilities_.run_blocking(timeout, std::move(callable));
+    }
+
+    template <typename callable_type>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<callable_type&>>> tryRunBlocking(callable_type callable) const {
+        return capabilities_.try_run_blocking(std::move(callable));
+    }
+
+    template <typename rep_type, typename period_type, typename callable_type>
+    [[nodiscard]] Task<BlockingResult<std::invoke_result_t<callable_type&>>> tryRunBlocking(
+        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
+        return capabilities_.try_run_blocking(timeout, std::move(callable));
+    }
 
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] DbHandle db() const;
@@ -79,31 +105,17 @@ private:
         const detail::WorkerClientRegistryView&, const detail::WorkerStateRegistry*, BlockingPool*,
         StopToken&&) = delete;
 
-    [[nodiscard]] void* workerStateInstance(const void* typeKey) const;
-    friend class detail::BlockingCapability<WebWorkerContext>;
-    friend class detail::WorkerStateCapability<WebWorkerContext>;
-    [[nodiscard]] BlockingPool& blockingPool() const;
-    [[nodiscard]] const WorkerHandle& blockingWorker() const noexcept {
-        return worker_;
-    }
-    [[nodiscard]] StopToken blockingStopToken() const noexcept {
-        return stopToken_;
-    }
-
     // WebWorkerDispatch owns these stable values until every posted task has
     // completed. In particular, clientRegistries_ borrows its view; retire()
     // detaches that view only after activeStarted_ reaches zero. Contexts borrow
     // them so starting a task does not copy endpoint or cancellation-state
     // ownership on the worker thread.
-    const WorkerHandle& worker_;
+    detail::worker_context_capabilities capabilities_;
     std::pmr::memory_resource* resource_;
     const detail::WorkerClientRegistryView& clientRegistries_;
-    const detail::WorkerStateRegistry* workerStates_;
-    BlockingPool* blockingPool_;
-    const StopToken& stopToken_;
     // Each posted callback gets an independent operation lifetime. Declared
     // last so cold frames are destroyed before the callback context disappears.
-    mutable detail::ScopedOperationScope operationScope_;
+    mutable ::ruvia::operation_scope operationScope_;
 };
 
 using WebWorkerPostResult = PostOutcome<Task<void>(WebWorkerContext&)>;

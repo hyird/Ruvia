@@ -1,16 +1,20 @@
 #pragma once
 
 #include <exception>
+#include <memory>
+#include <stdexcept>
 #include <utility>
 
+#include <asio/co_spawn.hpp>
+
+#include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/WorkerSignal.h"
 
 namespace ruvia::detail {
 
-// Worker-affine completion state shared by standalone clients. Each client
-// still owns its protocol-specific phase transitions and resource teardown;
-// this object owns the common one-shot close task, completion publication, and
+// Worker-affine completion state used by the composed client_lifecycle and
+// protocol-specific retirement policies. Owns one-shot close completion and
 // fatal cleanup failure reporting. Callers may observe the stored failure;
 // runtime retirement only confirms completion after reporting it once.
 class ClientCloseState final {
@@ -37,12 +41,40 @@ public:
         return complete_;
     }
 
-    [[nodiscard]] bool startTask() noexcept {
+    // One owner-preserving root cleanup bridge for every standalone client.
+    // The factory is invoked only by the task that wins one-shot retirement.
+    template <typename owner_type, typename factory_type, typename completion_type>
+    void start_cleanup(std::shared_ptr<owner_type> owner, factory_type factory,
+        completion_type completion) noexcept {
+        if (!loop_.isCurrent()) {
+            std::terminate();
+        }
         if (taskStarted_ || complete_) {
-            return false;
+            return;
         }
         taskStarted_ = true;
-        return true;
+        try {
+            asio::co_spawn(loop_.executor(), ruvia::asAwaitable(factory()),
+                [owner = std::move(owner), completion = std::move(completion)](std::exception_ptr failure) mutable {
+                    completion(std::move(failure));
+                });
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    template <typename owner_type, typename start_type>
+    [[nodiscard]] Task<void> shutdown_owned(std::shared_ptr<owner_type> owner,
+        start_type start, ObservationMode mode) {
+        if (!loop_.isCurrent()) {
+            throw std::logic_error("client shutdown must run on its bound event loop");
+        }
+        (void)owner;  // Keep the address-stable client in the coroutine frame.
+        start();
+        while (!complete_) {
+            co_await wait();
+        }
+        observeFailure(mode);
     }
 
     [[nodiscard]] auto wait() {

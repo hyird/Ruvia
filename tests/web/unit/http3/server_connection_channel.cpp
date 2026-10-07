@@ -311,9 +311,14 @@ struct ChannelFixture final {
         Status attachStatus{};
         Status closePublicationStatus{Status::kWrongState};
         worker.callTask([&](Scheduler& scheduler, Runtime& runtime) -> ruvia::Task<void> {
+            if (channel.reject(scheduler, grant.registration, Channel::RejectReason::kStopping) != Status::kWrongState) {
+                throw std::runtime_error("HTTP/3 rejection bypassed Bind consumption");
+            }
             bindStatus = channel.receiveBind(bind);
-            if (bindStatus != Status::kReceived || bind.identity != grant.identity) {
-                throw std::runtime_error("HTTP/3 worker did not receive the committed Bind");
+            Channel::Bind duplicate;
+            if (bindStatus != Status::kReceived || bind.identity != grant.identity ||
+                channel.receiveBind(duplicate) != Status::kEmpty) {
+                throw std::runtime_error("HTTP/3 worker did not consume Bind exactly once");
             }
             runtime.connection.emplace(runtime.routes.implementation.routeTable(),
                 runtime.workerMemory, runtime.services, runtime.options, runtime.outbound,
@@ -323,8 +328,10 @@ struct ChannelFixture final {
                     .connectionGeneration = grant.identity.connectionGeneration,
                     .maxTrackedStreams = 8});
             attachStatus = channel.attach(scheduler, grant.registration, *runtime.connection);
-            if (attachStatus != Status::kPublished) {
-                throw std::runtime_error("real HTTP/3 scheduler attach failed");
+            if (attachStatus != Status::kPublished ||
+                channel.attach(scheduler, grant.registration, *runtime.connection) != Status::kWrongState ||
+                channel.reject(scheduler, grant.registration, Channel::RejectReason::kStopping) != Status::kWrongState) {
+                throw std::runtime_error("HTTP/3 attach outcome was not single-shot");
             }
             if (publishCloseBeforeNetworkAck) {
                 if (!runtime.connection->requestStop()) {
@@ -591,10 +598,13 @@ void finishRejected(ChannelFixture& fixture, std::uint64_t id) {
 
 void acknowledgeFinalization(ChannelFixture& fixture) {
     Channel::WorkerFinalized workerFinalized;
-    if (fixture.channel.receiveWorkerFinalized(workerFinalized) != Status::kReceived ||
+    Channel::WorkerFinalized duplicate_worker;
+    if (fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) != Status::kStale ||
+        fixture.channel.receiveWorkerFinalized(workerFinalized) != Status::kReceived ||
         workerFinalized.identity != fixture.grant.identity ||
-        fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) !=
-            Status::kPublished) {
+        fixture.channel.receiveWorkerFinalized(duplicate_worker) != Status::kEmpty ||
+        fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) != Status::kPublished ||
+        fixture.channel.acknowledgeWorkerFinalized(fixture.grant.identity) != Status::kStale) {
         throw std::runtime_error("worker-finalization acknowledgement failed");
     }
 
@@ -611,7 +621,14 @@ void acknowledgeFinalization(ChannelFixture& fixture) {
     Status postFinalIntent{};
     Status postFinalAckReceive{};
     fixture.worker.call([&](Scheduler&, Runtime&) {
+        if (fixture.channel.acknowledgeNetworkFinalized(fixture.grant.identity) != Status::kStale) {
+            throw std::runtime_error("network finalization acknowledged before consumption");
+        }
         received = fixture.channel.receiveNetworkFinalized(networkFinalized);
+        Channel::NetworkFinalized duplicate_network;
+        if (fixture.channel.receiveNetworkFinalized(duplicate_network) != Status::kEmpty) {
+            throw std::runtime_error("network finalization consumed more than once");
+        }
         postFinalIntent = fixture.channel.publishIntent(fixture.grant.identity,
             resetIntent(fixture.grant.identity, 0, 1,
                 ruvia::Http3ConnectionErrorCode::kRequestCancelled));
@@ -638,6 +655,11 @@ void acknowledgeFinalization(ChannelFixture& fixture) {
                          !fixture.channel.readyToRearm();
     fixture.networkWake.release.release();
     acknowledgementThread.join();
+    fixture.worker.call([&](Scheduler&, Runtime&) {
+        if (fixture.channel.acknowledgeNetworkFinalized(fixture.grant.identity) != Status::kStale) {
+            throw std::runtime_error("network finalization acknowledged more than once");
+        }
+    });
     if (!blocked || acknowledged != Status::kPublished ||
         fixture.networkWake.calls.load(std::memory_order_relaxed) < networkWakeBeforeBorrow + 2 ||
         fixture.workerWake.calls.load(std::memory_order_relaxed) <= workerWakeBeforeBorrow) {
@@ -755,6 +777,10 @@ RUVIA_TEST(http3ServerConnectionChannelRetainsGrantUntilAcceptedAndRequiresRealA
             bindStatus = fixture.channel.receiveBind(bind);
             rejectStatus = fixture.channel.reject(scheduler, fixture.grant.registration,
                 Channel::RejectReason::kConstructionFailed);
+            if (fixture.channel.reject(scheduler, fixture.grant.registration,
+                    Channel::RejectReason::kCapacity) != Status::kWrongState) {
+                throw std::runtime_error("HTTP/3 rejection outcome changed before network handoff");
+            }
         });
         RUVIA_CHECK(bindStatus == Status::kReceived);
         RUVIA_CHECK(bind.identity == fixture.grant.identity);

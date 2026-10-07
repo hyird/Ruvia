@@ -47,6 +47,9 @@ using Entity = ruvia::DbEntity<ruvia::FixedString{"items"},
     ruvia::DbColumn<ruvia::FixedString{"id"}, int>,
     ruvia::DbColumn<ruvia::FixedString{"name"}, std::pmr::string>>;
 
+RUVIA_DB_PROJECTION(numeric_projection, ruvia::DbColumn<"id", int>)
+RUVIA_DB_PROJECTION(named_projection, ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>)
+
 ruvia::Task<ruvia::DbRows> rowsTask() {
     auto rows = ruvia::detail::DbResultAccess::makeResult(std::pmr::get_default_resource());
     auto& names = ruvia::detail::DbResultAccess::columnNames(rows);
@@ -295,7 +298,7 @@ RUVIA_TEST(db_mapping_preserves_field_error_order_with_missing_columns) {
 
 RUVIA_TEST(db_mapping_reserves_known_row_count_once) {
     using Numeric = ruvia::DbEntity<"numbers", ruvia::DbColumn<"id", int>>;
-    using Projection = ruvia::DbProjection<ruvia::DbColumn<"id", int>>;
+    using Projection = numeric_projection;
     for (const std::size_t count : {std::size_t{0}, std::size_t{1}, std::size_t{128}}) {
         const auto makeRows = [count] {
             auto* source = std::pmr::get_default_resource();
@@ -346,7 +349,7 @@ RUVIA_TEST(db_mapping_reserves_known_row_count_once) {
 }
 
 RUVIA_TEST(db_projection_selection_does_not_allocate_or_borrow_field_names) {
-    using Output = ruvia::DbProjection<ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>>;
+    using Output = named_projection;
     ruvia::test::CountingMemoryResource source;
     std::optional<ruvia::detail::DbMapProjection<Output>> mapper;
     {
@@ -371,7 +374,7 @@ RUVIA_TEST(db_projection_selection_does_not_allocate_or_borrow_field_names) {
 }
 
 RUVIA_TEST(db_projection_mapping_reclaims_operations_and_preserves_partial_results) {
-    using Output = ruvia::DbProjection<ruvia::DbColumn<"id", int>, ruvia::DbColumn<"name", std::pmr::string>>;
+    using Output = named_projection;
     asio::io_context context;
     ruvia::test::CountingMemoryResource resource;
     const auto operation = [&](bool invalid, QueryGate* gate, bool partial) {

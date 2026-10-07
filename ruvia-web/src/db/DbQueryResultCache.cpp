@@ -166,21 +166,27 @@ Task<void> DbQueryCacheState::clear(OperationOptions options) {
 }  // namespace ruvia::detail
 
 namespace ruvia {
-DbQueryResultCache::DbQueryResultCache(detail::DbQueryCacheState& state, detail::ScopedOperationScope& scope, OperationOptions options) noexcept
-    : detail::ScopedCapabilityNode(scope, &DbQueryResultCache::expireCapability),
-      state_(&state),
-      options_(std::move(options)) {}
-void DbQueryResultCache::expireCapability(detail::ScopedCapabilityNode& node) noexcept {
-    auto& cache = static_cast<DbQueryResultCache&>(node);
+DbQueryResultCache::DbQueryResultCache(detail::DbQueryCacheState& state, operation_scope& scope, OperationOptions options) noexcept
+    : state_(&state),
+      options_(std::move(options)),
+      registration_(scope, this, &DbQueryResultCache::expire_capability) {}
+
+DbQueryResultCache::DbQueryResultCache(const DbQueryResultCache& other) noexcept
+    : state_(other.state_),
+      options_(other.options_),
+      registration_(other.registration_, this) {}
+
+void DbQueryResultCache::expire_capability(void* target) noexcept {
+    auto& cache = *static_cast<DbQueryResultCache*>(target);
     cache.state_ = nullptr;
     cache.options_ = {};
 }
 ScopedOperation<void> DbQueryResultCache::remove(std::span<const std::string_view> ids) const {
-    requireActive();
-    return detail::makeScopedOperation(operationScope(), state_->remove(ids, options_));
+    registration_.require_active();
+    return make_scoped_operation(registration_.scope(), state_->remove(ids, options_));
 }
 ScopedOperation<void> DbQueryResultCache::clear() const {
-    requireActive();
-    return detail::makeScopedOperation(operationScope(), state_->clear(options_));
+    registration_.require_active();
+    return make_scoped_operation(registration_.scope(), state_->clear(options_));
 }
 }  // namespace ruvia

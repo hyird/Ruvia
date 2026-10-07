@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <condition_variable>
 #include <exception>
 #include <functional>
@@ -21,15 +22,14 @@ namespace detail {
 
 using EventLoopFailureSink = std::function<void(std::exception_ptr)>;
 
-class RootTaskStateBase {
+class root_task_completion final {
 public:
-    RootTaskStateBase(WorkerHandle worker, EventLoopFailureSink failureSink)
+    root_task_completion(WorkerHandle worker, EventLoopFailureSink failure_sink)
         : worker_(std::move(worker)),
-          failureSink_(std::move(failureSink)) {}
+          failureSink_(std::move(failure_sink)) {}
 
-    RootTaskStateBase(const RootTaskStateBase&) = delete;
-    RootTaskStateBase& operator=(const RootTaskStateBase&) = delete;
-    virtual ~RootTaskStateBase() = default;
+    root_task_completion(const root_task_completion&) = delete;
+    root_task_completion& operator=(const root_task_completion&) = delete;
 
     [[nodiscard]] bool valid() const noexcept {
         const std::lock_guard lock(mutex_);
@@ -90,12 +90,8 @@ public:
         publish_completion();
     }
 
-protected:
-    void beforeGet() const {
+    [[nodiscard]] std::exception_ptr consume_failure() {
         wait();
-    }
-
-    [[nodiscard]] std::exception_ptr consumeFailure() {
         std::lock_guard lock(mutex_);
         if (!handleAlive_) {
             throw std::logic_error("root task result was already consumed");
@@ -103,8 +99,6 @@ protected:
         handleAlive_ = false;
         return failure_;
     }
-
-    mutable std::mutex mutex_;
 
 private:
     void report(std::exception_ptr failure) const noexcept {
@@ -120,54 +114,74 @@ private:
 
     WorkerHandle worker_;
     EventLoopFailureSink failureSink_;
+    mutable std::mutex mutex_;
     mutable std::condition_variable completed_;
     std::exception_ptr failure_;
     bool complete_{false};
     bool handleAlive_{true};
 };
 
-template <typename T>
-class RootTaskState final : public RootTaskStateBase {
-public:
-    using RootTaskStateBase::RootTaskStateBase;
+struct root_task_void_result final {};
 
-    void stage_value(T value) {
+template <typename T>
+class RootTaskState final {
+public:
+    RootTaskState(WorkerHandle worker, EventLoopFailureSink failure_sink)
+        : completion_(std::move(worker), std::move(failure_sink)) {}
+
+    [[nodiscard]] bool valid() const noexcept {
+        return completion_.valid();
+    }
+
+    void wait() const {
+        completion_.wait();
+    }
+
+    void abandon() noexcept {
+        completion_.abandon();
+    }
+
+    void stage_failure(std::exception_ptr failure) noexcept {
+        completion_.stage_failure(std::move(failure));
+    }
+
+    void publish_completion() noexcept {
+        completion_.publish_completion();
+    }
+
+    void completeFailure(std::exception_ptr failure) noexcept {
+        completion_.completeFailure(std::move(failure));
+    }
+
+    template <typename value_type>
+        requires std::same_as<value_type, std::remove_cv_t<T>>
+    void stage_value(value_type value) {
         value_.emplace(std::move(value));
     }
 
-    [[nodiscard]] T get() {
-        beforeGet();
-        auto failure = consumeFailure();
+    void stage_value() noexcept
+        requires std::is_void_v<T>
+    {}
+
+    T get() {
+        auto failure = completion_.consume_failure();
         if (failure) {
             std::rethrow_exception(failure);
         }
-        struct retire_value final {
-            std::optional<T>& value;
-            ~retire_value() {
-                value.reset();
-            }
-        } retire{value_};
-        return std::move(*value_);
+        if constexpr (!std::is_void_v<T>) {
+            struct retire_value final {
+                std::optional<T>& value;
+                ~retire_value() {
+                    value.reset();
+                }
+            } retire{value_};
+            return std::move(*value_);
+        }
     }
 
 private:
-    std::optional<T> value_;
-};
-
-template <>
-class RootTaskState<void> final : public RootTaskStateBase {
-public:
-    using RootTaskStateBase::RootTaskStateBase;
-
-    void stage_value() noexcept {}
-
-    void get() {
-        beforeGet();
-        auto failure = consumeFailure();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
-    }
+    root_task_completion completion_;
+    [[no_unique_address]] std::conditional_t<std::is_void_v<T>, root_task_void_result, std::optional<T>> value_;
 };
 
 }  // namespace detail

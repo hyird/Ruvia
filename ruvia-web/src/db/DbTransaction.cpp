@@ -78,9 +78,9 @@ DbTransaction::DbTransaction(detail::DbPoolRef client, std::size_t slot,
     : state_(detail::makePmrObject<State>(resource, client, slot, resource, std::move(options))) {}
 
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
-    : detail::ScopedCapabilityNode(std::move(other)),
-      cache_(other.cache_),
-      state_(std::move(other.state_)) {}
+    : cache_(other.cache_),
+      state_(std::move(other.state_)),
+      registration_(std::move(other.registration_), this) {}
 
 DbTransaction::~DbTransaction() = default;
 
@@ -88,133 +88,60 @@ bool DbTransaction::active() const noexcept {
     return state_ != nullptr && state_->operation.active();
 }
 
-void DbTransaction::bindOperationScope(detail::ScopedOperationScope& scope) noexcept {
-    bind(scope, &DbTransaction::expireCapability);
+void DbTransaction::bindOperationScope(::ruvia::operation_scope& scope) noexcept {
+    registration_.bind(scope, this, &DbTransaction::expire_capability);
 }
 
-void DbTransaction::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    auto& transaction = static_cast<DbTransaction&>(capability);
+void DbTransaction::expire_capability(void* target) noexcept {
+    auto& transaction = *static_cast<DbTransaction*>(target);
     transaction.reset();
 }
 
 DbDriver DbTransaction::queryDriver() const {
-    requireActive();
+    registration_.require_active();
     return detail::dbPoolDriver(state_->operation.activePayload().client);
 }
 
 std::pmr::memory_resource* DbTransaction::queryResource() const {
-    requireActive();
+    registration_.require_active();
     return state_->operation.activePayload().resource;
 }
 
 Task<DbRows> DbTransaction::queryTask(const DbQuery& query) {
-    requireActive();
+    registration_.require_active();
     OperationGuard operation(state_->operation);
     const auto& lease = operation.lease();
-    auto statement = query.compile(detail::dbPoolDriver(lease.client), lease.resource);
-    if (!statement.returnsRows()) {
-        throw std::invalid_argument("query requires a statement that returns rows");
-    }
-    if (cache_) {
-        auto key = cache_->key(query, statement, detail::dbPoolDriver(lease.client));
-        return queryCachedPrepared<false>(std::move(statement), std::nullopt, std::move(key), std::nullopt,
-            query.cacheDuration(), std::nullopt, *cache_, std::move(operation));
-    }
-    return queryPrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation));
+    auto plan = detail::db_query_plan::prepare(query, nullptr,
+        detail::dbPoolDriver(lease.client), lease.resource, cache_);
+    return query_plan_prepared<false>(std::move(plan), cache_, std::move(operation));
 }
 
 Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountTask(const DbQuery& query, const DbQuery& count) {
-    requireActive();
+    registration_.require_active();
     OperationGuard operation(state_->operation);
     const auto& lease = operation.lease();
-    const auto driver = detail::dbPoolDriver(lease.client);
-    auto first = query.compile(driver, lease.resource);
-    auto second = count.compile(driver, lease.resource);
-    if (!first.returnsRows() || !second.returnsRows()) {
-        throw std::invalid_argument("query and count require statements that return rows");
-    }
-    if (cache_) {
-        auto firstKey = cache_->key(query, first, driver);
-        auto secondKey = cache_->key(count, second, driver);
-        return queryCachedPrepared<true>(std::move(first), std::move(second), std::move(firstKey), std::move(secondKey),
-            query.cacheDuration(), count.cacheDuration(), *cache_, std::move(operation));
-    }
-    return queryAndCountPrepared(std::move(first), std::move(second), std::move(operation));
+    auto plan = detail::db_query_plan::prepare(query, &count,
+        detail::dbPoolDriver(lease.client), lease.resource, cache_);
+    return query_plan_prepared<true>(std::move(plan), cache_, std::move(operation));
 }
 
-template <bool Count>
-Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> DbTransaction::queryCachedPrepared(
-    DbStatement first, std::optional<DbStatement> second,
-    std::optional<std::pmr::string> firstKey, std::optional<std::pmr::string> secondKey,
-    std::optional<std::chrono::milliseconds> firstDuration,
-    std::optional<std::chrono::milliseconds> secondDuration,
-    detail::DbQueryCacheState& cache,
-    OperationGuard pending) {
+template <bool with_count>
+Task<detail::db_query_result<with_count>> DbTransaction::query_plan_prepared(
+    detail::db_query_plan plan, detail::DbQueryCacheState* cache, OperationGuard pending) {
     OperationGuard operation(std::move(pending));
     operation.start();
     auto& lease = operation.lease();
-    const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
-    bool backendFailed = false;
+    bool backend_failed = false;
     try {
-        auto firstOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);
-        auto rows = co_await cache.wrap(firstDuration, std::move(firstKey),
-            detail::DbCacheQuery(lease.client, lease.slot, std::move(first.sql_),
-                std::move(first.params_), lease.resource, &backendFailed),
-            std::move(firstOptions), operationTimeout);
-        if (operationTimeout.expired()) {
-            detail::throwDbCacheTimeout();
-        }
-        if constexpr (Count) {
-            auto secondOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);
-            auto total = co_await cache.wrap(secondDuration, std::move(secondKey),
-                detail::DbCacheQuery(lease.client, lease.slot, std::move(second->sql_),
-                    std::move(second->params_), lease.resource, &backendFailed),
-                std::move(secondOptions), operationTimeout);
-            if (operationTimeout.expired()) {
-                detail::throwDbCacheTimeout();
-            }
-            operation.finishActive();
-            co_return std::pair{std::move(rows), std::move(total)};
-        } else {
-            operation.finishActive();
-            co_return rows;
-        }
+        auto result = co_await detail::execute_db_query_plan<with_count>(std::move(plan),
+            detail::db_query_backend{lease.client, lease.slot, lease.resource, cache, &backend_failed},
+            lease.options);
+        operation.finishActive();
+        co_return result;
     } catch (...) {
         // SQL failures have already retired the lease in the backend. Cache
         // failures must retire it here while it is still owned by this operation.
-        if (!backendFailed) {
-            abortPoolTransaction(lease.client, lease.slot);
-        }
-        throw;
-    }
-}
-
-Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(
-    DbStatement query, DbStatement count, OperationGuard pending) {
-    OperationGuard operation(std::move(pending));
-    operation.start();
-    auto& lease = operation.lease();
-    const ruvia::OperationTimeout operationTimeout(lease.options.timeout);
-    bool backendFailed = false;
-    try {
-        auto firstOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);
-        auto rows = co_await detail::DbCacheQuery(lease.client, lease.slot,
-            std::move(query.sql_), std::move(query.params_), lease.resource, &backendFailed)(
-            std::move(firstOptions));
-        if (operationTimeout.expired()) {
-            detail::throwDbCacheTimeout();
-        }
-        auto secondOptions = detail::dbCacheRemainingOptions(lease.options, operationTimeout);
-        auto total = co_await detail::DbCacheQuery(lease.client, lease.slot,
-            std::move(count.sql_), std::move(count.params_), lease.resource, &backendFailed)(
-            std::move(secondOptions));
-        if (operationTimeout.expired()) {
-            detail::throwDbCacheTimeout();
-        }
-        operation.finishActive();
-        co_return std::pair{std::move(rows), std::move(total)};
-    } catch (...) {
-        if (!backendFailed) {
+        if (!backend_failed) {
             abortPoolTransaction(lease.client, lease.slot);
         }
         throw;
@@ -222,39 +149,39 @@ Task<std::pair<DbRows, DbRows>> DbTransaction::queryAndCountPrepared(
 }
 
 ScopedOperation<DbRows> DbTransaction::query(const DbQuery& query) & {
-    requireActive();
-    return detail::makeScopedOperation(operationScope(), queryTask(query));
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(registration_.scope(), queryTask(query));
 }
 
 ScopedOperation<DbExecResult> DbTransaction::execute(const DbQuery& query) & {
-    requireActive();
+    registration_.require_active();
     OperationGuard operation(state_->operation);
     const auto& lease = operation.lease();
     auto statement = query.compile(detail::dbPoolDriver(lease.client), lease.resource);
     if (statement.returnsRows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
-    return detail::makeScopedOperation(operationScope(),
+    return ::ruvia::make_scoped_operation(registration_.scope(),
         executePrepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
 }
 
 ScopedOperation<DbRows> DbTransaction::query(
     std::string_view sql, std::span<const DbValue> params) & {
-    requireActive();
+    registration_.require_active();
     OperationGuard operation(state_->operation);
     auto statement = prepareDbStatement(sql, params, operation.lease().resource);
-    return detail::makeScopedOperation(operationScope(),
+    return ::ruvia::make_scoped_operation(registration_.scope(),
         queryPrepared(std::move(statement.sql), std::move(statement.params), std::move(operation)));
 }
 
 ScopedOperation<DbExecResult> DbTransaction::execute(
     std::string_view sql, std::span<const DbValue> params) & {
-    requireActive();
+    registration_.require_active();
     OperationGuard operation(state_->operation);
     auto statement = prepareDbStatement(sql, params, operation.lease().resource);
-    return detail::makeScopedOperation(
-        operationScope(), executePrepared(std::move(statement.sql), std::move(statement.params),
-                              std::move(operation)));
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), executePrepared(std::move(statement.sql), std::move(statement.params),
+                                   std::move(operation)));
 }
 
 Task<DbRows> DbTransaction::queryPrepared(
@@ -280,9 +207,9 @@ Task<DbExecResult> DbTransaction::executePrepared(
 }
 
 ScopedOperation<void> DbTransaction::commit() & {
-    requireActive();
-    return detail::makeScopedOperation(
-        operationScope(), commitTask(OperationGuard(state_->operation)));
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), commitTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbTransaction::commitTask(OperationGuard pending) {
@@ -294,9 +221,9 @@ Task<void> DbTransaction::commitTask(OperationGuard pending) {
 }
 
 ScopedOperation<void> DbTransaction::rollback() & {
-    requireActive();
-    return detail::makeScopedOperation(
-        operationScope(), rollbackTask(OperationGuard(state_->operation)));
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), rollbackTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbTransaction::rollbackTask(OperationGuard pending) {

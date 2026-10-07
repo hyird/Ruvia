@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/io/SocketUtils.h"
+#include "ruvia/core/Socket.h"
 
 namespace ruvia {
 namespace {
@@ -289,7 +289,7 @@ void ConnectionScanner::Impl::unregisterEntry(Entry& entry) noexcept {
 void ConnectionScanner::Impl::closeAll() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
         if (current->socket_ != nullptr) {
-            detail::closeSocket(*current->socket_);
+            closeSocket(*current->socket_);
         }
     }
 }
@@ -345,22 +345,20 @@ void ConnectionScanner::Impl::schedule() {
         return;
     }
     const auto timerState = timerState_;
-    detail::WorkerHandleAccess::scheduleTimer(
-        worker_, timer_, detail::workerTimerDeadlineAfter(options_.scanInterval),
-        [timerState](WorkerTimerOutcome outcome) {
-            if (outcome == WorkerTimerOutcome::kCancelled) {
-                return;
-            }
-            std::lock_guard lock(timerState->mutex);
-            auto* scanner = timerState->owner;
-            if (scanner == nullptr || !scanner->running_) {
-                return;
-            }
-            if (scanner->hasScanningWork()) {
-                scanner->scan();
-            }
-            scanner->schedule();
-        });
+    (worker_).schedule_timer(timer_, ::ruvia::workerTimerDeadlineAfter(options_.scanInterval), [timerState](WorkerTimerOutcome outcome) {
+        if (outcome == WorkerTimerOutcome::kCancelled) {
+            return;
+        }
+        std::lock_guard lock(timerState->mutex);
+        auto* scanner = timerState->owner;
+        if (scanner == nullptr || !scanner->running_) {
+            return;
+        }
+        if (scanner->hasScanningWork()) {
+            scanner->scan();
+        }
+        scanner->schedule();
+    });
 }
 void ConnectionScanner::Impl::scan() noexcept {
     const auto now = steadyNowMs();
@@ -376,7 +374,7 @@ void ConnectionScanner::Impl::scan() noexcept {
         auto* next = current->next_;
         current->runPeriodicChecks(now);
         if (current->socket_ != nullptr && isTimedOut(*current, now)) {
-            detail::closeSocket(*current->socket_);
+            closeSocket(*current->socket_);
         }
         current = next;
     }

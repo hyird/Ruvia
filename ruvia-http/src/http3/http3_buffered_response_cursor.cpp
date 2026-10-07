@@ -65,7 +65,7 @@ http3_buffered_response_cursor::create(const HttpResponse& response, const HttpB
     }
     try {
         http3_buffered_response_cursor cursor(resource);
-        const auto* encoded = &encoded_head;
+        const auto* encoded = &encoded_head.field_section;
         cursor.decoded_field_section_size_ = encoded->decodedFieldSectionSize();
         if (encoded->fieldSection.size() > std::numeric_limits<std::size_t>::max() -
                                                kHttp3FrameHeaderMaxBytes) {

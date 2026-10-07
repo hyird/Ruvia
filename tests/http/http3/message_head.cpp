@@ -73,6 +73,16 @@ RUVIA_TEST(http3_message_head_decodes_get_post_and_response) {
     if (response) {
         RUVIA_CHECK_EQ(response->status, 204);
     }
+
+    const auto wide = decode({{":status", "200"},
+                                 {"content-length", " \t18446744073709551615, 018446744073709551615\t "},
+                                 {"content-length", "18446744073709551615"}, {"x-ows", " value\t"}},
+        ruvia::Http3MessageHeadKind::kResponse);
+    RUVIA_CHECK(wide.has_value());
+    if (wide) {
+        RUVIA_CHECK(wide->contentLength == UINT64_MAX);
+        RUVIA_CHECK_EQ(wide->headers.back().value, " value\t");
+    }
 }
 
 RUVIA_TEST(http3_message_head_rejects_pseudo_header_order_duplicates_and_unknown_fields) {
@@ -113,6 +123,11 @@ RUVIA_TEST(http3_message_head_rejects_host_field_content_length_and_status_error
                                               {"content-length", "2"}, {"content-length", "3"}},
         ruvia::Http3MessageHeadKind::kRequest);
     RUVIA_CHECK(!conflictingLength);
+    for (const std::string_view value : {"", "1,", ",1", "1,,1", "1, 2", "+1", "-1", "18446744073709551616"}) {
+        const auto invalid = decode({{":status", "200"}, {"content-length", value}},
+            ruvia::Http3MessageHeadKind::kResponse);
+        RUVIA_CHECK(!invalid && invalid.error() == ruvia::Http3MessageHeadError::kMessageError);
+    }
     const auto badStatus = decode({{":status", "099"}}, ruvia::Http3MessageHeadKind::kResponse);
     RUVIA_CHECK(!badStatus);
 }
@@ -341,6 +356,14 @@ RUVIA_TEST(http3_message_head_applies_rfc_field_section_size_and_propagates_reso
     const auto oversized = decode({{":method", "GET"}, {":scheme", "https"}, {":path", "/"}},
         ruvia::Http3MessageHeadKind::kRequest, std::pmr::get_default_resource(), {40, 16});
     RUVIA_CHECK(!oversized && oversized.error() == ruvia::Http3MessageHeadError::kFieldSectionTooLarge);
+    const auto exact = decode({{":status", "200"}}, ruvia::Http3MessageHeadKind::kResponse,
+        std::pmr::get_default_resource(), {.maxFieldSectionSize = 42});
+    RUVIA_CHECK(exact.has_value());
+    for (const std::size_t limit : {std::size_t{0}, std::size_t{31}, std::size_t{41}}) {
+        const auto rejected = decode({{":status", "200"}}, ruvia::Http3MessageHeadKind::kResponse,
+            std::pmr::get_default_resource(), {.maxFieldSectionSize = limit});
+        RUVIA_CHECK(!rejected && rejected.error() == ruvia::Http3MessageHeadError::kFieldSectionTooLarge);
+    }
     const auto oversizedWire = decode({{":method", "GET"}, {":scheme", "https"},
                                           {":authority", "example.test"}, {":path", "/"}},
         ruvia::Http3MessageHeadKind::kRequest, std::pmr::get_default_resource(),

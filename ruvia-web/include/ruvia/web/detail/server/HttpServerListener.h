@@ -8,7 +8,6 @@
 #include <variant>
 #include <vector>
 
-#include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 
@@ -127,20 +126,6 @@ public:
     std::optional<asio::ssl::context> tlsContext;
     SniContextStore sniContexts;
     SniContextLookup sniLookup;
-};
-
-class HttpServerAcceptor final {
-public:
-    HttpServerAcceptor(asio::io_context& ioContext,
-        const HttpServerListenerDefinition& definition);
-
-    HttpServerAcceptor(const HttpServerAcceptor&) = delete;
-    HttpServerAcceptor& operator=(const HttpServerAcceptor&) = delete;
-    HttpServerAcceptor(HttpServerAcceptor&&) = delete;
-    HttpServerAcceptor& operator=(HttpServerAcceptor&&) = delete;
-
-    asio::ip::tcp::acceptor acceptor;
-    asio::ip::tcp::endpoint endpoint;
 };
 
 }  // namespace ruvia::detail

@@ -39,6 +39,8 @@ void onNotification(void* context, Endpoint::notification_kind kind) noexcept {
                 state.endpoint->request_stop();
             }
             break;
+        case Endpoint::notification_kind::io_retired:
+            break;
     }
 }
 

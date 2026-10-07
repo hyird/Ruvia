@@ -7,6 +7,8 @@
 
 #include <asio/error.hpp>
 
+#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -49,15 +51,24 @@ Http3DatagramEndpoint::Http3DatagramEndpoint(asio::io_context& network_io,
     udp::endpoint bind_endpoint, notification callback)
     : bind_endpoint_(checked_bind_endpoint(std::move(bind_endpoint))),
       owner_thread_(std::this_thread::get_id()),
-      socket_(network_io, bind_endpoint_),
-      notification_(checked_notification(callback)) {}
+      socket_(std::in_place, network_io, bind_endpoint_),
+      notification_(checked_notification(callback)),
+      send_buffer_(Http3UdpSocket::kDatagramBufferSize) {}
+
+Http3DatagramEndpoint::Http3DatagramEndpoint(http3_datagram_channel& channel,
+    udp::endpoint local_endpoint, notification callback)
+    : bind_endpoint_(checked_bind_endpoint(std::move(local_endpoint))),
+      owner_thread_(std::this_thread::get_id()),
+      channel_(&channel),
+      notification_(checked_notification(callback)),
+      forwarded_(true) {}
 
 Http3DatagramEndpoint::~Http3DatagramEndpoint() {
     require_owner_thread();
     if (!stopping_) {
         request_stop();
     }
-    if (callback_depth_ != 0 || !socket_.done()) {
+    if (callback_depth_ != 0 || !socket_done()) {
         std::terminate();
     }
 }
@@ -85,8 +96,15 @@ void Http3DatagramEndpoint::prepare() {
         throw std::logic_error("HTTP/3 UDP endpoint cannot prepare in this state");
     }
     try {
-        socket_.prepare();
-        bound_endpoint_ = udp::endpoint(bind_endpoint_.address(), socket_.boundPort());
+        if (forwarded_) {
+            if (bind_endpoint_.port() == 0) {
+                throw std::invalid_argument("forwarded HTTP/3 endpoint requires the bound acceptor port");
+            }
+            bound_endpoint_ = bind_endpoint_;
+        } else {
+            socket_->prepare();
+            bound_endpoint_ = udp::endpoint(bind_endpoint_.address(), socket_->boundPort());
+        }
         prepared_ = true;
     } catch (...) {
         request_stop();
@@ -109,12 +127,25 @@ Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::start() noexcept {
         return pump_result::error;
     }
     started_ = true;
+    if (forwarded_) {
+        poll_forwarded();
+        return stopping_ ? pump_result::stopped : pump_result::pending;
+    }
     return arm_receive() ? pump_result::pending : pump_result::error;
 }
 
 std::optional<Http3DatagramEndpoint::received_datagram>
 Http3DatagramEndpoint::receive_slot() const noexcept {
     require_owner_thread();
+    if (forwarded_) {
+        if (stopping_ || channel_ == nullptr) {
+            return std::nullopt;
+        }
+        const auto received = channel_->worker_input();
+        return received ? std::optional<received_datagram>{{received->bytes,
+                              received->peer, received->local_destination}}
+                        : std::nullopt;
+    }
     if (!has_held_receive_) {
         return std::nullopt;
     }
@@ -127,6 +158,15 @@ Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::consume_receive() noex
     if (stopping_) {
         return pump_result::stopped;
     }
+    if (forwarded_) {
+        if (channel_->worker_input()) {
+            channel_->worker_consume_input();
+        }
+        if (channel_->worker_input()) {
+            channel_->wake_worker();
+        }
+        return pump_result::pending;
+    }
     if (!has_held_receive_) {
         return pump_result::idle;
     }
@@ -138,9 +178,33 @@ Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::consume_receive() noex
 Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_datagram(
     std::span<const std::byte> bytes, const udp::endpoint& source,
     const udp::endpoint& peer) noexcept {
+    return send_packet(bytes, source, peer, true);
+}
+
+Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_borrowed_datagram(
+    std::span<const std::byte> bytes, const udp::endpoint& source,
+    const udp::endpoint& peer) noexcept {
+    return send_packet(bytes, source, peer, false);
+}
+
+std::span<std::byte> Http3DatagramEndpoint::packet_buffer(std::span<std::byte> fallback) noexcept {
+    require_owner_thread();
+    if (stopping_ || send_in_flight_) {
+        return {};
+    }
+    return forwarded_ ? channel_->worker_output_buffer() : fallback;
+}
+
+Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_packet(
+    std::span<const std::byte> bytes, const udp::endpoint& source,
+    const udp::endpoint& peer, bool copy) noexcept {
     require_owner_thread();
     if (stopping_) {
         return pump_result::stopped;
+    }
+    if (forwarded_ && channel_->acceptor_closed()) {
+        poll_forwarded();
+        return error_ ? pump_result::error : pump_result::stopped;
     }
     const std::size_t max_payload = bound_endpoint_.address().is_v4() ? 65507 : 65527;
     if (!prepared_ || !started_ || bytes.empty() ||
@@ -155,11 +219,21 @@ Http3DatagramEndpoint::pump_result Http3DatagramEndpoint::send_datagram(
                                         : invalid_datagram());
         return pump_result::error;
     }
-    std::ranges::copy(bytes, send_buffer_.begin());
+    if (forwarded_) {
+        if (!channel_->worker_send(bytes, source, peer)) {
+            return pump_result::pending;
+        }
+        send_size_ = bytes.size();
+        send_in_flight_ = true;
+        return pump_result::pending;
+    }
+    if (copy) {
+        std::ranges::copy(bytes, send_buffer_.begin());
+        bytes = std::span<const std::byte>(send_buffer_).first(bytes.size());
+    }
     send_size_ = bytes.size();
     send_in_flight_ = true;
-    const auto accepted = socket_.asyncSend(
-        Http3UdpSocket::SendView{source, peer, std::span<const std::byte>(send_buffer_).first(send_size_)},
+    const auto accepted = socket_->asyncSend(Http3UdpSocket::SendView{source, peer, bytes},
         this, &Http3DatagramEndpoint::send_completion);
     if (!accepted) {
         send_in_flight_ = false;
@@ -180,6 +254,23 @@ bool Http3DatagramEndpoint::outbound_quiescent() const noexcept {
     return !send_in_flight_;
 }
 
+void Http3DatagramEndpoint::poll_forwarded() noexcept {
+    require_owner_thread();
+    if (!forwarded_ || stopping_ || channel_ == nullptr) {
+        return;
+    }
+    if (channel_->acceptor_closed()) {
+        error_ = channel_->error();
+        request_stop();
+        return;
+    }
+    if (send_in_flight_ && !channel_->worker_output_pending()) {
+        handle_send({}, send_size_);
+    }
+    if (!stopping_ && channel_ != nullptr && channel_->worker_input()) {
+        notify(notification_kind::input_available);
+    }
+}
 void Http3DatagramEndpoint::request_stop() noexcept {
     require_owner_thread();
     if (stopping_) {
@@ -188,7 +279,15 @@ void Http3DatagramEndpoint::request_stop() noexcept {
     stopping_ = true;
     held_receive_ = {};
     has_held_receive_ = false;
-    socket_.requestStop();
+    if (forwarded_) {
+        // The acceptor retains any published/in-flight output bytes. No access
+        // through this borrowed pointer is permitted after worker retirement.
+        channel_ = nullptr;
+        send_in_flight_ = false;
+        send_size_ = 0;
+    } else {
+        socket_->requestStop();
+    }
     if (!stopping_notified_) {
         stopping_notified_ = true;
         notify(notification_kind::stopping);
@@ -197,12 +296,12 @@ void Http3DatagramEndpoint::request_stop() noexcept {
 
 bool Http3DatagramEndpoint::socket_done() const noexcept {
     require_owner_thread();
-    return socket_.done();
+    return forwarded_ ? channel_ == nullptr : socket_->done();
 }
 
 Http3DatagramEndpoint::stop_status Http3DatagramEndpoint::status() const noexcept {
     require_owner_thread();
-    if (!stopping_ || callback_depth_ != 0 || send_in_flight_ || !socket_.done()) {
+    if (!stopping_ || callback_depth_ != 0 || send_in_flight_ || !socket_done()) {
         return stop_status::pending;
     }
     return error_ ? stop_status::error : stop_status::done;
@@ -219,6 +318,9 @@ void Http3DatagramEndpoint::receive_completion(void* context, std::error_code er
     ++self.callback_depth_;
     self.receive_armed_ = false;
     self.handle_receive(error, std::move(view));
+    if (self.stopping_) {
+        self.notify(notification_kind::io_retired);
+    }
     --self.callback_depth_;
 }
 
@@ -227,6 +329,9 @@ void Http3DatagramEndpoint::send_completion(void* context, std::error_code error
     auto& self = *static_cast<Http3DatagramEndpoint*>(context);
     ++self.callback_depth_;
     self.handle_send(error, size);
+    if (self.stopping_) {
+        self.notify(notification_kind::io_retired);
+    }
     --self.callback_depth_;
 }
 
@@ -241,7 +346,7 @@ bool Http3DatagramEndpoint::arm_receive() noexcept {
         return false;
     }
     receive_armed_ = true;
-    if (!socket_.asyncReceive(this, &Http3DatagramEndpoint::receive_completion)) {
+    if (!socket_->asyncReceive(this, &Http3DatagramEndpoint::receive_completion)) {
         receive_armed_ = false;
         fail(io_failure());
         return false;

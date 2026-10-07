@@ -171,7 +171,7 @@ public:
           allocator_(std::move(allocatorValue)) {}
 
     void start() {
-        task_.handle_.promise().setCompletion(this, &TaskCompletionState::complete);
+        task_.handle_.promise().control_.set_completion(this, &TaskCompletionState::complete);
         task_.start();
     }
 

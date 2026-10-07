@@ -4,10 +4,12 @@
 #include <bit>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 
 #include <openssl/sha.h>
 
 #include "ruvia/web/detail/db/DbConfigStorage.h"
+#include "ruvia/web/detail/db/DbQueryCacheState.h"
 #include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
@@ -65,6 +67,37 @@ std::pmr::string digest(std::string_view bytes, std::pmr::memory_resource* resou
     return result;
 }
 }  // namespace
+
+db_query_plan db_query_plan::prepare(const DbQuery& query, const DbQuery* count,
+    DbDriver driver, std::pmr::memory_resource* resource, DbQueryCacheState* cache) {
+    const auto prepare = [&](const DbQuery& input) {
+        auto statement = input.compile(driver, resource);
+        if (!statement.returnsRows()) {
+            throw std::invalid_argument(count
+                                            ? "query and count require statements that return rows"
+                                            : "query requires a statement that returns rows");
+        }
+        auto key = cache ? cache->key(input, statement, driver) : std::nullopt;
+        return db_query_step{std::move(statement.sql_), std::move(statement.params_),
+            std::move(key), input.cacheDuration()};
+    };
+    db_query_plan plan{prepare(query), std::nullopt};
+    if (count != nullptr) {
+        plan.second.emplace(prepare(*count));
+    }
+    return plan;
+}
+
+Task<DbRows> db_query_backend::operator()(db_query_step step,
+    OperationOptions options, const OperationTimeout& deadline) const {
+    DbCacheQuery database(pool, slot, std::move(step.sql), std::move(step.params),
+        resource, backend_failed);
+    if (cache != nullptr && step.cache_key.has_value()) {
+        return cache->wrap(step.cache_duration, std::move(step.cache_key),
+            std::move(database), std::move(options), deadline);
+    }
+    return std::move(database)(std::move(options));
+}
 
 Task<DbRows> DbCacheQuery::operator()(OperationOptions options) && {
     return executeOwned(std::move(pool_), std::move(slot_), std::move(sql_), std::move(params_),

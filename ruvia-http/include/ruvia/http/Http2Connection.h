@@ -15,6 +15,8 @@
 
 #include "ruvia/http/BorrowedText.h"
 #include "ruvia/http/Http2Framing.h"
+#include "ruvia/http/Http2RequestContent.h"
+#include "ruvia/http/Http2RequestHeadSubmitResult.h"
 #include "ruvia/http/Http2ResponseHeadSubmitResult.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
@@ -37,7 +39,6 @@ namespace ruvia {
 namespace detail {
 class Http2Connection;
 class Http2ConnectionOwnerEndpoint;
-class Http2RequestHeadSubmitResult;
 }  // namespace detail
 
 enum class Http2ServerRequestReleaseStatus : std::uint8_t { kReleased,
@@ -57,77 +58,6 @@ struct Http2ConnectionOptions final {
 struct Http2WebSocketServerHandshakeOptions final {
     std::span<const std::string_view> supportedSubprotocols{};
     std::span<const HttpHeaderView> responseHeaders{};
-};
-
-class Http2RequestContent;
-
-class Http2RequestWithoutContent final {
-private:
-    friend class Http2RequestContent;
-    constexpr Http2RequestWithoutContent() noexcept = default;
-};
-
-class Http2KnownLengthRequestContent final {
-public:
-    [[nodiscard]] constexpr std::uint64_t length() const noexcept {
-        return length_;
-    }
-
-private:
-    friend class Http2RequestContent;
-    explicit constexpr Http2KnownLengthRequestContent(std::uint64_t length) noexcept
-        : length_(length) {}
-    std::uint64_t length_;
-};
-
-class Http2StreamingRequestContent final {
-public:
-    [[nodiscard]] constexpr std::optional<std::uint64_t> expectedLength() const noexcept {
-        return length_;
-    }
-
-private:
-    friend class Http2RequestContent;
-    explicit constexpr Http2StreamingRequestContent(std::optional<std::uint64_t> length) noexcept
-        : length_(length) {}
-    std::optional<std::uint64_t> length_{};
-};
-
-class Http2RequestContent final {
-public:
-    [[nodiscard]] static constexpr Http2RequestContent none() noexcept {
-        return Http2RequestContent(Http2RequestWithoutContent());
-    }
-    [[nodiscard]] static constexpr Http2RequestContent knownLength(std::uint64_t length) noexcept {
-        return Http2RequestContent(Http2KnownLengthRequestContent(length));
-    }
-    [[nodiscard]] static constexpr Http2RequestContent streaming(std::optional<std::uint64_t> length = {}) noexcept {
-        return Http2RequestContent(Http2StreamingRequestContent(length));
-    }
-    [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const& noexcept {
-        return std::get_if<Http2RequestWithoutContent>(&value_);
-    }
-    const Http2RequestWithoutContent* withoutContent() const&& = delete;
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent()
-        const& noexcept {
-        return std::get_if<Http2KnownLengthRequestContent>(&value_);
-    }
-    const Http2KnownLengthRequestContent* knownLengthContent() const&& = delete;
-    [[nodiscard]] constexpr const Http2StreamingRequestContent* streamingContent() const& noexcept {
-        return std::get_if<Http2StreamingRequestContent>(&value_);
-    }
-    const Http2StreamingRequestContent* streamingContent() const&& = delete;
-
-private:
-    using Value = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent,
-        Http2StreamingRequestContent>;
-    explicit constexpr Http2RequestContent(Http2RequestWithoutContent value) noexcept
-        : value_(value) {}
-    explicit constexpr Http2RequestContent(Http2KnownLengthRequestContent value) noexcept
-        : value_(value) {}
-    explicit constexpr Http2RequestContent(Http2StreamingRequestContent value) noexcept
-        : value_(value) {}
-    Value value_;
 };
 
 struct Http2RegularRequestHeadView final {
@@ -151,61 +81,6 @@ struct Http2ExtendedConnectRequestHeadView final {
     BorrowedText authority{};
     BorrowedText target{"/"};
     std::span<const HttpHeaderView> headers{};
-};
-
-class Http2SubmittedRequestHead final {
-public:
-    [[nodiscard]] constexpr std::uint32_t streamId() const noexcept {
-        return streamId_;
-    }
-
-private:
-    friend class Http2RequestHeadSubmitResult;
-    explicit constexpr Http2SubmittedRequestHead(std::uint32_t streamId) noexcept
-        : streamId_(streamId) {}
-    std::uint32_t streamId_;
-};
-
-class Http2RequestHeadSubmitFailure final {
-public:
-    [[nodiscard]] constexpr Http2RequestHeadSubmitError error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class Http2RequestHeadSubmitResult;
-    explicit constexpr Http2RequestHeadSubmitFailure(Http2RequestHeadSubmitError error) noexcept
-        : error_(error) {}
-    Http2RequestHeadSubmitError error_;
-};
-
-class Http2RequestHeadSubmitResult final {
-public:
-    [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
-    }
-    const Http2SubmittedRequestHead* submitted() const&& = delete;
-    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
-    }
-    const Http2RequestHeadSubmitFailure* failure() const&& = delete;
-
-private:
-    friend class Http2Connection;
-    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
-    explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead value) noexcept
-        : value_(value) {}
-    explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure value) noexcept
-        : value_(std::unexpected(value)) {}
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
-        std::uint32_t streamId) noexcept {
-        return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));
-    }
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeFailure(
-        Http2RequestHeadSubmitError error) noexcept {
-        return Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure(error));
-    }
-    Value value_;
 };
 
 enum class Http2FinishResponseStatus : std::uint8_t {
@@ -836,7 +711,7 @@ private:
     friend WebSocketHandshakeValidationResult validateHttp2WebSocketHandshake(
         Http2Connection&, std::uint32_t, const HttpRequest&) noexcept;
     [[nodiscard]] static Http2RequestHeadSubmitResult pinSubmittedRequest(
-        detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result);
+        detail::Http2Connection& connection, const Http2RequestHeadSubmitResult& result);
     explicit Http2Connection(std::pmr::memory_resource* resource, Http2Role role, bool enablePush, bool receiveOriginAdvertisements);
     class Impl;
     struct ImplDeleter final {

@@ -228,6 +228,12 @@ struct Http3ServerConnection::RequestRetirement final {
         if (owner.session_.request(streamId) == nullptr) {
             return;
         }
+        const auto* slot = owner.findRequestSlot(streamId);
+        if (slot != nullptr && slot->status == RequestStatus::kPublished) {
+            // The response is terminal, not the peer's receive direction. Its
+            // remaining storage belongs to the input owner until FIN or reset.
+            return;
+        }
         (void)owner.session_.release(streamId);
         owner.requireConnectionClose(TransportCloseReason::kRequestRetirementFailure,
             Http3ConnectionErrorCode::kInternalError);
@@ -1348,6 +1354,19 @@ Http3ServerConnection::handleInputResult(std::uint64_t streamId,
         }
     }
 
+    if (result.status == Input::Status::kFed || result.status == Input::Status::kFinished) {
+        const auto* slot = findRequestSlot(streamId);
+        if (slot != nullptr && slot->requestStarted &&
+            (slot->entry == nullptr || slot->entry->dispatch.complete())) {
+            // A response can finish before peer FIN. Its dispatch has returned
+            // the lease; only now may the input owner release receive storage.
+            if (result.status == Input::Status::kFinished) {
+                (void)session_.release(streamId);
+            }
+            return {.status = EventStatus::kAccepted, .input = result};
+        }
+    }
+
     if ((result.status == Input::Status::kFed ||
             result.status == Input::Status::kFinished) &&
         session_.streamState(streamId) == Session::StreamState::kReady) {
@@ -1397,7 +1416,7 @@ bool Http3ServerConnection::queueContinueResponse(std::uint64_t streamId) {
     }
     auto head = session_.encodeInterimResponseHead(streamId, HttpInterimResponseHead(http_status::kContinue));
     const auto peerLimit = session_.peerMaxFieldSectionSize();
-    if (!head || (peerLimit && head->decodedFieldSectionSize() > *peerLimit)) {
+    if (!head || (peerLimit && head->field_section.decodedFieldSectionSize() > *peerLimit)) {
         slot->status = RequestStatus::kCancelled;
         (void)enqueueResetIntent(*slot);
         (void)retireRequestInput(streamId);
@@ -1405,13 +1424,13 @@ bool Http3ServerConnection::queueContinueResponse(std::uint64_t streamId) {
         return false;
     }
     std::pmr::vector<char> frame(worker_.resource());
-    frame.resize(kHttp3FrameHeaderMaxBytes + head->fieldSection.size());
-    const auto prefix = encodeHttp3FrameHeader(frame, static_cast<std::uint64_t>(Http3FrameType::kHeaders), head->fieldSection.size());
+    frame.resize(kHttp3FrameHeaderMaxBytes + head->field_section.fieldSection.size());
+    const auto prefix = encodeHttp3FrameHeader(frame, static_cast<std::uint64_t>(Http3FrameType::kHeaders), head->field_section.fieldSection.size());
     if (!prefix) {
         throw std::runtime_error("HTTP/3 continue response framing failed");
     }
-    frame.resize(*prefix + head->fieldSection.size());
-    std::copy(head->fieldSection.begin(), head->fieldSection.end(), frame.begin() + static_cast<std::ptrdiff_t>(*prefix));
+    frame.resize(*prefix + head->field_section.fieldSection.size());
+    std::copy(head->field_section.fieldSection.begin(), head->field_section.fieldSection.end(), frame.begin() + static_cast<std::ptrdiff_t>(*prefix));
     slot->responsePreludeBytes = frame.size();
     slot->interimResponse.emplace(PendingInterimResponse{std::move(frame)});
     enqueueForDemand(*slot, true);

@@ -22,14 +22,14 @@ ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientState::read(
     OperationOptions options) {
     validateOperationOptions(options);
     requireCurrent();
-    return makeScopedOperation(operationScope_,
+    return ::ruvia::make_scoped_operation(operationScope_,
         readOwned(shared_from_this(), std::move(options),
-            ActivityLease(readActive_, "concurrent WebSocket client reads are not supported")),
+            claim_activity(readActive_, "concurrent WebSocket client reads are not supported")),
         &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<std::optional<WebSocketMessage>> WebSocketClientState::readOwned(
-    std::shared_ptr<WebSocketClientState> state, OperationOptions options, ActivityLease activity) {
+    std::shared_ptr<WebSocketClientState> state, OperationOptions options, operation_lane_lease activity) {
     static_cast<void>(activity);
     state->requireOpen();
     OperationGuard operation(*state, options);

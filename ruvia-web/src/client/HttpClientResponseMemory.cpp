@@ -211,14 +211,14 @@ HttpClientResponseState::HttpClientResponseState(HttpClientResponseMemoryDomain&
 
 void HttpClientResponseState::detachTransportBindings() noexcept {
     if (tunnel) {
-        tunnel->wake = nullptr;
-        tunnel->wakeTarget = nullptr;
-        tunnel->stop();
+        tunnel->output.wake = nullptr;
+        tunnel->output.wakeTarget = nullptr;
+        tunnel->output.stop();
     }
     if (upload) {
-        upload->wake = nullptr;
-        upload->wakeTarget = nullptr;
-        upload->stop();
+        upload->output.wake = nullptr;
+        upload->output.wakeTarget = nullptr;
+        upload->output.stop();
     }
     if (http2DataCredit) {
         http2DataCredit.reset();

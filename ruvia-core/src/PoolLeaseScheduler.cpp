@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/core/detail/pool/PoolWaiterQueue.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
 #include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia {
@@ -102,7 +102,7 @@ public:
             co_return PoolWaiterResult::makeAcquired(slot);
         }
 
-        const auto deadline = timeout.has_value() ? detail::workerTimerDeadlineAfter(*timeout)
+        const auto deadline = timeout.has_value() ? ::ruvia::workerTimerDeadlineAfter(*timeout)
                                                   : std::chrono::steady_clock::time_point::max();
         auto waiterId = ++owner.nextWaiterId_;
         if (waiterId == 0) {
@@ -119,14 +119,13 @@ public:
             }
         } guard{waiterState->queue, waiter};
 
-        detail::WorkerTimerRegistration deadlineTimer;
+        ::ruvia::WorkerTimerRegistration deadlineTimer;
         if (timeout.has_value() && worker != nullptr && worker->valid()) {
-            detail::WorkerHandleAccess::scheduleTimer(*worker, deadlineTimer, deadline,
-                [waiterState, waiterId](detail::WorkerTimerOutcome outcome) noexcept {
-                    if (outcome == detail::WorkerTimerOutcome::kExpired) {
-                        (void)waiterState->queue.expire(waiterId);
-                    }
-                });
+            (*worker).schedule_timer(deadlineTimer, deadline, [waiterState, waiterId](::ruvia::WorkerTimerOutcome outcome) noexcept {
+                if (outcome == ::ruvia::WorkerTimerOutcome::kExpired) {
+                    (void)waiterState->queue.expire(waiterId);
+                }
+            });
         }
 
         auto stopRegistration = stopToken.registerCallback([worker, waiterState, waiterId] {

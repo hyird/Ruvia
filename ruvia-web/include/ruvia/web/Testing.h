@@ -28,7 +28,7 @@
 
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/web/detail/app/AppConfiguration.h"
+#include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/integration/WorkerState.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 
@@ -161,7 +161,7 @@ private:
 // configuration calls below may run in any order before that. Not thread-safe:
 // drive one TestApp from one thread, like the single-threaded worker it
 // stands in for.
-class TestApp final : public detail::AppConfiguration<TestApp> {
+class TestApp final {
 public:
     TestApp();
     ~TestApp();
@@ -171,9 +171,31 @@ public:
     TestApp(TestApp&&) = delete;
     TestApp& operator=(TestApp&&) = delete;
 
-    // The App configuration knobs that change dispatch behavior, with the
-    // same semantics as their App counterparts; use<>() and useWorkerState<>()
-    // come from the shared configuration base.
+    // Uses the same composed dispatch configuration as App, with TestApp's
+    // first-request lifecycle guard instead of the process lifecycle.
+    template <typename middleware_type, typename... args_types>
+    TestApp& use(args_types&&... args) {
+        return useMiddleware(
+            detail::makeMiddlewareDescriptor<middleware_type>(std::forward<args_types>(args)...));
+    }
+
+    template <typename middleware_type, typename... args_types>
+    TestApp& useAt(const MiddlewareScopeOptions& options, args_types&&... args) {
+        return useMiddleware(
+            detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
+    }
+
+    template <typename state_type, typename factory_type>
+    TestApp& useWorkerState(factory_type&& factory) {
+        return useWorkerStateDefinition(
+            detail::WorkerStateDefinition::make<state_type>(std::forward<factory_type>(factory)));
+    }
+
+    template <typename state_type>
+    TestApp& useWorkerState() {
+        return useWorkerStateDefinition(detail::make_default_worker_state<state_type>());
+    }
+
     TestApp& onError(HttpErrorHandler handler);
     TestApp& onNotFound(HttpNotFoundHandler handler);
     // Prefixes use the same segment and trailing-slash normalization as App;
@@ -190,8 +212,6 @@ public:
     [[nodiscard]] TestResponse request(const TestRequest& request);
 
 private:
-    friend class detail::AppConfiguration<TestApp>;
-
     TestApp& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
     TestApp& useWorkerStateDefinition(detail::WorkerStateDefinition definition);
 

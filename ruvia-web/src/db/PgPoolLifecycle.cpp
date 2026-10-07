@@ -88,7 +88,7 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
         }
         slot.waitSocket.reset();
     }
-    clearSlotDeadline(slot);
+    clear_db_slot_deadline(slot);
     if (slot.connection != nullptr) {
         PQfinish(slot.connection);
         slot.connection = nullptr;
@@ -97,39 +97,13 @@ void PostgreSqlPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void PostgreSqlPool::setSlotDeadline(
-    ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) {
-    clearSlotDeadline(slot);
-    if (timeout.count() <= 0) {
-        return;
+void PostgreSqlPool::ConnectionSlot::expire_deadline(
+    ConnectionSlot& slot, DeadlineKind kind) noexcept {
+    if (kind == DeadlineKind::kResolve) {
+        slot.resolver.cancel();
+    } else if (slot.waitSocket != nullptr) {
+        slot.waitSocket->cancel();
     }
-    const auto deadline = workerTimerDeadlineAfter(timeout);
-    slot.deadline.arm(deadline, kind);
-    try {
-        WorkerHandleAccess::scheduleTimer(
-            worker_, *slot.deadlineTimer, deadline, [&slot](WorkerTimerOutcome outcome) noexcept {
-                if (outcome != WorkerTimerOutcome::kExpired) {
-                    return;
-                }
-                const auto expired = slot.deadline.expire(std::chrono::steady_clock::now());
-                if (!expired.has_value()) {
-                    return;
-                }
-                if (*expired == ConnectionSlot::DeadlineKind::kResolve) {
-                    slot.resolver.cancel();
-                } else if (slot.waitSocket != nullptr) {
-                    slot.waitSocket->cancel();
-                }
-            });
-    } catch (...) {
-        slot.deadline.reset();
-        throw;
-    }
-}
-
-void PostgreSqlPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineTimer->cancel();
-    (void)slot.deadline.clear();
 }
 
 }  // namespace ruvia::detail

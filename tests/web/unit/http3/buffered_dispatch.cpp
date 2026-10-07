@@ -30,6 +30,7 @@
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3Settings.h"
 #include "ruvia/http/HttpByteRange.h"
+#include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ErrorHandlers.h"
@@ -82,6 +83,13 @@ struct HandlerState final {
     std::string errorCode;
     bool allocateErrorHeaders{};
     bool throwFromErrorHandler{};
+    bool response_no_transform{};
+    bool error_no_transform{};
+    bool first_error_no_transform{};
+    std::string error_body{"handled-error"};
+    std::size_t error_handler_calls{};
+    std::size_t suspend_error_call{};
+    ruvia::WorkerSignal* error_started{};
     std::string largeResponseHeader;
     ruvia::WorkerSignal* webSocketStarted{};
     ruvia::WorkerSignal* webSocketMessageReceived{};
@@ -173,6 +181,9 @@ ruvia::Task<ruvia::HttpResponse> bufferedHandler(void* raw, ruvia::Context& cont
         state.uploadTrailerObserved = context.req().trailer("x-checksum") == "final" && context.req().header("x-checksum") == "initial";
     }
     context.header("x-dispatch", "buffered");
+    if (state.response_no_transform) {
+        context.header("cache-control", "no-transform");
+    }
     if (!state.largeResponseHeader.empty()) {
         context.header("x-large-response", state.largeResponseHeader);
     }
@@ -309,18 +320,27 @@ struct Routes final {
         : errorHandler([this](ruvia::Context& context, ruvia::HttpErrorInfo error)
                            -> ruvia::Task<ruvia::HttpResponse> {
               handlers.errorHandlerCalled = true;
+              ++handlers.error_handler_calls;
               handlers.errorCode.assign(error.code());
               if (handlers.throwFromErrorHandler) {
                   throw std::runtime_error("error handler failed");
               }
               context.status(error.status());
               context.header("x-error-handler", "used");
+              if (handlers.error_no_transform ||
+                  (handlers.first_error_no_transform && handlers.error_handler_calls == 1)) {
+                  context.header("cache-control", "no-transform");
+              }
+              if (handlers.suspend_error_call == handlers.error_handler_calls) {
+                  handlers.error_started->notify();
+                  (void)co_await ruvia::sleepFor(context.worker(), 10s, context.stopToken());
+              }
               if (handlers.allocateErrorHeaders) {
                   for (unsigned i = 0; i < 32; ++i) {
                       context.header("x-owned-error-" + std::to_string(i), std::string_view(handlers.responseBody));
                   }
               }
-              auto response = context.text("handled-error");
+              auto response = context.text(std::string_view(handlers.error_body));
               handlers.error_handler_response_ready = true;
               co_return response;
           }) {
@@ -533,17 +553,24 @@ bool controlAccepted(Mailbox::ControlResult result) noexcept {
 }
 
 void feedWebSocketRequest(Engine& session, ruvia::WorkerMemory& worker,
-    std::uint64_t streamId, std::string_view version = "13") {
+    std::uint64_t streamId, std::string_view version = "13",
+    std::string_view accept_encoding = {}) {
     const std::array fields{
         ruvia::Http3FieldSectionFieldView{":method", "CONNECT"},
         ruvia::Http3FieldSectionFieldView{":protocol", "websocket"},
         ruvia::Http3FieldSectionFieldView{":scheme", "https"},
         ruvia::Http3FieldSectionFieldView{":authority", "example.test"},
         ruvia::Http3FieldSectionFieldView{":path", "/socket"},
-        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", version}};
-    const auto fieldsToEncode = version.empty()
-                                    ? std::span<const ruvia::Http3FieldSectionFieldView>(fields.data(), fields.size() - 1)
-                                    : std::span<const ruvia::Http3FieldSectionFieldView>(fields);
+        ruvia::Http3FieldSectionFieldView{"sec-websocket-version", version},
+        ruvia::Http3FieldSectionFieldView{"accept-encoding", accept_encoding}};
+    std::pmr::vector<ruvia::Http3FieldSectionFieldView> fieldsToEncode(worker.resource());
+    for (const auto& field : fields) {
+        if ((field.name == "sec-websocket-version" && version.empty()) ||
+            (field.name == "accept-encoding" && accept_encoding.empty())) {
+            continue;
+        }
+        fieldsToEncode.push_back(field);
+    }
     const auto fieldSection = ruvia::encodeHttp3FieldSection(fieldsToEncode, worker.resource());
     if (!fieldSection) {
         throw std::runtime_error("HTTP/3 WebSocket fixture field section encoding failed");
@@ -704,6 +731,7 @@ struct DecodedResponse final {
     std::string upgradeHeader;
     std::string websocketAcceptHeader;
     std::string contentType;
+    std::string content_encoding;
     std::string body;
     std::string completeTrailer;
 };
@@ -720,6 +748,8 @@ void onResponse(void* raw, const ruvia::Http3ClientResponseEvent& event) {
                 response.decodedFieldSectionSize += header.name.size() + header.value.size() + 32;
                 if (header.name == "content-type") {
                     response.contentType = header.value;
+                } else if (header.name == "content-encoding") {
+                    response.content_encoding = header.value;
                 } else if (header.name == "x-dispatch") {
                     response.dispatchHeader = header.value;
                 } else if (header.name == "x-error-handler") {
@@ -2474,10 +2504,6 @@ ruvia::Task<void> exerciseWebSocketHandshakeFailures(Fixture& fixture,
         }
         auto dispatch = fixture.makeDispatch(streamId, fixture.services);
         RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
-        if (!requestEnded) {
-            const auto fin = fixture.session.feed(streamId, {}, true);
-            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
-        }
         RUVIA_CHECK(fixture.routes.handlers.errorHandlerCalled);
         RUVIA_CHECK_EQ(fixture.routes.handlers.errorCode, expectedCode);
         PublishedWire wire;
@@ -2493,7 +2519,137 @@ ruvia::Task<void> exerciseWebSocketHandshakeFailures(Fixture& fixture,
         RUVIA_CHECK(response.upgradeHeader.empty());
         RUVIA_CHECK(response.websocketAcceptHeader.empty());
         RUVIA_CHECK_EQ(response.body, "handled-error");
+        if (!requestEnded) {
+            RUVIA_CHECK(fixture.session.request(streamId) != nullptr);
+            const auto fin = fixture.session.feed(streamId, {}, true);
+            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
+            RUVIA_CHECK(fixture.session.release(streamId));
+        }
+        RUVIA_CHECK(fixture.session.request(streamId) == nullptr);
         fixture.routes.handlers.errorHandlerCalled = false;
+    }
+}
+
+ruvia::Task<void> exercise_buffered_recovery_coding(Fixture& fixture, bool web_socket,
+    ruvia::testing::TestContext& ruvia_ctx) {
+    auto& state = fixture.routes.handlers;
+    state.responseBody.assign(2048, 'a');
+    state.error_body.assign(2048, 'e');
+    state.response_no_transform = true;
+    state.first_error_no_transform = web_socket;
+    for (unsigned mode = 0; mode != 4; ++mode) {
+        state.error_handler_calls = 0;
+        state.errorCode.clear();
+        state.error_no_transform = mode == 1;
+        fixture.options.compression.emplace();
+        if (mode == 2) {
+            fixture.options.compression.reset();
+        }
+        const auto accept_encoding = mode == 3 ? "identity;q=0, *;q=0" : "gzip, identity;q=0";
+        const std::uint64_t stream_id = mode * 4;
+        if (web_socket) {
+            feedWebSocketRequest(fixture.session, fixture.worker, stream_id, "12", accept_encoding);
+        } else {
+            const std::array fields{ruvia::Http3FieldSectionFieldView{"accept-encoding", accept_encoding}};
+            feedRequest(fixture, stream_id, "GET", "/large", {}, fields);
+        }
+        auto dispatch = fixture.makeDispatch(stream_id, fixture.services);
+        RUVIA_CHECK(co_await dispatch.runHandler() == Dispatch::RunStatus::kResponseReady);
+        RUVIA_CHECK_EQ(state.error_handler_calls, web_socket ? std::size_t{2} : std::size_t{1});
+        RUVIA_CHECK_EQ(state.errorCode, std::string("not_acceptable"));
+        PublishedWire wire;
+        publishAndDrain(dispatch, fixture, stream_id, wire, ruvia_ctx);
+        DecodedResponse response;
+        RUVIA_CHECK(decodePublished(wire, web_socket ? ruvia::HttpKnownMethod::kConnect : ruvia::HttpKnownMethod::kGet,
+                        stream_id, fixture.worker.resource(), response)
+                        .status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+        RUVIA_CHECK_EQ(response.status, std::uint16_t{406});
+        RUVIA_CHECK_EQ(response.finalHeads, std::size_t{1});
+        RUVIA_CHECK_EQ(response.errorHeader, std::string("used"));
+        if (!web_socket && mode == 0) {
+            RUVIA_CHECK_EQ(response.content_encoding, std::string("gzip"));
+            const auto decoded_body = ruvia::decodeHttpContent(ruvia::HttpContentCoding::kGzip, response.body,
+                {.maxDecodedBytes = state.error_body.size(), .resource = fixture.worker.resource()});
+            RUVIA_CHECK(decoded_body.decoded() != nullptr);
+            if (const auto* content = decoded_body.decoded()) {
+                RUVIA_CHECK_EQ(content->bytes(), state.error_body);
+            }
+        } else {
+            RUVIA_CHECK(response.content_encoding.empty());
+            RUVIA_CHECK_EQ(response.body, state.error_body);
+        }
+        if (web_socket) {
+            RUVIA_CHECK(fixture.session.request(stream_id) != nullptr);
+            const auto fin = fixture.session.feed(stream_id, {}, true);
+            RUVIA_CHECK(fin.scope == ruvia::Http3ConnectionErrorScope::kNone);
+            RUVIA_CHECK(fixture.session.release(stream_id));
+        }
+        RUVIA_CHECK(fixture.session.request(stream_id) == nullptr);
+    }
+}
+
+RUVIA_TEST(http3_buffered_recovery_preserves_ordinary_and_websocket_coding_policies) {
+    for (const bool web_socket : {false, true}) {
+        auto& io = ruvia::test::newTestIoContext();
+        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+        const auto worker = attachment.loop().handle();
+        ruvia::test::CountingMemoryResource resource;
+        {
+            Fixture fixture(worker, resource);
+            runWorkerTask(attachment, exercise_buffered_recovery_coding(fixture, web_socket, ruvia_ctx));
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+    }
+}
+
+ruvia::Task<void> exercise_buffered_recovery_cancellation(Fixture& fixture,
+    const ruvia::WorkerHandle& worker, bool web_socket, ruvia::testing::TestContext& ruvia_ctx) {
+    auto& state = fixture.routes.handlers;
+    ruvia::WorkerSignal error_started(worker);
+    state.error_started = &error_started;
+    state.suspend_error_call = web_socket ? 2 : 1;
+    state.response_no_transform = true;
+    state.first_error_no_transform = web_socket;
+    const auto accept_encoding = "gzip, identity;q=0";
+    if (web_socket) {
+        feedWebSocketRequest(fixture.session, fixture.worker, 0, "12", accept_encoding);
+    } else {
+        const std::array fields{ruvia::Http3FieldSectionFieldView{"accept-encoding", accept_encoding}};
+        feedRequest(fixture, 0, "GET", "/large", {}, fields);
+    }
+    auto dispatch = fixture.makeDispatch(0, fixture.services);
+    ruvia::TaskScope tasks(worker, {.resource = fixture.worker.resource()});
+    ruvia::WorkerSignal finished(worker);
+    auto status = Dispatch::RunStatus::kFailed;
+    bool joined = false;
+    tasks.spawn(runOwner(dispatch, status, joined, finished));
+    co_await error_started.wait();
+    RUVIA_CHECK(dispatch.handlerActive());
+    dispatch.cancel();
+    co_await finished.wait();
+    co_await tasks.join();
+    RUVIA_CHECK(joined && status == Dispatch::RunStatus::kCancelled);
+    RUVIA_CHECK(!dispatch.handlerActive() && !dispatch.responseReady());
+    RUVIA_CHECK_EQ(dispatch.publishedWireBytes(), std::uint64_t{0});
+    Mailbox::BorrowedBlock block;
+    Control control;
+    RUVIA_CHECK(!fixture.outbound.tryReceive(block) && !fixture.outbound.tryReceiveControl(control));
+    RUVIA_CHECK(fixture.session.request(0) == nullptr);
+}
+
+RUVIA_TEST(http3_buffered_recovery_cancellation_joins_error_handler_without_publishing) {
+    for (const bool web_socket : {false, true}) {
+        auto& io = ruvia::test::newTestIoContext();
+        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+        const auto worker = attachment.loop().handle();
+        ruvia::test::CountingMemoryResource resource;
+        {
+            Fixture fixture(worker, resource);
+            runWorkerTask(attachment, exercise_buffered_recovery_cancellation(fixture, worker, web_socket, ruvia_ctx));
+        }
+        RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
     }
 }
 

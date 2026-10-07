@@ -32,7 +32,7 @@ Task<std::optional<T>> ContextRequest::jsonIfModelTask(const Context* context) {
 
 template <typename T>
 ScopedOperation<std::optional<T>> ContextRequest::jsonIf() const {
-    return detail::makeScopedOperation(
+    return ::ruvia::make_scoped_operation(
         contextOperationScope(context_), jsonIfModelTask<T>(context_));
 }
 
@@ -55,7 +55,7 @@ Task<std::optional<T>> ContextRequest::formIfModelTask(const Context* context) {
 
 template <typename T>
 ScopedOperation<std::optional<T>> ContextRequest::formIf() const {
-    return detail::makeScopedOperation(
+    return ::ruvia::make_scoped_operation(
         contextOperationScope(context_), formIfModelTask<T>(context_));
 }
 

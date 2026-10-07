@@ -66,8 +66,9 @@ void HttpClientRequestStorage::setTunnel(std::string_view authority, std::string
     tunnelProtocol_.assign(protocol);
     isTunnel_ = true;
 }
-HttpClientOutputQueue* HttpClientRequestStorage::output() const noexcept {
-    return tunnel_ != nullptr ? static_cast<HttpClientOutputQueue*>(tunnel_) : static_cast<HttpClientOutputQueue*>(upload_);
+http_client_output_queue* HttpClientRequestStorage::output() const noexcept {
+    return tunnel_ != nullptr ? &tunnel_->output : upload_ != nullptr ? &upload_->output
+                                                                      : nullptr;
 }
 
 HttpClientRequestStorage& HttpClientRequestStorage::appendHeader(

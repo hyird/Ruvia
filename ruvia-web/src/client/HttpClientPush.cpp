@@ -47,10 +47,10 @@ const HttpPushRequest& HttpClientPush::request() const& {
 ScopedOperation<HttpClientResponse> HttpClientPush::response() & {
     auto* state = response_.state_;
     (void)request();
-    if (state->pushResponseTaken || state->pushResponseScope.hasPendingOperations()) {
+    if (state->pushResponseTaken || state->pushResponseScope.has_pending_operations()) {
         throw std::logic_error("push response has already been transferred or is active");
     }
-    return detail::makeScopedOperation(state->pushResponseScope, receiveOwned(HttpClientResponse(state, true)));
+    return ::ruvia::make_scoped_operation(state->pushResponseScope, receiveOwned(HttpClientResponse(state, true)));
 }
 Task<HttpClientResponse> HttpClientPush::receiveOwned(HttpClientResponse pin) {
     auto& state = *pin.state_;

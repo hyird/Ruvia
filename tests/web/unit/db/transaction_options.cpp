@@ -146,7 +146,7 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
         test::CountingMemoryResource resource;
         detail::DbRegistry registry(context, worker, &resource,
             DbConfig{.driver = driver});
-        detail::ScopedOperationScope scope;
+        ::ruvia::operation_scope scope;
         auto handle = registry.get(scope);
         StopSource cancellation;
         cancellation.requestStop();
@@ -157,9 +157,9 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
                 {
                     const auto cold = handle.beginTransaction({.isolation = DbTransactionIsolation::kSerializable,
                         .accessMode = DbTransactionAccessMode::kReadOnly});
-                    RUVIA_CHECK(scope.hasPendingOperations());
+                    RUVIA_CHECK(scope.has_pending_operations());
                 }
-                RUVIA_CHECK(!scope.hasPendingOperations());
+                RUVIA_CHECK(!scope.has_pending_operations());
                 RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
                 bool observedCancellation = false;
                 bool observedInvalid = false;
@@ -183,7 +183,7 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
                 }
                 RUVIA_CHECK(observedCancellation);
                 RUVIA_CHECK(observedInvalid);
-                RUVIA_CHECK(!scope.hasPendingOperations());
+                RUVIA_CHECK(!scope.has_pending_operations());
                 RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
             }
         };

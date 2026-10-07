@@ -18,6 +18,7 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/post.hpp>
 #include <asio/read.hpp>
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
@@ -89,12 +90,22 @@ struct ClosingResolveSlot final {
     bool closeRequested{false};
     bool observedActiveResolve{false};
     ClosingResolver resolver;
+    bool throw_on_initiation{false};
+    ruvia::WorkerTimerRegistration deadline_timer;
+    ruvia::WorkerTimerRegistration* deadlineTimer{&deadline_timer};
     ruvia::detail::OperationDeadline<DeadlineKind> deadline;
+
+    static void expire_deadline(ClosingResolveSlot& slot, DeadlineKind) noexcept {
+        slot.resolver.cancel();
+    }
 };
 
 template <typename Handler>
 void ClosingResolver::async_resolve(std::string_view, std::string_view, Handler handler) {
     slot_->observedActiveResolve = slot_->waitActive;
+    if (slot_->throw_on_initiation) {
+        throw std::runtime_error("resolver initiation failed");
+    }
     slot_->closeRequested = true;
     handler(asio::error::operation_aborted, asio::ip::tcp::resolver::results_type{});
 }
@@ -107,17 +118,9 @@ struct ClosingResolvePool final {
     } config_;
 
     std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    ruvia::WorkerHandle worker_;
 
     void throwIfCancelled(const ClosingResolveSlot&) const {}
-
-    void setSlotDeadline(ClosingResolveSlot& slot, std::chrono::milliseconds timeout,
-        ClosingResolveSlot::DeadlineKind kind) {
-        slot.deadline.arm(ruvia::detail::workerTimerDeadlineAfter(timeout), kind);
-    }
-
-    void clearSlotDeadline(ClosingResolveSlot& slot) noexcept {
-        slot.deadline.reset();
-    }
 };
 #endif
 
@@ -149,23 +152,24 @@ struct GuardedLeaseGate final {
     std::coroutine_handle<> continuation_{};
 };
 
-class GuardedLeaseCapability final : public ruvia::detail::ScopedCapabilityNode {
+class GuardedLeaseCapability final {
 public:
-    GuardedLeaseCapability(ruvia::detail::ScopedOperationScope& scope, GuardedLeaseState& state,
+    GuardedLeaseCapability(ruvia::operation_scope& scope, GuardedLeaseState& state,
         bool& expired) noexcept
-        : ScopedCapabilityNode(scope, &GuardedLeaseCapability::expire),
-          state_(state),
-          expired_(expired) {}
+        : state_(state),
+          expired_(expired),
+          registration_(scope, this, &GuardedLeaseCapability::expire) {}
 
 private:
-    static void expire(ruvia::detail::ScopedCapabilityNode& node) noexcept {
-        auto& capability = static_cast<GuardedLeaseCapability&>(node);
+    static void expire(void* target) noexcept {
+        auto& capability = *static_cast<GuardedLeaseCapability*>(target);
         capability.state_.reset([](GuardedLease&) noexcept {});
         capability.expired_ = true;
     }
 
     GuardedLeaseState& state_;
     bool& expired_;
+    ruvia::scoped_capability_registration registration_;
 };
 
 ruvia::Task<void> failGuardedLeaseAfterGate(
@@ -190,8 +194,8 @@ ruvia::Task<void> awaitScopedOperation(ruvia::ScopedOperation<void>& operation) 
     co_return;
 }
 
-ruvia::Task<void> joinScopedOperations(ruvia::detail::ScopedOperationScope& scope) {
-    co_await scope.closeAndJoin();
+ruvia::Task<void> joinScopedOperations(ruvia::operation_scope& scope) {
+    co_await scope.close_and_join();
     co_return;
 }
 
@@ -218,6 +222,28 @@ public:
     ruvia::WorkerHandle worker;
 };
 
+struct deadline_test_slot final {
+    enum class deadline_kind : std::uint8_t { resolve,
+        socket,
+        sleep };
+
+    static void expire_deadline(deadline_test_slot& slot, deadline_kind kind) noexcept {
+        ++slot.expiry_count;
+        slot.last_expired = kind;
+        auto continuation = std::exchange(slot.deadlineContinuation, {});
+        if (continuation) {
+            continuation.resume();
+        }
+    }
+
+    ruvia::WorkerTimerRegistration timer;
+    ruvia::WorkerTimerRegistration* deadlineTimer{&timer};
+    ruvia::detail::OperationDeadline<deadline_kind> deadline;
+    std::coroutine_handle<> deadlineContinuation{};
+    unsigned expiry_count{0};
+    std::optional<deadline_kind> last_expired;
+};
+
 // Bound parameters passed as ordinary arguments.
 
 // A prepared sequence must keep selecting the span overload rather than being
@@ -230,6 +256,83 @@ public:
 // parameter cloning requires.
 
 }  // namespace
+
+RUVIA_TEST(db_slot_deadline_replacement_cancel_and_disable_retire_previous_action) {
+    using namespace std::chrono_literals;
+    using kind = deadline_test_slot::deadline_kind;
+    DbRegistryTestRuntime runtime;
+    deadline_test_slot slot;
+    asio::post(runtime.ioContext, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1h, kind::resolve);
+        slot.deadlineContinuation = std::noop_coroutine();
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::socket);
+        RUVIA_CHECK(!slot.deadlineContinuation);
+    });
+    // The attachment retains its owner loop; wait for expiry, not loop exit.
+    while (slot.expiry_count != 1) {
+        runtime.ioContext.run_one();
+    }
+    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
+    RUVIA_CHECK(slot.last_expired == kind::socket);
+    RUVIA_CHECK(slot.deadline.expired());
+
+    runtime.ioContext.restart();
+    asio::post(runtime.ioContext, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::sleep);
+        slot.deadlineContinuation = std::noop_coroutine();
+        ruvia::detail::clear_db_slot_deadline(slot);
+        RUVIA_CHECK(!slot.timer.registered());
+        RUVIA_CHECK(!slot.deadlineContinuation);
+        RUVIA_CHECK(slot.deadline.kind() == nullptr);
+        RUVIA_CHECK(!slot.deadline.expired());
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::resolve);
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 0ms, kind::socket);
+        RUVIA_CHECK(!slot.timer.registered());
+        RUVIA_CHECK(slot.deadline.kind() == nullptr);
+    });
+    runtime.ioContext.poll();
+    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
+
+    runtime.ioContext.restart();
+    asio::post(runtime.ioContext, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::sleep);
+        slot.deadlineContinuation = std::noop_coroutine();
+    });
+    while (slot.expiry_count != 2) {
+        runtime.ioContext.run_one();
+    }
+    RUVIA_CHECK_EQ(slot.expiry_count, 2u);
+    RUVIA_CHECK(slot.last_expired == kind::sleep);
+    RUVIA_CHECK(!slot.deadlineContinuation);
+    ruvia::detail::clear_db_slot_deadline(slot);
+}
+
+RUVIA_TEST(db_slot_deadline_initiation_failure_rolls_back_and_can_be_reused) {
+    using namespace std::chrono_literals;
+    using kind = deadline_test_slot::deadline_kind;
+    DbRegistryTestRuntime runtime;
+    deadline_test_slot slot;
+    const ruvia::WorkerHandle unavailable_worker;
+    asio::post(runtime.ioContext, [&] {
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1h, kind::resolve);
+        slot.deadlineContinuation = std::noop_coroutine();
+        RUVIA_CHECK(throwsOn([&] {
+            ruvia::detail::arm_db_slot_deadline(unavailable_worker, slot, 1ms, kind::sleep);
+        }));
+        RUVIA_CHECK(!slot.timer.registered());
+        RUVIA_CHECK(!slot.deadlineContinuation);
+        RUVIA_CHECK(slot.deadline.kind() == nullptr);
+        RUVIA_CHECK(!slot.deadline.expired());
+        RUVIA_CHECK_EQ(slot.expiry_count, 0u);
+        ruvia::detail::arm_db_slot_deadline(runtime.worker, slot, 1ms, kind::socket);
+    });
+    while (slot.expiry_count != 1) {
+        runtime.ioContext.run_one();
+    }
+    RUVIA_CHECK_EQ(slot.expiry_count, 1u);
+    RUVIA_CHECK(slot.last_expired == kind::socket);
+    ruvia::detail::clear_db_slot_deadline(slot);
+}
 
 RUVIA_TEST(db_operation_options_validate_and_compose_restrictions) {
     RUVIA_CHECK(throwsOn([] {
@@ -308,6 +411,28 @@ RUVIA_TEST(db_resolve_shutdown_preserves_slot_until_it_reports_closing) {
     RUVIA_CHECK(slot.observedActiveResolve);
     RUVIA_CHECK(!slot.waitActive);
     RUVIA_CHECK(reportedClosing);
+}
+
+RUVIA_TEST(db_resolve_initiation_failure_retires_slot_deadline) {
+    DbRegistryTestRuntime runtime;
+    ClosingResolvePool pool;
+    pool.worker_ = runtime.worker;
+    ClosingResolveSlot slot;
+    slot.throw_on_initiation = true;
+    auto future = asio::co_spawn(runtime.ioContext,
+        ruvia::asAwaitable(ruvia::detail::resolveDbHost(
+            pool, slot, ruvia::OperationTimeout(std::chrono::hours(1)), "test database")),
+        asio::use_future);
+    while (future.wait_for(std::chrono::seconds::zero()) != std::future_status::ready) {
+        runtime.ioContext.run_one();
+    }
+    runtime.ioContext.poll();
+    RUVIA_CHECK(throwsOn([&] { (void)future.get(); }));
+    RUVIA_CHECK(slot.observedActiveResolve);
+    RUVIA_CHECK(!slot.waitActive);
+    RUVIA_CHECK(!slot.deadline_timer.registered());
+    RUVIA_CHECK(slot.deadline.kind() == nullptr);
+    RUVIA_CHECK(!slot.deadline.expired());
 }
 #endif
 
@@ -792,16 +917,16 @@ RUVIA_TEST(database_operation_guarded_started_cancellation_fails_lease_and_relea
 
 RUVIA_TEST(database_operation_guard_releases_before_scoped_join_expires_owner) {
     asio::io_context io;
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     ruvia::test::CountingMemoryResource memory;
     GuardedLeaseState state(GuardedLease("lease"));
     bool ownerExpired = false;
     GuardedLeaseCapability capability(scope, state, ownerExpired);
     GuardedLeaseGate gate;
 
-    auto operation = ruvia::detail::makeScopedOperation(scope,
+    auto operation = ruvia::make_scoped_operation(scope,
         failGuardedLeaseAfterGate(GuardedLeaseGuard(state), gate, std::pmr::string(256, 'j', &memory)));
-    auto overlap = ruvia::detail::makeScopedOperation(scope,
+    auto overlap = ruvia::make_scoped_operation(scope,
         completeGuardedLease(GuardedLeaseGuard(state), std::pmr::string(256, 'o', &memory)));
     auto runner = asio::co_spawn(io,
         ruvia::asAwaitable(awaitScopedOperation(operation)), asio::use_future);
@@ -915,13 +1040,13 @@ RUVIA_TEST(database_operation_guard_survives_moving_stable_owner_while_running) 
 }
 
 RUVIA_TEST(scoped_operation_scope_tracks_cold_owner_operations) {
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto coldTask = []() -> ruvia::Task<void> { co_return; }();
     {
-        auto operation = ruvia::detail::makeScopedOperation(operationScope, std::move(coldTask));
-        RUVIA_CHECK(operationScope.hasPendingOperations());
+        auto operation = ruvia::make_scoped_operation(operationScope, std::move(coldTask));
+        RUVIA_CHECK(operationScope.has_pending_operations());
     }
-    RUVIA_CHECK(!operationScope.hasPendingOperations());
+    RUVIA_CHECK(!operationScope.has_pending_operations());
 }
 
 RUVIA_TEST(db_value_and_result_storage_have_one_live_alternative) {
@@ -1031,7 +1156,7 @@ RUVIA_TEST(db_registry_derives_default_pool_from_owned_entry_index) {
     }};
     ruvia::detail::DbRegistry registry(
         runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
 
     bool defaultResolved = true;
     bool aliasResolved = true;
@@ -1053,7 +1178,7 @@ RUVIA_TEST(db_registry_reports_typed_not_configured_error) {
     DbRegistryTestRuntime runtime;
     ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker,
         std::pmr::get_default_resource(), std::span<const ruvia::detail::DbDefinition>());
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
 
     bool defaultTyped = false;
     bool aliasTyped = false;
@@ -1106,7 +1231,7 @@ RUVIA_TEST(db_handle_copy_rejects_after_parent_scope_closes) {
     const std::array definitions{dbDefinition("default", config)};
     ruvia::detail::DbRegistry registry(
         runtime.ioContext, runtime.worker, std::pmr::get_default_resource(), definitions);
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto handle = registry.get(operationScope);
     auto copiedHandle = handle;
     operationScope.close();
@@ -1271,7 +1396,7 @@ RUVIA_TEST(db_sql_literal_cold_operations_release_owned_parameters) {
     DbRegistryTestRuntime runtime;
     ruvia::test::CountingMemoryResource memory;
     ruvia::detail::DbRegistry registry(runtime.ioContext, runtime.worker, &memory, testDbConfig());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     auto handle = registry.get(scope);
     const auto baseline = memory.liveAllocations();
     for (int i = 0; i < 16; ++i) {

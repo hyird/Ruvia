@@ -66,7 +66,7 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
     ~WebSocket() {
-        if (operationScope_.hasPendingOperations() && worker_ != nullptr && !worker_->isCurrent()) {
+        if (operationScope_.has_pending_operations() && worker_ != nullptr && !worker_->isCurrent()) {
             std::terminate();
         }
     }
@@ -195,7 +195,7 @@ private:
     bool readActive_{false};
     bool writeActive_{false};
     bool closeActive_{false};
-    detail::ScopedOperationScope operationScope_;
+    ::ruvia::operation_scope operationScope_;
 };
 
 }  // namespace ruvia

@@ -141,22 +141,21 @@ bool RedisPool::armDeadline(
     }
     const auto deadline = workerTimerDeadlineAfter(*remaining);
     connection.deadline.arm(deadline, kind);
-    WorkerHandleAccess::scheduleTimer(worker_, *connection.deadlineTimer, deadline,
-        [&connection](WorkerTimerOutcome outcome) noexcept {
-            if (outcome != WorkerTimerOutcome::kExpired) {
-                return;
-            }
-            const auto expiredKind = connection.deadline.expire(std::chrono::steady_clock::now());
-            if (!expiredKind.has_value()) {
-                return;
-            }
-            std::error_code ignored;
-            if (*expiredKind == Connection::DeadlineKind::kResolve) {
-                connection.resolver.cancel();
-            } else {
-                connection.socket.cancel(ignored);
-            }
-        });
+    (worker_).schedule_timer(*connection.deadlineTimer, deadline, [&connection](WorkerTimerOutcome outcome) noexcept {
+        if (outcome != WorkerTimerOutcome::kExpired) {
+            return;
+        }
+        const auto expiredKind = connection.deadline.expire(std::chrono::steady_clock::now());
+        if (!expiredKind.has_value()) {
+            return;
+        }
+        std::error_code ignored;
+        if (*expiredKind == Connection::DeadlineKind::kResolve) {
+            connection.resolver.cancel();
+        } else {
+            connection.socket.cancel(ignored);
+        }
+    });
     return true;
 }
 

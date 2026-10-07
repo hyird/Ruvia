@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <memory_resource>
@@ -7,7 +8,9 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/OperationTimeout.h"
@@ -18,9 +21,47 @@
 #include "ruvia/web/detail/db/DbBackend.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
+namespace ruvia {
+class DbQuery;
+}
+
 namespace ruvia::detail {
 
 struct DbConfigStorage;
+class DbQueryCacheState;
+
+struct db_query_step final {
+    std::pmr::string sql;
+    std::pmr::vector<DbValue> params;
+    std::optional<std::pmr::string> cache_key;
+    std::optional<std::chrono::milliseconds> cache_duration;
+};
+
+// Preparation owns every statement and cache key before returning a cold task.
+// Transaction state and its exclusive lease remain with the outer operation.
+struct db_query_plan final {
+    db_query_step first;
+    std::optional<db_query_step> second;
+    [[nodiscard]] static db_query_plan prepare(const DbQuery& query,
+        const DbQuery* count, DbDriver driver, std::pmr::memory_resource* resource,
+        DbQueryCacheState* cache);
+};
+
+struct db_query_backend final {
+    DbPoolRef pool;
+    std::optional<std::size_t> slot;
+    std::pmr::memory_resource* resource;
+    DbQueryCacheState* cache;
+    bool* backend_failed{nullptr};
+
+    // Move the inputs into DbCacheQuery before creating a lazy backend task.
+    [[nodiscard]] Task<DbRows> operator()(db_query_step step,
+        OperationOptions options, const OperationTimeout& deadline) const;
+};
+
+template <bool with_count>
+using db_query_result = std::conditional_t<with_count, std::pair<DbRows, DbRows>, DbRows>;
+
 [[nodiscard]] std::pmr::string db_cache_scope(std::string_view name_space,
     std::string_view alias, const DbConfigStorage& config, std::pmr::memory_resource* resource);
 
@@ -86,6 +127,27 @@ private:
         throwDbCacheTimeout();
     }
     return result;
+}
+// One deadline and one execution chain for direct, cached, and mixed sequences.
+// The backend is a value adapter, not a transaction owner or type-erased callback.
+template <bool with_count, typename backend_type>
+Task<db_query_result<with_count>> execute_db_query_plan(
+    db_query_plan plan, backend_type backend, OperationOptions options) {
+    const OperationTimeout deadline(options.timeout);
+    std::array<std::optional<DbRows>, with_count ? 2 : 1> results;
+    for (std::size_t index = 0; index < results.size(); ++index) {
+        auto& step = index == 0 ? plan.first : plan.second.value();
+        results[index].emplace(co_await backend(std::move(step),
+            dbCacheRequiredOptions(options, deadline), deadline));
+        if (deadline.expired()) {
+            throwDbCacheTimeout();
+        }
+    }
+    if constexpr (with_count) {
+        co_return std::pair{std::move(*results[0]), std::move(*results[1])};
+    } else {
+        co_return std::move(*results[0]);
+    }
 }
 
 // Store, key, and deferred database query belong to the cold frame. On a hit

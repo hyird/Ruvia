@@ -26,6 +26,21 @@ enum class HttpFieldListParseStatus : std::uint8_t { kOk,
     kMalformed,
     kRejected };
 
+// HTTP/2 and HTTP/3 share the connection-specific field ban. Decoded-name
+// lowercase validation and the request-only TE value exception belong to the
+// protocol boundary; application-owned names are matched case-insensitively.
+[[nodiscard]] inline bool is_forbidden_http_binary_connection_field(std::string_view name) noexcept {
+    return httpAsciiEqualsIgnoreCase(name, "connection") ||
+           httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
+           httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+           httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
+           httpAsciiEqualsIgnoreCase(name, "upgrade");
+}
+
+[[nodiscard]] inline bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
+    return is_forbidden_http_binary_connection_field(name) || httpAsciiEqualsIgnoreCase(name, "te");
+}
+
 enum class HttpConnectionOption : std::uint8_t {
     kClose = 1U << 0,
     kKeepAlive = 1U << 1,

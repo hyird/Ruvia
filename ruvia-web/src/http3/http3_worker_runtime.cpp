@@ -1,6 +1,7 @@
-#include "ruvia/web/detail/http3/Http3NetworkRuntime.h"
+#include "ruvia/web/detail/http3/http3_worker_runtime.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <limits>
 #include <stdexcept>
@@ -29,64 +30,26 @@ bool phaseTimeoutExpired(std::optional<std::chrono::milliseconds> timeout,
     return timeout && now >= lastActivity && now - lastActivity >= *timeout;
 }
 
-std::size_t totalConnectionCapacity(std::span<const Http3NetworkRuntime::WorkerTarget> workers) {
-    if (workers.empty()) {
-        throw std::invalid_argument("HTTP/3 server network requires at least one worker");
+std::size_t connection_capacity(const http3_worker_runtime::worker_target& worker) {
+    if (worker.server == nullptr || worker.max_connections == 0 ||
+        worker.mailbox_capacity == 0 || worker.max_requests_per_connection == 0) {
+        throw std::invalid_argument("invalid HTTP/3 worker target");
     }
-    std::size_t total = 0;
-    for (const auto& worker : workers) {
-        if (worker.server == nullptr || worker.maxConnections == 0 ||
-            worker.mailboxCapacity == 0 || worker.maxRequestsPerConnection == 0 ||
-            worker.maxConnections > std::numeric_limits<std::size_t>::max() - total) {
-            throw std::invalid_argument("invalid HTTP/3 server network worker target");
-        }
-        total += worker.maxConnections;
-    }
-    return total;
+    return worker.max_connections;
 }
 
-const HttpServerListenerDefinition::Tls& requireTls(
-    const HttpServerListenerDefinition& listener) {
-    const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport);
-    if (tls == nullptr || !listener.http3.has_value()) {
-        throw std::invalid_argument("HTTP/3 server network requires TLS and explicit configuration");
-    }
-    return *tls;
-}
-
-ruvia::quic_server_config transportConfig(
-    std::span<const Http3NetworkRuntime::WorkerTarget> workers) {
-    if (workers.empty()) {
-        throw std::invalid_argument("HTTP/3 server network requires at least one worker");
-    }
-    const auto& first = workers.front();
-    // The QUIC transport parameter follows the normalized per-worker server
-    // timeout (zero disables the local idle deadline); Http3ListenConfig owns
-    // handshake/drain deadlines, not idle policy.
-    const auto idleTimeout = first.idleTimeout;
-    if (std::ranges::any_of(workers,
-            [&first](const Http3NetworkRuntime::WorkerTarget& worker) {
-                return worker.idleTimeout != first.idleTimeout ||
-                       worker.requestHeaderTimeout != first.requestHeaderTimeout ||
-                       worker.requestBodyTimeout != first.requestBodyTimeout ||
-                       worker.writeTimeout != first.writeTimeout ||
-                       worker.maxRequestsPerConnection != first.maxRequestsPerConnection;
-            })) {
-        throw std::invalid_argument("HTTP/3 workers require normalized phase timeouts");
-    }
+ruvia::quic_server_config transport_config(
+    const http3_worker_runtime::worker_target& worker, ruvia::quic_cid_partition partition) {
     ruvia::quic_server_config config;
-    config.max_active_connections = totalConnectionCapacity(workers);
+    config.max_active_connections = connection_capacity(worker);
     config.max_pending_connections = config.max_active_connections;
+    config.cid_partition = partition;
     config.limits.max_lifetime_peer_streams =
-        http3TransportLifetimeStreamCapacity(first.maxRequestsPerConnection);
+        http3TransportLifetimeStreamCapacity(worker.max_requests_per_connection);
     config.local_transport_parameters.idle_timeout_ms =
-        idleTimeout ? static_cast<std::uint64_t>(idleTimeout->count()) : 0;
+        worker.idle_timeout ? static_cast<std::uint64_t>(worker.idle_timeout->count()) : 0;
     config.local_transport_parameters.max_datagram_frame_size = 65536;
     return config;
-}
-
-asio::ip::udp::endpoint udpEndpoint(const HttpServerListenerDefinition& listener) {
-    return {listener.endpoint.address(), listener.endpoint.port()};
 }
 
 }  // namespace
@@ -110,6 +73,10 @@ Http3DatagramEndpoint::pump_result send_http3_version_negotiation(
     if (endpoint.send_in_flight()) {
         return Http3DatagramEndpoint::pump_result::idle;
     }
+    packet_buffer = endpoint.packet_buffer(packet_buffer);
+    if (packet_buffer.empty()) {
+        return Http3DatagramEndpoint::pump_result::idle;
+    }
     const auto packet = server.write_version_negotiation(plan, packet_buffer);
     if (packet.status == ruvia::quic_operation_status::would_block) {
         return Http3DatagramEndpoint::pump_result::idle;
@@ -131,23 +98,23 @@ Http3DatagramEndpoint::pump_result send_http3_version_negotiation(
     return sent;
 }
 
-Http3NetworkRuntime::WorkerLink::WorkerLink(std::pmr::memory_resource* resource,
-    Http3NetworkRuntime& network, WorkerTarget configured)
+http3_worker_runtime::worker_link::worker_link(std::pmr::memory_resource* resource,
+    http3_worker_runtime& network, worker_target configured)
     : target(configured),
-      requestMailbox(configured.mailboxCapacity, configured.mailboxCapacity,
-          configured.mailboxCapacity, resource,
-          Http3StreamMailboxCapacityNotifier{&network, &Http3NetworkRuntime::networkWake}),
+      requestMailbox(configured.mailbox_capacity, configured.mailbox_capacity,
+          configured.mailbox_capacity, resource,
+          Http3StreamMailboxCapacityNotifier{&network, &http3_worker_runtime::networkWake}),
       channels(resource),
       channelViews(resource),
       connections(resource) {
-    channels.reserve(target.maxConnections);
-    channelViews.reserve(target.maxConnections);
-    connections.reserve(target.maxConnections);
+    channels.reserve(target.max_connections);
+    channelViews.reserve(target.max_connections);
+    connections.reserve(target.max_connections);
     const Http3ServerConnectionChannel::Notification networkNotification{
-        &network, &Http3NetworkRuntime::networkWake};
+        &network, &http3_worker_runtime::networkWake};
     const Http3ServerConnectionChannel::Notification workerNotification{
-        target.server, &Http3NetworkRuntime::workerWake};
-    for (std::size_t i = 0; i < target.maxConnections; ++i) {
+        target.server, &http3_worker_runtime::workerWake};
+    for (std::size_t i = 0; i < target.max_connections; ++i) {
         channels.push_back(makePmrObject<Http3ServerConnectionChannel>(
             resource, networkNotification, workerNotification,
             network.localSettings_.h3Datagram ? resource : nullptr));
@@ -156,18 +123,19 @@ Http3NetworkRuntime::WorkerLink::WorkerLink(std::pmr::memory_resource* resource,
     }
 }
 
-Http3NetworkRuntime::Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRuntime,
-    const HttpServerListenerDefinition& listener, std::span<const WorkerTarget> workers,
-    FailureNotification failure)
-    : networkRuntime_(networkRuntime),
-      ioContext_(networkRuntime.ioContext()),
+http3_worker_runtime::http3_worker_runtime(ruvia::WorkerRuntimeContext& runtime,
+    asio::ip::udp::endpoint local, const HttpServerListenerDefinition::Tls& tls_config,
+    const Http3ListenConfig& http3_config, worker_target worker,
+    http3_datagram_channel& datagrams, ruvia::quic_cid_partition partition,
+    failure_notification failure)
+    : ioContext_(runtime.ioContext()),
       ownerThread_(std::this_thread::get_id()),
       memory_(),
-      bindAddress_(listener.endpoint.address()),
-      tls_(requireTls(listener), memory_.resource()),
-      wire_(ioContext_, udpEndpoint(listener), tls_, transportConfig(workers),
+      bindAddress_(local.address()),
+      tls_(tls_config, memory_.resource()),
+      wire_(ioContext_, datagrams, local, tls_, transport_config(worker, partition),
           memory_.resource(), {this, [](void* context, http3_quic_server_transport& transport, Http3DatagramEndpoint& endpoint) noexcept {
-                                   auto& self = *static_cast<Http3NetworkRuntime*>(context);
+                                   auto& self = *static_cast<http3_worker_runtime*>(context);
                                    const bool progress = self.protocolPump(&transport, &endpoint);
                                    if (self.failure_) {
                                        return Http3QuicWireOwner::ProtocolPumpResult::kFatal;
@@ -176,64 +144,63 @@ Http3NetworkRuntime::Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRun
                                               ? Http3QuicWireOwner::ProtocolPumpResult::kProgress
                                               : Http3QuicWireOwner::ProtocolPumpResult::kIdle;
                                }}),
-      workers_(memory_.resource()),
+      worker_(nullptr, PmrObjectDeleter<worker_link>{memory_.resource()}),
+      datagrams_(&datagrams),
       pendingOffers_(memory_.resource()),
       monitorTimer_(ioContext_),
       failureNotification_(failure),
-      drainTimeout_(listener.http3->drainTimeout),
-      handshakeTimeout_(listener.http3->handshakeTimeout),
-      localSettings_{.qpackMaxTableCapacity = listener.http3->qpack.maxTableCapacity, .qpackBlockedStreams = listener.http3->qpack.maxBlockedStreams, .enableConnectProtocol = true, .h3Datagram = true} {
-    if (drainTimeout_ <= std::chrono::milliseconds::zero()) {
-        throw std::invalid_argument("HTTP/3 drain timeout must be greater than zero");
-    }
-    workers_.reserve(workers.size());
-    pendingOffers_.reserve(totalConnectionCapacity(workers));
-    for (const auto& worker : workers) {
-        workers_.push_back(
-            makePmrObject<WorkerLink>(memory_.resource(), memory_.resource(), *this, worker));
-    }
+      drainTimeout_(http3_config.drainTimeout),
+      handshakeTimeout_(http3_config.handshakeTimeout),
+      localSettings_{.qpackMaxTableCapacity = http3_config.qpack.maxTableCapacity, .qpackBlockedStreams = http3_config.qpack.maxBlockedStreams, .enableConnectProtocol = true, .h3Datagram = true} {
     try {
+        if (drainTimeout_ <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument("HTTP/3 drain timeout must be greater than zero");
+        }
+        pendingOffers_.reserve(connection_capacity(worker));
+        worker_ = makePmrObject<worker_link>(memory_.resource(), memory_.resource(), *this, worker);
         wire_.prepare();
         wire_.deferTransportRetirement();
+        // The caller owns constructor rollback until the final nonthrowing step.
+        datagrams.worker_start();
     } catch (...) {
+        // Detach before the caller publishes its single cold rollback ACK.
         wire_.requestStop();
         wire_.pollStop();
         if (!wire_.stopStatus().complete()) {
             std::terminate();
         }
+        datagrams_ = nullptr;
         throw;
     }
 }
 
-Http3NetworkRuntime::~Http3NetworkRuntime() {
+http3_worker_runtime::~http3_worker_runtime() {
     requireOwnerThread();
-    if (running_ || monitorScheduled_ || !drained()) {
+    if (running_ || monitorScheduled_ || !protocol_drained() || datagrams_ != nullptr) {
         std::terminate();
     }
 }
 
-void Http3NetworkRuntime::stageWorkerLinks() {
+void http3_worker_runtime::stage() {
     requireOwnerThread();
     if (staged_) {
-        throw std::logic_error("HTTP/3 server network worker links already staged");
+        throw std::logic_error("HTTP/3 worker link already staged");
     }
-    for (auto& owned : workers_) {
-        auto& worker = *owned;
-        if (!worker.target.server->stageInstall({
-                .requestMailbox = &worker.requestMailbox,
-                .channels = worker.channelViews,
-                .networkWake = {this, &networkWake},
-            })) {
-            throw std::runtime_error("failed to stage HTTP/3 worker link");
-        }
+    auto& worker = *worker_;
+    if (!worker.target.server->stageInstall({
+            .requestMailbox = &worker.requestMailbox,
+            .channels = worker.channelViews,
+            .networkWake = {this, &networkWake},
+        })) {
+        throw std::runtime_error("failed to stage HTTP/3 worker link");
     }
     staged_ = true;
 }
 
-void Http3NetworkRuntime::start() {
+void http3_worker_runtime::start() {
     requireOwnerThread();
     if (!staged_ || running_ || stopping_) {
-        throw std::logic_error("HTTP/3 server network cannot start in this state");
+        throw std::logic_error("HTTP/3 worker runtime cannot start in this state");
     }
     running_ = true;
     wire_.start();
@@ -241,24 +208,14 @@ void Http3NetworkRuntime::start() {
     scheduleMonitor();
 }
 
-void Http3NetworkRuntime::wake() noexcept {
-    if (wakeScheduled_.exchange(true, std::memory_order_acq_rel)) {
-        return;
+void http3_worker_runtime::wake() noexcept {
+    requireOwnerThread();
+    if (datagrams_ != nullptr) {
+        datagrams_->wake_worker();
     }
-    networkRuntime_.deferOrTerminate([this] {
-        requireOwnerThread();
-        wakeScheduled_.store(false, std::memory_order_release);
-        if (stopping_) {
-            (void)protocolPump();
-            wire_.pollStop();
-            scheduleMonitor();
-        } else if (running_) {
-            wire_.requestDrive();
-        }
-    });
 }
 
-void Http3NetworkRuntime::stop() noexcept {
+void http3_worker_runtime::stop() noexcept {
     requireOwnerThread();
     const bool alreadyStopping = stopping_;
     requestStopOnOwner();
@@ -266,72 +223,134 @@ void Http3NetworkRuntime::stop() noexcept {
         (void)protocolPump();
     }
     wire_.pollStop();
-    if (!drained()) {
+    if (!protocol_drained()) {
         scheduleMonitor();
     }
+    wake();
 }
 
-bool Http3NetworkRuntime::drained() const noexcept {
+bool http3_worker_runtime::protocol_drained() const noexcept {
     requireOwnerThread();
     if (!stopping_) {
         return false;
     }
-    const bool channelsDone = std::ranges::all_of(workers_, [](const auto& owned) {
-        return std::ranges::all_of(owned->channels,
-            [](const auto& channel) { return channel->readyToDestroy(); });
-    });
-    const bool workersDone = std::ranges::all_of(workers_, [](const auto& owned) {
-        return owned->target.server->drained();
-    });
-    return channelsDone && workersDone && wire_.stopStatus().complete();
+    const bool channels_done = std::ranges::all_of(worker_->channels,
+        [](const auto& channel) { return channel->readyToDestroy(); });
+    return channels_done && worker_->target.server->drained() &&
+           wire_.stopStatus().complete() && !monitorScheduled_;
 }
 
-asio::ip::udp::endpoint Http3NetworkRuntime::localEndpoint() const {
+bool http3_worker_runtime::drained() const noexcept {
+    return protocol_drained() && datagrams_ == nullptr &&
+           (!datagram_run_started_ || datagram_run_retired_);
+}
+
+asio::ip::udp::endpoint http3_worker_runtime::local_endpoint() const {
     requireOwnerThread();
     return {bindAddress_, wire_.boundPort()};
 }
 
-void Http3NetworkRuntime::networkWake(void* context) noexcept {
-    static_cast<Http3NetworkRuntime*>(context)->wake();
+Task<void> http3_worker_runtime::run_datagrams() {
+    requireOwnerThread();
+    if (datagram_run_started_ || datagrams_ == nullptr || abandon_requested_) {
+        std::terminate();
+    }
+    datagram_run_started_ = true;
+    try {
+        while (!protocol_drained()) {
+            if (datagrams_->acceptor_closed()) {
+                requestStopOnOwner();
+            }
+            wire_.poll_datagrams();
+            if (const auto failure = wire_.failure()) {
+                reportFailure(failure);
+            }
+            if (stopping_) {
+                (void)protocolPump();
+                wire_.pollStop();
+                scheduleMonitor();
+            } else if (running_) {
+                wire_.requestDrive();
+            }
+            if (!protocol_drained()) {
+                if (co_await datagrams_->worker_notification().wait() ==
+                    WorkerNotificationWaitStatus::kClosed) {
+                    abandon_requested_ = true;
+                    stop();
+                    break;
+                }
+            }
+        }
+    } catch (...) {
+        // A failed native wait must not leave the acceptor awaiting an ACK.
+        // The owner monitor continues ordered protocol retirement without it.
+        abandon_requested_ = true;
+        reportFailure(std::current_exception());
+    }
+    datagram_run_retired_ = true;
+    finish_datagrams();
 }
 
-void Http3NetworkRuntime::workerWake(void* context) noexcept {
+void http3_worker_runtime::abandon_before_launch() noexcept {
+    requireOwnerThread();
+    if (datagram_run_started_) {
+        std::terminate();
+    }
+    abandon_requested_ = true;
+    stop();
+    finish_datagrams();
+}
+
+void http3_worker_runtime::finish_datagrams() noexcept {
+    if (datagrams_ == nullptr || !protocol_drained() ||
+        (datagram_run_started_ && !datagram_run_retired_)) {
+        return;
+    }
+    // wire stop has detached its endpoint; no borrowed channel survives ACK.
+    auto* channel = std::exchange(datagrams_, nullptr);
+    channel->worker_close();
+}
+
+void http3_worker_runtime::networkWake(void* context) noexcept {
+    static_cast<http3_worker_runtime*>(context)->wake();
+}
+
+void http3_worker_runtime::workerWake(void* context) noexcept {
     auto& worker = *static_cast<Http3WorkerServer*>(context);
     (void)worker.notification().notify();
 }
 
-void Http3NetworkRuntime::requireOwnerThread() const noexcept {
+void http3_worker_runtime::requireOwnerThread() const noexcept {
     if (std::this_thread::get_id() != ownerThread_) {
         std::terminate();
     }
 }
 
-void Http3NetworkRuntime::requestStopOnOwner() noexcept {
+void http3_worker_runtime::requestStopOnOwner() noexcept {
     if (stopping_) {
         return;
     }
     stopping_ = true;
-    for (auto& owned : workers_) {
-        auto& worker = *owned;
-        (void)worker.requestMailbox.stop();
-        for (std::size_t i = 0; i < worker.connections.size(); ++i) {
-            auto& connection = worker.connections[i];
-            if (!connection.grantReceived) {
-                continue;
+    worker_->target.server->requestStop();
+    auto& worker = *worker_;
+    (void)worker.requestMailbox.stop();
+    for (std::size_t i = 0; i < worker.connections.size(); ++i) {
+        auto& connection = worker.connections[i];
+        if (!connection.grantReceived) {
+            continue;
+        }
+        if (connection.bindPublished) {
+            if (connection.accepted) {
+                closeConnection(connection, kServerShutdownCode);
             }
-            if (connection.bindPublished) {
-                if (connection.accepted) {
-                    closeConnection(connection, kServerShutdownCode);
-                }
-            } else {
-                (void)requestRevoke(worker, i);
-                (void)retireUnbound(worker, i);
-            }
+        } else {
+            (void)requestRevoke(worker, i);
+            (void)retireUnbound(worker, i);
         }
     }
 }
 
-void Http3NetworkRuntime::reportFailure(std::exception_ptr failure) noexcept {
+void http3_worker_runtime::reportFailure(std::exception_ptr failure) noexcept {
     requireOwnerThread();
     if (failure_ == nullptr) {
         failure_ = failure;
@@ -347,9 +366,9 @@ void Http3NetworkRuntime::reportFailure(std::exception_ptr failure) noexcept {
     scheduleMonitor();
 }
 
-void Http3NetworkRuntime::scheduleMonitor() noexcept {
+void http3_worker_runtime::scheduleMonitor() noexcept {
     requireOwnerThread();
-    if (monitorScheduled_ || (!running_ && !stopping_) || drained()) {
+    if (monitorScheduled_ || (!running_ && !stopping_) || protocol_drained()) {
         return;
     }
     monitorScheduled_ = true;
@@ -361,7 +380,7 @@ void Http3NetworkRuntime::scheduleMonitor() noexcept {
     } catch (...) {
         monitorScheduled_ = false;
         reportFailure(std::current_exception());
-        if (!drained()) {
+        if (!protocol_drained()) {
             // A failed monitor initiation must not leave joined owners waiting
             // on a wire callback that can no longer make ordered progress.
             std::terminate();
@@ -369,13 +388,13 @@ void Http3NetworkRuntime::scheduleMonitor() noexcept {
     }
 }
 
-void Http3NetworkRuntime::monitor(const asio::error_code& error) noexcept {
+void http3_worker_runtime::monitor(const asio::error_code& error) noexcept {
     requireOwnerThread();
     monitorScheduled_ = false;
     if (error) {
         if (error != asio::error::operation_aborted) {
             try {
-                throw std::system_error(error, "HTTP/3 server network monitor timer");
+                throw std::system_error(error, "HTTP/3 worker monitor timer");
             } catch (...) {
                 reportFailure(std::current_exception());
             }
@@ -391,12 +410,17 @@ void Http3NetworkRuntime::monitor(const asio::error_code& error) noexcept {
             wire_.requestDrive();
         }
     }
-    if (!drained()) {
+    if (!protocol_drained()) {
         scheduleMonitor();
+    }
+    if (abandon_requested_) {
+        finish_datagrams();
+    } else {
+        wake();
     }
 }
 
-bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
+bool http3_worker_runtime::protocolPump(http3_quic_server_transport* transport,
     Http3DatagramEndpoint* endpoint) noexcept {
     requireOwnerThread();
     if (!running_ && !stopping_) {
@@ -404,6 +428,7 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
     }
 
     try {
+        auto& worker = worker_;
         bool anyProgress = false;
         bool exhaustedBudget = true;
         transportActivityForPump_ = wire_.consumeTransportActivity();
@@ -429,7 +454,7 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
                         (void)queue_http3_initial_offer(pendingOffers_, route.offer);
                     } else if (route.kind == ruvia::quic_server_route_kind::version_negotiation) {
                         if (send_http3_version_negotiation(transport->server(),
-                                route.version_negotiation, *endpoint, packetBuffer_) ==
+                                route.version_negotiation, *endpoint, {}) ==
                             Http3DatagramEndpoint::pump_result::pending) {
                             anyProgress = true;
                         }
@@ -439,17 +464,15 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
                         try {
                             (void)transport->server().receive(route.connection, datagram, now);
                         } catch (const ruvia::quic_error&) {
-                            for (auto& worker : workers_) {
-                                for (std::size_t index = 0; index < worker->connections.size(); ++index) {
-                                    auto& connection = worker->connections[index];
-                                    if (connection.accepted && connection.transportId == route.connection) {
-                                        if (connection.bindPublished) {
-                                            closeConnection(connection, kProtocolFailureCode);
-                                        } else {
-                                            transport->retire(route.connection);
-                                            connection.accepted = false;
-                                            (void)requestRevoke(*worker, index);
-                                        }
+                            for (std::size_t index = 0; index < worker->connections.size(); ++index) {
+                                auto& connection = worker->connections[index];
+                                if (connection.accepted && connection.transportId == route.connection) {
+                                    if (connection.bindPublished) {
+                                        closeConnection(connection, kProtocolFailureCode);
+                                    } else {
+                                        transport->retire(route.connection);
+                                        connection.accepted = false;
+                                        (void)requestRevoke(*worker, index);
                                     }
                                 }
                             }
@@ -461,34 +484,24 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
                     throw std::system_error(endpoint->error(), "consume HTTP/3 UDP receive slot");
                 }
             }
-            for (auto& worker : workers_) {
-                for (std::size_t index = 0; index < worker->connections.size(); ++index) {
-                    auto& connection = worker->connections[index];
-                    if (!connection.accepted) {
+            for (std::size_t index = 0; index < worker->connections.size(); ++index) {
+                auto& connection = worker->connections[index];
+                if (!connection.accepted) {
+                    continue;
+                }
+                try {
+                    const auto info = transport->server().connection(connection.transportId).info();
+                    if (connection.handshakeDeadline && now >= *connection.handshakeDeadline &&
+                        !info.quic_handshake_complete) {
+                        if (connection.bindPublished) {
+                            closeConnection(connection, kProtocolFailureCode);
+                        } else {
+                            (void)retireUnbound(*worker, index);
+                        }
                         continue;
                     }
-                    try {
-                        const auto info = transport->server().connection(connection.transportId).info();
-                        if (connection.handshakeDeadline && now >= *connection.handshakeDeadline &&
-                            !info.quic_handshake_complete) {
-                            if (connection.bindPublished) {
-                                closeConnection(connection, kProtocolFailureCode);
-                            } else {
-                                (void)retireUnbound(*worker, index);
-                            }
-                            continue;
-                        }
-                        if (info.state == ruvia::quic_connection_state::failed ||
-                            info.state == ruvia::quic_connection_state::retired) {
-                            if (connection.bindPublished) {
-                                closeConnection(connection, kProtocolFailureCode);
-                            } else {
-                                transport->retire(connection.transportId);
-                                connection.accepted = false;
-                                (void)requestRevoke(*worker, index);
-                            }
-                        }
-                    } catch (const ruvia::quic_error&) {
+                    if (info.state == ruvia::quic_connection_state::failed ||
+                        info.state == ruvia::quic_connection_state::retired) {
                         if (connection.bindPublished) {
                             closeConnection(connection, kProtocolFailureCode);
                         } else {
@@ -497,18 +510,19 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
                             (void)requestRevoke(*worker, index);
                         }
                     }
+                } catch (const ruvia::quic_error&) {
+                    if (connection.bindPublished) {
+                        closeConnection(connection, kProtocolFailureCode);
+                    } else {
+                        transport->retire(connection.transportId);
+                        connection.accepted = false;
+                        (void)requestRevoke(*worker, index);
+                    }
                 }
             }
         }
         for (std::size_t pass = 0; pass < pumpBudget_; ++pass) {
-            bool progress = false;
-            if (!workers_.empty()) {
-                for (std::size_t offset = 0; offset < workers_.size(); ++offset) {
-                    const auto index = (nextWorker_ + offset) % workers_.size();
-                    progress = pumpWorker(*workers_[index]) || progress;
-                }
-                nextWorker_ = (nextWorker_ + 1) % workers_.size();
-            }
+            const bool progress = pumpWorker(*worker_);
             if (!progress) {
                 exhaustedBudget = false;
                 break;
@@ -518,50 +532,45 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
 
         if (!stopping_ && transport != nullptr && endpoint != nullptr &&
             !endpoint->send_in_flight()) {
-            for (auto& worker : workers_) {
-                for (auto& connection : worker->connections) {
-                    if (!connection.accepted) {
+            for (auto& connection : worker_->connections) {
+                if (!connection.accepted) {
+                    continue;
+                }
+                try {
+                    auto& quic = transport->server().connection(connection.transportId);
+                    const auto packet_buffer = endpoint->packet_buffer({});
+                    if (packet_buffer.empty()) {
+                        break;
+                    }
+                    const auto packet = quic.write_packet(packet_buffer,
+                        std::chrono::steady_clock::now());
+                    if (packet.size == 0) {
                         continue;
                     }
-                    try {
-                        auto& quic = transport->server().connection(connection.transportId);
-                        const auto packet = quic.write_packet(packetBuffer_,
-                            std::chrono::steady_clock::now());
-                        if (packet.size == 0) {
-                            continue;
-                        }
-                        const auto source = to_udp_endpoint(from_quic_address(packet.local));
-                        const auto peer = to_udp_endpoint(from_quic_address(packet.peer));
-                        if (!source || !peer || packet.size > packetBuffer_.size()) {
-                            closeConnection(connection, kProtocolFailureCode);
-                            continue;
-                        }
-                        const auto sent = endpoint->send_datagram(
-                            std::span<const std::byte>(packetBuffer_).first(packet.size),
-                            *source, *peer);
-                        if (sent == Http3DatagramEndpoint::pump_result::error) {
-                            throw std::system_error(endpoint->error(), "send HTTP/3 QUIC packet");
-                        }
-                        anyProgress = true;
-                        break;
-                    } catch (const ruvia::quic_error&) {
+                    const auto source = to_udp_endpoint(from_quic_address(packet.local));
+                    const auto peer = to_udp_endpoint(from_quic_address(packet.peer));
+                    if (!source || !peer || packet.size > packet_buffer.size()) {
                         closeConnection(connection, kProtocolFailureCode);
+                        continue;
                     }
-                }
-                if (endpoint->send_in_flight()) {
+                    const auto sent = endpoint->send_datagram(
+                        std::span<const std::byte>(packet_buffer).first(packet.size),
+                        *source, *peer);
+                    if (sent == Http3DatagramEndpoint::pump_result::error) {
+                        throw std::system_error(endpoint->error(), "send HTTP/3 QUIC packet");
+                    }
+                    anyProgress = true;
                     break;
+                } catch (const ruvia::quic_error&) {
+                    closeConnection(connection, kProtocolFailureCode);
                 }
             }
         }
 
         if (stopping_) {
-            const bool channelsDone = std::ranges::all_of(workers_, [](const auto& owned) {
-                return std::ranges::all_of(owned->channels,
-                    [](const auto& channel) { return channel->readyToDestroy(); });
-            });
-            const bool workersDone = std::ranges::all_of(workers_, [](const auto& owned) {
-                return owned->target.server->drained();
-            });
+            const bool channelsDone = std::ranges::all_of(worker_->channels,
+                [](const auto& channel) { return channel->readyToDestroy(); });
+            const bool workersDone = worker_->target.server->drained();
             if (channelsDone && workersDone) {
                 wire_.releaseTransportRetirement();
             }
@@ -570,10 +579,7 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
                 anyProgress = true;
             }
             wire_.pollStop();
-            if (channelsDone && wire_.stopStatus().complete() &&
-                std::ranges::all_of(workers_, [](const auto& owned) {
-                    return owned->target.server->drained();
-                })) {
+            if (channelsDone && wire_.stopStatus().complete() && workersDone) {
                 running_ = false;
             }
         } else if (exhaustedBudget) {
@@ -591,7 +597,7 @@ bool Http3NetworkRuntime::protocolPump(http3_quic_server_transport* transport,
     }
 }
 
-bool Http3NetworkRuntime::pumpWorker(WorkerLink& worker) noexcept {
+bool http3_worker_runtime::pumpWorker(worker_link& worker) noexcept {
     bool progress = false;
     try {
         progress = pumpChannels(worker);
@@ -651,7 +657,7 @@ bool Http3NetworkRuntime::pumpWorker(WorkerLink& worker) noexcept {
     return progress;
 }
 
-bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
+bool http3_worker_runtime::pumpChannels(worker_link& worker) noexcept {
     bool progress = false;
     for (std::size_t i = 0; i < worker.channels.size(); ++i) {
         auto& channel = *worker.channels[i];
@@ -677,7 +683,7 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
             progress = attach(worker, i) || progress;
         }
         // The channel accepts worker intents during the AttachAck publication
-        // window, but the network must consume that ACK before taking one.
+        // window, but the same-worker wire driver consumes that ACK first.
 
         if (connection.pendingIntentAck) {
             const auto acknowledged = channel.acknowledgeIntentAfterHandoff(
@@ -702,8 +708,8 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
                 const auto status = channel.receiveIntent(intent);
                 if (status == Http3ServerConnectionChannel::Status::kEmpty ||
                     status == Http3ServerConnectionChannel::Status::kWrongState) {
-                    // WorkerFinalized closes this producer gate before the network
-                    // consumes that record; there can be no further intents then.
+                    // WorkerFinalized closes this producer gate before the wire
+                    // driver consumes that record; no further intents remain.
                     break;
                 }
                 if (status != Http3ServerConnectionChannel::Status::kReceived ||
@@ -844,10 +850,9 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
             }
         }
 
-        // Physical transport retirement also retires every server-network-side
-        // publication source. Close that gate before waiting for WorkerFinalized:
-        // the worker is intentionally forbidden to publish its final record
-        // until both publication gates are closed.
+        // Physical transport retirement closes the wire driver's publication
+        // gate before waiting for the same-worker handler's WorkerFinalized.
+        // The existing handshake orders both protocol halves' final records.
         if (connection.transportRetiredPublished &&
             !connection.networkPublicationsClosed) {
             const auto closed = channel.closeNetworkPublications(connection.identity);
@@ -907,7 +912,7 @@ bool Http3NetworkRuntime::pumpChannels(WorkerLink& worker) noexcept {
     return progress;
 }
 
-bool Http3NetworkRuntime::admit(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::admit(worker_link& worker, std::size_t index) noexcept {
     auto& connection = worker.connections[index];
     auto* transport = wire_.transport();
     if (transport == nullptr || !connection.grantReceived || connection.bindPublished ||
@@ -965,9 +970,9 @@ bool Http3NetworkRuntime::admit(WorkerLink& worker, std::size_t index) noexcept 
             (void)requestRevoke(worker, index);
             return true;
         }
-        const auto remote_address = peer->address().to_string();
+        connection.remote_address = peer->address().to_string();
         const auto committed = worker.channels[index]->commitAccepted(connection.identity,
-            {.remoteAddress = remote_address,
+            {.remoteAddress = connection.remote_address,
                 .clientCertificateSubject = {},
                 .remotePort = peer->port()},
             localSettings_, quic.max_datagram_payload_size());
@@ -992,7 +997,7 @@ bool Http3NetworkRuntime::admit(WorkerLink& worker, std::size_t index) noexcept 
     }
 }
 
-bool Http3NetworkRuntime::retireUnbound(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::retireUnbound(worker_link& worker, std::size_t index) noexcept {
     auto& connection = worker.connections[index];
     if (!connection.grantReceived || connection.bindPublished) {
         return false;
@@ -1011,7 +1016,7 @@ bool Http3NetworkRuntime::retireUnbound(WorkerLink& worker, std::size_t index) n
     return requestRevoke(worker, index) || progress;
 }
 
-bool Http3NetworkRuntime::requestRevoke(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::requestRevoke(worker_link& worker, std::size_t index) noexcept {
     auto& connection = worker.connections[index];
     if (!connection.grantReceived || connection.bindPublished ||
         connection.revokeRequested) {
@@ -1025,7 +1030,7 @@ bool Http3NetworkRuntime::requestRevoke(WorkerLink& worker, std::size_t index) n
     return true;
 }
 
-bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::attach(worker_link& worker, std::size_t index) noexcept {
     auto& channel = *worker.channels[index];
     auto& connection = worker.connections[index];
     Http3ServerConnectionChannel::AttachResult result{
@@ -1060,7 +1065,7 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
             memory_.resource(), *prefixes);
         auto planner = Http3ServerRequestAdmissionPlanner::create({
             .maxRequestsPerConnection = static_cast<std::uint64_t>(
-                worker.target.maxRequestsPerConnection),
+                worker.target.max_requests_per_connection),
         });
         if (!planner) {
             closeConnection(connection, kProtocolFailureCode);
@@ -1072,10 +1077,10 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
             quic, memory_.resource(), connection.identity.epoch,
             connection.identity.connectionGeneration,
             Http3ServerStreamOutputConfig{
-                .maxTrackedStreams = worker.target.maxRequestsPerConnection,
-                .maxQueuedBlocks = worker.target.mailboxCapacity,
+                .maxTrackedStreams = worker.target.max_requests_per_connection,
+                .maxQueuedBlocks = worker.target.mailbox_capacity,
                 .maxDriveWorkItems = 16,
-                .writeTimeout = worker.target.writeTimeout,
+                .writeTimeout = worker.target.write_timeout,
             });
         connection.attached = true;
     } catch (...) {
@@ -1084,7 +1089,7 @@ bool Http3NetworkRuntime::attach(WorkerLink& worker, std::size_t index) noexcept
     return true;
 }
 
-bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
+bool http3_worker_runtime::pumpInput(worker_link& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     auto& transport = *wire_.transport();
     auto& quic = transport.server().connection(connection.transportId);
@@ -1160,7 +1165,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
             // request-header timeout should transition to body timeout.
             stream.frameTracker = makePmrObject<Http3StreamFrames>(memory_.resource(),
                 Http3StreamKind::kRequest, memory_.resource());
-            if (connection.admittedRequestCount == worker.target.maxRequestsPerConnection) {
+            if (connection.admittedRequestCount == worker.target.max_requests_per_connection) {
                 if (!announceGoaway(worker, index) || !sealAdmission(worker, index)) {
                     return true;
                 }
@@ -1217,9 +1222,9 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
 
         if (stream.requestStream) {
             const auto timeout = stream.receivePhase == Stream::ReceivePhase::kHeaders
-                                     ? worker.target.requestHeaderTimeout
+                                     ? worker.target.request_header_timeout
                                  : stream.bodyTimeoutApplies()
-                                     ? worker.target.requestBodyTimeout
+                                     ? worker.target.request_body_timeout
                                      : std::nullopt;
             if (phaseTimeoutExpired(timeout, stream.lastInputActivity,
                     std::chrono::steady_clock::now())) {
@@ -1378,7 +1383,7 @@ bool Http3NetworkRuntime::pumpInput(WorkerLink& worker, std::size_t index) {
                            streamTurnBudget < streamCount);
 }
 
-void Http3NetworkRuntime::terminateRequestStream(Connection& connection,
+void http3_worker_runtime::terminateRequestStream(Connection& connection,
     std::uint64_t streamId, std::uint64_t errorCode) {
     bool terminateDirectly = connection.output == nullptr;
     if (connection.output != nullptr) {
@@ -1439,8 +1444,8 @@ void Http3NetworkRuntime::terminateRequestStream(Connection& connection,
     }
 }
 
-Http3NetworkRuntime::TunnelEstablishedResult
-Http3NetworkRuntime::acceptTunnelEstablished(Connection& connection,
+http3_worker_runtime::TunnelEstablishedResult
+http3_worker_runtime::acceptTunnelEstablished(Connection& connection,
     const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [&control](const Stream& stream) { return stream.id == control.id.streamId; });
@@ -1469,7 +1474,7 @@ Http3NetworkRuntime::acceptTunnelEstablished(Connection& connection,
     return TunnelEstablishedResult::kAccepted;
 }
 
-bool Http3NetworkRuntime::confirmTunnelEstablished(Connection& connection,
+bool http3_worker_runtime::confirmTunnelEstablished(Connection& connection,
     std::uint64_t streamId,
     std::uint64_t acceptedWireBytes) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
@@ -1489,7 +1494,7 @@ bool Http3NetworkRuntime::confirmTunnelEstablished(Connection& connection,
     return true;
 }
 
-void Http3NetworkRuntime::notePeerFin(Connection& connection,
+void http3_worker_runtime::notePeerFin(Connection& connection,
     std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
@@ -1498,7 +1503,7 @@ void Http3NetworkRuntime::notePeerFin(Connection& connection,
     }
 }
 
-void Http3NetworkRuntime::noteInputReset(Connection& connection,
+void http3_worker_runtime::noteInputReset(Connection& connection,
     std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
@@ -1520,7 +1525,7 @@ void Http3NetworkRuntime::noteInputReset(Connection& connection,
     }
 }
 
-void Http3NetworkRuntime::completeInputTerminal(Connection& connection,
+void http3_worker_runtime::completeInputTerminal(Connection& connection,
     std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
@@ -1537,7 +1542,7 @@ void Http3NetworkRuntime::completeInputTerminal(Connection& connection,
     found->inputTerminal = true;
 }
 
-void Http3NetworkRuntime::stopRequestInput(Connection& connection,
+void http3_worker_runtime::stopRequestInput(Connection& connection,
     std::uint64_t streamId) noexcept {
     const auto found = std::ranges::find_if(connection.streams,
         [streamId](const Stream& stream) { return stream.id == streamId; });
@@ -1549,7 +1554,7 @@ void Http3NetworkRuntime::stopRequestInput(Connection& connection,
     completeInputTerminal(connection, streamId);
 }
 
-bool Http3NetworkRuntime::announceGoaway(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::announceGoaway(worker_link& worker, std::size_t index) noexcept {
     auto& connection = worker.connections[index];
     if (connection.goawayQueued) {
         return true;
@@ -1574,18 +1579,18 @@ bool Http3NetworkRuntime::announceGoaway(WorkerLink& worker, std::size_t index) 
     return true;
 }
 
-bool Http3NetworkRuntime::sealAdmission(WorkerLink& worker, std::size_t index) noexcept {
+bool http3_worker_runtime::sealAdmission(worker_link& worker, std::size_t index) noexcept {
     auto& connection = worker.connections[index];
     if (connection.admissionSealedPublished) {
         return true;
     }
     if (!connection.goawayQueued || !connection.admissionPlanner ||
-        connection.admittedRequestCount != worker.target.maxRequestsPerConnection) {
+        connection.admittedRequestCount != worker.target.max_requests_per_connection) {
         closeConnection(connection, kProtocolFailureCode);
         return false;
     }
     const auto sealed = worker.channels[index]->publishAdmissionSealed(connection.identity,
-        worker.target.maxRequestsPerConnection, connection.admissionPlanner->goawayId());
+        worker.target.max_requests_per_connection, connection.admissionPlanner->goawayId());
     if (sealed != Http3ServerConnectionChannel::Status::kPublished) {
         closeConnection(connection, kProtocolFailureCode);
         return false;
@@ -1595,7 +1600,7 @@ bool Http3NetworkRuntime::sealAdmission(WorkerLink& worker, std::size_t index) n
     return true;
 }
 
-bool Http3NetworkRuntime::rejectRequestStream(WorkerLink& worker, std::size_t index,
+bool http3_worker_runtime::rejectRequestStream(worker_link& worker, std::size_t index,
     std::uint64_t streamId) {
     auto& connection = worker.connections[index];
     if (connection.rejectedRequestCount >= kHttp3PostGoawayRequestAllowance) {
@@ -1618,7 +1623,7 @@ bool Http3NetworkRuntime::rejectRequestStream(WorkerLink& worker, std::size_t in
     return true;
 }
 
-bool Http3NetworkRuntime::pump_datagrams(WorkerLink& worker, std::size_t index) {
+bool http3_worker_runtime::pump_datagrams(worker_link& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     auto& quic = wire_.transport()->server().connection(connection.transportId);
     auto& channel = *worker.channels[index];
@@ -1669,7 +1674,7 @@ bool Http3NetworkRuntime::pump_datagrams(WorkerLink& worker, std::size_t index) 
     return progress;
 }
 
-bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
+bool http3_worker_runtime::pumpResponses(worker_link& worker) noexcept {
     bool progress = false;
     worker.responseMailboxDrained = false;
     std::size_t processed = 0;
@@ -1757,7 +1762,7 @@ bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
         }
         if (processed >= kResponseMailboxPumpBudget) {
             // Leave remaining mailbox entries for the next protocol turn; the
-            // outer network pump schedules a bounded continuation while work remains.
+            // outer worker pump schedules a bounded continuation while work remains.
             break;
         }
         if (!worker.pendingResponseControl) {
@@ -1784,7 +1789,7 @@ bool Http3NetworkRuntime::pumpResponses(WorkerLink& worker) noexcept {
     return progress;
 }
 
-bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) {
+bool http3_worker_runtime::pumpOutput(worker_link& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     if (connection.output == nullptr) {
         return false;
@@ -1866,7 +1871,7 @@ bool Http3NetworkRuntime::pumpOutput(WorkerLink& worker, std::size_t index) {
            connection.tunnelHandshakeScanRemaining != 0;
 }
 
-bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) {
+bool http3_worker_runtime::retire(worker_link& worker, std::size_t index) {
     auto& connection = worker.connections[index];
     if (!connection.accepted || !connection.bindPublished || !connection.attachResolved ||
         connection.transportRetiredPublished) {
@@ -1900,7 +1905,9 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) {
         return false;
     }
     auto& quic = transport->server().connection(connection.transportId);
-    bool forceLocalRetirement = stopping_ || connection.gracefulCloseAbandoned;
+    bool forceLocalRetirement = stopping_ || connection.gracefulCloseAbandoned ||
+                                (connection.closeStarted && connection.drainDeadline &&
+                                    std::chrono::steady_clock::now() >= *connection.drainDeadline);
     const auto state = quic.info().state;
     if (state == ruvia::quic_connection_state::failed) {
         forceLocalRetirement = true;
@@ -1953,6 +1960,8 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) {
     }
     connection.critical.reset();
     transport->retire(connection.transportId);
+    connection.accepted = false;
+    connection.handshakeDeadline.reset();
     if (worker.channels[index]->publishTransportRetired(connection.identity) !=
         Http3ServerConnectionChannel::Status::kPublished) {
         std::terminate();
@@ -1962,13 +1971,13 @@ bool Http3NetworkRuntime::retire(WorkerLink& worker, std::size_t index) {
     return true;
 }
 
-Http3NetworkRuntime::Connection* Http3NetworkRuntime::findConnection(
-    WorkerLink& worker, Http3StreamMessageId id) noexcept {
+http3_worker_runtime::Connection* http3_worker_runtime::findConnection(
+    worker_link& worker, Http3StreamMessageId id) noexcept {
     return findConnection(worker, id.epoch, id.connectionGeneration);
 }
 
-Http3NetworkRuntime::Connection* Http3NetworkRuntime::findConnection(
-    WorkerLink& worker, std::uint64_t epoch, std::uint64_t generation) noexcept {
+http3_worker_runtime::Connection* http3_worker_runtime::findConnection(
+    worker_link& worker, std::uint64_t epoch, std::uint64_t generation) noexcept {
     const auto found = std::ranges::find_if(worker.connections, [epoch, generation](const Connection& value) {
         return value.attached && value.identity.epoch == epoch &&
                value.identity.connectionGeneration == generation;
@@ -1976,7 +1985,7 @@ Http3NetworkRuntime::Connection* Http3NetworkRuntime::findConnection(
     return found == worker.connections.end() ? nullptr : &*found;
 }
 
-void Http3NetworkRuntime::closeConnection(Connection& connection,
+void http3_worker_runtime::closeConnection(Connection& connection,
     Http3ConnectionErrorCode reason) noexcept {
     if (!connection.accepted || connection.closeStarted) {
         return;
@@ -1987,6 +1996,9 @@ void Http3NetworkRuntime::closeConnection(Connection& connection,
     }
     connection.closeStarted = true;
     connection.closeErrorCode = reason;
+    if (!connection.drainDeadline) {
+        connection.drainDeadline = std::chrono::steady_clock::now() + drainTimeout_;
+    }
     if (auto* transport = wire_.transport(); transport != nullptr) {
         static constexpr std::string_view close_reason = "HTTP/3 connection closing";
         try {
@@ -2001,7 +2013,7 @@ void Http3NetworkRuntime::closeConnection(Connection& connection,
     }
 }
 
-void Http3NetworkRuntime::notifyWorker(WorkerLink& worker) noexcept {
+void http3_worker_runtime::notifyWorker(worker_link& worker) noexcept {
     (void)worker.target.server->notification().notify();
 }
 

@@ -8,6 +8,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 #include <asio/any_io_executor.hpp>
 
@@ -241,8 +242,10 @@ private:
         kFailed,
     };
 
+    using web_socket_dispatch_result = std::variant<RunStatus, HttpResponse>;
+
     [[nodiscard]] Task<RunStatus> runHandlerInner();
-    [[nodiscard]] Task<RunStatus> runWebSocketHandler();
+    [[nodiscard]] Task<web_socket_dispatch_result> runWebSocketHandler();
     [[nodiscard]] Task<std::optional<HttpResponse>> runTunnelHandler();
     [[nodiscard]] Task<void> writeInterimResponse(const HttpInterimResponseHead& head);
     [[nodiscard]] Task<void> awaitResponsePublication();
@@ -257,7 +260,7 @@ private:
     void latchCancellationReason() const noexcept;
     [[nodiscard]] bool exceedsPeerFieldSectionLimit() const noexcept;
     void fail(std::exception_ptr failure = {}) noexcept;
-    [[nodiscard]] bool releaseDispatchStorage() noexcept;
+    void releaseDispatchStorage() noexcept;
     static void peerTransportFinTimeoutTick(void* target, std::int64_t nowMs) noexcept;
     void armPeerTransportFinTimeout() noexcept;
     void disarmPeerTransportFinTimeout() noexcept;

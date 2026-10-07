@@ -27,7 +27,7 @@ using ruvia::HttpRequestTargetForm;
 using ruvia::requestContentCoding;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::requestBodyBytes;
-using ruvia::detail::RequestKnownHeader;
+using ruvia::detail::RequestHeaderKind;
 using ruvia::detail::requestKnownHeader;
 
 using ruvia::test::HeaderMemory;
@@ -81,7 +81,7 @@ RUVIA_TEST(request_header_block_move_assignment_and_reset_release_storage) {
     HttpRequestAccess::setResource(second, &secondResource);
     HttpRequestAccess::reserveHeaders(first, 1);
     HttpRequestAccess::reserveHeaders(second, 1);
-    const auto host = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    const auto host = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
     RUVIA_CHECK(HttpRequestAccess::addHeader(first, {"Host", "first"}, host));
     RUVIA_CHECK(HttpRequestAccess::addHeader(second, {"Host", "second"}, host));
     first = std::move(second);
@@ -163,42 +163,53 @@ RUVIA_TEST(request_access_preserves_extension_method_token) {
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
 }
 
-RUVIA_TEST(request_access_known_header_slot_mapping) {
-    RUVIA_CHECK_EQ(HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAccept), std::size_t{0});
-    RUVIA_CHECK_EQ(HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost), std::size_t{11});
-    RUVIA_CHECK_EQ(
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kUserAgent), std::size_t{24});
-    // Every known header maps within the cache (25 slots), so the clamp never
-    // fires for a valid enumerator.
-    RUVIA_CHECK(HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kUserAgent) <
-                HttpRequestAccess::kCachedHeaderSlots);
+RUVIA_TEST(request_access_classified_and_unknown_header_lookup) {
+    auto request = HttpRequestAccess::make();
+    for (const auto field : {HttpHeaderView{"aCcEpT", "text/plain"},
+             HttpHeaderView{"HOST", "example.com"},
+             HttpHeaderView{"User-Agent", "client"},
+             HttpHeaderView{"Sec-WebSocket-Extensions", "permessage-deflate"},
+             HttpHeaderView{"X-Request-Id", "request-id"}}) {
+        RUVIA_CHECK(HttpRequestAccess::addHeader(request, field));
+        RUVIA_CHECK(request.header(field.name()) == field.value());
+        const auto kind = ruvia::detail::classifyRequestHeader(field.name());
+        if (kind == RequestHeaderKind::kOther) {
+            RUVIA_CHECK(!HttpRequestAccess::hasKnownHeader(request, kind));
+            RUVIA_CHECK(HttpRequestAccess::knownHeader(request, kind).empty());
+        } else {
+            RUVIA_CHECK(HttpRequestAccess::hasKnownHeader(request, kind));
+            RUVIA_CHECK_EQ(HttpRequestAccess::knownHeader(request, kind), field.value());
+        }
+    }
+    RUVIA_CHECK(request.header("accept") == "text/plain");
+    RUVIA_CHECK(request.header("x-request-id") == "request-id");
 }
 
 RUVIA_TEST(request_access_known_header_last_write_wins) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "first.example"}, slot));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestKnownHeader::kHost), std::string_view("first.example"));
+        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("first.example"));
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "second.example"}, slot));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestKnownHeader::kHost), std::string_view("second.example"));
+        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("second.example"));
     // An unpopulated known header reads back empty.
-    RUVIA_CHECK(requestKnownHeader(request, RequestKnownHeader::kUserAgent).empty());
+    RUVIA_CHECK(requestKnownHeader(request, RequestHeaderKind::kUserAgent).empty());
 }
 
 RUVIA_TEST(request_access_add_header_appends_and_caches) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"host", "example.com"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost)));
+        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost)));
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{1});
     RUVIA_CHECK_EQ(request.headers()[0].name(), std::string_view("host"));
     RUVIA_CHECK_EQ(request.headers()[0].value(), std::string_view("example.com"));
     // The two-argument overload also caches the value for fast known-header access.
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestKnownHeader::kHost), std::string_view("example.com"));
+        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("example.com"));
 }
 
 RUVIA_TEST(request_access_unknown_header_lookup_uses_last_match) {
@@ -220,7 +231,7 @@ RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
     RUVIA_CHECK(presentEmpty.has_value());
     RUVIA_CHECK(presentEmpty.value_or("missing").empty());
 
-    const auto hostSlot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    const auto hostSlot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", ""}, hostSlot));
     const auto knownPresentEmpty = request.header("HOST");
     RUVIA_CHECK(knownPresentEmpty.has_value());
@@ -230,7 +241,7 @@ RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
 RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost);
     RUVIA_CHECK(
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "first.example"}, slot));
     RUVIA_CHECK(
@@ -238,19 +249,19 @@ RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
 
     RUVIA_CHECK_EQ(request.header("Host"), std::string_view("second.example"));
     RUVIA_CHECK_EQ(
-        requestKnownHeader(request, RequestKnownHeader::kHost), std::string_view("second.example"));
+        requestKnownHeader(request, RequestHeaderKind::kHost), std::string_view("second.example"));
 }
 
 RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentEncoding);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kContentEncoding);
     RUVIA_CHECK(
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "br"}, slot));
     RUVIA_CHECK(
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
 
-    RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kContentEncoding),
+    RUVIA_CHECK_EQ(requestKnownHeader(request, RequestHeaderKind::kContentEncoding),
         std::string_view("gzip"));
     std::pmr::monotonic_buffer_resource resource;
     const auto coding = requestContentCoding(request, &resource);
@@ -266,7 +277,7 @@ RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
 RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentEncoding);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kContentEncoding);
     RUVIA_CHECK(
         HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", ","}, slot));
     RUVIA_CHECK(
@@ -300,7 +311,7 @@ RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request,
         HttpHeaderView{"Cookie", "sid=first; theme=dark; sid=second"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kCookie)));
 
     const auto value = request.cookie("sid");
     RUVIA_CHECK(value.has_value());
@@ -310,7 +321,7 @@ RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
 RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kCookie);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1"}, slot));
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "b=2"}, slot));
 
@@ -337,9 +348,9 @@ RUVIA_TEST(request_access_reset_clears_cached_headers) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "h"},
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost)));
+        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kHost)));
     // reset wipes cached known headers and appended headers.
     HttpRequestAccess::reset(request);
-    RUVIA_CHECK(requestKnownHeader(request, RequestKnownHeader::kHost).empty());
+    RUVIA_CHECK(requestKnownHeader(request, RequestHeaderKind::kHost).empty());
     RUVIA_CHECK(request.headers().empty());
 }

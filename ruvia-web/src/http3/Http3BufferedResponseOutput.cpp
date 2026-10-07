@@ -38,7 +38,7 @@ Http3BufferedResponseOutput::create(const HttpResponse& response,
 std::expected<Http3BufferedResponseOutput, Http3BufferedResponseOutput::Error>
 Http3BufferedResponseOutput::create(const HttpResponse& response, const HttpBufferedResponseWritePlan& writePlan, Http3ResponseHead encodedHead,
     WorkerMemory& worker, Http3StreamMailbox& mailbox, MessageId messageId, std::optional<std::uint64_t> peerMaxFieldSectionSize, std::uint64_t initialPublishedWireBytes) noexcept {
-    if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
+    if (peerMaxFieldSectionSize && std::cmp_greater(encodedHead.field_section.decodedFieldSectionSize(), *peerMaxFieldSectionSize)) {
         return std::unexpected(Error::kPeerFieldSectionLimit);
     }
     auto cursor = ruvia::http3_buffered_response_cursor::create(response, writePlan, std::move(encodedHead), worker.resource());

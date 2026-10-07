@@ -4,17 +4,15 @@
 #include <optional>
 #include <variant>
 
-namespace ruvia::detail {
+namespace ruvia {
 
-// The outbound request-content contract is chosen before the initial HEADERS are
-// serialized. Keeping it as one value prevents Content-Length and END_STREAM from
-// becoming independent sources of truth.
+// One outbound content contract determines both Content-Length and END_STREAM.
+// Public callers and the protocol engine use this same value directly.
 class Http2RequestContent;
 
 class Http2RequestWithoutContent final {
 private:
     friend class Http2RequestContent;
-
     constexpr Http2RequestWithoutContent() noexcept = default;
 };
 
@@ -26,10 +24,8 @@ public:
 
 private:
     friend class Http2RequestContent;
-
     explicit constexpr Http2KnownLengthRequestContent(std::uint64_t length) noexcept
         : length_(length) {}
-
     std::uint64_t length_;
 };
 
@@ -41,7 +37,6 @@ public:
 
 private:
     friend class Http2RequestContent;
-
     explicit constexpr Http2StreamingRequestContent(std::optional<std::uint64_t> length) noexcept
         : length_(length) {}
     std::optional<std::uint64_t> length_{};
@@ -52,46 +47,35 @@ public:
     [[nodiscard]] static constexpr Http2RequestContent none() noexcept {
         return Http2RequestContent(Http2RequestWithoutContent());
     }
-
     [[nodiscard]] static constexpr Http2RequestContent knownLength(std::uint64_t length) noexcept {
         return Http2RequestContent(Http2KnownLengthRequestContent(length));
     }
-
     [[nodiscard]] static constexpr Http2RequestContent streaming(std::optional<std::uint64_t> length = {}) noexcept {
         return Http2RequestContent(Http2StreamingRequestContent(length));
     }
-
     [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const& noexcept {
-        return std::get_if<Http2RequestWithoutContent>(&content_);
+        return std::get_if<Http2RequestWithoutContent>(&value_);
     }
-    [[nodiscard]] constexpr const Http2RequestWithoutContent* withoutContent() const&& = delete;
-
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent()
-        const& noexcept {
-        return std::get_if<Http2KnownLengthRequestContent>(&content_);
+    const Http2RequestWithoutContent* withoutContent() const&& = delete;
+    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent() const& noexcept {
+        return std::get_if<Http2KnownLengthRequestContent>(&value_);
     }
-    [[nodiscard]] constexpr const Http2KnownLengthRequestContent* knownLengthContent() const&& =
-        delete;
-
+    const Http2KnownLengthRequestContent* knownLengthContent() const&& = delete;
     [[nodiscard]] constexpr const Http2StreamingRequestContent* streamingContent() const& noexcept {
-        return std::get_if<Http2StreamingRequestContent>(&content_);
+        return std::get_if<Http2StreamingRequestContent>(&value_);
     }
-    [[nodiscard]] constexpr const Http2StreamingRequestContent* streamingContent() const&& = delete;
+    const Http2StreamingRequestContent* streamingContent() const&& = delete;
 
 private:
-    using Content = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent,
+    using Value = std::variant<Http2RequestWithoutContent, Http2KnownLengthRequestContent,
         Http2StreamingRequestContent>;
-
-    explicit constexpr Http2RequestContent(Http2RequestWithoutContent content) noexcept
-        : content_(content) {}
-
-    explicit constexpr Http2RequestContent(Http2KnownLengthRequestContent content) noexcept
-        : content_(content) {}
-
-    explicit constexpr Http2RequestContent(Http2StreamingRequestContent content) noexcept
-        : content_(content) {}
-
-    Content content_;
+    explicit constexpr Http2RequestContent(Http2RequestWithoutContent value) noexcept
+        : value_(value) {}
+    explicit constexpr Http2RequestContent(Http2KnownLengthRequestContent value) noexcept
+        : value_(value) {}
+    explicit constexpr Http2RequestContent(Http2StreamingRequestContent value) noexcept
+        : value_(value) {}
+    Value value_;
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

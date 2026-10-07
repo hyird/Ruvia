@@ -58,7 +58,7 @@ void TaskScope::spawn(Task<void> task) & {
     ++active_;
     lifecycle_.template emplace<TaskScopeOpen>();
 
-    node->task.handle_.promise().setCompletion(node, &TaskScope::childComplete);
+    node->task.handle_.promise().control_.set_completion(node, &TaskScope::childComplete);
     node->task.start();
 }
 

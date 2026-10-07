@@ -9,20 +9,20 @@
 namespace ruvia {
 
 ScopedOperation<std::optional<MultipartStreamPart>> MultipartReader::read() & {
-    requireActive();
-    if (operationScope_.hasPendingOperations()) {
+    registration_.require_active();
+    if (operationScope_.has_pending_operations()) {
         throw std::logic_error("multipart body read is already in progress");
     }
-    return detail::makeScopedOperation(operationScope_, readTask());
+    return ::ruvia::make_scoped_operation(operationScope_, readTask());
 }
 
 BodyReader& MultipartReader::bodyReader() const {
-    requireActive();
+    registration_.require_active();
     return *bodyReader_;
 }
 
-void MultipartReader::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    auto& reader = static_cast<MultipartReader&>(capability);
+void MultipartReader::expire_capability(void* target) noexcept {
+    auto& reader = *static_cast<MultipartReader*>(target);
     reader.operationScope_.close();
     reader.bodyReader_ = nullptr;
     reader.state_.emplace<ExpiredState>();

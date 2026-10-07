@@ -101,9 +101,9 @@ enum class RouteRateLimitPresence : std::uint8_t {
 // atomics, or cross-thread coordination. Keys are (route scope, normalized
 // remote address).
 template <typename Clock>
-class BasicRateLimiter {
+class rate_limiter final {
 public:
-    BasicRateLimiter(std::optional<RateLimitRule> defaultRulePerWorker,
+    rate_limiter(std::optional<RateLimitRule> defaultRulePerWorker,
         RouteRateLimitPresence routeRules, std::size_t capacity,
         std::pmr::memory_resource* resource = nullptr)
         : defaultRulePerWorker_(defaultRulePerWorker),
@@ -119,8 +119,8 @@ public:
         }
     }
 
-    BasicRateLimiter(const BasicRateLimiter&) = delete;
-    BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
+    rate_limiter(const rate_limiter&) = delete;
+    rate_limiter& operator=(const rate_limiter&) = delete;
 
     [[nodiscard]] bool hasDefaultRule() const noexcept {
         return defaultRulePerWorker_.has_value();
@@ -283,9 +283,6 @@ private:
     std::pmr::vector<Slot> slots_;
 };
 
-class RateLimiter final : public BasicRateLimiter<SteadyRateLimiterClock> {
-public:
-    using BasicRateLimiter<SteadyRateLimiterClock>::BasicRateLimiter;
-};
+using RateLimiter = rate_limiter<SteadyRateLimiterClock>;
 
 }  // namespace ruvia::detail

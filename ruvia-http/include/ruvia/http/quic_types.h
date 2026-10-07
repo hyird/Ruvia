@@ -163,6 +163,14 @@ struct quic_limits {
     std::size_t max_lifetime_peer_streams{128};
 };
 
+// Immutable stateless routing partition for server-generated connection IDs.
+// Constructors require count > 0 and index < count; count = 1 preserves the
+// unpartitioned random CID behavior.
+struct quic_cid_partition {
+    std::uint32_t index{};
+    std::uint32_t count{1};
+};
+
 struct quic_connection_config {
     quic_role role{quic_role::client};
     // The version of the first packet/Initial offer; it remains unchanged by negotiation.
@@ -174,6 +182,7 @@ struct quic_connection_config {
     quic_connection_id destination_connection_id{};
     std::optional<quic_connection_id> source_connection_id{};
     std::optional<quic_connection_id> original_destination_connection_id{};
+    quic_cid_partition cid_partition{};
     quic_transport_parameters local_transport_parameters{};
     quic_limits limits{};
 };

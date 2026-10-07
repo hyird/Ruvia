@@ -26,15 +26,12 @@ using Account = DbEntity<"accounts", Id,
     DbManyToMany<"labels", Label, DbJoinTable<"account_labels", DbJoinColumns<DbJoinColumn<"account_id", "id">>, DbJoinColumns<DbJoinColumn<"label_id", "id">>>>>;
 
 struct Child;
-using ParentBase = DbEntity<"parents", Id,
-    DbOneToMany<"children", Child, "parent">>;
-using ChildBase = DbEntity<"children", Id,
+struct Parent;
+RUVIA_DB_ENTITY(Parent, "parents", Id,
+    DbOneToMany<"children", Child, "parent">)
+RUVIA_DB_ENTITY(Child, "children", Id,
     DbColumn<"parent_id", std::int64_t>,
-    DbManyToOne<"parent", ParentBase, DbJoinColumn<"parent_id", "id">>>;
-struct Child final : ChildBase {
-    using ChildBase::ChildBase;
-};
-using Parent = ParentBase;
+    DbManyToOne<"parent", Parent, DbJoinColumn<"parent_id", "id">>)
 
 struct Node;
 RUVIA_DB_ENTITY(Node, "nodes", Id, DbColumn<"parent_id", std::int64_t, DbColumnOptions{.nullable = true}>,

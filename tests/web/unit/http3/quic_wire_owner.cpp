@@ -24,11 +24,11 @@
 
 #include "ruvia/http/quic_server.h"
 #include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/http3/Http3NetworkRuntime.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
 #include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
 #include "ruvia/web/detail/http3/Http3QuicWireOwner.h"
+#include "ruvia/web/detail/http3/http3_worker_runtime.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 
 #include "test_harness.h"

@@ -131,10 +131,10 @@ RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     using ruvia::httpEtagPreconditions;
     using ruvia::HttpHeaderView;
     using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::RequestKnownHeader;
+    using ruvia::detail::RequestHeaderKind;
 
     auto request = HttpRequestAccess::make();
-    const auto noneMatchSlot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfNoneMatch);
+    const auto noneMatchSlot = HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kIfNoneMatch);
     RUVIA_CHECK(HttpRequestAccess::addHeader(
         request, HttpHeaderView("If-None-Match", R"("current")"), noneMatchSlot));
     RUVIA_CHECK(HttpRequestAccess::addHeader(
@@ -148,7 +148,7 @@ RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     auto wildcard = HttpRequestAccess::make();
     RUVIA_CHECK(HttpRequestAccess::addHeader(
         wildcard, HttpHeaderView("If-Match", "*"),
-        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfMatch)));
+        HttpRequestAccess::knownHeaderSlot(RequestHeaderKind::kIfMatch)));
     const auto existence = httpEtagPreconditions(wildcard, R"("unused")");
     RUVIA_CHECK(existence.ifMatch.present);
     RUVIA_CHECK(existence.ifMatch.matches());

@@ -1,67 +1,14 @@
-#include <chrono>
-#include <stdexcept>
-#include <system_error>
 #include <utility>
 
-#include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/recycling_allocator.hpp>
-
-#include "ruvia/core/Async.h"
 #include "ruvia/core/Socket.h"
-#include "ruvia/core/Timer.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
 #include "ruvia/web/detail/server/session/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/session/HttpServerSessionEntry.h"
 
 namespace ruvia::detail {
 
-Task<void> WebWorkerRuntime::superviseListener(
-    std::size_t listenerIndex, HttpServerAcceptor& acceptor) {
-    try {
-        co_await acceptLoop(listenerIndex, acceptor);
-        if (httpServerWorkerRunning(workerState_) && !stopToken_.stopRequested()) {
-            throw std::runtime_error("HTTP listener stopped unexpectedly");
-        }
-    } catch (...) {
-        failWorker(std::current_exception());
-    }
-}
-
-Task<void> WebWorkerRuntime::acceptLoop(
-    std::size_t listenerIndex, HttpServerAcceptor& acceptor) {
-    for (;;) {
-        auto acceptCompletion =
-            co_await ruvia::asyncAsio<asio::ip::tcp::socket>([&acceptor](auto handler) mutable {
-                acceptor.acceptor.async_accept(std::move(handler));
-            });
-        const auto ec = acceptCompletion.errorCode();
-        auto socket = std::move(acceptCompletion).takeResult();
-
-        if (ec) {
-            // Fatal: acceptor was cancelled (stop()) or closed. Exit cleanly.
-            if (ec == asio::error::operation_aborted || ec == asio::error::bad_descriptor ||
-                ec == asio::error::invalid_argument) {
-                co_return;
-            }
-            // Transient: fd exhaustion, ECONNABORTED, EINTR, ENOBUFS, ENOMEM,
-            // etc. A single bad accept must not stop the worker forever.
-            acceptFailures_.fetch_add(1, std::memory_order_relaxed);
-            static_cast<void>(
-                co_await sleepFor(workerRuntime_.handle(), std::chrono::milliseconds(50)));
-            if (!httpServerWorkerRunning(workerState_)) {
-                co_return;
-            }
-            continue;
-        }
-
-        acceptSocketOnContext(listenerIndex, std::move(socket));
-    }
-}
-
 void WebWorkerRuntime::acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket) {
-    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning ||
         !httpServerWorkerRunning(workerState_)) {
         return;
     }
@@ -77,9 +24,7 @@ void WebWorkerRuntime::acceptSocketOnContext(std::size_t listenerIndex, TcpSocke
     try {
         ruvia::configureAcceptedSocket(socket);
         AcceptedConnectionLease connection(std::move(socket), activeConnectionCount_);
-        asio::co_spawn(ioContext_,
-            ruvia::asAwaitable(handleSession(*listeners_[listenerIndex], std::move(connection))),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        backgroundTasks_.spawn(handleSession(*listeners_[listenerIndex], std::move(connection)));
     } catch (...) {
         acceptFailures_.fetch_add(1, std::memory_order_relaxed);
         options_.connectionFailure.invoke({}, std::current_exception());
@@ -91,7 +36,7 @@ void WebWorkerRuntime::acceptTransferredConnection(NativeAcceptedSocketTicket&& 
         return;
     }
     const auto listenerIndex = ticket.listenerIndex();
-    if (lifecycle_.state() != RuntimeLifecycle::State::kRunning ||
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning ||
         !httpServerWorkerRunning(workerState_) || listenerIndex >= listeners_.size()) {
         return;
     }

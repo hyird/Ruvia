@@ -6,7 +6,6 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 
 namespace ruvia::detail {
 
@@ -225,7 +224,7 @@ static_assert(sizeof(Http2FinalResponseControlPlanResult) <= 2);
             Http2FinalResponseControlPlanError::kUpgradeUnavailable));
     }
     for (const auto& header : response.headers()) {
-        if (http2IsForbiddenResponseConnectionField(header.name())) {
+        if (is_forbidden_http_binary_response_field(header.name())) {
             return Http2FinalResponseControlPlanResult(Http2FinalResponseControlPlanFailure(
                 Http2FinalResponseControlPlanError::kConnectionSpecificFieldForbidden));
         }

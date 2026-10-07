@@ -4,52 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/detail/field/request_header_kind.h"
+
 namespace ruvia::detail {
-
-enum class RequestHeaderKind : std::uint8_t {
-    kOther,
-    kAccept,
-    kAcceptEncoding,
-    kAccessControlRequestHeaders,
-    kAccessControlRequestMethod,
-    kAuthorization,
-    kConnection,
-    kContentEncoding,
-    kContentLength,
-    kContentType,
-    kCookie,
-    kExpect,
-    kHost,
-    kIfMatch,
-    kIfModifiedSince,
-    kIfNoneMatch,
-    kIfRange,
-    kIfUnmodifiedSince,
-    kOrigin,
-    kRange,
-    kSecWebSocketKey,
-    kSecWebSocketProtocol,
-    kSecWebSocketVersion,
-    kTransferEncoding,
-    kUpgrade,
-    kUserAgent,
-    kForwarded,
-    kXForwardedFor,
-    kXForwardedProto,
-    kSecWebSocketExtensions
-};
-
-inline constexpr std::size_t kRequestHeaderKindCount =
-    std::to_underlying(RequestHeaderKind::kSecWebSocketExtensions) + 1;
-
-[[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(
-    RequestHeaderKind kind) noexcept {
-    const auto index = static_cast<std::size_t>(kind);
-    return index == 0 ? kRequestHeaderKindCount : index - 1;
-}
 
 [[nodiscard]] inline constexpr std::uint32_t singletonRequestHeaderBit(
     RequestHeaderKind kind) noexcept {
@@ -133,6 +92,17 @@ inline constexpr std::array<bool, 256> kHttpFieldValueCharTable = [] {
 
 [[nodiscard]] inline bool isHttpFieldValueChar(unsigned char c) noexcept {
     return kHttpFieldValueCharTable[c];
+}
+
+// Byte repertoire only. Protocol boundaries separately decide whether leading
+// or trailing OWS is permitted (HTTP/3 currently accepts it, HTTP/2 does not).
+[[nodiscard]] inline bool is_valid_http_field_value_bytes(std::string_view value) noexcept {
+    for (const unsigned char ch : value) {
+        if (!isHttpFieldValueChar(ch)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept;

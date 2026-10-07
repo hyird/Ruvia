@@ -187,7 +187,7 @@ RUVIA_TEST(http3_client_response_delivery_copies_events_without_invalidating_ret
             RUVIA_CHECK(state.headers.front().value() == "copied");
             RUVIA_CHECK(!state.complete);
 
-            const auto first = co_await state.read<std::string_view>();
+            const auto first = co_await state.consume_body<std::string_view>();
             RUVIA_CHECK(first.has_value());
             RUVIA_CHECK_EQ(first->size(), firstBody.size());
             returnedView = *first;
@@ -573,7 +573,7 @@ RUVIA_TEST(http3_client_response_delivery_collect_all_wakes_paused_producer_and_
         co_await paused.wait();
         bool tooSmall = false;
         try {
-            (void)co_await ruvia::detail::makeScopedOperation(state.bodyOperationScope, state.readAll(2));
+            (void)co_await ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(2));
         } catch (const ruvia::HttpClientError& error) {
             tooSmall = error.code() == ruvia::HttpClientError::Code::kResponseTooLarge;
         }
@@ -581,7 +581,7 @@ RUVIA_TEST(http3_client_response_delivery_collect_all_wakes_paused_producer_and_
         RUVIA_CHECK(waitedForSpace && tooSmall && state.complete);
         RUVIA_CHECK(!state.failure && !state.errorCode);
         RUVIA_CHECK(state.pending == "abc" && state.offset == 0);
-        const auto body = co_await ruvia::detail::makeScopedOperation(state.bodyOperationScope, state.readAll(3));
+        const auto body = co_await ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(3));
         const auto bodyBytes = body.bytes();
         RUVIA_CHECK(bodyBytes.size() == 3 && bodyBytes.front() == std::byte{'a'} &&
                     bodyBytes.back() == std::byte{'c'});
@@ -709,7 +709,7 @@ RUVIA_TEST(http3_client_response_delivery_shared_budget_backpressures_per_stream
         const auto framingProbe = framing.readAllowance(Driver::kReadBlockBytes);
         RUVIA_CHECK(framingProbe.status == Delivery::ReadStatus::kReady && framingProbe.bytes == 1);
 
-        const auto borrowed = co_await firstState.read<std::string_view>();
+        const auto borrowed = co_await firstState.consume_body<std::string_view>();
         RUVIA_CHECK(borrowed && *borrowed == "abc");
         RUVIA_CHECK_EQ(budget.used(), std::size_t{6});
         firstState.releaseConsumedBodyPrefix();
@@ -862,7 +862,7 @@ RUVIA_TEST(http3_client_response_delivery_budget_survives_connection_generations
         RUVIA_CHECK_EQ(oldGenerationWake.notifications, oldBeforePolicy + 1);
         RUVIA_CHECK_EQ(newGenerationWake.notifications, newBeforePolicy + 1);
 
-        const auto borrowed = co_await oldGenerationState.read<std::string_view>();
+        const auto borrowed = co_await oldGenerationState.consume_body<std::string_view>();
         RUVIA_CHECK(borrowed && *borrowed == firstBody);
         RUVIA_CHECK_EQ(budget.used(), firstBody.size());
         // The borrowed bytes remain charged until the next body operation frees
@@ -1022,7 +1022,7 @@ RUVIA_TEST(http3_client_response_delivery_holds_compressed_bytes_until_fin_and_d
         std::optional<std::string_view> readValue;
         ruvia::TaskScope tasks(worker.handle, {.resource = &resource});
         auto consumer = [&]() -> ruvia::Task<void> {
-            readValue = co_await state.read<std::string_view>();
+            readValue = co_await state.consume_body<std::string_view>();
             readReturned = true;
         };
         auto watchdog = [&]() -> ruvia::Task<void> {

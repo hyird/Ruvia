@@ -21,19 +21,6 @@
 #include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
 
 namespace ruvia {
-namespace {
-
-[[nodiscard]] detail::Http2RequestContent toInternal(Http2RequestContent content) noexcept {
-    if (content.withoutContent() != nullptr) {
-        return detail::Http2RequestContent::none();
-    }
-    if (const auto* known = content.knownLengthContent()) {
-        return detail::Http2RequestContent::knownLength(known->length());
-    }
-    return detail::Http2RequestContent::streaming(content.streamingContent()->expectedLength());
-}
-
-}  // namespace
 
 static std::expected<HttpRequest, HttpProtocolError> buildHttp2ServerRequest(
     detail::Http2Connection& connection, std::uint32_t streamId,
@@ -62,7 +49,7 @@ static WebSocketHandshakeValidationResult validateServerWebSocketHandshake(
 }
 
 Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
-    detail::Http2Connection& connection, const detail::Http2RequestHeadSubmitResult& result) {
+    detail::Http2Connection& connection, const Http2RequestHeadSubmitResult& result) {
     if (const auto* submitted = result.submitted()) {
         try {
             connection.pinStream(submitted->streamId());
@@ -77,13 +64,13 @@ Http2RequestHeadSubmitResult Http2Connection::pinSubmittedRequest(
             }
             std::rethrow_exception(original);
         }
-        return Http2RequestHeadSubmitResult::makeSubmitted(submitted->streamId());
+        return result;
     }
     const auto error = result.failure()->error();
     if (error == Http2RequestHeadSubmitError::kConnectionNotStarted) {
         std::terminate();
     }
-    return Http2RequestHeadSubmitResult::makeFailure(error);
+    return result;
 }
 
 namespace {
@@ -669,7 +656,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRequestHead(
     }
     const auto result = impl_->connection.submitRegularRequestHead(request.method.view(),
         request.scheme.view(), authority, request.target.view(),
-        static_cast<std::span<const HttpHeaderView>>(request.headers), toInternal(request.content),
+        static_cast<std::span<const HttpHeaderView>>(request.headers), request.content,
         request.expectation);
     return pinSubmittedRequest(impl_->connection, result);
 }

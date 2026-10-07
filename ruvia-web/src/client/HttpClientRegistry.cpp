@@ -111,7 +111,7 @@ Task<void> HttpClientRegistry::join() {
     }
 }
 
-HttpClientHandle HttpClientRegistry::get(ScopedOperationScope& scope) const {
+HttpClientHandle HttpClientRegistry::get(::ruvia::operation_scope& scope) const {
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
@@ -124,7 +124,7 @@ HttpClientHandle HttpClientRegistry::get(ScopedOperationScope& scope) const {
 }
 
 HttpClientHandle HttpClientRegistry::get(
-    ScopedOperationScope& scope, OperationOptions options) const {
+    ::ruvia::operation_scope& scope, OperationOptions options) const {
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }
@@ -139,7 +139,7 @@ HttpClientHandle HttpClientRegistry::get(
 }
 
 HttpClientHandle HttpClientRegistry::get(
-    std::string_view alias, ScopedOperationScope& scope) const {
+    std::string_view alias, ::ruvia::operation_scope& scope) const {
     if (closing_) {
         throw HttpClientError(HttpClientError::Code::kClosing, "http client registry is closing");
     }

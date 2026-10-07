@@ -64,82 +64,32 @@ namespace ruvia::detail {
         return true;
     }
 
-    switch (classifyRequestHeader(name)) {
-        case RequestHeaderKind::kHost:
-        case RequestHeaderKind::kContentLength:
-        case RequestHeaderKind::kTransferEncoding:
-        case RequestHeaderKind::kConnection:
-        case RequestHeaderKind::kContentEncoding:
-        case RequestHeaderKind::kContentType:
-        case RequestHeaderKind::kCookie:
-        case RequestHeaderKind::kExpect:
-        case RequestHeaderKind::kIfMatch:
-        case RequestHeaderKind::kIfModifiedSince:
-        case RequestHeaderKind::kIfNoneMatch:
-        case RequestHeaderKind::kIfRange:
-        case RequestHeaderKind::kIfUnmodifiedSince:
-        case RequestHeaderKind::kRange:
-        case RequestHeaderKind::kUpgrade:
-        case RequestHeaderKind::kAuthorization:
-            return true;
-        case RequestHeaderKind::kOther:
-        case RequestHeaderKind::kAccept:
-        case RequestHeaderKind::kAcceptEncoding:
-        case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
-        case RequestHeaderKind::kUserAgent:
-        case RequestHeaderKind::kOrigin:
-        case RequestHeaderKind::kSecWebSocketKey:
-        case RequestHeaderKind::kSecWebSocketProtocol:
-        case RequestHeaderKind::kSecWebSocketVersion:
-        case RequestHeaderKind::kForwarded:
-        case RequestHeaderKind::kXForwardedFor:
-        case RequestHeaderKind::kXForwardedProto:
-        case RequestHeaderKind::kSecWebSocketExtensions:
-            break;
+    if (is_forbidden_common_trailer_name(name, classifyRequestHeader(name))) {
+        return true;
     }
 
     switch (name.size()) {
-        case 2:
-            return httpAsciiEqualsIgnoreCase(name, "TE");
         case 3:
             // Response control data (RFC 9110 §7.4).
             return httpAsciiEqualsIgnoreCase(name, "Age");
-        case 4:
-            return httpAsciiEqualsIgnoreCase(name, "Date") ||
-                   httpAsciiEqualsIgnoreCase(name, "Vary");
         case 6:
             return httpAsciiEqualsIgnoreCase(name, "Pragma");
         case 7:
-            return httpAsciiEqualsIgnoreCase(name, "Trailer") ||
-                   httpAsciiEqualsIgnoreCase(name, "Expires") ||
+            return httpAsciiEqualsIgnoreCase(name, "Expires") ||
                    httpAsciiEqualsIgnoreCase(name, "Warning");
-        case 8:
-            return httpAsciiEqualsIgnoreCase(name, "Location");
-        case 10:
-            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                   httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 11:
             return httpAsciiEqualsIgnoreCase(name, "Retry-After");
-        case 12:
-            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
-        case 13:
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                   httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 15:
             return httpAsciiEqualsIgnoreCase(name, "X-Frame-Options") ||
                    httpAsciiEqualsIgnoreCase(name, "Referrer-Policy") ||
                    httpAsciiEqualsIgnoreCase(name, "Clear-Site-Data");
         case 16:
             return httpAsciiEqualsIgnoreCase(name, "X-XSS-Protection") ||
-                   httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate") ||
-                   httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
+                   httpAsciiEqualsIgnoreCase(name, "WWW-Authenticate");
         case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate") ||
-                   httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
+            return httpAsciiEqualsIgnoreCase(name, "Permissions-Policy");
         case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization") ||
-                   httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Disposition");
         case 22:
             return httpAsciiEqualsIgnoreCase(name, "X-Content-Type-Options");
         case 23:

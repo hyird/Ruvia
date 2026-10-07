@@ -17,6 +17,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/detail/redis/RedisArgumentPack.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
+#include "ruvia/web/redis/RedisPipeline.h"
 #include "ruvia/web/redis/RedisRepositoryTypes.h"
 #include "ruvia/web/redis/RedisTransaction.h"
 
@@ -29,7 +30,7 @@ class RedisClientRuntime;
 template <typename Entity>
 class RedisRepository;
 
-class RedisHandle final : private detail::ScopedCapabilityNode {
+class RedisHandle final {
 public:
     RedisHandle(const RedisHandle& other) noexcept;
     RedisHandle& operator=(const RedisHandle&) = delete;
@@ -275,28 +276,29 @@ private:
 
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<Result> commandMapped(std::span<const std::string_view> args, Mapper mapper) const {
-        requireActive();
+        registration_.require_active();
         return scoped(detail::mapRedisCommand<Result>(commandOwned(args), resource_, std::move(mapper)));
     }
 
     RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
-        std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope) noexcept;
+        std::pmr::memory_resource* resource, operation_scope& operationScope) noexcept;
     RedisHandle(detail::RedisPool& generalPool, detail::RedisPool& blockingPool,
-        std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
+        std::pmr::memory_resource* resource, operation_scope& operationScope,
         OperationOptions options) noexcept;
 
     template <typename T>
     [[nodiscard]] ScopedOperation<T> scoped(ruvia::Task<T> task) const {
-        return detail::makeScopedOperation(operationScope(), std::move(task));
+        return make_scoped_operation(registration_.scope(), std::move(task));
     }
 
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    static void expire_capability(void* target) noexcept;
     [[nodiscard]] detail::RedisCommandExecutor executor() const;
     [[nodiscard]] detail::RedisCommandExecutor executor(detail::RedisPool& pool) const;
     detail::RedisPool* pool_;
     detail::RedisPool* blockingPool_;
     std::pmr::memory_resource* resource_;
     OperationOptions operationOptions_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

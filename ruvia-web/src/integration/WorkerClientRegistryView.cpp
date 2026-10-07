@@ -28,7 +28,7 @@ namespace {
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WorkerClientRegistryView::db(
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
@@ -37,7 +37,7 @@ DbHandle WorkerClientRegistryView::db(
 }
 
 DbHandle WorkerClientRegistryView::db(std::string_view alias,
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw DbError(DbError::Code::kNotConfigured, std::nullopt, "database is not configured");
     }
@@ -48,7 +48,7 @@ DbHandle WorkerClientRegistryView::db(std::string_view alias,
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WorkerClientRegistryView::redis(
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
@@ -56,7 +56,7 @@ RedisHandle WorkerClientRegistryView::redis(
 }
 
 RedisHandle WorkerClientRegistryView::redis(std::string_view alias,
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
@@ -66,7 +66,7 @@ RedisHandle WorkerClientRegistryView::redis(std::string_view alias,
 #endif
 
 HttpClientHandle WorkerClientRegistryView::httpClient(
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");
@@ -76,7 +76,7 @@ HttpClientHandle WorkerClientRegistryView::httpClient(
 }
 
 HttpClientHandle WorkerClientRegistryView::httpClient(std::string_view alias,
-    ScopedOperationScope& operationScope, const StopToken& stopToken) const {
+    ::ruvia::operation_scope& operationScope, const StopToken& stopToken) const {
     if (!attached()) {
         throw HttpClientError(
             HttpClientError::Code::kNotConfigured, "http client is not configured");

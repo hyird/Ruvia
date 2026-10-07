@@ -199,7 +199,11 @@ function(ruvia_configure_library target)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     if(MSVC)
-        target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
+        # Checked iterators allocate PMR proxies in noexcept container operations.
+        # Consumers need the same STL ABI and allocation contracts as our libraries.
+        target_compile_definitions(${target} PUBLIC
+            _WIN32_WINNT=0x0A00
+            _ITERATOR_DEBUG_LEVEL=0)
         target_compile_options(${target}
             PUBLIC /utf-8 /Zc:preprocessor
             PRIVATE /W4 /permissive- /bigobj /FS)

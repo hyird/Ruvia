@@ -26,9 +26,7 @@ bool isValidHttpHeaderValue(std::string_view value) noexcept {
             return false;
         }
     }
-    return std::ranges::all_of(value, [](char c) noexcept {
-        return detail::isHttpFieldValueChar(static_cast<unsigned char>(c));
-    });
+    return detail::is_valid_http_field_value_bytes(value);
 }
 
 bool isValidHttpStatusText(std::string_view value) noexcept {

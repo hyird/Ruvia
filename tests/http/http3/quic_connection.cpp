@@ -9,6 +9,8 @@
 #include <new>
 #include <stdexcept>
 
+#include "ruvia/http/quic_server.h"
+
 #include "test_harness.h"
 
 namespace {
@@ -221,6 +223,31 @@ RUVIA_TEST(quic_connection_preserves_explicit_empty_scid_and_defaults_nullopt_to
     RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
 }
 
+RUVIA_TEST(quic_connection_generated_server_source_cid_matches_its_partition) {
+    counting_resource resource;
+    for (const auto partition : {ruvia::quic_cid_partition{.index = 5, .count = 7},
+             ruvia::quic_cid_partition{.index = std::numeric_limits<std::uint32_t>::max() - 1,
+                 .count = std::numeric_limits<std::uint32_t>::max()}}) {
+        auto config = client_config();
+        config.role = ruvia::quic_role::server;
+        config.original_destination_connection_id = config.destination_connection_id;
+        config.source_connection_id.reset();
+        config.cid_partition = partition;
+        ruvia::quic_connection connection(config, provider(),
+            {.drive = drive_tls, .retire = retire_tls}, &resource,
+            ruvia::quic_timestamp{} + std::chrono::seconds(1));
+        const auto params = decode_local_transport_parameters(connection);
+        RUVIA_CHECK_EQ(params.initial_scid.datalen, std::size_t{16});
+        std::array<std::byte, 32> packet{};
+        packet[0] = std::byte{0x40};
+        std::ranges::copy(std::span<const std::byte>(
+                              reinterpret_cast<const std::byte*>(params.initial_scid.data), params.initial_scid.datalen),
+            packet.begin() + 1);
+        RUVIA_CHECK(ruvia::quic_datagram_partition(packet, partition.count) == partition.index);
+    }
+    RUVIA_CHECK_EQ(resource.allocations, resource.deallocations);
+}
+
 RUVIA_TEST(quic_connection_native_initial_key_factory_rollback_retires_bound_driver) {
     counting_resource resource;
     retire_context retire_state;
@@ -281,5 +308,18 @@ RUVIA_TEST(quic_connection_rejects_missing_server_original_dcid_and_malformed_lo
     invalid = client_config();
     invalid.local_transport_parameters.idle_timeout_ms =
         static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / 1'000'000 + 1;
+    RUVIA_CHECK(rejects(invalid));
+    invalid = client_config();
+    invalid.cid_partition.count = 0;
+    RUVIA_CHECK(rejects(invalid));
+    invalid = client_config();
+    invalid.cid_partition = {.index = 3, .count = 3};
+    RUVIA_CHECK(rejects(invalid));
+    invalid = client_config();
+    invalid.role = ruvia::quic_role::server;
+    invalid.original_destination_connection_id = invalid.destination_connection_id;
+    invalid.cid_partition = {.index = 1, .count = 2};
+    RUVIA_CHECK(rejects(invalid));
+    invalid.source_connection_id = ruvia::quic_connection_id(std::array<std::byte, 16>{});
     RUVIA_CHECK(rejects(invalid));
 }

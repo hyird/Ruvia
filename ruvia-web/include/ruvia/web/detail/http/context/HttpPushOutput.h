@@ -22,6 +22,6 @@ private:
     std::pmr::memory_resource* resource_;
     void* target_;
     Submit submit_;
-    ScopedOperationScope scope_;
+    ::ruvia::operation_scope scope_;
 };
 }  // namespace ruvia::detail

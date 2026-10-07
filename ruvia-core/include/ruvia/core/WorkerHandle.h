@@ -27,6 +27,19 @@ public:
     [[nodiscard]] bool isCurrent() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
 
+    // Worker-affine timer registration. This stable handle must outlive the
+    // borrowed registration; destruction unregisters without a late callback.
+    void schedule_timer(WorkerTimerRegistration& registration,
+        std::chrono::steady_clock::time_point deadline,
+        MoveOnlyFunction<void(WorkerTimerOutcome)> completion) const&;
+    void schedule_timer(WorkerTimerRegistration&,
+        std::chrono::steady_clock::time_point,
+        MoveOnlyFunction<void(WorkerTimerOutcome)>) const&& = delete;
+
+    // Reserves bounded admission before invoking the factory, so the caller
+    // can transfer ownership only for an accepted post.
+    [[nodiscard]] PostStatus post_factory(MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) const;
+
     template <typename Fn>
         requires detail::MoveOnlyFunctionTarget<void, Fn>
     [[nodiscard]] PostResult post(Fn&& fn) const {
@@ -65,11 +78,6 @@ struct WorkerHandleAccess {
         const WorkerHandle& worker, MoveOnlyFunction<void()> callback);
     static void whenIdle(const WorkerHandle& worker, MoveOnlyFunction<void()> callback);
     static void waitForReservations(const WorkerHandle& worker) noexcept;
-    static void scheduleTimer(const WorkerHandle& worker, ::ruvia::WorkerTimerRegistration& registration,
-        std::chrono::steady_clock::time_point deadline,
-        MoveOnlyFunction<void(::ruvia::WorkerTimerOutcome)> completion);
-    [[nodiscard]] static PostStatus postFactory(
-        const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory);
 };
 
 }  // namespace detail

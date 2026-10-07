@@ -4,6 +4,7 @@
 #include <exception>
 #include <future>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -159,7 +160,7 @@ RUVIA_TEST(
     const std::array definitions{redisDefinition("default", config)};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope generalScope;
+    ruvia::operation_scope generalScope;
     auto redis = registry.get(generalScope);
     const std::array<std::string_view, 1> keys{"queue"};
     const std::array streams{ruvia::RedisStreamReadView{.stream = "events", .id = ">"}};
@@ -250,7 +251,7 @@ RUVIA_TEST(redis_registry_derives_default_pool_from_owned_entry_index) {
     }};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
 
     bool defaultResolved = true;
     bool aliasResolved = true;
@@ -311,7 +312,7 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto handle = registry.get(operationScope);
     auto copiedHandle = handle;
     auto configuredHandle = handle.withOptions({.timeout = std::chrono::seconds(3)});
@@ -378,6 +379,188 @@ RUVIA_TEST(redis_request_capabilities_reject_after_parent_scope_closes) {
     RUVIA_CHECK(transactionRejected);
 }
 
+RUVIA_TEST(redis_batch_builders_own_cold_payload_and_reject_reuse) {
+    auto& io_context = ruvia::test::newTestIoContext();
+    RedisTestWorker worker(io_context);
+    ruvia::test::CountingMemoryResource memory;
+    const std::array definitions{redisDefinition("default")};
+    ruvia::detail::RedisRegistry registry(io_context, &memory, definitions, worker.handle());
+    ruvia::operation_scope scope;
+    auto handle = registry.get(scope);
+    const auto baseline = memory.liveAllocations();
+    const auto throws_logic_error = [](auto&& operation) {
+        try {
+            operation();
+        } catch (const std::logic_error&) {
+            return true;
+        }
+        return false;
+    };
+    {
+        auto pipeline = handle.pipeline();
+        pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
+        std::optional moved(std::move(pipeline));
+        RUVIA_CHECK(throws_logic_error([&] { pipeline.get("moved"); }));
+        auto cold = std::move(*moved).exec();
+        RUVIA_CHECK(throws_logic_error([&] { moved->incrBy("used", 1); }));
+        RUVIA_CHECK(throws_logic_error([&] { (void)std::move(*moved).exec(); }));
+        moved.reset();
+        RUVIA_CHECK(memory.liveAllocations() > baseline);
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    {
+        auto transaction = handle.transaction();
+        transaction.watch(std::string(128, 'w')).unwatch().set(std::string(128, 'k'), std::string(128, 'v'));
+        std::optional moved(std::move(transaction));
+        RUVIA_CHECK(throws_logic_error([&] { transaction.watch("moved"); }));
+        auto cold = std::move(*moved).exec();
+        RUVIA_CHECK(throws_logic_error([&] { moved->unwatch(); }));
+        RUVIA_CHECK(throws_logic_error([&] { moved->zadd("used", 1, "member"); }));
+        moved.reset();
+        RUVIA_CHECK(memory.liveAllocations() > baseline);
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+    {
+        auto pipeline = handle.pipeline();
+        auto transaction = handle.transaction();
+        for (auto word : {"WATCH", "UNWATCH", "MULTI", "EXEC", "BLPOP"}) {
+            RUVIA_CHECK(throwsInvalidArgument([&] { pipeline.command(word, "key"); }));
+            RUVIA_CHECK(throwsInvalidArgument([&] { transaction.command(word, "key"); }));
+        }
+        for (auto score : {std::numeric_limits<double>::infinity(),
+                 -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+            RUVIA_CHECK(throwsInvalidArgument([&] { pipeline.zadd("key", score, "member"); }));
+            RUVIA_CHECK(throwsInvalidArgument([&] { transaction.zadd("key", score, "member"); }));
+        }
+        pipeline.set(std::string(128, 'k'), std::string(128, 'v'));
+        transaction.watch(std::string(128, 'w')).set(std::string(128, 'k'), std::string(128, 'v'));
+        scope.close();
+        RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+        RUVIA_CHECK(throws_logic_error([&] {
+            pipeline.zadd("expired", std::numeric_limits<double>::quiet_NaN(), "member");
+        }));
+        RUVIA_CHECK(throws_logic_error([&] { (void)std::move(transaction).exec(); }));
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+}
+
+RUVIA_TEST(redis_batch_typed_commands_preserve_order_arguments_and_resource) {
+    auto& io_context = ruvia::test::newTestIoContext();
+    RedisTestWorker worker(io_context);
+    ruvia::test::CountingMemoryResource memory;
+    const ruvia::detail::RedisConfigStorage config(ruvia::RedisConfig{}, &memory);
+    ruvia::detail::RedisPool pool(io_context, config, config.commandTimeout, 1, worker.handle(), &memory);
+    const auto baseline = memory.liveAllocations();
+    {
+        ruvia::detail::redis_command_batch batch(pool, {}, &memory);
+        const auto minimum = std::numeric_limits<std::int64_t>::min();
+        const auto maximum = std::numeric_limits<std::int64_t>::max();
+        batch.get("k");
+        batch.set("k", "v");
+        batch.get_del("k");
+        batch.append("k", "v");
+        batch.strlen("k");
+        batch.del("k");
+        batch.unlink("k");
+        batch.exists("k");
+        batch.touch("k");
+        batch.type("k");
+        batch.rename("k", "n");
+        batch.rename_nx("k", "n");
+        batch.incr("k");
+        batch.incr_by("k", minimum);
+        batch.decr("k");
+        batch.decr_by("k", maximum);
+        batch.hget("k", "f");
+        batch.hset("k", "f", "v");
+        batch.hdel("k", "f");
+        batch.hexists("k", "f");
+        batch.hlen("k");
+        batch.hget_all("k");
+        batch.lpush("k", "v");
+        batch.rpush("k", "v");
+        batch.lpop("k");
+        batch.rpop("k");
+        batch.llen("k");
+        batch.lrange("k", minimum, maximum);
+        batch.sadd("k", "m");
+        batch.srem("k", "m");
+        batch.smembers("k");
+        batch.scard("k");
+        batch.zadd("k", 1.5, "m");
+        batch.zrem("k", "m");
+        batch.zrange("k", minimum, maximum);
+        batch.zscore("k", "m");
+        batch.zcard("k");
+        const std::string binary_key("k\0ey", 4);
+        const std::string binary_value("v\0alue", 6);
+        auto source_key = binary_key;
+        auto source_value = binary_value;
+        batch.set(source_key, source_value);
+        source_key.assign(128, 'x');
+        source_value.assign(128, 'y');
+        auto moved = std::move(batch);
+        auto payload = moved.consume();
+        RUVIA_CHECK_EQ(payload.commands.size(), std::size_t{38});
+        RUVIA_CHECK(payload.commands.get_allocator().resource() == &memory);
+        const std::initializer_list<std::initializer_list<std::string_view>> expected{
+            {"GET", "k"},
+            {"SET", "k", "v"},
+            {"GETDEL", "k"},
+            {"APPEND", "k", "v"},
+            {"STRLEN", "k"},
+            {"DEL", "k"},
+            {"UNLINK", "k"},
+            {"EXISTS", "k"},
+            {"TOUCH", "k"},
+            {"TYPE", "k"},
+            {"RENAME", "k", "n"},
+            {"RENAMENX", "k", "n"},
+            {"INCR", "k"},
+            {"INCRBY", "k", "-9223372036854775808"},
+            {"DECR", "k"},
+            {"DECRBY", "k", "9223372036854775807"},
+            {"HGET", "k", "f"},
+            {"HSET", "k", "f", "v"},
+            {"HDEL", "k", "f"},
+            {"HEXISTS", "k", "f"},
+            {"HLEN", "k"},
+            {"HGETALL", "k"},
+            {"LPUSH", "k", "v"},
+            {"RPUSH", "k", "v"},
+            {"LPOP", "k"},
+            {"RPOP", "k"},
+            {"LLEN", "k"},
+            {"LRANGE", "k", "-9223372036854775808", "9223372036854775807"},
+            {"SADD", "k", "m"},
+            {"SREM", "k", "m"},
+            {"SMEMBERS", "k"},
+            {"SCARD", "k"},
+            {"ZADD", "k", "1.5", "m"},
+            {"ZREM", "k", "m"},
+            {"ZRANGE", "k", "-9223372036854775808", "9223372036854775807"},
+            {"ZSCORE", "k", "m"},
+            {"ZCARD", "k"},
+        };
+        std::size_t command_index = 0;
+        for (auto arguments : expected) {
+            const auto& command = payload.commands[command_index++];
+            RUVIA_CHECK_EQ(command.args.size(), arguments.size());
+            std::size_t argument_index = 0;
+            for (auto argument : arguments) {
+                const auto& actual = command.args[argument_index++];
+                RUVIA_CHECK(actual == argument);
+                RUVIA_CHECK(actual.get_allocator().resource() == &memory);
+            }
+        }
+        RUVIA_CHECK(payload.commands.back().args[1] == std::string_view(binary_key));
+        RUVIA_CHECK(payload.commands.back().args[2] == std::string_view(binary_value));
+        moved.expire();
+        RUVIA_CHECK(payload.commands.back().args[2] == std::string_view(binary_value));
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), baseline);
+}
+
 RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
     const auto expiring = ruvia::RedisSetExpiration::expiresAfter(std::chrono::milliseconds(1500));
     RUVIA_CHECK(expiring.duration() != nullptr);
@@ -411,7 +594,7 @@ RUVIA_TEST(redis_expire_rejects_non_positive_ttl_before_io) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto redis = registry.get(operationScope);
 
     bool zeroRejected = false;
@@ -437,7 +620,7 @@ RUVIA_TEST(redis_multi_key_commands_reject_empty_key_spans_before_io) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto redis = registry.get(operationScope);
     const std::span<const std::string_view> noKeys;
 
@@ -515,7 +698,7 @@ RUVIA_TEST(redis_operation_arguments_are_reclaimed_after_cancellation_and_failur
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationMemory, definitions, worker.handle());
     const auto registryLiveAllocations = operationMemory.liveAllocations();
-    ruvia::detail::ScopedOperationScope operationScope;
+    ruvia::operation_scope operationScope;
     auto redis = registry.get(operationScope);
     ruvia::StopSource cancellation;
     cancellation.requestStop();

@@ -32,6 +32,7 @@
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/detail/tls/TlsHost.h"
 
+#include "failing_memory_resource.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
@@ -89,6 +90,39 @@ bool throwsInvalid(Fn&& fn) {
     } catch (const std::invalid_argument&) {
         return true;
     }
+}
+
+template <typename Storage, typename Config, typename Verify>
+void verify_config_rebinding(ruvia::testing::TestContext& ruvia_ctx, const Config& config, Verify&& verify) {
+    CountingMemoryResource source_resource;
+    std::optional<Storage> source(std::in_place, config, &source_resource);
+    const auto source_allocations = source_resource.allocationCount();
+    bool succeeded = false;
+    std::size_t failures = 0;
+    for (std::size_t allowance = 0; allowance != 64 && !succeeded; ++allowance) {
+        failing_memory_resource target_resource;
+        std::optional<Storage> rebound;
+        target_resource.fail_after(allowance);
+        try {
+            rebound.emplace(*source, &target_resource);
+            succeeded = true;
+        } catch (const std::bad_alloc&) {
+            ++failures;
+        }
+        target_resource.allow_allocations();
+        RUVIA_CHECK_EQ(source_resource.allocationCount(), source_allocations);
+        if (succeeded) {
+            source.reset();
+            RUVIA_CHECK_EQ(source_resource.liveAllocations(), std::size_t{0});
+            verify(*rebound, &target_resource);
+        } else {
+            verify(*source, &source_resource);
+        }
+        rebound.reset();
+        RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(succeeded);
+    RUVIA_CHECK(failures >= 2);
 }
 
 }  // namespace
@@ -534,6 +568,90 @@ RUVIA_TEST(client_transport_storage_owns_normalized_strings) {
     RUVIA_CHECK_EQ(view.certificateChainFile, std::string_view(expectedCertificate));
     RUVIA_CHECK_EQ(view.privateKeyFile, std::string_view(expectedPrivateKey));
     RUVIA_CHECK_EQ(view.privateKeyPassword, std::string_view(expectedPassword));
+}
+
+RUVIA_TEST(http_client_config_rebinding_preserves_normalized_origin_and_owned_fields) {
+    for (const auto scheme : {ruvia::HttpScheme::kHttp, ruvia::HttpScheme::kHttps}) {
+        for (const bool explicit_port : {false, true}) {
+            ruvia::HttpClientConfig config;
+            config.host = std::string(40, 'h') + ".example";
+            config.scheme = scheme;
+            if (explicit_port) {
+                config.port = 8443;
+            }
+            config.caFile = std::string(80, 'c');
+            config.certificateChainFile = std::string(80, 'x');
+            config.privateKeyFile = std::string(80, 'k');
+            config.privateKeyPassword = std::string(80, 'p');
+            config.userAgent = std::string(80, 'a');
+            config.cookies.emplace_back(std::string(80, 'n'), std::string(80, 'v'));
+            config.qpack.maxTableCapacity = 8192;
+            config.qpack.maxBlockedStreams = 7;
+            verify_config_rebinding<ruvia::detail::HttpClientConfigStorage>(ruvia_ctx, config,
+                [&](const auto& storage, std::pmr::memory_resource* resource) {
+                    RUVIA_CHECK_EQ(std::string_view(storage.host), std::string_view(config.host));
+                    RUVIA_CHECK(storage.host.get_allocator().resource() == resource);
+                    RUVIA_CHECK(storage.scheme == scheme);
+                    RUVIA_CHECK_EQ(storage.port, explicit_port ? 8443 : (scheme == ruvia::HttpScheme::kHttps ? 443 : 80));
+                    RUVIA_CHECK_EQ(storage.http3Qpack.maxTableCapacity, config.qpack.maxTableCapacity);
+                    RUVIA_CHECK_EQ(storage.http3Qpack.maxBlockedStreams, config.qpack.maxBlockedStreams);
+                    RUVIA_CHECK_EQ(std::string_view(storage.userAgent), std::string_view(config.userAgent));
+                    RUVIA_CHECK(storage.userAgent.get_allocator().resource() == resource);
+                    RUVIA_CHECK_EQ(storage.cookies.size(), std::size_t{1});
+                    RUVIA_CHECK(storage.cookies.get_allocator().resource() == resource);
+                    RUVIA_CHECK(storage.cookies.front().first.get_allocator().resource() == resource);
+                    RUVIA_CHECK(storage.cookies.front().second.get_allocator().resource() == resource);
+                    RUVIA_CHECK_EQ(std::string_view(storage.cookies.front().first), std::string_view(config.cookies.front().first));
+                    RUVIA_CHECK_EQ(std::string_view(storage.cookies.front().second), std::string_view(config.cookies.front().second));
+                    const auto transport = storage.transport.view();
+                    RUVIA_CHECK_EQ(transport.caFile, std::string_view(config.caFile));
+                    RUVIA_CHECK_EQ(transport.certificateChainFile, std::string_view(config.certificateChainFile));
+                    RUVIA_CHECK_EQ(transport.privateKeyFile, std::string_view(config.privateKeyFile));
+                    RUVIA_CHECK_EQ(transport.privateKeyPassword, std::string_view(config.privateKeyPassword));
+                });
+        }
+    }
+}
+
+RUVIA_TEST(redis_config_rebinding_preserves_tls_credentials_and_limits) {
+    ruvia::RedisConfig config;
+    config.host = std::string(40, 'h') + ".example";
+    config.username = std::string(80, 'u');
+    config.password = std::string(80, 'p');
+    config.tls.ca_file = std::string(80, 'c');
+    config.tls.certificate_file = std::string(80, 'x');
+    config.tls.private_key_file = std::string(80, 'k');
+    config.tls.server_name = config.host;
+    config.database = 2;
+    config.poolSizePerWorker = 7;
+    config.blockingPoolSizePerWorker = 3;
+    config.commandTimeout = std::nullopt;
+    config.maxReplyBytes = std::nullopt;
+    config.maxArrayDepth = 17;
+    verify_config_rebinding<ruvia::detail::RedisConfigStorage>(ruvia_ctx, config,
+        [&](const auto& storage, std::pmr::memory_resource* resource) {
+            RUVIA_CHECK_EQ(std::string_view(storage.host), std::string_view(config.host));
+            RUVIA_CHECK(storage.host.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(std::string_view(storage.username), std::string_view(config.username));
+            RUVIA_CHECK(storage.username.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(std::string_view(storage.password), std::string_view(config.password));
+            RUVIA_CHECK(storage.password.get_allocator().resource() == resource);
+            RUVIA_CHECK(storage.tls.mode == config.tls.mode);
+            RUVIA_CHECK_EQ(std::string_view(storage.tls.ca_file), std::string_view(config.tls.ca_file));
+            RUVIA_CHECK(storage.tls.ca_file.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(std::string_view(storage.tls.certificate_file), std::string_view(config.tls.certificate_file));
+            RUVIA_CHECK(storage.tls.certificate_file.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(std::string_view(storage.tls.private_key_file), std::string_view(config.tls.private_key_file));
+            RUVIA_CHECK(storage.tls.private_key_file.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(std::string_view(storage.tls.server_name), std::string_view(config.tls.server_name));
+            RUVIA_CHECK(storage.tls.server_name.get_allocator().resource() == resource);
+            RUVIA_CHECK_EQ(storage.database, config.database);
+            RUVIA_CHECK_EQ(storage.poolSizePerWorker, config.poolSizePerWorker);
+            RUVIA_CHECK_EQ(storage.blockingPoolSizePerWorker, config.blockingPoolSizePerWorker);
+            RUVIA_CHECK(!storage.commandTimeout);
+            RUVIA_CHECK(!storage.maxReplyBytes);
+            RUVIA_CHECK_EQ(storage.maxArrayDepth, config.maxArrayDepth);
+        });
 }
 
 RUVIA_TEST(http_client_config_is_validated_before_pmr_normalization) {

@@ -250,9 +250,9 @@ void Http3ClientConnection::onResponseEvent(void* context, const Http3Connection
             if (*event.requestContentSignal == HttpClientRequestContentSignal::kContinue) {
                 upload->contentReleased = true;
                 request.continueDeadline.reset();
-                upload->notifyData();
-            } else if (!upload->ended) {
-                upload->stop();
+                upload->output.notifyData();
+            } else if (!upload->output.ended) {
+                upload->output.stop();
                 request.continueDeadline.reset();
             }
         }
@@ -1260,9 +1260,9 @@ bool Http3ClientConnection::sweep(bool requestsMayStart, bool early_data_only) {
         }
         if (request.continueDeadline && now >= *request.continueDeadline) {
             request.continueDeadline.reset();
-            if (request.responseState_ != nullptr && request.responseState_->upload && !request.responseState_->upload->stopped) {
+            if (request.responseState_ != nullptr && request.responseState_->upload && !request.responseState_->upload->output.stopped) {
                 request.responseState_->upload->contentReleased = true;
-                request.responseState_->upload->notifyData();
+                request.responseState_->upload->output.notifyData();
                 progress = true;
             }
         }
@@ -1327,7 +1327,7 @@ bool Http3ClientConnection::sendDatagram(RequestId id, std::span<const std::byte
     requireOwnerThread();
     const auto request = find(id);
     if (request == requests_.end() || request->responseState_ == nullptr || !request->responseState_->tunnel ||
-        !request->responseState_->tunnel->accepted || request->responseState_->tunnel->ended || request->responseState_->tunnel->stopped || !session_) {
+        !request->responseState_->tunnel->accepted || request->responseState_->tunnel->output.ended || request->responseState_->tunnel->output.stopped || !session_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
     const auto queued = session_->transport().write_datagram(wire);

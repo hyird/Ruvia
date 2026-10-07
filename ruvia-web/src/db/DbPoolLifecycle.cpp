@@ -1,4 +1,4 @@
-#include <mysql/mysql.h>
+#include <mysql.h>
 
 #include <exception>
 #include <memory_resource>
@@ -26,7 +26,7 @@ detail::MariaDbPool::ConnectionSlot::ConnectionSlot(
       waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}),
       socketQuarantine(detail::makePmrObject<detail::DbSlotSocketQuarantine>(
           detail::processResource(), ioContext)),
-      deadlineTimer(detail::makePmrObject<detail::WorkerTimerRegistration>(
+      deadlineTimer(detail::makePmrObject<::ruvia::WorkerTimerRegistration>(
           detail::pmrResourceOrDefault(resource))) {}
 
 detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() {
@@ -96,7 +96,7 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
             handle.resume();
         }
     }
-    clearSlotDeadline(slot);
+    detail::clear_db_slot_deadline(slot);
     if (slot.waitSocket != nullptr) {
         // release() leaves the wrapper attached on failure. Keep both objects
         // in the slot so a later close attempt can retry without either owner
@@ -115,52 +115,25 @@ void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
     slot.closeRequested = false;
 }
 
-void detail::MariaDbPool::setSlotDeadline(
-    ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) {
-    clearSlotDeadline(slot);
-    if (timeout.count() <= 0) {
-        return;
+void detail::MariaDbPool::ConnectionSlot::expire_deadline(
+    ConnectionSlot& slot, DeadlineKind kind) noexcept {
+    switch (kind) {
+        case DeadlineKind::kResolve:
+            slot.resolver.cancel();
+            break;
+        case DeadlineKind::kSocket:
+            if (slot.waitSocket != nullptr) {
+                slot.waitSocket->cancel();
+            }
+            break;
+        case DeadlineKind::kSleep: {
+            auto handle = std::exchange(slot.deadlineContinuation, {});
+            if (handle) {
+                handle.resume();
+            }
+            break;
+        }
     }
-    const auto deadline = detail::workerTimerDeadlineAfter(timeout);
-    slot.deadline.arm(deadline, kind);
-    try {
-        WorkerHandleAccess::scheduleTimer(
-            worker_, *slot.deadlineTimer, deadline, [&slot](WorkerTimerOutcome outcome) noexcept {
-                if (outcome != WorkerTimerOutcome::kExpired) {
-                    return;
-                }
-                const auto expired = slot.deadline.expire(std::chrono::steady_clock::now());
-                if (!expired.has_value()) {
-                    return;
-                }
-                switch (*expired) {
-                    case ConnectionSlot::DeadlineKind::kResolve:
-                        slot.resolver.cancel();
-                        break;
-                    case ConnectionSlot::DeadlineKind::kSocket:
-                        if (slot.waitSocket != nullptr) {
-                            slot.waitSocket->cancel();
-                        }
-                        break;
-                    case ConnectionSlot::DeadlineKind::kSleep: {
-                        auto handle = std::exchange(slot.deadlineContinuation, {});
-                        if (handle) {
-                            handle.resume();
-                        }
-                        break;
-                    }
-                }
-            });
-    } catch (...) {
-        slot.deadline.reset();
-        throw;
-    }
-}
-
-void detail::MariaDbPool::clearSlotDeadline(ConnectionSlot& slot) noexcept {
-    slot.deadlineTimer->cancel();
-    (void)slot.deadline.clear();
-    slot.deadlineContinuation = {};
 }
 
 }  // namespace ruvia

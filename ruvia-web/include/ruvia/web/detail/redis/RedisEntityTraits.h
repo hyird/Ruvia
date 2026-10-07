@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -130,9 +131,17 @@ consteval bool redisEntityPrimaryKeyIsValid() {
         std::make_index_sequence<std::tuple_size_v<typename Entity::Columns>>{});
 }
 
+template <typename entity>
+concept redis_entity_schema = requires(const entity& value) {
+    typename entity::RedisEntityType;
+    typename entity::Columns;
+    requires std::same_as<entity, typename entity::RedisEntityType>;
+    { entity::prefix() } -> std::convertible_to<std::string_view>;
+    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
+};
 template <typename Entity>
 consteval void validateRedisEntity() {
-    static_assert(requires { typename Entity::RedisEntityType; }, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
+    static_assert(redis_entity_schema<Entity>, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
     static_assert(redisEntityColumnsAreScalar<Entity>(),
         "Redis repositories support only scalar Redis columns");
     static_assert(redisEntityPrimaryKeyCount<Entity>() == 1,

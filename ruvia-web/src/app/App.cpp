@@ -107,8 +107,8 @@ void App::stop() {
             return;
         }
         if (state.runtime != nullptr) {
-            if (state.runtime->network) {
-                state.runtime->network->stop();
+            if (state.runtime->ingress) {
+                state.runtime->ingress->stop();
             }
             for (auto& worker : state.runtime->workers) {
                 try {

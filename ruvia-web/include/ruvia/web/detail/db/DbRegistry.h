@@ -77,7 +77,7 @@ struct DbSlotSocketQuarantine;
 
 #ifdef RUVIA_ENABLE_MARIADB
 
-class MariaDbPool final : public DbPoolLifecycleBase<MariaDbPool> {
+class MariaDbPool final {
 public:
     MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
         std::pmr::memory_resource* resource = nullptr);
@@ -87,6 +87,26 @@ public:
 
     MariaDbPool(const MariaDbPool&) = delete;
     MariaDbPool& operator=(const MariaDbPool&) = delete;
+
+    [[nodiscard]] Task<void> connect() {
+        return lifecycle_.connect();
+    }
+    void closeNow() noexcept {
+        lifecycle_.closeNow();
+    }
+    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken token) {
+        return lifecycle_.acquireSlot(timeout, std::move(token));
+    }
+    void releaseSlot(std::size_t slot) noexcept {
+        lifecycle_.releaseSlot(slot);
+    }
+    void cancelOperationById(std::uint64_t id) noexcept {
+        lifecycle_.cancelOperationById(id);
+    }
+    template <typename Slot>
+    void throwIfCancelled(const Slot& slot) const {
+        lifecycle_.throwIfCancelled(slot);
+    }
 
     template <typename Pool>
     friend Task<void> finishDbTransaction(
@@ -116,7 +136,7 @@ public:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
-    friend class DbPoolLifecycleBase<MariaDbPool>;
+    friend class db_pool_lifecycle<MariaDbPool>;
     friend class WorkerCancellationMailbox<MariaDbPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
@@ -154,13 +174,12 @@ public:
             kSocket,
             kSleep };
         OperationDeadline<DeadlineKind> deadline;
+
+        static void expire_deadline(ConnectionSlot& slot, DeadlineKind kind) noexcept;
     };
 
     // Backend dispatch entry points. The class itself remains detail-only.
     void closeSlot(ConnectionSlot& slot) noexcept;
-    void setSlotDeadline(
-        ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
-    void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
     Task<int> waitForMysql(ConnectionSlot& slot, int status, const ruvia::OperationTimeout& deadline);
@@ -210,13 +229,14 @@ private:
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<DbOperationCancellationMailbox<MariaDbPool>> cancellationMailbox_;
+    db_pool_lifecycle<MariaDbPool> lifecycle_{*this};
 };
 
 #endif  // RUVIA_ENABLE_MARIADB
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 
-class PostgreSqlPool final : public DbPoolLifecycleBase<PostgreSqlPool> {
+class PostgreSqlPool final {
 public:
     PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
         std::pmr::memory_resource* resource = nullptr);
@@ -226,6 +246,26 @@ public:
 
     PostgreSqlPool(const PostgreSqlPool&) = delete;
     PostgreSqlPool& operator=(const PostgreSqlPool&) = delete;
+
+    [[nodiscard]] Task<void> connect() {
+        return lifecycle_.connect();
+    }
+    void closeNow() noexcept {
+        lifecycle_.closeNow();
+    }
+    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken token) {
+        return lifecycle_.acquireSlot(timeout, std::move(token));
+    }
+    void releaseSlot(std::size_t slot) noexcept {
+        lifecycle_.releaseSlot(slot);
+    }
+    void cancelOperationById(std::uint64_t id) noexcept {
+        lifecycle_.cancelOperationById(id);
+    }
+    template <typename Slot>
+    void throwIfCancelled(const Slot& slot) const {
+        lifecycle_.throwIfCancelled(slot);
+    }
 
 private:
     template <typename Pool>
@@ -256,7 +296,7 @@ private:
     friend void releaseDbSlot(Pool&, std::size_t) noexcept;
     template <typename Pool>
     friend class DbSlotCancellationGuard;
-    friend class DbPoolLifecycleBase<PostgreSqlPool>;
+    friend class db_pool_lifecycle<PostgreSqlPool>;
     friend class WorkerCancellationMailbox<PostgreSqlPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
@@ -287,14 +327,13 @@ private:
         enum class DeadlineKind : std::uint8_t { kResolve,
             kSocket };
         OperationDeadline<DeadlineKind> deadline;
+
+        static void expire_deadline(ConnectionSlot& slot, DeadlineKind kind) noexcept;
     };
 
 public:
     // Backend dispatch entry points. The class itself remains detail-only.
     void closeSlot(ConnectionSlot& slot) noexcept;
-    void setSlotDeadline(
-        ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind);
-    void clearSlotDeadline(ConnectionSlot& slot) noexcept;
     Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
     Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
     Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const ruvia::OperationTimeout& deadline);
@@ -344,6 +383,7 @@ private:
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
     std::shared_ptr<DbOperationCancellationMailbox<PostgreSqlPool>> cancellationMailbox_;
+    db_pool_lifecycle<PostgreSqlPool> lifecycle_{*this};
 };
 
 #endif  // RUVIA_ENABLE_POSTGRESQL
@@ -365,8 +405,8 @@ public:
     Task<void> connect();
     void closeNow() noexcept;
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] DbHandle get(ScopedOperationScope& operationScope) const;
-    [[nodiscard]] DbHandle get(std::string_view alias, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] DbHandle get(::ruvia::operation_scope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::string_view alias, ::ruvia::operation_scope& operationScope) const;
 
 #ifdef RUVIA_ENABLE_MARIADB
     using MariaDbPoolOwner = std::unique_ptr<MariaDbPool, PmrObjectDeleter<MariaDbPool>>;
@@ -389,7 +429,7 @@ private:
     void attach_cache(std::size_t index, const WorkerHandle& worker, const RedisHandle& redis,
         const DbCacheConfigStorage& policy, const DbConfigStorage& config, std::string_view alias);
     std::pmr::memory_resource* resource_;
-    ScopedOperationScope cache_scope_;
+    ::ruvia::operation_scope cache_scope_;
     struct Entry final {
         PoolOwner pool;
         std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;

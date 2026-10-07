@@ -4,6 +4,7 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "ruvia/web/detail/redis/RedisOwnedCommand.h"
 #include "ruvia/web/redis/RedisHandle.h"
 
 #ifndef RUVIA_ENABLE_REDIS
@@ -117,7 +118,7 @@ public:
     Task<RedisValue> executeOwned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, OperationOptions options = {});
     Task<std::pmr::vector<RedisValue>> executePipeline(
-        std::span<const RedisPipeline::Command> commands, OperationOptions options,
+        std::span<const redis_owned_command> commands, OperationOptions options,
         std::pmr::memory_resource* resource);
     Task<std::pmr::vector<RedisValue>> executePipeline(
         std::span<const RedisCommandArgsView> commands, OperationOptions options,
@@ -125,7 +126,6 @@ public:
 
 private:
     friend class ::ruvia::RedisHandle;
-    friend class ::ruvia::RedisPipeline;
     friend class WorkerCancellationMailbox<RedisPool>;
 
     struct Connection final {
@@ -232,8 +232,8 @@ public:
     void closeNow() noexcept;
 
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] RedisHandle get(ScopedOperationScope& operationScope) const;
-    [[nodiscard]] RedisHandle get(std::string_view alias, ScopedOperationScope& operationScope) const;
+    [[nodiscard]] RedisHandle get(::ruvia::operation_scope& operationScope) const;
+    [[nodiscard]] RedisHandle get(std::string_view alias, ::ruvia::operation_scope& operationScope) const;
 
 private:
     using Entry = std::unique_ptr<RedisClientRuntime, PmrObjectDeleter<RedisClientRuntime>>;

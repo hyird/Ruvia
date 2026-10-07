@@ -106,15 +106,14 @@ void WebSocketClientState::arm(WorkerTimerRegistration& timer,
         return;
     }
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
-    WorkerHandleAccess::scheduleTimer(worker_, timer, workerTimerDeadlineAfter(*timeout),
-        [weak = std::move(weak), reason](WorkerTimerOutcome outcome) noexcept {
-            if (outcome != WorkerTimerOutcome::kExpired) {
-                return;
-            }
-            if (const auto state = weak.lock()) {
-                state->closeOnWorker(reason);
-            }
-        });
+    (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*timeout), [weak = std::move(weak), reason](WorkerTimerOutcome outcome) noexcept {
+        if (outcome != WorkerTimerOutcome::kExpired) {
+            return;
+        }
+        if (const auto state = weak.lock()) {
+            state->closeOnWorker(reason);
+        }
+    });
 }
 
 void WebSocketClientState::disarm(WorkerTimerRegistration& timer) noexcept {
@@ -179,51 +178,54 @@ std::string_view WebSocketClientState::subprotocol() {
 namespace ruvia {
 
 WebSocketClientHandle::WebSocketClientHandle(std::shared_ptr<detail::WebSocketClientState> state,
-    detail::ScopedOperationScope& scope, OperationOptions options) noexcept
-    : detail::ScopedCapabilityNode(scope, &WebSocketClientHandle::expireCapability),
-      state_(std::move(state)),
-      options_(std::move(options)) {}
+    ::ruvia::operation_scope& scope, OperationOptions options) noexcept
+    : state_(std::move(state)),
+      options_(std::move(options)),
+      registration_(scope, this, &WebSocketClientHandle::expire_capability) {}
 
-WebSocketClientHandle::WebSocketClientHandle(const WebSocketClientHandle& other) noexcept = default;
+WebSocketClientHandle::WebSocketClientHandle(const WebSocketClientHandle& other) noexcept
+    : state_(other.state_),
+      options_(other.options_),
+      registration_(other.registration_, this) {}
 
-void WebSocketClientHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    static_cast<WebSocketClientHandle&>(capability).state_.reset();
+void WebSocketClientHandle::expire_capability(void* target) noexcept {
+    static_cast<WebSocketClientHandle*>(target)->state_.reset();
 }
 
 WebSocketClientHandle WebSocketClientHandle::withOptions(OperationOptions options) const {
     detail::validateOperationOptions(options);
-    requireActive();
+    registration_.require_active();
     return WebSocketClientHandle(
-        state_, operationScope(), detail::mergeOperationOptions(options_, std::move(options)));
+        state_, registration_.scope(), detail::mergeOperationOptions(options_, std::move(options)));
 }
 
 ScopedOperation<std::optional<WebSocketMessage>> WebSocketClientHandle::read() const {
-    requireActive();
+    registration_.require_active();
     return state_->read(options_);
 }
 
 ScopedOperation<void> WebSocketClientHandle::text(std::string_view payload, WebSocketSendOptions options) const {
-    requireActive();
+    registration_.require_active();
     return state_->write(WebSocketOpcode::kText, payload, options_, options);
 }
 
 ScopedOperation<void> WebSocketClientHandle::binary(std::string_view payload, WebSocketSendOptions options) const {
-    requireActive();
+    registration_.require_active();
     return state_->write(WebSocketOpcode::kBinary, payload, options_, options);
 }
 
 ScopedOperation<void> WebSocketClientHandle::ping(std::string_view payload) const {
-    requireActive();
+    registration_.require_active();
     return state_->write(WebSocketOpcode::kPing, payload, options_);
 }
 
 ScopedOperation<void> WebSocketClientHandle::pong(std::string_view payload) const {
-    requireActive();
+    registration_.require_active();
     return state_->write(WebSocketOpcode::kPong, payload, options_);
 }
 
 ScopedOperation<void> WebSocketClientHandle::close(WebSocketCloseOptions options) const {
-    requireActive();
+    registration_.require_active();
     return state_->close(options, options_);
 }
 

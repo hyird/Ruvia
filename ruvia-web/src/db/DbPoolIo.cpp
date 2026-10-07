@@ -1,4 +1,4 @@
-#include <mysql/mysql.h>
+#include <mysql.h>
 
 #include <array>
 #include <charconv>
@@ -236,7 +236,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
             throw DbError(DbError::Code::kIoError, DbDriver::kMariaDb,
                 "MariaDB requested an unsupported empty wait");
         }
-        setSlotDeadline(slot, *selectedDeadline.timeout, ConnectionSlot::DeadlineKind::kSleep);
+        detail::arm_db_slot_deadline(worker_, slot, *selectedDeadline.timeout, ConnectionSlot::DeadlineKind::kSleep);
         struct DeadlineAwaiter final {
             ConnectionSlot& slot;
 
@@ -253,7 +253,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
         };
         DbSlotActiveWaitGuard activeWait(slot);
         co_await DeadlineAwaiter{slot};
-        clearSlotDeadline(slot);
+        detail::clear_db_slot_deadline(slot);
         throwIfCancelled(slot);
         if (slot.closeRequested) {
             throw DbError(
@@ -282,7 +282,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
         throw mysqlSocketError("binding MariaDB wait socket", error);
     }
 
-    setSlotDeadline(slot, selectedDeadline.timeout.value_or(std::chrono::milliseconds(0)),
+    detail::arm_db_slot_deadline(worker_, slot, selectedDeadline.timeout.value_or(std::chrono::milliseconds(0)),
         ConnectionSlot::DeadlineKind::kSocket);
     struct SocketWaitAwaiter final {
         ConnectionSlot& slot;
@@ -404,7 +404,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
     const bool operationExpired =
         deadline.expired() ||
         (selectedDeadline.source == detail::MysqlWaitDeadlineSource::kOperation && expired);
-    clearSlotDeadline(slot);
+    detail::clear_db_slot_deadline(slot);
     throwIfCancelled(slot);
     if (slot.closeRequested) {
         throw DbError(DbError::Code::kClosing, DbDriver::kMariaDb, "database client is closing");

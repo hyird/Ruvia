@@ -10,7 +10,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia::detail {
@@ -89,6 +89,7 @@ private:
     void abandonQueued() noexcept;
     void publish(std::size_t index);
     void rollbackReserved(std::size_t index) noexcept;
+    void release_abandoned_node(std::size_t index) noexcept;
     void drain();
     void armTimer();
     void fireTimers();

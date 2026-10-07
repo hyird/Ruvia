@@ -323,7 +323,7 @@ WebSocketServerHandshake makeWebSocketServerHandshake(
     const HttpRequest& request, WebSocketServerHandshakeOptions options) {
     detail::WebSocketAcceptKey accept;
     detail::encodeWebSocketAccept(
-        accept, detail::requestKnownHeader(request, detail::RequestKnownHeader::kSecWebSocketKey));
+        accept, detail::requestKnownHeader(request, detail::RequestHeaderKind::kSecWebSocketKey));
     std::pmr::string subprotocol(
         detail::chooseWebSocketSubprotocol(request, options.supportedSubprotocols),
         detail::httpPmrResourceOrDefault(options.resource));

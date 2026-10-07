@@ -262,6 +262,46 @@ ruvia::Http2Connection preparedClientMethod(std::pmr::memory_resource* resource,
 
 }  // namespace
 
+RUVIA_TEST(http2_public_request_submission_exposes_one_exclusive_success_or_failure_contract) {
+    auto client = ruvia::Http2Connection::client();
+    const auto invalid = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+        .method = "", .authority = "example.test"});
+    RUVIA_CHECK(invalid.submitted() == nullptr);
+    RUVIA_CHECK(invalid.failure() != nullptr);
+    if (const auto* failure = invalid.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+    const auto extended = client.submitRequestHead(ruvia::Http2ExtendedConnectRequestHeadView{
+        .protocol = "websocket", .authority = "example.test"});
+    RUVIA_CHECK(extended.submitted() == nullptr);
+    RUVIA_CHECK(extended.failure() != nullptr);
+    if (const auto* failure = extended.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::Http2RequestHeadSubmitError::kPeerCapabilityUnavailable);
+    }
+    const auto regular = client.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+        .authority = "example.test"});
+    RUVIA_CHECK(regular.failure() == nullptr);
+    RUVIA_CHECK(regular.submitted() != nullptr);
+    if (const auto* submitted = regular.submitted()) {
+        RUVIA_CHECK_EQ(submitted->streamId(), std::uint32_t{1});
+    }
+    const auto connect = client.submitRequestHead(ruvia::Http2ConnectRequestHeadView{
+        .authority = "example.test:443"});
+    RUVIA_CHECK(connect.failure() == nullptr);
+    RUVIA_CHECK(connect.submitted() != nullptr);
+    if (const auto* submitted = connect.submitted()) {
+        RUVIA_CHECK_EQ(submitted->streamId(), std::uint32_t{3});
+    }
+    auto server = ruvia::Http2Connection::server();
+    const auto wrong_role = server.submitRequestHead(ruvia::Http2RegularRequestHeadView{
+        .authority = "example.test"});
+    RUVIA_CHECK(wrong_role.submitted() == nullptr);
+    RUVIA_CHECK(wrong_role.failure() != nullptr);
+    if (const auto* failure = wrong_role.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::Http2RequestHeadSubmitError::kInvalidState);
+    }
+}
+
 RUVIA_TEST(http2_public_default_resource_is_resolved_once) {
     for (bool clientRole : {false, true}) {
         AccountingAllocationResource original;
