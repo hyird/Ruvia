@@ -184,9 +184,9 @@ std::error_code exceptionCode() noexcept {
 
 }  // namespace
 
-class Http3UdpSocket::Impl final {
+class http3_udp_socket::impl final {
 public:
-    Impl(asio::io_context& networkIo, Udp::endpoint bindEndpoint)
+    impl(asio::io_context& networkIo, Udp::endpoint bindEndpoint)
         : io_(networkIo),
           bindEndpoint_(std::move(bindEndpoint)),
           socket_(io_),
@@ -197,10 +197,10 @@ public:
         ipv6Socket_ = bindEndpoint_.address().is_v6();
     }
 
-    ~Impl() {
+    ~impl() {
         requireOwnerThreadNoexcept();
         if (!stopping_) {
-            requestStop();
+            request_stop();
         }
         if (!done()) {
             std::terminate();
@@ -264,18 +264,20 @@ public:
         }
     }
 
-    std::uint16_t boundPort() const noexcept {
+    std::uint16_t bound_port() const noexcept {
         return prepared_ ? boundEndpoint_.port() : 0;
     }
 
-    bool asyncReceive(void* context, ReceiveCompletion completion) noexcept {
+    bool async_receive(std::span<std::byte> bytes, void* context, receive_completion completion) noexcept {
         requireOwnerThreadNoexcept();
-        if (!prepared_ || stopping_ || receive_.active || completion == nullptr) {
+        if (!prepared_ || stopping_ || receive_.active || completion == nullptr ||
+            bytes.empty() || bytes.size() > http3_udp_socket::datagram_buffer_size) {
             return false;
         }
         receive_.active = true;
         receive_.context = context;
         receive_.completion = completion;
+        receive_.bytes = bytes;
 #ifdef _WIN32
         const bool accepted = startWindowsReceive();
 #else
@@ -285,12 +287,13 @@ public:
             receive_.active = false;
             receive_.context = nullptr;
             receive_.completion = nullptr;
+            receive_.bytes = {};
             return false;
         }
         return true;
     }
 
-    bool asyncSend(SendView view, void* context, SendCompletion completion) noexcept {
+    bool async_send(send_view view, void* context, send_completion completion) noexcept {
         requireOwnerThreadNoexcept();
         const std::size_t maxPayload = ipv6Socket_ ? 65527U : 65507U;
         if (!prepared_ || stopping_ || send_.active || completion == nullptr ||
@@ -317,7 +320,7 @@ public:
         return true;
     }
 
-    void requestStop() noexcept {
+    void request_stop() noexcept {
         requireOwnerThreadNoexcept();
         if (stopping_) {
             return;
@@ -352,13 +355,13 @@ private:
 #endif
     }
     struct ReceiveSlot final {
-        std::array<std::byte, Http3UdpSocket::kDatagramBufferSize> bytes{};
+        std::span<std::byte> bytes;
         alignas(std::max_align_t) std::array<std::byte, 256> control{};
         sockaddr_storage peerAddress{};
         NativeSocketLength peerAddressLength{};
         bool active{};
         void* context{};
-        ReceiveCompletion completion{};
+        receive_completion completion{};
     };
 
     struct SendSlot final {
@@ -367,8 +370,8 @@ private:
         NativeSocketLength peerAddressLength{};
         bool active{};
         void* context{};
-        SendCompletion completion{};
-        SendView view{};
+        send_completion completion{};
+        send_view view{};
     };
 
 #ifndef _WIN32
@@ -435,7 +438,7 @@ private:
     struct PosixIoHandler final {
         using allocator_type = PosixHandlerAllocator<PosixIoHandler>;
 
-        Impl* owner{};
+        impl* owner{};
         PosixHandlerStorage* storage{};
         PosixDirection direction{};
 
@@ -504,20 +507,20 @@ private:
     }
 
     void completeReceive(std::error_code error, std::size_t size = 0,
-        Udp::endpoint peer = {}, Udp::endpoint localDestination = {}) noexcept {
+        Udp::endpoint peer = {}, Udp::endpoint local_destination = {}) noexcept {
         if (!receive_.active) {
             std::terminate();
         }
         auto completion = receive_.completion;
         void* const context = receive_.context;
+        const auto bytes = std::exchange(receive_.bytes, {});
         receive_.active = false;
         receive_.completion = nullptr;
         receive_.context = nullptr;
         ++callbacksRunning_;
         completion(context, error,
-            ReceiveView{std::span<const std::byte>(receive_.bytes.data(),
-                            error ? 0 : size),
-                std::move(peer), std::move(localDestination)});
+            receive_view{std::span<const std::byte>(bytes.data(), error ? 0 : size),
+                std::move(peer), std::move(local_destination)});
         --callbacksRunning_;
     }
 
@@ -819,7 +822,7 @@ private:
     }
 #else
     struct HandlerStorage final {
-        Impl* owner{};
+        impl* owner{};
         alignas(std::max_align_t) std::array<std::byte, 1024> bytes{};
         bool allocated{};
     };
@@ -887,7 +890,7 @@ private:
     struct WindowsCompletionHandler final {
         using allocator_type = FixedHandlerAllocator<WindowsCompletionHandler>;
 
-        Impl* owner{};
+        impl* owner{};
         HandlerStorage* storage{};
         Direction direction{};
 
@@ -961,8 +964,7 @@ private:
             receive_.peerAddress = {};
             receive_.control = {};
             receiveBufferDescriptor_.buf = reinterpret_cast<char*>(receive_.bytes.data());
-            receiveBufferDescriptor_.len =
-                static_cast<ULONG>(Http3UdpSocket::kDatagramBufferSize);
+            receiveBufferDescriptor_.len = static_cast<ULONG>(receive_.bytes.size());
             receiveMessage_ = {};
             receiveMessage_.name = reinterpret_cast<sockaddr*>(&receive_.peerAddress);
             receiveMessage_.namelen = static_cast<INT>(sizeof(receive_.peerAddress));
@@ -1226,35 +1228,35 @@ private:
 #endif
 };
 
-Http3UdpSocket::Http3UdpSocket(asio::io_context& networkIo,
+http3_udp_socket::http3_udp_socket(asio::io_context& networkIo,
     asio::ip::udp::endpoint bindEndpoint)
-    : impl_(makePmrObject<Impl>(processResource(), networkIo, std::move(bindEndpoint))) {}
+    : impl_(makePmrObject<impl>(processResource(), networkIo, std::move(bindEndpoint))) {}
 
-Http3UdpSocket::~Http3UdpSocket() = default;
+http3_udp_socket::~http3_udp_socket() = default;
 
-void Http3UdpSocket::prepare() {
+void http3_udp_socket::prepare() {
     impl_->prepare();
 }
 
-std::uint16_t Http3UdpSocket::boundPort() const noexcept {
-    return impl_->boundPort();
+std::uint16_t http3_udp_socket::bound_port() const noexcept {
+    return impl_->bound_port();
 }
 
-bool Http3UdpSocket::asyncReceive(void* context,
-    ReceiveCompletion completion) noexcept {
-    return impl_->asyncReceive(context, completion);
+bool http3_udp_socket::async_receive(std::span<std::byte> bytes, void* context,
+    receive_completion completion) noexcept {
+    return impl_->async_receive(bytes, context, completion);
 }
 
-bool Http3UdpSocket::asyncSend(SendView view, void* context,
-    SendCompletion completion) noexcept {
-    return impl_->asyncSend(std::move(view), context, completion);
+bool http3_udp_socket::async_send(send_view view, void* context,
+    send_completion completion) noexcept {
+    return impl_->async_send(std::move(view), context, completion);
 }
 
-void Http3UdpSocket::requestStop() noexcept {
-    impl_->requestStop();
+void http3_udp_socket::request_stop() noexcept {
+    impl_->request_stop();
 }
 
-bool Http3UdpSocket::done() const noexcept {
+bool http3_udp_socket::done() const noexcept {
     return impl_->done();
 }
 

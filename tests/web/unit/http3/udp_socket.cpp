@@ -18,7 +18,7 @@
 #include "test_harness.h"
 
 namespace {
-using Socket = ruvia::detail::Http3UdpSocket;
+using Socket = ruvia::detail::http3_udp_socket;
 using Udp = asio::ip::udp;
 using namespace std::chrono_literals;
 
@@ -37,8 +37,9 @@ struct Exchange final {
     std::size_t replySize{};
     std::array<std::byte, 64> requestBytes{};
     std::size_t requestSize{};
+    bool receivedIntoOwnedStorage{};
     Udp::endpoint receivedPeer;
-    Udp::endpoint localDestination;
+    Udp::endpoint local_destination;
     std::array<std::byte, 64> replyBuffer{};
     Udp::endpoint replyPeer;
     int receiveCalls{};
@@ -63,7 +64,7 @@ void onSend(void* object, std::error_code error, std::size_t size) noexcept {
     exchange.sentSize = size;
 }
 
-void onReceive(void* object, std::error_code error, Socket::ReceiveView view) noexcept {
+void onReceive(void* object, std::error_code error, Socket::receive_view view) noexcept {
     auto& exchange = *static_cast<Exchange*>(object);
     ++exchange.receiveCalls;
     exchange.receiveError = error;
@@ -71,11 +72,11 @@ void onReceive(void* object, std::error_code error, Socket::ReceiveView view) no
         return;
     }
     exchange.receivedPeer = std::move(view.peer);
-    exchange.localDestination = std::move(view.localDestination);
+    exchange.local_destination = std::move(view.local_destination);
     exchange.requestSize = std::min(view.bytes.size(), exchange.requestBytes.size());
-    std::copy_n(view.bytes.begin(), exchange.requestSize, exchange.requestBytes.begin());
-    exchange.sendAccepted = exchange.server->asyncSend(
-        Socket::SendView{exchange.replySource, exchange.receivedPeer,
+    exchange.receivedIntoOwnedStorage = view.bytes.data() == exchange.requestBytes.data();
+    exchange.sendAccepted = exchange.server->async_send(
+        Socket::send_view{exchange.replySource, exchange.receivedPeer,
             std::span<const std::byte>(exchange.replyBytes.data(), exchange.replySize)},
         &exchange, onSend);
 }
@@ -97,7 +98,7 @@ Exchange runExchange(asio::io_context& io, Socket& server, Udp::socket& client,
     bool clientReceiveAccepted = false;
     bool clientSendAccepted = false;
     const auto cancelAndDrain = [&]() noexcept {
-        server.requestStop();
+        server.request_stop();
         asio::error_code ignored;
         client.cancel(ignored);
         if (io.stopped()) {
@@ -127,7 +128,7 @@ Exchange runExchange(asio::io_context& io, Socket& server, Udp::socket& client,
                 exchange.replyReceivedSize = size;
             });
         clientReceiveAccepted = true;
-        receiveAccepted = server.asyncReceive(&exchange, onReceive);
+        receiveAccepted = server.async_receive(exchange.requestBytes, &exchange, onReceive);
         client.async_send_to(asio::buffer(request), destination,
             [&exchange, expectedSize = request.size()](const asio::error_code& error,
                 std::size_t size) noexcept {
@@ -179,6 +180,7 @@ struct StopReceive final {
     bool rearmAccepted{};
     bool postStopRearmAccepted{};
     bool doneInsideCompletion{};
+    std::array<std::byte, 64> bytes{};
 };
 
 struct SendCompletionState final {
@@ -201,17 +203,17 @@ void onCancellationSend(void* object, std::error_code error, std::size_t size) n
 }
 
 void onStopReceive(void* object, std::error_code error,
-    Socket::ReceiveView view) noexcept {
+    Socket::receive_view view) noexcept {
     auto& state = *static_cast<StopReceive*>(object);
     ++state.calls;
     if (state.calls == 1) {
         state.firstError = error;
         state.firstSize = view.bytes.size();
         if (state.rearm) {
-            state.rearmAccepted = state.socket->asyncReceive(&state, onStopReceive);
-            state.socket->requestStop();
+            state.rearmAccepted = state.socket->async_receive(state.bytes, &state, onStopReceive);
+            state.socket->request_stop();
             state.doneInsideCompletion = state.socket->done();
-            state.postStopRearmAccepted = state.socket->asyncReceive(&state, onStopReceive);
+            state.postStopRearmAccepted = state.socket->async_receive(state.bytes, &state, onStopReceive);
         }
     } else {
         state.secondError = error;
@@ -281,23 +283,23 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     asio::io_context io;
     Socket server(io, Udp::endpoint(asio::ip::address_v4::any(), 0));
     server.prepare();
-    RUVIA_CHECK(server.boundPort() != 0);
+    RUVIA_CHECK(server.bound_port() != 0);
 
     const auto loopback1 = asio::ip::address_v4::loopback();
     const auto loopback2 = asio::ip::address_v4({127, 0, 0, 2});
     Udp::socket client1(io, Udp::endpoint(loopback1, 0));
     Udp::socket client2(io, Udp::endpoint(loopback2, 0));
 #ifdef _WIN32
-    const Udp::endpoint source(loopback1, server.boundPort());
+    const Udp::endpoint source(loopback1, server.bound_port());
 #else
-    const Udp::endpoint source(loopback2, server.boundPort());
+    const Udp::endpoint source(loopback2, server.bound_port());
 #endif
     const std::array<std::byte, 4> firstRequest{
         std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14}};
     const std::array<std::byte, 5> secondRequest{
         std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24}, std::byte{0x25}};
 
-    auto first = runExchange(io, server, client1, Udp::endpoint(loopback1, server.boundPort()),
+    auto first = runExchange(io, server, client1, Udp::endpoint(loopback1, server.bound_port()),
         source, firstRequest);
     RUVIA_CHECK(first.requestSent);
     RUVIA_CHECK(first.requestSendCalls == 1);
@@ -306,7 +308,8 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     RUVIA_CHECK(first.receiveCalls == 1);
     RUVIA_CHECK(!first.receiveError);
     RUVIA_CHECK(first.receivedPeer == client1.local_endpoint());
-    RUVIA_CHECK(first.localDestination == Udp::endpoint(loopback1, server.boundPort()));
+    RUVIA_CHECK(first.local_destination == Udp::endpoint(loopback1, server.bound_port()));
+    RUVIA_CHECK(first.receivedIntoOwnedStorage);
     RUVIA_CHECK(first.requestSize == firstRequest.size());
     RUVIA_CHECK(std::equal(firstRequest.begin(), firstRequest.end(), first.requestBytes.begin()));
     RUVIA_CHECK(first.sendAccepted);
@@ -329,15 +332,15 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     // Late replies to a departed peer must leave the shared receive side usable.
     client1.close();
     Exchange closed_peer;
-    const bool late_send = server.asyncSend(
-        Socket::SendView{source, first.receivedPeer, firstRequest}, &closed_peer, onSend);
+    const bool late_send = server.async_send(
+        Socket::send_view{source, first.receivedPeer, firstRequest}, &closed_peer, onSend);
     RUVIA_CHECK(late_send);
     io.restart();
     io.run_for(50ms);
     RUVIA_CHECK_EQ(closed_peer.sendCalls, 1);
     RUVIA_CHECK(!closed_peer.sendError);
     if (!late_send || closed_peer.sendCalls != 1 || closed_peer.sendError) {
-        server.requestStop();
+        server.request_stop();
         io.restart();
         io.run_for(2s);
         if (!server.done()) {
@@ -346,7 +349,7 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
         return;
     }
 
-    auto second = runExchange(io, server, client2, Udp::endpoint(loopback2, server.boundPort()),
+    auto second = runExchange(io, server, client2, Udp::endpoint(loopback2, server.bound_port()),
         source, secondRequest);
     RUVIA_CHECK(second.requestSent);
     RUVIA_CHECK(second.requestSendCalls == 1);
@@ -355,7 +358,8 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
     RUVIA_CHECK(second.receiveCalls == 1);
     RUVIA_CHECK(!second.receiveError);
     RUVIA_CHECK(second.receivedPeer == client2.local_endpoint());
-    RUVIA_CHECK(second.localDestination == Udp::endpoint(loopback2, server.boundPort()));
+    RUVIA_CHECK(second.local_destination == Udp::endpoint(loopback2, server.bound_port()));
+    RUVIA_CHECK(second.receivedIntoOwnedStorage);
     RUVIA_CHECK(second.requestSize == secondRequest.size());
     RUVIA_CHECK(std::equal(secondRequest.begin(), secondRequest.end(), second.requestBytes.begin()));
     RUVIA_CHECK(second.sendAccepted);
@@ -375,7 +379,7 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
         return;
     }
 
-    server.requestStop();
+    server.request_stop();
     RUVIA_CHECK(server.done());
 
     try {
@@ -392,7 +396,7 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
                     error.code().message().c_str());
                 RUVIA_CHECK(false && "unexpected IPv6 network prepare failure");
             }
-            ipv6Server.requestStop();
+            ipv6Server.request_stop();
             RUVIA_CHECK(ipv6Server.done());
             return;
         }
@@ -413,17 +417,17 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
                     ipv6Error.message().c_str());
                 RUVIA_CHECK(false && "unexpected IPv6 network client setup failure");
             }
-            ipv6Server.requestStop();
+            ipv6Server.request_stop();
             RUVIA_CHECK(ipv6Server.done());
             return;
         }
 
         const auto ipv6Loopback = asio::ip::address_v6::loopback();
-        const Udp::endpoint ipv6Source(ipv6Loopback, ipv6Server.boundPort());
+        const Udp::endpoint ipv6Source(ipv6Loopback, ipv6Server.bound_port());
         const std::array<std::byte, 3> ipv6Request{
             std::byte{0x31}, std::byte{0x32}, std::byte{0x33}};
         auto ipv6 = runExchange(io, ipv6Server, ipv6Client,
-            Udp::endpoint(ipv6Loopback, ipv6Server.boundPort()), ipv6Source, ipv6Request);
+            Udp::endpoint(ipv6Loopback, ipv6Server.bound_port()), ipv6Source, ipv6Request);
         RUVIA_CHECK(ipv6.requestSent);
         RUVIA_CHECK(ipv6.requestSendCalls == 1);
         RUVIA_CHECK(!ipv6.requestError);
@@ -431,8 +435,9 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
         RUVIA_CHECK(ipv6.receiveCalls == 1);
         RUVIA_CHECK(!ipv6.receiveError);
         RUVIA_CHECK(ipv6.receivedPeer == ipv6Client.local_endpoint());
-        RUVIA_CHECK(ipv6.localDestination ==
-                    Udp::endpoint(ipv6Loopback, ipv6Server.boundPort()));
+        RUVIA_CHECK(ipv6.local_destination ==
+                    Udp::endpoint(ipv6Loopback, ipv6Server.bound_port()));
+        RUVIA_CHECK(ipv6.receivedIntoOwnedStorage);
         RUVIA_CHECK(ipv6.requestSize == ipv6Request.size());
         RUVIA_CHECK(std::equal(ipv6Request.begin(), ipv6Request.end(), ipv6.requestBytes.begin()));
         RUVIA_CHECK(ipv6.sendAccepted);
@@ -446,7 +451,7 @@ RUVIA_TEST(http3NetworkUdpSocketPreservesPktinfoAndExplicitReplySource) {
         RUVIA_CHECK(std::equal(ipv6.replyBytes.begin(),
             ipv6.replyBytes.begin() + static_cast<std::ptrdiff_t>(ipv6.replySize),
             ipv6.replyBuffer.begin()));
-        ipv6Server.requestStop();
+        ipv6Server.request_stop();
         RUVIA_CHECK(ipv6Server.done());
     } catch (const std::exception& error) {
         RUVIA_CHECK(false && "unexpected IPv6 network setup/runtime exception");
@@ -461,10 +466,10 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
     {
         Socket cold(io, Udp::endpoint(loopback, 0));
         StopReceive coldState{.socket = &cold, .firstError = {}, .secondError = {}};
-        RUVIA_CHECK(!cold.asyncReceive(&coldState, onStopReceive));
+        RUVIA_CHECK(!cold.async_receive(coldState.bytes, &coldState, onStopReceive));
         RUVIA_CHECK_EQ(coldState.calls, 0);
         cold.prepare();
-        cold.requestStop();
+        cold.request_stop();
         RUVIA_CHECK(cold.done());
     }
 
@@ -475,15 +480,15 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         Socket socket(io, Udp::endpoint(loopback, 0));
         socket.prepare();
         StopReceive state{.socket = &socket, .firstError = {}, .secondError = {}};
-        const bool accepted = socket.asyncReceive(&state, onStopReceive);
+        const bool accepted = socket.async_receive(state.bytes, &state, onStopReceive);
         RUVIA_CHECK(accepted);
-        const bool duplicateAccepted = socket.asyncReceive(&state, onStopReceive);
+        const bool duplicateAccepted = socket.async_receive(state.bytes, &state, onStopReceive);
         RUVIA_CHECK(!duplicateAccepted);
 #ifndef _WIN32
         RUVIA_CHECK_EQ(io.poll_one(), 1U);
         RUVIA_CHECK_EQ(state.calls, 0);
 #endif
-        socket.requestStop();
+        socket.request_stop();
         RUVIA_CHECK(!socket.done());
         io.run_for(2s);
         if (!socket.done()) {
@@ -515,13 +520,13 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         socket.prepare();
         Udp::socket sender(io, Udp::endpoint(loopback, 0));
         StopReceive state{.socket = &socket, .firstError = {}, .secondError = {}, .rearm = true};
-        const bool accepted = socket.asyncReceive(&state, onStopReceive);
+        const bool accepted = socket.async_receive(state.bytes, &state, onStopReceive);
         RUVIA_CHECK(accepted);
         const std::array<std::byte, 2> packet{std::byte{0x41}, std::byte{0x42}};
         DatagramSendState sendState;
         bool sendAccepted = false;
         const auto cancelAndDrain = [&]() noexcept {
-            socket.requestStop();
+            socket.request_stop();
             asio::error_code ignored;
             sender.cancel(ignored);
             if (io.stopped()) {
@@ -542,7 +547,7 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         };
         try {
             sender.async_send_to(asio::buffer(packet),
-                Udp::endpoint(loopback, socket.boundPort()),
+                Udp::endpoint(loopback, socket.bound_port()),
                 [&sendState](const asio::error_code& error, std::size_t size) noexcept {
                     ++sendState.calls;
                     sendState.error = error;
@@ -590,12 +595,12 @@ RUVIA_TEST(http3NetworkUdpSocketStopDrainsReceiveCompletions) {
         SendCompletionState state;
         const std::array<std::byte, 3> payload{
             std::byte{0x51}, std::byte{0x52}, std::byte{0x53}};
-        const bool accepted = socket.asyncSend(
-            Socket::SendView{Udp::endpoint(loopback, socket.boundPort()),
+        const bool accepted = socket.async_send(
+            Socket::send_view{Udp::endpoint(loopback, socket.bound_port()),
                 peer.local_endpoint(), payload},
             &state, onCancellationSend);
         RUVIA_CHECK(accepted);
-        socket.requestStop();
+        socket.request_stop();
         RUVIA_CHECK(!socket.done());
         io.run_for(2s);
         if (!socket.done()) {
@@ -629,7 +634,7 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
     Socket server(io, Udp::endpoint(asio::ip::address_v4::any(), 0));
     server.prepare();
     Udp::socket peer(io, Udp::endpoint(loopback, 0));
-    const Udp::endpoint explicitSource(loopback, server.boundPort());
+    const Udp::endpoint explicitSource(loopback, server.bound_port());
 
     CountingResource resource;
     {
@@ -640,16 +645,16 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
         const std::size_t retainedAllocationBytes = resource.liveBytes;
 
         SendCompletionState invalidSourceState;
-        Socket::SendView invalidSource{
-            Udp::endpoint(asio::ip::address_v4::any(), server.boundPort()),
+        Socket::send_view invalidSource{
+            Udp::endpoint(asio::ip::address_v4::any(), server.bound_port()),
             peer.local_endpoint(), {}};
-        RUVIA_CHECK(!server.asyncSend(invalidSource, &invalidSourceState, onCancellationSend));
+        RUVIA_CHECK(!server.async_send(invalidSource, &invalidSourceState, onCancellationSend));
         RUVIA_CHECK_EQ(invalidSourceState.calls, 0);
         SendCompletionState invalidPortState;
-        Socket::SendView invalidPort{
-            Udp::endpoint(loopback, static_cast<std::uint16_t>(server.boundPort() + 1)),
+        Socket::send_view invalidPort{
+            Udp::endpoint(loopback, static_cast<std::uint16_t>(server.bound_port() + 1)),
             peer.local_endpoint(), {}};
-        RUVIA_CHECK(!server.asyncSend(invalidPort, &invalidPortState, onCancellationSend));
+        RUVIA_CHECK(!server.async_send(invalidPort, &invalidPortState, onCancellationSend));
         RUVIA_CHECK_EQ(invalidPortState.calls, 0);
 
         for (std::size_t roundIndex = 0; roundIndex < kRounds; ++roundIndex) {
@@ -677,8 +682,8 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
                                 round.received.begin() + static_cast<std::ptrdiff_t>(size));
                         }
                     });
-                const bool accepted = server.asyncSend(
-                    Socket::SendView{explicitSource, peer.local_endpoint(), round.payload},
+                const bool accepted = server.async_send(
+                    Socket::send_view{explicitSource, peer.local_endpoint(), round.payload},
                     &round, onRoundSend);
                 RUVIA_CHECK(accepted);
                 RUVIA_CHECK(round.sendCalls == 0);
@@ -696,7 +701,7 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
                     round.received.begin()));
                 if (round.sendCalls != 1 || round.receiveCalls != 1 ||
                     round.sendError || round.receiveError) {
-                    server.requestStop();
+                    server.request_stop();
                     asio::error_code ignored;
                     peer.cancel(ignored);
                     if (io.stopped()) {
@@ -732,8 +737,8 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
                     zeroLength.receiveError = error;
                     zeroLength.receivedSize = size;
                 });
-            const bool accepted = server.asyncSend(
-                Socket::SendView{explicitSource, peer.local_endpoint(), zeroLength.payload},
+            const bool accepted = server.async_send(
+                Socket::send_view{explicitSource, peer.local_endpoint(), zeroLength.payload},
                 &zeroLength, onRoundSend);
             RUVIA_CHECK(accepted);
             io.run_for(2s);
@@ -746,7 +751,7 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
             RUVIA_CHECK_EQ(zeroLength.receivedSize, 0U);
             RUVIA_CHECK(zeroLength.sender == explicitSource);
             if (zeroLength.sendCalls != 1 || zeroLength.receiveCalls != 1) {
-                server.requestStop();
+                server.request_stop();
                 asio::error_code ignored;
                 peer.cancel(ignored);
                 if (io.stopped()) {
@@ -780,6 +785,6 @@ RUVIA_TEST(http3NetworkUdpSocketBorrowsSendBytesUntilCompletion) {
     }
     RUVIA_CHECK_EQ(resource.liveBytes, 0U);
     RUVIA_CHECK_EQ(resource.allocations, resource.returns);
-    server.requestStop();
+    server.request_stop();
     RUVIA_CHECK(server.done());
 }

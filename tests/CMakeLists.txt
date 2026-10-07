@@ -67,6 +67,7 @@ if(RUVIA_BUILD_CORE)
         core/pmr_string.cpp
         core/pool_waiter_queue.cpp
         core/scoped_operation.cpp
+        core/spsc_ring_queue.cpp
         core/stop_token.cpp
         core/worker_mailbox.cpp
         core/worker_runtime.cpp

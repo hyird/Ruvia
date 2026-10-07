@@ -150,7 +150,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
                   options_.trustedProxies.empty() ? nullptr : &options_.trustedProxies,
               .precompressedStaticFiles = options_.compression.has_value(),
           }),
-      http3Server_(nullptr, PmrObjectDeleter<Http3WorkerServer>{memory_.resource()}),
+      http3Server_(nullptr, PmrObjectDeleter<http3_worker_server>{memory_.resource()}),
       http3_transport_(nullptr, PmrObjectDeleter<http3_worker_runtime>{memory_.resource()}),
       webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(ioContext_.get_executor(),
           workerRuntime_.handle(), memory_.resource(), capabilities_,
@@ -166,7 +166,7 @@ WebWorkerRuntime::WebWorkerRuntime(ValidatedConfigurationTag,
             options_.workerMailboxCapacity > std::numeric_limits<std::uint32_t>::max()) {
             throw std::invalid_argument("HTTP/3 worker limits are not representable");
         }
-        http3Server_ = makePmrObject<Http3WorkerServer>(memory_.resource(), workerRuntime_,
+        http3Server_ = makePmrObject<http3_worker_server>(memory_.resource(),
             workerRuntime_.handle(), memory_, routes_, capabilities_, connectionScanner_,
             ioContext_.get_executor(), options_, stopToken_,
             *options_.maxConnections,
@@ -299,7 +299,7 @@ void WebWorkerRuntime::launch() {
         // Core still owes owner-affine draining. App performs the external
         // producer barrier before requesting phase-two finalization.
         if (!runtime_.started() && http3Server_ != nullptr) {
-            http3Server_->abandonBeforeLaunch();
+            http3Server_->abandon_before_launch();
             if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
                 channel->abandon_worker();
             }
@@ -358,7 +358,7 @@ void WebWorkerRuntime::stopAdmission() noexcept {
     }
     runtime_.request_stop();
     if (!runtime_.started() && http3Server_ != nullptr) {
-        http3Server_->abandonBeforeLaunch();
+        http3Server_->abandon_before_launch();
         if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
             channel->abandon_worker();
         }
@@ -484,17 +484,7 @@ void WebWorkerRuntime::stopAdmissionOnContext() noexcept {
     workerRuntime_.close();
 
     serveSignal_.notify();
-    if (http3Server_ != nullptr) {
-        if (http3_transport_ != nullptr) {
-            http3_transport_->stop();
-        } else {
-            http3Server_->abandonBeforeLaunch();
-            if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
-                channel->abandon_worker();
-            }
-        }
-        http3Server_->requestStop();
-    }
+    stop_http3();
     connectionScanner_.stop();
     connectionScanner_.closeAll();
 }
@@ -525,8 +515,67 @@ void WebWorkerRuntime::failWorker(const std::exception_ptr& failure) noexcept {
     options_.workerFailure.notify(failure);
 }
 
+void WebWorkerRuntime::start_http3() {
+    struct cold_channel_owner final {
+        http3_datagram_channel* channel;
+        ~cold_channel_owner() {
+            if (channel) {
+                channel->abandon_worker();
+            }
+        }
+    } cold{quic_channel_.exchange(nullptr, std::memory_order_acq_rel)};
+    if (!cold.channel) {
+        throw std::logic_error("HTTP/3 worker has no staged acceptor channel");
+    }
+    http3_transport_ = makePmrObject<http3_worker_runtime>(memory_.resource(),
+        workerRuntime_, quic_endpoint_, *listeners_[http3_listener_index_]->tls(),
+        *http3_config_, http3_worker_runtime::worker_target{.server = http3Server_.get(), .max_connections = *options_.maxConnections, .mailbox_capacity = static_cast<std::uint32_t>(options_.workerMailboxCapacity), .max_requests_per_connection = *options_.maxRequestsPerConnection, .idle_timeout = options_.idleTimeout, .request_header_timeout = options_.requestHeaderTimeout, .request_body_timeout = options_.requestBodyTimeout, .write_timeout = options_.writeTimeout},
+        *cold.channel, cid_partition_,
+        http3_worker_runtime::failure_notification{this, [](void* object, std::exception_ptr failure) noexcept {
+                                                       static_cast<WebWorkerRuntime*>(object)->failWorker(failure);
+                                                   }});
+    // Completed construction transfers channel retirement to the protocol owner.
+    // The runner, once started, is its structured asynchronous retirement owner.
+    cold.channel = nullptr;
+    http3_transport_->stage();
+    if (!http3Server_->install()) {
+        throw std::runtime_error("failed to install HTTP/3 worker bridge");
+    }
+    backgroundTasks_.spawn(http3Server_->run());
+    if (!stopToken_.stopRequested()) {
+        http3_transport_->start();
+    } else {
+        http3_transport_->stop();
+    }
+    backgroundTasks_.spawn(http3_transport_->run_datagrams());
+}
+
+void WebWorkerRuntime::stop_http3() noexcept {
+    if (!http3Server_) {
+        return;
+    }
+    if (http3Server_->run_started()) {
+        http3Server_->request_stop();
+    } else {
+        http3Server_->abandon_before_launch();
+    }
+    if (http3_transport_) {
+        if (http3_transport_->runner_started()) {
+            http3_transport_->stop();
+        } else {
+            http3_transport_->abandon_before_launch();
+        }
+    } else if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+        channel->abandon_worker();
+    }
+}
+
 Task<void> WebWorkerRuntime::runWorker() {
     if (!httpServerWorkerRunning(workerState_)) {
+        stop_http3();
+        (void)workerCompletion_.markStartupFailed(
+            std::make_exception_ptr(std::runtime_error("web worker startup cancelled")));
+        workerCompletion_.markServingAborted();
         co_return;
     }
     try {
@@ -536,67 +585,16 @@ Task<void> WebWorkerRuntime::runWorker() {
         connectionScanner_.start();
         co_await capabilities_.connect();
         if (http3Server_ != nullptr && !stopToken_.stopRequested()) {
-            auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel);
-            if (channel == nullptr) {
-                http3Server_->abandonBeforeLaunch();
-                throw std::logic_error("HTTP/3 worker has no staged acceptor channel");
-            }
-            try {
-                http3_transport_ = makePmrObject<http3_worker_runtime>(memory_.resource(),
-                    workerRuntime_, quic_endpoint_, *listeners_[http3_listener_index_]->tls(),
-                    *http3_config_, http3_worker_runtime::worker_target{
-                                        .server = http3Server_.get(),
-                                        .max_connections = *options_.maxConnections,
-                                        .mailbox_capacity = static_cast<std::uint32_t>(options_.workerMailboxCapacity),
-                                        .max_requests_per_connection = *options_.maxRequestsPerConnection,
-                                        .idle_timeout = options_.idleTimeout,
-                                        .request_header_timeout = options_.requestHeaderTimeout,
-                                        .request_body_timeout = options_.requestBodyTimeout,
-                                        .write_timeout = options_.writeTimeout,
-                                    },
-                    *channel, cid_partition_, http3_worker_runtime::failure_notification{this, [](void* object, std::exception_ptr failure) noexcept {
-                                                                                             static_cast<WebWorkerRuntime*>(object)->failWorker(failure);
-                                                                                         }});
-                http3_transport_->stage();
-            } catch (...) {
-                http3Server_->abandonBeforeLaunch();
-                if (http3_transport_ != nullptr) {
-                    http3_transport_->abandon_before_launch();
-                } else {
-                    channel->abandon_worker();
-                }
-                throw;
-            }
-            // install() prepares all worker-side state before TaskScope synchronously
-            // starts run(). If either activation or task registration fails, no
-            // run coroutine owns this bridge, so retire it before unwinding.
-            if (!http3Server_->install()) {
-                http3Server_->abandonBeforeLaunch();
-                http3_transport_->abandon_before_launch();
-                throw std::runtime_error("failed to install HTTP/3 worker bridge");
-            }
-            try {
-                backgroundTasks_.spawn(http3Server_->run());
-            } catch (...) {
-                http3Server_->abandonBeforeLaunch();
-                http3_transport_->abandon_before_launch();
-                throw;
-            }
-            try {
-                // run_datagrams can synchronously retire and ACK its channel.
-                // Do not borrow channel after TaskScope starts that coroutine.
-                if (!stopToken_.stopRequested() && !channel->acceptor_closed()) {
-                    http3_transport_->start();
-                } else {
-                    http3_transport_->stop();
-                }
-                backgroundTasks_.spawn(http3_transport_->run_datagrams());
-            } catch (...) {
-                http3_transport_->abandon_before_launch();
-                throw;
-            }
+            start_http3();
         }
-        (void)workerCompletion_.markStartupReady();
+        if (stopToken_.stopRequested()) {
+            stop_http3();
+            (void)workerCompletion_.markStartupFailed(
+                std::make_exception_ptr(std::runtime_error("web worker startup cancelled")));
+            workerCompletion_.markServingAborted();
+        } else {
+            (void)workerCompletion_.markStartupReady();
+        }
 
         while (!serveRequested_ && httpServerWorkerRunning(workerState_) &&
                !stopToken_.stopRequested()) {
@@ -621,11 +619,7 @@ Task<void> WebWorkerRuntime::runWorker() {
     } catch (...) {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
-        if (http3_transport_ != nullptr) {
-            http3_transport_->stop();
-        } else if (auto* channel = quic_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
-            channel->abandon_worker();
-        }
+        stop_http3();
         failWorker(failure);
     }
     co_await finalizeSignal_.wait();
@@ -635,6 +629,9 @@ Task<void> WebWorkerRuntime::runWorker() {
         const auto failure = std::current_exception();
         (void)workerCompletion_.markStartupFailed(failure);
         failWorker(failure);
+    }
+    if (http3_transport_) {
+        co_await http3_transport_->join();
     }
     try {
         co_await capabilities_.join();

@@ -102,11 +102,11 @@ quic_stream_write_result queue_stream_write(quic_connection_state& state,
     if (!stream.writable) {
         throw_invalid_stream("QUIC stream is not writable");
     }
-    if (terminal(state) || stream.send_reset || stream.send_stopped || stream.library_closed) {
+    if (terminal(state)) {
         return {.status = quic_operation_status::closing};
     }
-    if (stream.send_fin) {
-        return {.status = quic_operation_status::closing};
+    if (stream.send_reset || stream.send_stopped || stream.library_closed || stream.send_fin) {
+        return {.status = quic_operation_status::stream_closed};
     }
     if (input.empty()) {
         if (fin) {
@@ -216,7 +216,7 @@ quic_operation_status inspect_stream_write(const quic_connection_state& state,
         return quic_operation_status::retired;
     }
     if (stream->send_fin || stream->send_reset || stream->send_stopped || stream->library_closed) {
-        return quic_operation_status::closing;
+        return quic_operation_status::stream_closed;
     }
     if (stream->retained_output_bytes >= state.config_.limits.max_stream_buffer_size ||
         state.retained_stream_output_bytes_ >= state.config_.limits.max_connection_buffer_size) {

@@ -39,11 +39,23 @@ Http3ServerStreamInput::Http3ServerStreamInput(Http3SansIoSessionEngine& session
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
-    const Http3StreamMailbox::BorrowedBlock& block) noexcept {
+    const http3_stream_buffer::borrowed_block& block) noexcept {
     if (!block || block.critical() != nullptr) {
         return {Status::kInvalidInput};
     }
-    const auto& id = block.id();
+    return accept_bytes(block.id(), block.bytes());
+}
+
+Http3ServerStreamInput::Result Http3ServerStreamInput::accept_peer_stream_data(
+    http3_stream_id id, std::span<const std::byte> bytes) noexcept {
+    if (!isHttp3ClientUnidirectionalStreamId(id.stream_id)) {
+        return {Status::kInvalidInput};
+    }
+    return accept_bytes(id, bytes);
+}
+
+Http3ServerStreamInput::Result Http3ServerStreamInput::accept_bytes(
+    http3_stream_id id, std::span<const std::byte> bytes) noexcept {
     if (const auto identity = identityStatus(id); identity != Status::kFed) {
         return {identity};
     }
@@ -52,12 +64,11 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
     }
 
     Status failure = Status::kFed;
-    auto* state = findOrCreate(id.streamId, failure);
+    auto* state = findOrCreate(id.stream_id, failure);
     if (state == nullptr) {
         return {failure};
     }
     state->receivedEarlyData = state->receivedEarlyData || id.received_early_data;
-    const auto bytes = block.bytes();
     if (state->phase == StreamPhase::kFinished && !bytes.empty()) {
         return finalSizeFailure();
     }
@@ -88,17 +99,17 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
     if (state->qpackBlocked && resetPending) {
         state->wireBytes = newWireBytes;
         if (newWireBytes == *state->resetPublishedBytes) {
-            return applyPeerReset(id.streamId, *state);
+            return applyPeerReset(id.stream_id, *state);
         }
         return {Status::kDeferredReset};
     }
-    auto result = feedSession(id.streamId, wire, fin, *state);
+    auto result = feedSession(id.stream_id, wire, fin, *state);
     if (result.status == Status::kFed && fin) {
         result.status = Status::kFinished;
     }
     if (resetPending && result.status == Status::kFed) {
         if (state->wireBytes == *state->resetPublishedBytes) {
-            return applyPeerReset(id.streamId, *state);
+            return applyPeerReset(id.stream_id, *state);
         }
         result.status = Status::kDeferredReset;
     }
@@ -106,7 +117,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptData(
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
-    const Http3StreamControl& control) noexcept {
+    const http3_stream_control& control) noexcept {
     if (const auto identity = identityStatus(control.id); identity != Status::kFed) {
         return {identity};
     }
@@ -115,12 +126,12 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
     }
 
     switch (control.kind) {
-        case Http3StreamControl::Kind::kConnectionClosed:
+        case http3_stream_control::kind::connection_closed:
             stop();
             return {Status::kConnectionClosed};
-        case Http3StreamControl::Kind::kStreamReset: {
+        case http3_stream_control::kind::stream_reset: {
             Status failure = Status::kFed;
-            auto* state = findOrCreate(control.id.streamId, failure);
+            auto* state = findOrCreate(control.id.stream_id, failure);
             if (state == nullptr) {
                 return {failure};
             }
@@ -128,7 +139,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
                                        control.id.received_early_data;
             if (state->resetPublishedBytes.has_value()) {
                 if (*state->resetPublishedBytes != control.value ||
-                    state->resetErrorCode != control.streamResetErrorCode) {
+                    state->resetErrorCode != control.stream_reset_error_code) {
                     return finalSizeFailure();
                 }
                 return {state->phase == StreamPhase::kResetPending
@@ -145,18 +156,18 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptControl(
                 return finalSizeFailure();
             }
             state->resetPublishedBytes = control.value;
-            state->resetErrorCode = control.streamResetErrorCode;
+            state->resetErrorCode = control.stream_reset_error_code;
             if (control.value != state->wireBytes) {
                 state->phase = StreamPhase::kResetPending;
                 return {Status::kDeferredReset};
             }
-            return applyPeerReset(control.id.streamId, *state);
+            return applyPeerReset(control.id.stream_id, *state);
         }
-        case Http3StreamControl::Kind::kStreamFin:
+        case http3_stream_control::kind::stream_fin:
             return acceptFin(control);
-        case Http3StreamControl::Kind::kWritable:
+        case http3_stream_control::kind::writable:
             return {Status::kIgnoredControl};
-        case Http3StreamControl::Kind::kTunnelEstablished:
+        case http3_stream_control::kind::tunnel_established:
             return {Status::kInvalidInput};
     }
     return {Status::kInvalidInput};
@@ -217,20 +228,20 @@ bool Http3ServerStreamInput::stopped() const noexcept {
 }
 
 Http3ServerStreamInput::Status Http3ServerStreamInput::identityStatus(
-    const Http3StreamMessageId& id) const noexcept {
+    const http3_stream_id& id) const noexcept {
     if (id.epoch != epoch_) {
         return Status::kForeignEpoch;
     }
-    if (id.connectionGeneration != connectionGeneration_) {
+    if (id.connection_generation != connectionGeneration_) {
         return Status::kStaleConnection;
     }
     return Status::kFed;
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::acceptFin(
-    const Http3StreamControl& control) noexcept {
+    const http3_stream_control& control) noexcept {
     Status failure = Status::kFed;
-    auto* state = findOrCreate(control.id.streamId, failure);
+    auto* state = findOrCreate(control.id.stream_id, failure);
     if (state == nullptr) {
         return {failure};
     }
@@ -266,7 +277,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::acceptFin(
         state->pendingFin = true;
         return {Status::kDeferredQpack};
     }
-    return feedSession(control.id.streamId, {}, true, *state);
+    return feedSession(control.id.stream_id, {}, true, *state);
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::applyPeerReset(
@@ -289,7 +300,7 @@ Http3ServerStreamInput::Result Http3ServerStreamInput::applyPeerReset(
 }
 
 Http3ServerStreamInput::Result Http3ServerStreamInput::finalSizeFailure() noexcept {
-    // Inconsistent transport/mailbox counts are not peer RESET evidence or
+    // Inconsistent transport/buffer counts are not peer RESET evidence or
     // HTTP framing errors. Retire locally; the owner must close transport.
     stop();
     return {Status::kFinalSizeError};

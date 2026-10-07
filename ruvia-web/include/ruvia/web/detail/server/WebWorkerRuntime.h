@@ -23,7 +23,7 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/quic_server.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/http3/Http3WorkerServer.h"
+#include "ruvia/web/detail/http3/http3_worker_server.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -122,6 +122,8 @@ private:
     void stopAdmissionOnContext() noexcept;
     void stopOnContext() noexcept;
     void failWorker(const std::exception_ptr& failure) noexcept;
+    void start_http3();
+    void stop_http3() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();
     void acceptSocketOnContext(std::size_t listenerIndex, TcpSocket socket);
@@ -150,7 +152,7 @@ private:
     HttpServerOptions options_;
     ruvia::ConnectionScanner connectionScanner_;
     WorkerCapabilities capabilities_;
-    std::unique_ptr<Http3WorkerServer, PmrObjectDeleter<Http3WorkerServer>> http3Server_;
+    std::unique_ptr<http3_worker_server, PmrObjectDeleter<http3_worker_server>> http3Server_;
     std::unique_ptr<http3_worker_runtime, PmrObjectDeleter<http3_worker_runtime>> http3_transport_;
     std::optional<Http3ListenConfig> http3_config_;
     std::size_t http3_listener_index_{};

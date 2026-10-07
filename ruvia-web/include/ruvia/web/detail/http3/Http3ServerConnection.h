@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include <asio/any_io_executor.hpp>
@@ -19,13 +20,13 @@
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
 #include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamInput.h"
-#include "ruvia/web/detail/http3/Http3StreamMailbox.h"
+#include "ruvia/web/detail/http3/http3_stream_buffer.h"
 
 namespace ruvia::detail {
 
 class RouteTable;
 struct HttpServerOptions;
-class Http3WorkerMailboxScheduler;
+class http3_ready_scheduler;
 
 struct Http3ServerDatagramOutput final {
     void* context{};
@@ -44,12 +45,12 @@ struct Http3ServerConnectionConfig final {
 // Worker-affine, transport-independent owner for one HTTP/3 server connection.
 // Ordinary request bodies are buffered; explicit stream routes and WebSocket
 // CONNECT streams use bounded input. It accepts one routed block/control at a time, never
-// drains or stops either shared mailbox, and never waits for capacity.
+// drains or stops either shared buffer, and never waits for capacity.
 // All borrowed owners, including ContextServices' worker/token/capability and
 // connection-metadata borrows, must outlive this object and its joined tasks.
 // Stop sources observed during publication must request stop on this worker:
 // StopToken callbacks are synchronous and this owner intentionally has no
-// cross-thread queue or mailbox side channel.
+// cross-thread queue or buffer side channel.
 // The optional shared body budget must also outlive this owner and every request
 // lease it starts; join all children before retiring either owner. Destruction
 // also requires transport intents to be handed off, physical retirement to be
@@ -99,20 +100,20 @@ public:
 
     struct TransportIntentToken final {
         TransportIntentKind kind{TransportIntentKind::kStreamReset};
-        Http3StreamMessageId id{};
+        http3_stream_id id{};
         std::uint64_t sequence{};
 
         friend bool operator==(const TransportIntentToken& left,
             const TransportIntentToken& right) noexcept {
             return left.kind == right.kind && left.id.epoch == right.id.epoch &&
-                   left.id.connectionGeneration == right.id.connectionGeneration &&
-                   left.id.streamId == right.id.streamId && left.id.pushId == right.id.pushId && left.sequence == right.sequence;
+                   left.id.connection_generation == right.id.connection_generation &&
+                   left.id.stream_id == right.id.stream_id && left.id.push_id == right.id.push_id && left.sequence == right.sequence;
         }
     };
 
     struct TransportIntent final {
         TransportIntentToken token{};
-        // Exact QUIC RESET_STREAM code. This is not mailbox control.value,
+        // Exact QUIC RESET_STREAM code. This is not buffer control.value,
         // which remains reserved for a FIN's cumulative byte count.
         Http3ConnectionErrorCode streamResetErrorCode{
             Http3ConnectionErrorCode::kRequestCancelled};
@@ -244,19 +245,19 @@ public:
         std::uint64_t streamId{};
         std::optional<ruvia::http3_critical_stream_output::stream_kind> criticalKind{};
         // When status is kAttempted this is the exact result returned by the
-        // selected dispatch, including notifyPeer and the mailbox block lane.
+        // selected dispatch, including the buffer backpressure lane.
         Dispatch::PublishResult publication{};
     };
 
     Http3ServerConnection(const RouteTable& routes, WorkerMemory& worker,
         ContextServices services, const HttpServerOptions& options,
-        Http3StreamMailbox& outbound, ActivationRef activation,
+        http3_stream_buffer& outbound, ActivationRef activation,
         Http3ServerConnectionConfig config = {});
     // Shares a worker-owned buffered-body budget with other connections. The
     // budget must outlive this connection and every request lease it starts.
     Http3ServerConnection(const RouteTable& routes, WorkerMemory& worker,
         ContextServices services, const HttpServerOptions& options,
-        Http3StreamMailbox& outbound, ActivationRef activation,
+        http3_stream_buffer& outbound, ActivationRef activation,
         Http3ServerBodyBudget& bodyBudget,
         Http3ServerConnectionConfig config = {});
     ~Http3ServerConnection();
@@ -268,26 +269,29 @@ public:
     // The caller routes exactly one borrowed block/control here and releases a
     // block after return. A validated request FIN automatically starts one
     // buffered dispatch when the session is ready.
-    [[nodiscard]] EventResult acceptData(const Http3StreamMailbox::BorrowedBlock& block) &;
+    [[nodiscard]] EventResult acceptData(const http3_stream_buffer::borrowed_block& block) &;
     [[nodiscard]] bool resumeQpackInput() noexcept;
     [[nodiscard]] bool canAcceptInput(std::uint64_t streamId, std::size_t wireBytes) const noexcept;
-    EventResult acceptData(const Http3StreamMailbox::BorrowedBlock&) && = delete;
-    [[nodiscard]] EventResult acceptControl(const Http3StreamControl& control) &;
-    EventResult acceptControl(const Http3StreamControl&) && = delete;
+    EventResult acceptData(const http3_stream_buffer::borrowed_block&) && = delete;
+    // Worker-local peer unidirectional bytes bypass request DATA storage but
+    // still enter the authoritative input/session parser and error policy.
+    [[nodiscard]] EventResult accept_peer_stream_data(http3_stream_id id, std::span<const std::byte> bytes) &;
+    [[nodiscard]] EventResult acceptControl(const http3_stream_control& control) &;
+    EventResult acceptControl(const http3_stream_control&) && = delete;
 
     // A worker-affine snapshot of the active intrusive queues. DATA/CONTROL
-    // blocked entries are disjoint; local work never waits for mailbox capacity.
+    // blocked entries are disjoint; local work never waits for buffer capacity.
     [[nodiscard]] WorkState workState() const noexcept;
 
     // Makes at most one nonblocking publishStep attempt from an eligible
-    // runnable lane. Backpressure parks the request on the exact mailbox lane;
+    // runnable lane. Backpressure parks the request on the exact buffer lane;
     // it is not retried until reactivateBlocked() is called for that lane.
     [[nodiscard]] PublishAttempt publishOne(WorkLanes eligibleLanes) & noexcept;
     PublishAttempt publishOne(WorkLanes) && = delete;
 
     // Explicit capacity notification: reactivates only requests parked on the
     // named DATA/CONTROL lanes. The caller is already handling the capacity
-    // event; no independent transport or mailbox operation is performed.
+    // event; no independent transport or buffer operation is performed.
     [[nodiscard]] std::size_t reactivateBlocked(WorkLanes lanes) & noexcept;
     std::size_t reactivateBlocked(WorkLanes) && = delete;
 
@@ -295,7 +299,7 @@ public:
     // requires the external owner to close the transport. It logically stops
     // input, records a persistent typed close intent, cancels active handlers,
     // and wakes the scheduler; it does not touch the transport or either shared
-    // mailbox.
+    // buffer.
     void receiveDatagram(std::span<const std::byte> bytes) noexcept;
     [[nodiscard]] bool requestStop() & noexcept;
     bool requestStop() && = delete;
@@ -330,7 +334,7 @@ public:
     // reliably accepted responsibility for the intent; it does not mean a peer
     // observed the operation or that the transport has retired. A close ACK
     // settles only its own token; every reset remains independently owed. Ack
-    // never sends a notification; the caller owns the mailbox notify obligation
+    // never sends a notification; the caller owns the buffer notify obligation
     // from a successful reset-control send. join() alone is not transport
     // retirement or responsibility transfer.
     [[nodiscard]] std::optional<TransportIntent> peekTransportIntent() const noexcept;
@@ -347,7 +351,7 @@ public:
     [[nodiscard]] bool transportRetired() const noexcept;
 
 private:
-    friend class Http3WorkerMailboxScheduler;
+    friend class http3_ready_scheduler;
     friend struct Http3ServerConnectionResetIntentTestAccess;
     friend struct http3_worker_server_test_access;
 
@@ -471,7 +475,7 @@ private:
     WorkerMemory& worker_;
     const RouteTable& routes_;
     const HttpServerOptions& options_;
-    Http3StreamMailbox& outbound_;
+    http3_stream_buffer& outbound_;
     ActivationRef activation_;
     const std::uint64_t epoch_;
     const std::uint64_t connectionGeneration_;

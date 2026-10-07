@@ -1,20 +1,20 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <cstddef>
-#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <system_error>
 #include <thread>
-#include <vector>
 
 #include <asio/ip/udp.hpp>
 
 #include "ruvia/core/WorkerNotification.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
+#include "ruvia/core/buffer_pool.h"
+#include "ruvia/core/channel_lifecycle.h"
+#include "ruvia/core/spsc_ring_queue.h"
 
 namespace ruvia::detail {
 
@@ -24,94 +24,115 @@ namespace ruvia::detail {
 #pragma warning(disable : 4324)
 #endif
 
-// Acceptor-owned, startup-allocated SPSC packet storage in each direction. The
-// acceptor owns the UDP socket; neither endpoint exposes protocol state. All
-// notification calls and both owner loops must retire before destruction.
+// Only descriptors and linear credits cross owners. The Acceptor's single pool
+// owns all bytes; its aggregate notification is borrowed, never closed here.
+// I bounds routed RX including returned credits not yet reclaimed by the owner;
+// O bounds all issued TX, including available, prepared, queued and native sends.
+// Reclaim alone releases either quota. Each issued lease returns at most one
+// credit, so I + O slots cannot fill before any remaining return callback.
 class http3_datagram_channel final {
 public:
     using udp = asio::ip::udp;
     static constexpr std::size_t packet_capacity = 65536;
+    static constexpr std::size_t default_input_capacity = 64;
+    static constexpr std::size_t default_output_window = 16;
 
     struct datagram_view final {
         std::span<const std::byte> bytes;
         udp::endpoint local_destination;
         udp::endpoint peer;
     };
-    http3_datagram_channel(WorkerNotification& acceptor_notification,
-        std::pmr::memory_resource* resource, std::size_t input_capacity = 64);
-    ~http3_datagram_channel();
+    struct datagram final {
+        buffer_lease storage;
+        std::size_t size{};
+        udp::endpoint local_destination;
+        udp::endpoint peer;
+        [[nodiscard]] datagram_view view() const noexcept {
+            return {storage.bytes().first(size), local_destination, peer};
+        }
+    };
 
+    http3_datagram_channel(buffer_pool& pool, WorkerNotification& acceptor_notification,
+        std::pmr::memory_resource* resource = nullptr,
+        std::size_t input_capacity = default_input_capacity,
+        std::size_t output_window = default_output_window);
+    ~http3_datagram_channel();
     http3_datagram_channel(const http3_datagram_channel&) = delete;
     http3_datagram_channel& operator=(const http3_datagram_channel&) = delete;
 
-    // Cold startup only, before either owner serves. A never-started worker may
-    // be rolled back from its lifecycle coordinator with abandon_worker().
     void stage_worker(WorkerRuntimeContext& worker);
     void worker_start() noexcept;
-    // All channels may borrow the acceptor's single native wake latch.
-    [[nodiscard]] WorkerNotification& acceptor_notification() noexcept;
     [[nodiscard]] WorkerNotification& worker_notification() noexcept;
 
-    // Acceptor-affine. Full input is an ordinary UDP overload drop. Output is a
-    // loan: consume ONLY after the UDP send callback (or when no send started).
-    [[nodiscard]] bool acceptor_push(std::span<const std::byte> bytes,
-        const udp::endpoint& local_destination, const udp::endpoint& peer) noexcept;
-    [[nodiscard]] std::optional<datagram_view> acceptor_output() noexcept;
-    void acceptor_consume_output(std::error_code error = {}) noexcept;
+    // Acceptor-affine. Failed routing leaves the caller's lease untouched.
+    [[nodiscard]] bool acceptor_push(datagram&& packet) noexcept;
+    [[nodiscard]] std::optional<datagram> acceptor_take_output() noexcept;
+    void acceptor_poll() noexcept;
     void acceptor_close(std::error_code error = {}) noexcept;
+    // Final ACK follows worker ACK, independent credit draining and UDP retirement.
+    [[nodiscard]] bool acceptor_finalize() noexcept;
 
-    // Worker-affine after worker_start(). One output slot preserves the wire
-    // owner's single-send semantics; its bytes survive worker endpoint detach.
-    [[nodiscard]] std::optional<datagram_view> worker_input() const noexcept;
+    // Worker-affine. RX stays borrowed until consume; TX reserves a descriptor
+    // and an already-issued lease before the protocol writes any packet bytes.
+    [[nodiscard]] std::optional<datagram_view> worker_input() noexcept;
     void worker_consume_input() noexcept;
-    // Unpublished writable output storage. Commit with worker_send(); no
-    // overwrite is permitted while the previous send is pending.
     [[nodiscard]] std::span<std::byte> worker_output_buffer() noexcept;
     [[nodiscard]] bool worker_send(std::span<const std::byte> bytes,
         const udp::endpoint& local_destination, const udp::endpoint& peer) noexcept;
-    [[nodiscard]] bool worker_output_pending() const noexcept;
-    void wake_worker() noexcept;
-
-    // worker_close requires the forwarded endpoint to have detached and every
-    // worker waiter to have returned. The ACK does not reclaim an outbound loan.
+    void worker_cancel_output() noexcept;
+    [[nodiscard]] bool worker_outbound_capacity() const noexcept;
+    [[nodiscard]] std::size_t worker_outbound_count() const noexcept;
+    [[nodiscard]] bool worker_outbound_quiescent() const noexcept;
+    void worker_stop() noexcept;
     void worker_close() noexcept;
+    // Cold startup coordinator only; no started worker may be abandoned.
     void abandon_worker() noexcept;
     [[nodiscard]] bool acceptor_closed() const noexcept;
     [[nodiscard]] bool worker_closed() const noexcept;
     [[nodiscard]] std::error_code error() const noexcept;
 
 private:
-    struct packet_slot final {
-        std::array<std::byte, packet_capacity> bytes;
-        udp::endpoint local_destination;
-        udp::endpoint peer;
-        std::size_t size{};
+    struct returned_credit final {
+        buffer_credit credit;
+        bool output{};
     };
-
-    static void fill(packet_slot& slot, std::span<const std::byte> bytes,
-        const udp::endpoint& local_destination, const udp::endpoint& peer) noexcept;
-    [[nodiscard]] static datagram_view view(const packet_slot& slot) noexcept;
+    static void worker_receive_return(void*, buffer_credit) noexcept;
+    static void worker_output_return(void*, buffer_credit) noexcept;
+    static void acceptor_output_return(void*, buffer_credit) noexcept;
+    static void acceptor_pool_return(void*, buffer_credit) noexcept;
+    void return_worker_credit(buffer_credit, bool output) noexcept;
+    void replenish_output() noexcept;
     void require_acceptor() const noexcept;
     void require_worker() const noexcept;
     void notify_worker() noexcept;
 
     const std::thread::id acceptor_owner_;
     std::thread::id worker_owner_;
+    buffer_pool& pool_;
     WorkerNotification& acceptor_notification_;
     std::optional<WorkerNotification> worker_notification_;
-    std::pmr::vector<packet_slot> input_;
-    packet_slot output_;
-    alignas(64) std::atomic<std::uint64_t> input_published_{};
-    std::size_t input_write_slot_{};
-    alignas(64) std::atomic<std::uint64_t> input_consumed_{};
-    std::size_t input_read_slot_{};
-    alignas(64) std::atomic<std::uint64_t> output_published_{};
-    alignas(64) std::atomic<std::uint64_t> output_consumed_{};
-    std::atomic<bool> acceptor_closed_{};
+    const std::size_t credit_capacity_;
+    spsc_ring_queue<datagram> input_;
+    spsc_ring_queue<datagram> output_;
+    spsc_ring_queue<buffer_lease> available_output_;
+    // Every routed RX and issued TX returns at most one credit before reclaim.
+    // Their owner-side bounds are I and O, independent of packet/control lanes.
+    spsc_ring_queue<returned_credit> credits_;
+    spsc_channel_lifecycle input_lifecycle_;
+    spsc_channel_lifecycle output_lifecycle_;
+    std::optional<datagram> held_input_;
+    // One unused issued lease may stay with its worker after a zero-byte write.
+    // Cancelling admission never creates a native credit/replenishment ping-pong.
+    std::optional<buffer_lease> cached_output_;
+    std::optional<buffer_lease> prepared_output_;
+    std::optional<spsc_channel_lifecycle::admission_lease> output_admission_;
+    datagram* output_slot_{};
     std::atomic<bool> worker_started_{};
-    std::atomic<bool> worker_closed_{};
+    std::atomic<std::size_t> completed_output_{};
+    std::size_t submitted_output_{};
+    std::size_t issued_output_{};
+    std::size_t routed_input_{};
     std::error_code error_;
-    bool output_loaned_{};
 };
 
 #if defined(_MSC_VER)

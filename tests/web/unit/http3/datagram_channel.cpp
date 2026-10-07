@@ -1,11 +1,10 @@
-#include <algorithm>
 #include <array>
 #include <chrono>
 #include <exception>
 #include <future>
+#include <limits>
 #include <memory>
 #include <span>
-#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -13,17 +12,17 @@
 
 #include "ruvia/core/WorkerNotification.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
+#include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/web/detail/http3/Http3DatagramEndpoint.h"
 #include "ruvia/web/detail/http3/http3_datagram_channel.h"
+#include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
-#include "test_io_context.h"
 
 namespace {
 using channel = ruvia::detail::http3_datagram_channel;
-using endpoint = ruvia::detail::Http3DatagramEndpoint;
+using endpoint = ruvia::detail::http3_worker_datagram_endpoint;
 using namespace std::chrono_literals;
 
 class packet_worker final {
@@ -34,11 +33,10 @@ public:
         : runtime(owner_.context()) {
         owner_.start();
     }
-
-    template <typename Function>
-    auto invoke(Function function) {
-        using result = decltype(function());
-        auto task = std::make_shared<std::packaged_task<result()>>(std::move(function));
+    template <typename function>
+    auto invoke(function operation) {
+        using result = decltype(operation());
+        auto task = std::make_shared<std::packaged_task<result()>>(std::move(operation));
         auto completion = task->get_future();
         if (!runtime.submission().post([task] { (*task)(); }).accepted() ||
             completion.wait_for(5s) != std::future_status::ready) {
@@ -50,151 +48,369 @@ public:
         owner_.request_stop();
         owner_.join();
     }
-
     ruvia::WorkerRuntimeContext& runtime;
 };
+
+const channel::udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
+const channel::udp::endpoint peer(asio::ip::address_v4::loopback(), 5544);
+
+channel::datagram receive_packet(ruvia::buffer_pool& pool, std::byte value) {
+    auto lease = pool.try_acquire();
+    if (!lease) {
+        std::terminate();
+    }
+    lease->bytes()[0] = value;
+    return {std::move(*lease), 1, local, peer};
+}
+
+void retire(channel& packets, packet_worker& worker, ruvia::testing::TestContext& ruvia_ctx) {
+    packets.acceptor_close();
+    worker.invoke([&] { packets.worker_stop(); });
+    packets.acceptor_poll();
+    worker.invoke([&] { packets.worker_close(); });
+    RUVIA_CHECK(packets.worker_closed());
+    RUVIA_CHECK(packets.acceptor_finalize());
+}
 }  // namespace
 
 RUVIA_TEST(http3_datagram_channel_full_input_recovers_without_overwriting_borrowed_packet) {
-    asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor(acceptor_io, 8);
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
     ruvia::WorkerNotification notification(acceptor);
     ruvia::test::CountingMemoryResource memory;
     {
+        ruvia::buffer_pool pool(8, channel::packet_capacity, &memory);
         packet_worker worker;
-        channel packets(notification, &memory, 2);
+        channel packets(pool, notification, &memory, 2, 1);
         packets.stage_worker(worker.runtime);
         worker.invoke([&] { packets.worker_start(); });
-        const channel::udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
-        const channel::udp::endpoint peer(asio::ip::address_v4::loopback(), 5544);
-        std::array first{std::byte{1}, std::byte{2}};
-        const std::array second{std::byte{3}};
-        const std::array dropped{std::byte{4}};
-        RUVIA_CHECK(packets.acceptor_push(first, local, peer));
-        first.fill(std::byte{9});
-        RUVIA_CHECK(packets.acceptor_push(second, local, peer));
-        RUVIA_CHECK(!packets.acceptor_push(dropped, local, peer));
-        const auto held = worker.invoke([&] {
+        auto first = receive_packet(pool, std::byte{1});
+        auto* original = first.storage.bytes().data();
+        auto second = receive_packet(pool, std::byte{3});
+        auto dropped = receive_packet(pool, std::byte{4});
+        RUVIA_CHECK(packets.acceptor_push(std::move(first)));
+        RUVIA_CHECK(!first.storage);
+        RUVIA_CHECK(packets.acceptor_push(std::move(second)));
+        RUVIA_CHECK(!packets.acceptor_push(std::move(dropped)));
+        RUVIA_CHECK(dropped.storage);
+        RUVIA_CHECK(worker.invoke([&] {
             const auto input = packets.worker_input();
-            return input && input->bytes.size() == 2 && input->bytes[0] == std::byte{1} &&
-                   input->bytes[1] == std::byte{2} && input->local_destination == local && input->peer == peer;
-        });
-        RUVIA_CHECK(held);
-        RUVIA_CHECK(!packets.acceptor_push(dropped, local, peer));
+            return input && input->bytes.data() == original && input->bytes[0] == std::byte{1} &&
+                   input->local_destination == local && input->peer == peer;
+        }));
+        RUVIA_CHECK(!packets.acceptor_push(std::move(dropped)));
+        const auto available = pool.available();
         worker.invoke([&] { packets.worker_consume_input(); });
-        RUVIA_CHECK(packets.acceptor_push(dropped, local, peer));
-        const auto recovered = worker.invoke([&] {
+        // Worker completion returns a credit, never touches Acceptor free indices.
+        RUVIA_CHECK_EQ(pool.available(), available);
+        // Dequeue frees a descriptor, not the channel's outstanding RX budget.
+        RUVIA_CHECK(!packets.acceptor_push(std::move(dropped)));
+        RUVIA_CHECK(dropped.storage);
+        packets.acceptor_poll();
+        RUVIA_CHECK_EQ(pool.available(), available + 1);
+        RUVIA_CHECK(packets.acceptor_push(std::move(dropped)));
+        RUVIA_CHECK(worker.invoke([&] {
             const auto input = packets.worker_input();
-            const bool ordered = input && input->bytes.size() == 1 && input->bytes[0] == std::byte{3};
+            const bool ordered = input && input->bytes[0] == std::byte{3};
             packets.worker_consume_input();
             const auto next = packets.worker_input();
-            const bool replacement = next && next->bytes.size() == 1 && next->bytes[0] == std::byte{4};
+            const bool replacement = next && next->bytes[0] == std::byte{4};
             packets.worker_consume_input();
             return ordered && replacement && !packets.worker_input();
-        });
-        RUVIA_CHECK(recovered);
-        packets.acceptor_close();
-        RUVIA_CHECK(!packets.acceptor_push(second, local, peer));
-        worker.invoke([&] { packets.worker_close(); });
-        RUVIA_CHECK(packets.worker_closed());
+        }));
+        retire(packets, worker, ruvia_ctx);
+        RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
 }
 
-RUVIA_TEST(http3_forwarded_endpoint_output_loan_survives_detach_and_worker_close_ack) {
-    asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor(acceptor_io, 8);
+RUVIA_TEST(http3_datagram_channel_reservation_cancellation_and_output_window_recover) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
     ruvia::WorkerNotification notification(acceptor);
     ruvia::test::CountingMemoryResource memory;
     {
+        ruvia::buffer_pool pool(5, channel::packet_capacity, &memory);
         packet_worker worker;
-        channel packets(notification, &memory, 1);
+        channel packets(pool, notification, &memory, 3, 1);
         packets.stage_worker(worker.runtime);
-        const channel::udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
-        const channel::udp::endpoint peer(asio::ip::address_v4::loopback(), 5544);
+        worker.invoke([&] { packets.worker_start(); });
+        const auto allocations = memory.allocationCount();
+        auto* prepared = worker.invoke([&] {
+            auto bytes = packets.worker_output_buffer();
+            const bool stable = bytes.size() == channel::packet_capacity &&
+                                packets.worker_output_buffer().data() == bytes.data();
+            packets.worker_cancel_output();
+            return stable ? bytes.data() : nullptr;
+        });
+        RUVIA_CHECK(prepared);
+        RUVIA_CHECK(!packets.acceptor_take_output());
+        RUVIA_CHECK(worker.invoke([&] {
+            // Idle writes cancel locally: the same issued lease and descriptor
+            // admission are reusable without any Acceptor credit round trip.
+            for (unsigned count = 0; count != 8; ++count) {
+                if (!packets.worker_outbound_capacity()) {
+                    return false;
+                }
+                auto bytes = packets.worker_output_buffer();
+                if (bytes.data() != prepared) {
+                    return false;
+                }
+                packets.worker_cancel_output();
+                if (!packets.worker_outbound_quiescent() || packets.worker_outbound_count() != 0) {
+                    return false;
+                }
+            }
+            return packets.worker_outbound_capacity();
+        }));
+        RUVIA_CHECK_EQ(pool.available(), std::size_t{4});
+        RUVIA_CHECK(worker.invoke([&] {
+            auto bytes = packets.worker_output_buffer();
+            if (bytes.data() != prepared) {
+                return false;
+            }
+            bytes[0] = std::byte{1};
+            bytes[1] = std::byte{2};
+            return packets.worker_send(bytes.first(2), local, peer) &&
+                   packets.worker_outbound_count() == 1 && packets.worker_output_buffer().empty();
+        }));
+        auto loan = packets.acceptor_take_output();
+        RUVIA_CHECK(loan && loan->view().bytes.data() == prepared && loan->size == 2);
+        RUVIA_CHECK(worker.invoke([&] { return !packets.worker_outbound_capacity(); }));
+        RUVIA_CHECK(loan && loan->view().bytes[1] == std::byte{2});
+        // Completion releases the linear lease independently of any QUIC ACK.
+        loan.reset();
+        packets.acceptor_poll();
+        RUVIA_CHECK(worker.invoke([&] {
+            return packets.worker_outbound_count() == 0 && packets.worker_outbound_capacity();
+        }));
+        packets.acceptor_close(std::make_error_code(std::errc::operation_canceled));
+        worker.invoke([&] { packets.worker_stop(); });
+        packets.acceptor_poll();
+        worker.invoke([&] { packets.worker_close(); });
+        RUVIA_CHECK(packets.acceptor_finalize());
+        RUVIA_CHECK(packets.error() == std::errc::operation_canceled);
+        RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+        RUVIA_CHECK_EQ(memory.allocationCount(), allocations);
+    }
+    RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http3_worker_endpoint_waits_for_out_of_order_udp_lease_completion_before_detach) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
+    ruvia::WorkerNotification notification(acceptor);
+    ruvia::test::CountingMemoryResource memory;
+    {
+        ruvia::buffer_pool pool(7, channel::packet_capacity, &memory);
+        packet_worker worker;
+        auto packets = std::make_unique<channel>(pool, notification, &memory, 2, 3);
+        packets->stage_worker(worker.runtime);
         std::unique_ptr<endpoint> consumer;
         std::size_t completed{};
         worker.invoke([&] {
-            packets.worker_start();
-            consumer = std::make_unique<endpoint>(packets, local,
-                endpoint::notification{&completed, [](void* raw, endpoint::notification_kind kind) noexcept {
+            packets->worker_start();
+            consumer = std::make_unique<endpoint>(*packets, local,
+                endpoint::notification{&completed, [](void* context, endpoint::notification_kind kind) noexcept {
                                            if (kind == endpoint::notification_kind::output_drained) {
-                                               ++*static_cast<std::size_t*>(raw);
+                                               ++*static_cast<std::size_t*>(context);
                                            }
                                        }});
             consumer->prepare();
             static_cast<void>(consumer->start());
+            for (unsigned value = 1; value != 4; ++value) {
+                auto bytes = consumer->packet_buffer();
+                bytes[0] = std::byte(value);
+                if (consumer->send_datagram(bytes.first(1), local, peer) != endpoint::pump_result::pending) {
+                    std::terminate();
+                }
+            }
         });
-        const auto sent = worker.invoke([&] {
-            std::array bytes{std::byte{1}, std::byte{2}, std::byte{3}};
-            const bool accepted = consumer->send_datagram(bytes, local, peer) == endpoint::pump_result::pending;
-            bytes.fill(std::byte{9});
-            return accepted;
-        });
-        RUVIA_CHECK(sent);
-        const auto loan = packets.acceptor_output();
-        RUVIA_CHECK(loan && loan->bytes.size() == 3 && loan->bytes[0] == std::byte{1});
-        RUVIA_CHECK(loan && loan->peer == peer && loan->local_destination == local);
-        const auto blocked = worker.invoke([&] {
-            const std::array bytes{std::byte{8}};
-            return consumer->send_in_flight() &&
-                   consumer->send_datagram(bytes, local, peer) == endpoint::pump_result::pending &&
-                   !packets.worker_send(bytes, local, peer);
-        });
-        RUVIA_CHECK(blocked);
-        RUVIA_CHECK(loan && loan->bytes[2] == std::byte{3});
-        packets.acceptor_consume_output();
-        const auto recovered = worker.invoke([&] {
-            consumer->poll_forwarded();
-            const std::array bytes{std::byte{4}, std::byte{5}};
-            return completed == 1 && !consumer->send_in_flight() &&
-                   consumer->send_datagram(bytes, local, peer) == endpoint::pump_result::pending;
-        });
-        RUVIA_CHECK(recovered);
-        const auto late_loan = packets.acceptor_output();
-        RUVIA_CHECK(late_loan && late_loan->bytes.size() == 2);
-        packets.acceptor_close(std::make_error_code(std::errc::operation_canceled));
-        const auto detached = worker.invoke([&] {
-            consumer->poll_forwarded();
+        auto first = packets->acceptor_take_output();
+        auto second = packets->acceptor_take_output();
+        auto third = packets->acceptor_take_output();
+        RUVIA_CHECK(first && second && third);
+        auto* reusable = third->storage.bytes().data();
+        RUVIA_CHECK(worker.invoke([&] {
+            return consumer->outbound_count() == 3 && !consumer->outbound_capacity() &&
+                   consumer->packet_buffer().empty();
+        }));
+        third.reset();
+        packets->acceptor_poll();
+        RUVIA_CHECK(first->view().bytes[0] == std::byte{1});
+        RUVIA_CHECK(second->view().bytes[0] == std::byte{2});
+        RUVIA_CHECK(worker.invoke([&] {
+            consumer->poll_channel();
+            auto bytes = consumer->packet_buffer();
+            const bool returned = completed == 1 && consumer->outbound_count() == 2 &&
+                                  bytes.data() == reusable;
+            consumer->cancel_packet();
+            return returned;
+        }));
+        packets->acceptor_close(std::make_error_code(std::errc::operation_canceled));
+        RUVIA_CHECK(worker.invoke([&] {
+            consumer->poll_channel();
             consumer->request_stop();
-            const bool stopped = consumer->socket_done();
+            return !consumer->endpoint_retired() && consumer->status() == endpoint::stop_status::pending;
+        }));
+        RUVIA_CHECK(!packets->worker_closed());
+        second.reset();
+        RUVIA_CHECK(first->view().bytes[0] == std::byte{1});
+        first.reset();
+        packets->acceptor_poll();
+        RUVIA_CHECK(worker.invoke([&] {
+            consumer->poll_channel();
+            const bool drained = consumer->endpoint_retired() && consumer->outbound_quiescent();
+            consumer->retire_channel();
+            packets->worker_close();
+            return drained;
+        }));
+        RUVIA_CHECK(packets->acceptor_finalize());
+        RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+        packets.reset();
+        RUVIA_CHECK(worker.invoke([&] {
+            consumer->poll_channel();
+            consumer->cancel_packet();
+            consumer->retire_channel();
+            const std::array bytes{std::byte{1}};
+            const bool retired = consumer->endpoint_retired() && consumer->outbound_quiescent() &&
+                                 !consumer->outbound_pending() && consumer->outbound_count() == 0 &&
+                                 consumer->status() == endpoint::stop_status::error &&
+                                 consumer->send_datagram(bytes, local, peer) == endpoint::pump_result::stopped;
             consumer.reset();
-            packets.worker_close();
-            return stopped;
-        });
-        RUVIA_CHECK(detached);
-        RUVIA_CHECK(packets.worker_closed());
-        RUVIA_CHECK(late_loan && late_loan->bytes[0] == std::byte{4} && late_loan->bytes[1] == std::byte{5});
-        RUVIA_CHECK(packets.acceptor_output().has_value());
-        packets.acceptor_consume_output();
-        RUVIA_CHECK(!packets.acceptor_output());
-        RUVIA_CHECK(packets.error() == std::errc::operation_canceled);
+            return retired;
+        }));
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
 }
 
-RUVIA_TEST(http3_datagram_channel_cold_worker_ack_rejects_late_packets_and_retires_pmr_storage) {
-    asio::io_context acceptor_io;
-    ruvia::WorkerRuntimeContext acceptor(acceptor_io, 8);
+RUVIA_TEST(http3_datagram_channel_full_lanes_recover_through_wrapping_independent_credit_batches) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
+    ruvia::WorkerNotification notification(acceptor);
+    ruvia::buffer_pool pool(7, channel::packet_capacity);
+    packet_worker worker;
+    channel packets(pool, notification, nullptr, 3, 2);
+    packets.stage_worker(worker.runtime);
+    worker.invoke([&] { packets.worker_start(); });
+    for (unsigned round = 0; round != 5; ++round) {
+        for (unsigned value = 1; value != 4; ++value) {
+            auto packet = receive_packet(pool, std::byte(value));
+            RUVIA_CHECK(packets.acceptor_push(std::move(packet)));
+        }
+        worker.invoke([&] {
+            // Fill real TX descriptors while RX credits return independently;
+            // UDP completion below retains and returns actual submitted leases.
+            for (unsigned count = 0; count != 2; ++count) {
+                auto bytes = packets.worker_output_buffer();
+                if (bytes.empty()) {
+                    std::terminate();
+                }
+                bytes[0] = std::byte(count + 1);
+                if (!packets.worker_send(bytes.first(1), local, peer)) {
+                    std::terminate();
+                }
+            }
+            for (unsigned value = 1; value != 4; ++value) {
+                auto packet = packets.worker_input();
+                RUVIA_CHECK(packet && packet->bytes[0] == std::byte(value));
+                packets.worker_consume_input();
+            }
+        });
+        RUVIA_CHECK_EQ(pool.available(), std::size_t{2});
+        auto unrouted = receive_packet(pool, std::byte{9});
+        const auto* retained = unrouted.storage.bytes().data();
+        RUVIA_CHECK(!packets.acceptor_push(std::move(unrouted)));
+        RUVIA_CHECK(unrouted.storage.bytes().data() == retained);
+        unrouted.storage.reset();
+        auto first = packets.acceptor_take_output();
+        auto second = packets.acceptor_take_output();
+        RUVIA_CHECK(first && second);
+        RUVIA_CHECK(worker.invoke([&] { return !packets.worker_outbound_capacity(); }));
+        packets.acceptor_poll();
+        RUVIA_CHECK_EQ(pool.available(), std::size_t{5});
+        RUVIA_CHECK(worker.invoke([&] { return !packets.worker_outbound_capacity(); }));
+        second.reset();
+        RUVIA_CHECK(first && first->view().bytes[0] == std::byte{1});
+        first.reset();
+        packets.acceptor_poll();
+        RUVIA_CHECK(worker.invoke([&] {
+            return packets.worker_outbound_count() == 0 && packets.worker_outbound_capacity();
+        }));
+    }
+    retire(packets, worker, ruvia_ctx);
+    RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+}
+
+RUVIA_TEST(http3_datagram_channel_cold_abandonment_reclaims_only_on_acceptor_owner) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
     ruvia::WorkerNotification notification(acceptor);
     asio::io_context worker_io;
     ruvia::WorkerRuntimeContext worker(worker_io, 8);
     ruvia::test::CountingMemoryResource memory;
     {
-        channel packets(notification, &memory, 1);
+        ruvia::buffer_pool pool(4, channel::packet_capacity, &memory);
+        channel packets(pool, notification, &memory, 1, 2);
         packets.stage_worker(worker);
-        const channel::udp::endpoint local(asio::ip::address_v4::loopback(), 4433);
-        const channel::udp::endpoint peer(asio::ip::address_v4::loopback(), 5544);
-        const std::array input{std::byte{1}};
-        RUVIA_CHECK(packets.acceptor_push(input, local, peer));
-        packets.acceptor_close();
-        packets.abandon_worker();
+        auto input = receive_packet(pool, std::byte{1});
+        RUVIA_CHECK(packets.acceptor_push(std::move(input)));
+        const auto outstanding = pool.outstanding();
+        std::thread coordinator([&] { packets.abandon_worker(); });
+        coordinator.join();
+        RUVIA_CHECK_EQ(pool.outstanding(), outstanding);
+        RUVIA_CHECK(!packets.worker_closed());
+        RUVIA_CHECK(packets.acceptor_finalize());
         RUVIA_CHECK(packets.worker_closed());
-        RUVIA_CHECK(!packets.acceptor_push(input, local, peer));
-        RUVIA_CHECK(!packets.acceptor_output());
+        RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+        auto late = receive_packet(pool, std::byte{2});
+        RUVIA_CHECK(!packets.acceptor_push(std::move(late)));
+        late.storage.reset();
     }
     RUVIA_CHECK_EQ(memory.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocationCount(), memory.deallocationCount());
+}
+
+RUVIA_TEST(http3_datagram_channel_rejects_unrepresentable_or_unfunded_budget) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
+    ruvia::WorkerNotification notification(acceptor);
+    ruvia::buffer_pool pool(4, channel::packet_capacity);
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        channel packets(pool, notification, nullptr, std::numeric_limits<std::size_t>::max(), 1);
+    }));
+    RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+        channel packets(pool, notification, nullptr, 3, 2);
+    }));
+    RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+}
+
+RUVIA_TEST(http3_datagram_channel_full_credit_budget_retires_prepared_and_available_leases) {
+    asio::io_context io;
+    ruvia::WorkerRuntimeContext acceptor(io, 8);
+    ruvia::WorkerNotification notification(acceptor);
+    ruvia::buffer_pool pool(6, channel::packet_capacity);
+    packet_worker worker;
+    channel packets(pool, notification, nullptr, 3, 2);
+    packets.stage_worker(worker.runtime);
+    worker.invoke([&] { packets.worker_start(); });
+    for (unsigned value = 0; value != 3; ++value) {
+        auto packet = receive_packet(pool, std::byte(value));
+        RUVIA_CHECK(packets.acceptor_push(std::move(packet)));
+    }
+    RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{5});
+    RUVIA_CHECK(worker.invoke([&] { return !packets.worker_output_buffer().empty(); }));
+    packets.acceptor_close();
+    worker.invoke([&] {
+        // All three RX credits remain pending when the final two TX returns
+        // fill the independent credit lane. Prepared TX still counts in O.
+        packets.worker_stop();
+    });
+    RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{5});
+    RUVIA_CHECK(!packets.acceptor_finalize());
+    RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
+    worker.invoke([&] { packets.worker_close(); });
+    RUVIA_CHECK(packets.acceptor_finalize());
 }

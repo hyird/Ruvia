@@ -10,6 +10,8 @@
 #include <asio/error.hpp>
 #include <asio/post.hpp>
 
+#include "ruvia/core/memory/ProcessResource.h"
+
 namespace ruvia::detail {
 
 Http3QuicWireOwner::TimerWaitHandler::TimerWaitHandler(
@@ -67,35 +69,8 @@ void Http3QuicWireOwner::TimerRetirementHandler::operator()() noexcept {
     }
 }
 
-Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& networkIo,
-    Http3DatagramEndpoint::udp::endpoint bindEndpoint, http3_quic_tls_context& tls,
-    ruvia::quic_server_config transportConfig,
-    std::pmr::memory_resource* timerHandlerResource)
-    : Http3QuicWireOwner(networkIo, std::move(bindEndpoint), tls, transportConfig,
-          timerHandlerResource, {}) {}
-
-Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& networkIo,
-    Http3DatagramEndpoint::udp::endpoint bindEndpoint, http3_quic_tls_context& tls,
-    ruvia::quic_server_config transportConfig,
-    std::pmr::memory_resource* timerHandlerResource, ProtocolPump protocolPump)
-    : ownerThread_(std::this_thread::get_id()),
-      networkIo_(networkIo),
-      tls_(tls),
-      transportConfig_(transportConfig),
-      endpoint_(networkIo_, std::move(bindEndpoint),
-          Http3DatagramEndpoint::notification{this, &endpointNotification}),
-      timer_(networkIo_),
-      timerHandlerAllocator_(timerHandlerResource != nullptr
-                                 ? timerHandlerResource
-                                 : std::pmr::get_default_resource()),
-      protocolPump_(protocolPump) {
-    if ((protocolPump_.context == nullptr) != (protocolPump_.drive == nullptr)) {
-        throw std::invalid_argument("HTTP/3 wire protocol pump must be complete");
-    }
-}
-
 Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& worker_io,
-    http3_datagram_channel& channel, Http3DatagramEndpoint::udp::endpoint local_endpoint,
+    http3_datagram_channel& channel, http3_worker_datagram_endpoint::udp::endpoint local_endpoint,
     http3_quic_tls_context& tls, ruvia::quic_server_config transport_config,
     std::pmr::memory_resource* timer_handler_resource, ProtocolPump protocol_pump)
     : ownerThread_(std::this_thread::get_id()),
@@ -103,13 +78,13 @@ Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& worker_io,
       tls_(tls),
       transportConfig_(transport_config),
       endpoint_(channel, std::move(local_endpoint),
-          Http3DatagramEndpoint::notification{this, &endpointNotification}),
+          http3_worker_datagram_endpoint::notification{this, &endpointNotification}),
       timer_(networkIo_),
       timerHandlerAllocator_(timer_handler_resource != nullptr
                                  ? timer_handler_resource
-                                 : std::pmr::get_default_resource()),
+                                 : ruvia::detail::processResource()),
       protocolPump_(protocol_pump) {
-    if ((protocolPump_.context == nullptr) != (protocolPump_.drive == nullptr)) {
+    if (protocolPump_.context == nullptr || protocolPump_.drive == nullptr) {
         throw std::invalid_argument("HTTP/3 wire protocol pump must be complete");
     }
 }
@@ -148,9 +123,9 @@ void Http3QuicWireOwner::start() {
     try {
         started_ = true;
         const auto receive = endpoint_.start();
-        if (receive == Http3DatagramEndpoint::pump_result::error) {
+        if (receive == http3_worker_datagram_endpoint::pump_result::error) {
             captureEndpointError();
-        } else if (receive == Http3DatagramEndpoint::pump_result::stopped) {
+        } else if (receive == http3_worker_datagram_endpoint::pump_result::stopped) {
             beginStop();
         }
         if (!stopping_) {
@@ -181,7 +156,7 @@ void Http3QuicWireOwner::requestDrive() noexcept {
 
 void Http3QuicWireOwner::poll_datagrams() noexcept {
     requireOwnerThread();
-    endpoint_.poll_forwarded();
+    endpoint_.poll_channel();
 }
 
 void Http3QuicWireOwner::deferTransportRetirement() noexcept {
@@ -199,23 +174,27 @@ void Http3QuicWireOwner::releaseTransportRetirement() noexcept {
 
 void Http3QuicWireOwner::pollStop() noexcept {
     requireOwnerThread();
-    if (!stopping_ || driving_ || !timerHandlersRetired_ || !endpoint_.socket_done() ||
-        endpoint_.send_in_flight() || !transportRetirementReleased_) {
+    if (transportDestroyed_) {
+        return;
+    }
+    if (!stopping_ || driving_ || !timerHandlersRetired_ || !endpoint_.endpoint_retired() ||
+        endpoint_.outbound_pending() || !transportRetirementReleased_) {
         return;
     }
     transport_.reset();
-    transportDestroyed_ = true;
     captureEndpointError();
+    endpoint_.retire_channel();
+    transportDestroyed_ = true;
 }
 
 Http3QuicWireOwner::StopStatus Http3QuicWireOwner::stopStatus() const noexcept {
     requireOwnerThread();
     return StopStatus{
         .stopping = stopping_,
-        .socketDone = endpoint_.socket_done(),
+        .endpoint_retired = endpoint_.endpoint_retired(),
         .timerHandlersRetired = timerHandlersRetired_,
         .transportDestroyed = transportDestroyed_,
-        .sendInFlight = endpoint_.send_in_flight(),
+        .outbound_pending = endpoint_.outbound_pending(),
         .failed = static_cast<bool>(failure_),
     };
 }
@@ -243,7 +222,7 @@ void Http3QuicWireOwner::rethrowFailure() const {
 }
 
 void Http3QuicWireOwner::endpointNotification(void* context,
-    Http3DatagramEndpoint::notification_kind kind) noexcept {
+    http3_worker_datagram_endpoint::notification_kind kind) noexcept {
     auto& owner = *static_cast<Http3QuicWireOwner*>(context);
     try {
         owner.onEndpointNotification(kind);
@@ -259,9 +238,9 @@ void Http3QuicWireOwner::requireOwnerThread() const noexcept {
 }
 
 void Http3QuicWireOwner::onEndpointNotification(
-    Http3DatagramEndpoint::notification_kind kind) noexcept {
+    http3_worker_datagram_endpoint::notification_kind kind) noexcept {
     requireOwnerThread();
-    if (kind == Http3DatagramEndpoint::notification_kind::stopping) {
+    if (kind == http3_worker_datagram_endpoint::notification_kind::stopping) {
         captureEndpointError();
         beginStop();
         return;
@@ -288,20 +267,15 @@ void Http3QuicWireOwner::drive() noexcept {
         if (stopping_ || !transport_) {
             break;
         }
-        if (endpoint_.send_in_flight()) {
-            break;
-        }
         try {
-            if (protocolPump_.drive != nullptr) {
-                const auto result = protocolPump_.drive(protocolPump_.context,
-                    *transport_, endpoint_);
-                if (result == ProtocolPumpResult::kFatal) {
-                    recordFailure(std::make_exception_ptr(
-                        std::runtime_error("HTTP/3 server network protocol pump failed")));
-                    break;
-                }
-                driveRequested_ = result == ProtocolPumpResult::kProgress;
+            const auto result = protocolPump_.drive(protocolPump_.context,
+                *transport_, endpoint_);
+            if (result == ProtocolPumpResult::kFatal) {
+                recordFailure(std::make_exception_ptr(
+                    std::runtime_error("HTTP/3 server network protocol pump failed")));
+                break;
             }
+            driveRequested_ = driveRequested_ || result == ProtocolPumpResult::kProgress;
             updateDeadline();
         } catch (...) {
             recordCurrentFailure();
@@ -414,10 +388,6 @@ void Http3QuicWireOwner::onTimerCompletion(std::uint64_t generation,
     ++timerExpirations_;
     transportActivity_ = true;
     if (generation != timerGeneration_ || stopping_) {
-        return;
-    }
-    if (endpoint_.send_in_flight()) {
-        desiredDeadline_.reset();
         return;
     }
     drive();

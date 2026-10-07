@@ -80,16 +80,16 @@ Http3ServerStreamOutput::~Http3ServerStreamOutput() {
 
 void Http3ServerStreamOutput::requireOwnerThread() const {
     if (std::this_thread::get_id() != ownerThread_) {
-        throw std::logic_error("HTTP/3 server output used outside its server network thread");
+        throw std::logic_error("HTTP/3 server output used outside its owning worker thread");
     }
 }
 
 Http3ServerStreamOutput::IdentityStatus Http3ServerStreamOutput::identityStatus(
-    const Http3StreamMessageId& id) const noexcept {
+    const http3_stream_id& id) const noexcept {
     if (id.epoch != epoch_) {
         return IdentityStatus::kForeignEpoch;
     }
-    if (id.connectionGeneration != connectionGeneration_) {
+    if (id.connection_generation != connectionGeneration_) {
         return IdentityStatus::kStaleConnection;
     }
     return IdentityStatus::kMatch;
@@ -187,7 +187,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::registerPushStream(Stre
     return {.status = Status::kAccepted};
 }
 
-Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(Http3StreamMailbox::BorrowedBlock& block) {
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(http3_stream_buffer::borrowed_block& block) {
     requireOwnerThread();
     if (!block || block.critical() != nullptr) {
         return {.status = Status::kInvalidInput};
@@ -195,20 +195,20 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptData(Http3StreamM
     if (block.id().epoch != epoch_) {
         return {.status = Status::kForeignEpoch};
     }
-    if (block.id().connectionGeneration != connectionGeneration_) {
+    if (block.id().connection_generation != connectionGeneration_) {
         return {.status = Status::kStaleConnection};
     }
-    if (!validResponseStreamId(block.id().streamId)) {
+    if (!validResponseStreamId(block.id().stream_id)) {
         return failConnection(Status::kInvalidStreamId);
     }
-    const auto* registered = findStream(block.id().streamId);
+    const auto* registered = findStream(block.id().stream_id);
     const auto expectedPush = registered == nullptr ? std::nullopt : registered->info.pushId;
-    if (block.id().pushId != expectedPush) {
+    if (block.id().push_id != expectedPush) {
         return failConnection(Status::kInvalidInput);
     }
-    return acceptAddressedData(block, block.id().streamId, block.id().epoch, block.id().connectionGeneration);
+    return acceptAddressedData(block, block.id().stream_id, block.id().epoch, block.id().connection_generation);
 }
-Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptCriticalData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId) {
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptCriticalData(http3_stream_buffer::borrowed_block& block, StreamId streamId) {
     requireOwnerThread();
     const auto* target = block.critical();
     if (!block || target == nullptr ||
@@ -218,9 +218,9 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptCriticalData(Http
     if (const auto* slot = findStream(streamId); slot != nullptr && slot->info.pushId) {
         return {.status = Status::kInvalidInput};
     }
-    return acceptAddressedData(block, streamId, target->epoch, target->connectionGeneration);
+    return acceptAddressedData(block, streamId, target->epoch, target->connection_generation);
 }
-Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptAddressedData(Http3StreamMailbox::BorrowedBlock& block,
+Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptAddressedData(http3_stream_buffer::borrowed_block& block,
     StreamId streamId, std::uint64_t epoch, std::uint64_t generation) {
     if (epoch != epoch_) {
         return {.status = Status::kForeignEpoch};
@@ -294,7 +294,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptAddressedData(Htt
 }
 
 Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
-    const Http3StreamControl& control) {
+    const http3_stream_control& control) {
     requireOwnerThread();
     const auto identity = identityStatus(control.id);
     if (identity == IdentityStatus::kForeignEpoch) {
@@ -303,7 +303,7 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
     if (identity == IdentityStatus::kStaleConnection) {
         return {.status = Status::kStaleConnection};
     }
-    if (control.kind == Http3StreamControl::Kind::kConnectionClosed) {
+    if (control.kind == http3_stream_control::kind::connection_closed) {
         if (stopped_ && stopComplete_) {
             return {.status = Status::kConnectionClosed};
         }
@@ -323,26 +323,26 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
     if (stopped_) {
         return {.status = Status::kStopped};
     }
-    if (!validResponseStreamId(control.id.streamId)) {
+    if (!validResponseStreamId(control.id.stream_id)) {
         return failConnection(Status::kInvalidStreamId);
     }
-    const auto* registered = findStream(control.id.streamId);
+    const auto* registered = findStream(control.id.stream_id);
     const auto expectedPush = registered == nullptr ? std::nullopt : registered->info.pushId;
-    if (control.id.pushId != expectedPush) {
+    if (control.id.push_id != expectedPush) {
         return failConnection(Status::kInvalidInput);
     }
-    auto* slot = findOrCreateStream(control.id.streamId);
+    auto* slot = findOrCreateStream(control.id.stream_id);
     if (slot == nullptr) {
         return failConnection(Status::kCapacityExhausted);
     }
     if (isTerminal(slot->info.state)) {
         if (slot->info.state == StreamState::kFinished &&
-            control.kind == Http3StreamControl::Kind::kStreamFin &&
+            control.kind == http3_stream_control::kind::stream_fin &&
             slot->info.finalWireBytes && *slot->info.finalWireBytes == control.value) {
             return {.status = Status::kDuplicateFin};
         }
         if (slot->info.state == StreamState::kFinished &&
-            control.kind == Http3StreamControl::Kind::kStreamFin &&
+            control.kind == http3_stream_control::kind::stream_fin &&
             slot->info.finalWireBytes && *slot->info.finalWireBytes != control.value) {
             return failConnection(Status::kFinalSizeError);
         }
@@ -350,12 +350,12 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
     }
 
     switch (control.kind) {
-        case Http3StreamControl::Kind::kConnectionClosed:
+        case http3_stream_control::kind::connection_closed:
             break;
-        case Http3StreamControl::Kind::kStreamReset: {
+        case http3_stream_control::kind::stream_reset: {
             slot->info.state = StreamState::kStopping;
             const bool retired = retireStream(*slot, StreamState::kReset,
-                static_cast<std::uint64_t>(control.streamResetErrorCode));
+                static_cast<std::uint64_t>(control.stream_reset_error_code));
             if (!retired) {
                 return {.status = Status::kUnsafeToRelease,
                     .termination = slot->info.termination};
@@ -363,12 +363,12 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::acceptControl(
             return {.status = connectionRetired_ ? Status::kConnectionClosed : Status::kReset,
                 .termination = slot->info.termination};
         }
-        case Http3StreamControl::Kind::kWritable:
+        case http3_stream_control::kind::writable:
             notifyTransportActivity();
             return {.status = Status::kWritable};
-        case Http3StreamControl::Kind::kTunnelEstablished:
+        case http3_stream_control::kind::tunnel_established:
             return {.status = Status::kInvalidInput};
-        case Http3StreamControl::Kind::kStreamFin:
+        case http3_stream_control::kind::stream_fin:
             if (control.value > kHttp3VarIntMax || control.value < slot->info.receivedWireBytes) {
                 return failConnection(Status::kFinalSizeError);
             }
@@ -853,14 +853,19 @@ Http3ServerStreamOutput::Result Http3ServerStreamOutput::handleWriteFailure(
     StreamSlot& slot, TransportError writeStatus) {
     slot.info.lastWriteStatus = writeStatus;
     slot.info.state = StreamState::kStopping;
-    const bool retired = retireStream(slot, StreamState::kFailed,
-        static_cast<std::uint64_t>(Http3ConnectionErrorCode::kInternalError));
+    const bool stream_closed = writeStatus == TransportError::stream_closed;
+    const bool retired = retireStream(slot,
+        stream_closed ? StreamState::kCancelled : StreamState::kFailed,
+        static_cast<std::uint64_t>(stream_closed ? Http3ConnectionErrorCode::kRequestCancelled
+                                                 : Http3ConnectionErrorCode::kInternalError));
     if (!retired) {
         return {.status = Status::kUnsafeToRelease,
             .writeStatus = writeStatus,
             .termination = slot.info.termination};
     }
-    return {.status = connectionRetired_ ? Status::kConnectionClosed : Status::kTransportError,
+    return {.status = connectionRetired_ ? Status::kConnectionClosed
+                      : stream_closed    ? Status::kCancelled
+                                         : Status::kTransportError,
         .transportError = slot.info.termination.send,
         .writeStatus = writeStatus,
         .termination = slot.info.termination};

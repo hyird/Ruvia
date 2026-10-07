@@ -6,6 +6,7 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -16,10 +17,11 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerNotification.h"
 #include "ruvia/core/WorkerSubmissionView.h"
+#include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/quic_server.h"
-#include "ruvia/web/detail/http3/Http3DatagramEndpoint.h"
+#include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
 
@@ -86,7 +88,7 @@ private:
     Task<void> run_quic();
     void pump_quic() noexcept;
     [[nodiscard]] bool quic_retired() noexcept;
-    static void datagram_ready(void*, Http3DatagramEndpoint::notification_kind) noexcept;
+    static void datagram_ready(void*, http3_acceptor_datagram_endpoint::notification_kind) noexcept;
     void begin_accept(std::size_t index) noexcept;
     void accepted(std::size_t index, const asio::error_code&, asio::ip::tcp::socket) noexcept;
     void schedule_retry(std::size_t index) noexcept;
@@ -98,8 +100,9 @@ private:
     asio::io_context& io_context_;
     std::pmr::vector<listener_ptr> listeners_;
     std::pmr::vector<worker_target> targets_;
+    std::optional<buffer_pool> quic_pool_;
     std::pmr::vector<channel_ptr> quic_channels_;
-    std::unique_ptr<Http3DatagramEndpoint, PmrObjectDeleter<Http3DatagramEndpoint>> udp_;
+    std::unique_ptr<http3_acceptor_datagram_endpoint, PmrObjectDeleter<http3_acceptor_datagram_endpoint>> udp_;
     WorkerNotification quic_notification_;
     asio::steady_timer quic_retirement_;
     void* failure_target_{};
@@ -115,7 +118,6 @@ private:
     bool quic_stopping_{};
     std::size_t next_target_{};
     std::size_t next_output_{};
-    std::size_t sending_worker_{};
 };
 
 }  // namespace ruvia::detail

@@ -29,7 +29,7 @@
 #include "ruvia/web/detail/http/context/HttpPushOutput.h"
 #include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
 #include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
-#include "ruvia/web/detail/http3/Http3StreamMailbox.h"
+#include "ruvia/web/detail/http3/http3_stream_buffer.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/RequestDeadline.h"
 
@@ -53,14 +53,14 @@ struct Http3TunnelCallbacks final {
 //
 // RFC 9114 §§4.2.2, 7.2.4 and 10.5.1 say SHOULD NOT: the peer setting is
 // advisory. Compare the decoded sum(name + value + 32), including :status, not
-// QPACK/frame bytes. This dispatch checks before its first mailbox handoff;
+// QPACK/frame bytes. This dispatch checks before its first local buffer publication;
 // after any HEADERS prefix is handed off it must finish that same field section
 // even if a later peer setting is lower. This does not guarantee a final
 // transport-level field-section limit.
 //
 // The connection owner must retire/cancel inbound delivery separately through
-// Http3ServerStreamInput. publishStep() never waits for mailbox capacity: the
-// connection-level scheduler owns fairness and the mailbox's capacity wait.
+// Http3ServerStreamInput. publishStep() never waits for buffer capacity: the
+// connection-level scheduler owns fairness and local capacity recovery.
 // ContextServices is snapshotted by value; its worker/token/capability and
 // connection-metadata borrows, and all other constructor references, must
 // outlive this owner and its tasks.
@@ -113,14 +113,14 @@ public:
         kDeadline,
     };
 
-    // DATA/CONTROL identify the required mailbox lane. Local demands are
-    // handled by publishStep() without waiting for mailbox capacity.
+    // DATA/CONTROL identify the required buffer lane. Local demands are
+    // handled by publishStep() without waiting for buffer capacity.
     enum class PublicationDemand : std::uint8_t {
         kData,
         kControl,
         kLocalComplete,
         kLocalCancelled,
-        kLocalMailboxStopped,
+        local_buffer_stopped,
         kLocalPeerLimitRejected,
         kLocalFailed,
         kNotReady,
@@ -130,15 +130,13 @@ public:
     struct PublishResult final {
         PublishStatus status{PublishStatus::kNotReady};
         std::size_t bytesPublished{};
-        // Honor even on failure: already-published output cannot be recalled.
-        bool notifyPeer{false};
         // Non-None only for backpressure; identifies the capacity lane, not cursor state.
         PublishBlockReason blockReason{PublishBlockReason::kNone};
     };
 
     Http3BufferedRequestDispatch(Http3SansIoSessionEngine& session, const RouteTable& routes,
         WorkerMemory& worker, ContextServices services, const HttpServerOptions& options,
-        Http3StreamMailbox& outbound, Http3StreamMessageId messageId,
+        http3_stream_buffer& outbound, http3_stream_id messageId,
         ConnectionScanner::Entry& scannerEntry, asio::any_io_executor executor,
         Http3TunnelCallbacks tunnelCallbacks, std::uint64_t responsePreludeBytes = 0);
     ~Http3BufferedRequestDispatch();
@@ -150,10 +148,10 @@ public:
     // Both tasks are lazy. The first actual start acquires the request lease;
     // constructing and discarding either cold task changes no session state.
     [[nodiscard]] std::expected<Http3StreamingResponseHead, Http3ResponseHeadFailure> encodeStreamingResponseHead(HttpResponse response, HttpKnownMethod method, http_response_stream_kind kind, http_response_trailer_intent trailers) {
-        return session_.encodeStreamingResponseHead(messageId_.streamId, std::move(response), method, kind, trailers);
+        return session_.encodeStreamingResponseHead(messageId_.stream_id, std::move(response), method, kind, trailers);
     }
     [[nodiscard]] std::expected<Http3ResponseFieldSection, Http3ResponseHeadFailure> encodeResponseTrailers(std::span<const Http3FieldSectionFieldView> fields) {
-        return session_.encodeResponseTrailers(messageId_.streamId, fields);
+        return session_.encodeResponseTrailers(messageId_.stream_id, fields);
     }
     [[nodiscard]] Task<PrepareStatus> prepare() &;
     Task<PrepareStatus> prepare() && = delete;
@@ -161,15 +159,14 @@ public:
     Task<RunStatus> runHandler() && = delete;
 
     // Pure, worker-affine query. A foreign worker gets kWrongWorker before any
-    // dispatch/session/mailbox state is inspected. Does not publish, acknowledge,
-    // drain mailbox returns, allocate/free, invoke handlers, change state, or
+    // dispatch/session/buffer state is inspected. Does not publish, acknowledge,
+    // allocate/free, invoke handlers, change state, or
     // release resources.
     [[nodiscard]] PublicationDemand publicationDemand() const noexcept;
 
-    // Copies at most one cursor segment (clipped to one mailbox block) per
-    // call. Only successful trySend/trySendControl operations are acknowledged.
+    // Copies at most one cursor segment (clipped to one buffer block) per
+    // call. Only successful try_send/try_send_control operations are acknowledged.
     // Backpressure identifies the capacity lane without arming a wait here.
-    // notifyPeer transfers the exact wakeup obligation, independently of status.
     // Local terminal demands are committed and cleaned up here, never by the query.
     [[nodiscard]] PublishResult publishStep() & noexcept;
     PublishResult publishStep() && = delete;
@@ -208,7 +205,7 @@ public:
     [[nodiscard]] Task<HttpStreamReadResult> readTunnel(std::pmr::string& buffer);
     [[nodiscard]] Task<std::optional<HttpDatagramInput>> readDatagramInput();
     [[nodiscard]] HttpDatagramSessionConfig datagramConfig() const {
-        return session_.datagramConfig(messageId_.streamId);
+        return session_.datagramConfig(messageId_.stream_id);
     }
     void sendDatagram(std::span<const std::byte> bytes);
     [[nodiscard]] Task<std::error_code> writeTunnel(std::string_view bytes,
@@ -270,8 +267,8 @@ private:
     WorkerMemory& worker_;
     const ContextServices services_;
     const HttpServerOptions& options_;
-    Http3StreamMailbox& outbound_;
-    const Http3StreamMessageId messageId_;
+    http3_stream_buffer& outbound_;
+    const http3_stream_id messageId_;
     ConnectionScanner::Entry& scannerEntry_;
     ConnectionScanner::PeriodicCheckRegistration peerTransportFinCheck_;
     asio::any_io_executor executor_;
