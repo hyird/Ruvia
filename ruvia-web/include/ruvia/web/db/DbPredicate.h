@@ -60,6 +60,7 @@ private:
 
 template <typename E, FixedString Name>
 class DbFieldReference final {
+    static_assert(sql_entity<E>, "SQL field references require a SQL entity");
     static_assert(E::template columnIndex<Name>() < std::tuple_size_v<typename E::Columns>);
 
 public:

@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -34,13 +35,14 @@ class DbQueryBuilder;
 
 namespace detail {
 class DbQueryCacheState;
+struct db_query_plan;
 struct DbTransactionStartPlan;
 template <typename Pool>
 Task<DbTransaction> beginDbTransaction(Pool&, std::pmr::memory_resource*,
     OperationOptions, DbTransactionStartPlan);
 }  // namespace detail
 
-class DbTransaction final : private detail::ScopedCapabilityNode {
+class DbTransaction final {
 public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
@@ -139,18 +141,18 @@ private:
     [[nodiscard]] Task<std::pair<DbRows, DbRows>> queryAndCountTask(const DbQuery& query, const DbQuery& count);
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<std::pair<Result, std::uint64_t>> queryMappedAndCount(const DbQuery& query, const DbQuery& count, Mapper mapper) {
-        requireActive();
+        registration_.require_active();
         auto* resource = queryResource();
         auto task = queryAndCountTask(query, count);
-        return detail::makeScopedOperation(operationScope(),
+        return make_scoped_operation(registration_.scope(),
             detail::mapDbQueryAndCount<Result>(std::move(task), resource, std::move(mapper)));
     }
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) {
-        requireActive();
+        registration_.require_active();
         auto* resource = queryResource();
         auto task = queryTask(query);
-        return detail::makeScopedOperation(operationScope(),
+        return make_scoped_operation(registration_.scope(),
             detail::mapDbQuery<Result>(std::move(task), resource, std::move(mapper)));
     }
     friend class detail::MariaDbPool;
@@ -172,7 +174,6 @@ private:
 
     using OperationState = detail::DbOperationState<Lease>;
     using OperationGuard = detail::DbOperationGuard<Lease>;
-    static Task<std::pair<DbRows, DbRows>> queryAndCountPrepared(DbStatement query, DbStatement count, OperationGuard operation);
 
     class State;
     using StateOwner = std::unique_ptr<State, detail::PmrObjectDeleter<State>>;
@@ -186,19 +187,15 @@ private:
     static Task<void> commitTask(OperationGuard operation);
     static Task<void> rollbackTask(OperationGuard operation);
     void reset() noexcept;
-    void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    void bindOperationScope(operation_scope& scope) noexcept;
+    static void expire_capability(void* target) noexcept;
 
-    template <bool Count>
-    static Task<std::conditional_t<Count, std::pair<DbRows, DbRows>, DbRows>> queryCachedPrepared(
-        DbStatement first, std::optional<DbStatement> second,
-        std::optional<std::pmr::string> firstKey, std::optional<std::pmr::string> secondKey,
-        std::optional<std::chrono::milliseconds> firstDuration,
-        std::optional<std::chrono::milliseconds> secondDuration,
-        detail::DbQueryCacheState& cache,
-        OperationGuard operation);
+    template <bool with_count>
+    static Task<std::conditional_t<with_count, std::pair<DbRows, DbRows>, DbRows>> query_plan_prepared(
+        detail::db_query_plan plan, detail::DbQueryCacheState* cache, OperationGuard operation);
     detail::DbQueryCacheState* cache_{nullptr};
     StateOwner state_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

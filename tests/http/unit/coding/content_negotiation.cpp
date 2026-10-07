@@ -1,5 +1,6 @@
 #include <initializer_list>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/HttpAcceptEncoding.h"
@@ -7,6 +8,30 @@
 #include "ruvia/http/detail/field/HttpQualityValue.h"
 
 #include "test_harness.h"
+
+RUVIA_TEST(response_coding_sets_and_selection_snapshots_distinguish_every_supported_coding) {
+    constexpr ruvia::HttpContentCoding codings[]{ruvia::HttpContentCoding::kIdentity,
+        ruvia::HttpContentCoding::kGzip, ruvia::HttpContentCoding::deflate,
+        ruvia::HttpContentCoding::kBrotli, ruvia::HttpContentCoding::kZstd};
+    for (const auto coding : codings) {
+        auto candidates = ruvia::HttpResponseCodingCandidates::empty();
+        candidates.include(coding);
+        ruvia::HttpResponseCodingQualities qualities;
+        const std::string field = std::string(ruvia::httpContentCodingToken(coding)) +
+                                  ";q=1,*;q=0" + (coding == ruvia::HttpContentCoding::kIdentity ? "" : ",identity;q=0");
+        qualities.update(field);
+        const auto result = ruvia::HttpResponseCodingSelection::select(qualities, candidates);
+        RUVIA_CHECK(result.selected() != nullptr);
+        if (const auto* selected = result.selected()) {
+            RUVIA_CHECK(selected->coding() == coding);
+            for (const auto other : codings) {
+                RUVIA_CHECK(candidates.contains(other) == (other == coding));
+                RUVIA_CHECK(selected->accepts(other) == (other == coding));
+                RUVIA_CHECK(ruvia::HttpResponseCodingCandidates::all().contains(other));
+            }
+        }
+    }
+}
 
 namespace {
 

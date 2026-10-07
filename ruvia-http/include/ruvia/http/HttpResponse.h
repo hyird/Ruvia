@@ -380,6 +380,9 @@ private:
 
     static constexpr std::size_t kKnownHeaderCount = 22;
 
+    class encoded_header_update;
+    void apply_encoded_representation(std::string_view content_encoding, std::pmr::string* body);
+
     void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);

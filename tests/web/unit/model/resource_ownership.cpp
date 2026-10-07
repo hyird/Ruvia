@@ -220,6 +220,9 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
         RUVIA_CHECK(failed);
         RUVIA_CHECK_EQ(target.get<"first">().view(), std::string_view(oldText));
         RUVIA_CHECK_EQ(target.get<"second">().view(), std::string_view(oldText));
+        RUVIA_CHECK_EQ(source.get<"first">().view(), std::string_view(newText));
+        RUVIA_CHECK_EQ(source.get<"second">().view(), std::string_view(newText));
+        RUVIA_CHECK_EQ(source.resource(), &sourceResource);
         RUVIA_CHECK_EQ(targetResource.allocations.liveAllocations(), retained);
         for (int iteration = 0; iteration != 32; ++iteration) {
             source.set<"first">(newText);

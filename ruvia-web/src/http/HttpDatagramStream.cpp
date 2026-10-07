@@ -30,7 +30,7 @@ ScopedOperation<std::optional<HttpDatagram>> HttpDatagramStream::read() & {
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require(false);
-    return detail::makeScopedOperation(stream_.state_->readScope, readOwned(detail::CapsuleStatePin(*stream_.state_), false));
+    return ::ruvia::make_scoped_operation(stream_.state_->readScope, readOwned(detail::CapsuleStatePin(*stream_.state_), false));
 }
 Task<std::optional<HttpDatagram>> HttpDatagramStream::readOwned(detail::CapsuleStatePin pin, bool udp) {
     auto& state = pin.state();
@@ -154,6 +154,6 @@ ScopedOperation<void> HttpDatagramStream::sendPayload(std::string_view payload, 
     };
     std::pmr::string bytes(prefix.data(), size, state.resource);
     bytes.append(payload);
-    return detail::makeScopedOperation(state.outputScope, send(detail::CapsuleWriteInput{detail::CapsuleStatePin(state), std::move(bytes)}));
+    return ::ruvia::make_scoped_operation(state.outputScope, send(detail::CapsuleWriteInput{detail::CapsuleStatePin(state), std::move(bytes)}));
 }
 }  // namespace ruvia

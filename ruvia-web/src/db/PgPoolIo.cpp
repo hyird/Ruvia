@@ -112,9 +112,9 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
     }
 
     if (remaining.has_value()) {
-        setSlotDeadline(slot, *remaining, ConnectionSlot::DeadlineKind::kSocket);
+        arm_db_slot_deadline(worker_, slot, *remaining, ConnectionSlot::DeadlineKind::kSocket);
     } else {
-        clearSlotDeadline(slot);
+        clear_db_slot_deadline(slot);
     }
     struct SocketWaitAwaiter final {
         ConnectionSlot& slot;
@@ -183,7 +183,7 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
     // ASIO no longer owns it before returning to libpq.
     const auto releaseError = slot.waitSocket->release();
     const bool operationExpired = deadline.expired() || slot.deadline.expired();
-    clearSlotDeadline(slot);
+    clear_db_slot_deadline(slot);
     throwIfCancelled(slot);
     if (slot.closeRequested) {
         throw DbError(DbError::Code::kClosing, DbDriver::kPostgreSql, "database client is closing");

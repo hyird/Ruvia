@@ -204,6 +204,39 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
             auto cold = client.connect();
         }
         co_await client.connect();
+        const auto rejectsClaim = [&](auto&& makeOperation, std::string_view message) {
+            bool rejected = false;
+            try {
+                auto overlap = makeOperation();
+            } catch (const ruvia::WebSocketClientError& error) {
+                rejected = error.code() == ruvia::WebSocketClientError::Code::kInvalidState &&
+                           std::string_view(error.what()) == message;
+            }
+            RUVIA_CHECK(rejected);
+        };
+        {
+            auto writing = client.text("discarded");
+            rejectsClaim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            rejectsClaim([&] { return client.close({}); }, "WebSocket client close cannot overlap write");
+            // A failed close must release its earlier read claim without releasing the live write.
+            auto independentRead = client.read();
+            rejectsClaim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
+        }
+        {
+            auto reading = client.read();
+            rejectsClaim([&] { return client.read(); }, "concurrent WebSocket client reads are not supported");
+            rejectsClaim([&] { return client.close({}); }, "WebSocket client close cannot overlap read");
+            auto independentWrite = client.text("discarded");
+        }
+        {
+            auto closing = client.close({});
+            rejectsClaim([&] { return client.read(); }, "concurrent WebSocket client reads are not supported");
+            rejectsClaim([&] { return client.text("overlap"); }, "concurrent WebSocket client writes are not supported");
+            rejectsClaim([&] { return client.close({}); }, "WebSocket client close cannot overlap read");
+        }
+        {
+            auto reclaimed = client.close({});
+        }
         for (unsigned i = 0; i < 4; ++i) {
             {
                 auto cold = client.text("discarded");

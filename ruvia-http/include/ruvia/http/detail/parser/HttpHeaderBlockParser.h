@@ -55,7 +55,7 @@ struct ParsedRequestHeaderBlock {
     KnownRequestHeaderIndex hostHeaderIndex{-1};
     HttpConnectionOptions connectionOptions;
     HttpUpgradeProtocols upgradeProtocols;
-    HttpContentLengthState contentLength;
+    HttpContentLengthState<> contentLength;
     std::uint32_t seenHeaderBits{0};
     HttpResponseCodingQualities responseCodingQualities;
     HttpTransferEncodingState transferEncoding;

@@ -6,14 +6,13 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <type_traits>
 #include <utility>
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/core/WorkerWaitResult.h"
 #include "ruvia/core/detail/SuspendRaceState.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
 
 namespace ruvia::detail {
 
@@ -28,13 +27,13 @@ void completeWorkerSingleWait(State& state, WorkerWaitStatus status) noexcept;
 template <typename State>
 void cancelWorkerSingleWait(const std::shared_ptr<State>& state, std::uint64_t generation) noexcept;
 
-// Shared storage and transition machinery for one worker-bound waiter. Awaiter
-// remains a template parameter, so publishing, cancellation, and wake-up use a
-// direct typed pointer with no allocation, virtual dispatch, or type erasure.
+// Shared storage and transition machinery for one worker-bound waiter. Domain
+// awaiters own this component by value and publish its typed address directly,
+// without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
 // State must expose worker, mutex, waiter, waiterGeneration, and
 // nextWaiterGeneration.
-template <typename T, typename State, typename Awaiter>
-class WorkerSingleWaitAwaiter {
+template <typename T, typename State>
+class WorkerSingleWaitAwaiter final {
 public:
     WorkerSingleWaitAwaiter(std::shared_ptr<State> state,
         std::optional<std::chrono::steady_clock::duration> timeout, StopToken stopToken)
@@ -72,20 +71,20 @@ public:
 
     void publish() noexcept {
         auto& owner = state();
-        owner.waiter = self();
+        owner.waiter = this;
         owner.waiterGeneration = generation_;
     }
 
     [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
         auto& owner = state();
-        auto* waiter = self();
+        auto* waiter = this;
         std::lock_guard lock(owner.mutex);
         if (!completion_.suspend(handle)) {
             return false;
         }
         if (timeout_) {
             try {
-                WorkerHandleAccess::scheduleTimer(owner.worker, timer_,
+                owner.worker.schedule_timer(timer_,
                     workerTimerDeadlineAfter(*timeout_),
                     [&owner, waiter, completion = &completion_](WorkerTimerOutcome outcome) {
                         if (outcome == WorkerTimerOutcome::kExpired) {
@@ -122,7 +121,7 @@ public:
             timer_.cancel();
             return;
         }
-        auto* waiter = self();
+        auto* waiter = this;
         WorkerHandleAccess::deferOrTerminate(
             state().worker, [waiter] { waiter->resumeContinuation(); });
     }
@@ -132,10 +131,6 @@ public:
     }
 
 private:
-    [[nodiscard]] Awaiter* self() noexcept {
-        return static_cast<Awaiter*>(this);
-    }
-
     [[nodiscard]] static std::uint64_t reserveGeneration(State& state) noexcept {
         std::lock_guard lock(state.mutex);
         if (++state.nextWaiterGeneration == 0) {

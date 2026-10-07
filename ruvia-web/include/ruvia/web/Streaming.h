@@ -60,7 +60,7 @@ public:
 
 private:
     detail::CallableRef<std::optional<std::span<const std::byte>>> read_;
-    detail::ScopedOperationScope operationScope_;
+    ::ruvia::operation_scope operationScope_;
 };
 
 class ResponseStreamWriter final {
@@ -181,12 +181,12 @@ private:
     Aborted aborted_;
     StopToken stopToken_;
     bool outputActive_{false};
-    detail::ScopedOperationScope operationScope_;
+    ::ruvia::operation_scope operationScope_;
 
     friend class SseWriter;
 };
 
-class SseWriter final : private detail::ScopedCapabilityNode {
+class SseWriter final {
 public:
     SseWriter(const SseWriter& other) noexcept;
     SseWriter& operator=(const SseWriter&) = delete;
@@ -209,9 +209,10 @@ private:
 
     explicit SseWriter(ResponseStreamWriter& writer) noexcept;
     [[nodiscard]] ResponseStreamWriter& writer() const;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    static void expire_capability(void* target) noexcept;
 
     ResponseStreamWriter* writer_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

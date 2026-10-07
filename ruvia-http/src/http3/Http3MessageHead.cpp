@@ -1,6 +1,5 @@
 #include "ruvia/http/Http3MessageHead.h"
 
-#include <limits>
 #include <memory_resource>
 #include <string_view>
 
@@ -8,119 +7,40 @@
 #include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
+#include "ruvia/http/detail/util/HttpOws.h"
 
 namespace ruvia {
 namespace {
-
-bool isTokenChar(unsigned char ch) noexcept {
-    if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
-        return true;
-    }
-    constexpr std::string_view extra{"!#$%&'*+-.^_`|~"};
-    return extra.find(static_cast<char>(ch)) != std::string_view::npos;
-}
-
-bool isToken(std::string_view value) noexcept {
-    if (value.empty()) {
-        return false;
-    }
-    for (const unsigned char ch : value) {
-        if (!isTokenChar(ch)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool validValue(std::string_view value) noexcept {
-    for (const unsigned char ch : value) {
-        if ((ch < 0x20 && ch != '\t') || ch == 0x7f) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool equalsAsciiCaseInsensitive(std::string_view value, std::string_view expected) noexcept {
-    if (value.size() != expected.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < value.size(); ++i) {
-        const char ch = value[i] >= 'A' && value[i] <= 'Z' ? static_cast<char>(value[i] + ('a' - 'A')) : value[i];
-        if (ch != expected[i]) {
-            return false;
-        }
-    }
-    return true;
-}
 
 bool validPath(std::string_view value, std::string_view method) noexcept {
     return (value == "*" && method == "OPTIONS") || isValidHttpOriginFormTarget(value);
 }
 
 bool validAuthority(std::string_view value, std::string_view scheme) noexcept {
-    if (equalsAsciiCaseInsensitive(scheme, "http") ||
-        equalsAsciiCaseInsensitive(scheme, "https")) {
+    if (httpAsciiEqualsIgnoreCase(scheme, "http") ||
+        httpAsciiEqualsIgnoreCase(scheme, "https")) {
         const auto host = parseHttpAuthorityHost(value);
         return host.has_value() && !host->empty();
     }
     for (const unsigned char ch : value) {
         if (ch <= 0x20 || ch == 0x7f || ch == '/' || ch == '?' || ch == '#' ||
-            (ch == '@' && (scheme.empty() || equalsAsciiCaseInsensitive(scheme, "http") ||
-                              equalsAsciiCaseInsensitive(scheme, "https")))) {
+            (ch == '@' && (scheme.empty() || httpAsciiEqualsIgnoreCase(scheme, "http") ||
+                              httpAsciiEqualsIgnoreCase(scheme, "https")))) {
             return false;
         }
     }
     return !value.empty();
-}
-
-bool validScheme(std::string_view value) noexcept {
-    if (value.empty() || !((value[0] >= 'a' && value[0] <= 'z') ||
-                             (value[0] >= 'A' && value[0] <= 'Z'))) {
-        return false;
-    }
-    for (const unsigned char ch : value) {
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.')) {
-            return false;
-        }
-    }
-    return true;
-}
-
-std::string_view trimOws(std::string_view value) noexcept {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
-bool parseLength(std::string_view value, std::uint64_t& length) noexcept {
-    value = trimOws(value);
-    if (value.empty()) {
-        return false;
-    }
-    length = 0;
-    for (const unsigned char ch : value) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        const auto digit = static_cast<std::uint64_t>(ch - '0');
-        if (length > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
-            return false;
-        }
-        length = length * 10 + digit;
-    }
-    return true;
 }
 
 struct DecodeState final {
@@ -128,14 +48,13 @@ struct DecodeState final {
         std::pmr::memory_resource* resource, std::size_t maximumSize)
         : head(messageHead),
           kind(messageKind),
-          maxSize(maximumSize),
+          sectionSize(maximumSize),
           host(resource) {}
 
     Http3MessageHead& head;
     Http3MessageHeadKind kind;
     Http3MessageHeadError error{Http3MessageHeadError::kMessageError};
-    std::size_t size{0};
-    std::size_t maxSize;
+    detail::HttpHeaderSectionSize sectionSize;
     bool ordinarySeen{false};
     bool methodSeen{false};
     bool protocolSeen{false};
@@ -147,8 +66,7 @@ struct DecodeState final {
     bool callbackRejected{false};
     std::pmr::string host;
     bool contentTypeSeen{false};
-    bool contentLengthSeen{false};
-    std::uint64_t contentLength{0};
+    detail::HttpContentLengthState<std::uint64_t> contentLength;
 };
 
 bool fail(DecodeState& state) noexcept {
@@ -159,17 +77,14 @@ bool fail(DecodeState& state) noexcept {
 
 bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     auto& state = *static_cast<DecodeState*>(opaque);
-    if (field.name.empty() || !validValue(field.value)) {
+    if (field.name.empty() || !detail::is_valid_http_field_value_bytes(field.value)) {
         return fail(state);
     }
-    if (state.size > state.maxSize || field.name.size() > state.maxSize - state.size ||
-        field.value.size() > state.maxSize - state.size - field.name.size() ||
-        32 > state.maxSize - state.size - field.name.size() - field.value.size()) {
+    if (!state.sectionSize.add(field.name, field.value)) {
         state.error = Http3MessageHeadError::kFieldSectionTooLarge;
         state.callbackRejected = true;
         return false;
     }
-    state.size += field.name.size() + field.value.size() + 32;
 
     for (const unsigned char ch : field.name) {
         if (ch >= 'A' && ch <= 'Z') {
@@ -190,16 +105,16 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         };
         if (state.kind == Http3MessageHeadKind::kRequest) {
             if (field.name == ":method") {
-                if (!isToken(field.value) || !setText(state.head.method, state.methodSeen)) {
+                if (!detail::isValidHttpHeaderName(field.value) || !setText(state.head.method, state.methodSeen)) {
                     return fail(state);
                 }
             } else if (field.name == ":protocol") {
-                if (!isToken(field.value) ||
+                if (!detail::isValidHttpHeaderName(field.value) ||
                     !setText(state.head.protocol, state.protocolSeen)) {
                     return fail(state);
                 }
             } else if (field.name == ":scheme") {
-                if (!validScheme(field.value) || !setText(state.head.scheme, state.schemeSeen)) {
+                if (!detail::isValidUriScheme(field.value) || !setText(state.head.scheme, state.schemeSeen)) {
                     return fail(state);
                 }
             } else if (field.name == ":authority") {
@@ -228,16 +143,15 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
     }
 
     state.ordinarySeen = true;
-    if (!isToken(field.name)) {
+    if (!detail::isValidHttpHeaderName(field.name)) {
         return fail(state);
     }
-    if (field.name == "connection" || field.name == "keep-alive" || field.name == "proxy-connection" ||
-        field.name == "transfer-encoding" || field.name == "upgrade") {
+    if (detail::is_forbidden_http_binary_connection_field(field.name)) {
         return fail(state);
     }
     if (field.name == "te" &&
         (state.kind != Http3MessageHeadKind::kRequest ||
-            !equalsAsciiCaseInsensitive(trimOws(field.value), "trailers"))) {
+            !httpAsciiEqualsIgnoreCase(detail::httpTrimOws(field.value), "trailers"))) {
         return fail(state);
     }
     if (field.name == "host") {
@@ -279,24 +193,7 @@ bool receiveField(void* opaque, Http3FieldSectionFieldView field) {
         return fail(state);
     }
     if (field.name == "content-length") {
-        std::string_view remaining = field.value;
-        bool hadValue = false;
-        while (true) {
-            const auto comma = remaining.find(',');
-            const auto part = comma == std::string_view::npos ? remaining : remaining.substr(0, comma);
-            std::uint64_t parsed = 0;
-            if (!parseLength(part, parsed) || (state.contentLengthSeen && parsed != state.contentLength)) {
-                return fail(state);
-            }
-            state.contentLengthSeen = true;
-            state.contentLength = parsed;
-            hadValue = true;
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            remaining.remove_prefix(comma + 1);
-        }
-        if (!hadValue) {
+        if (state.contentLength.parseField(field.value) != detail::HttpContentLengthParseStatus::kOk) {
             return fail(state);
         }
     }
@@ -331,8 +228,8 @@ std::optional<Http3MessageHeadError> finishHead(DecodeState& state) {
             if (state.authoritySeen && state.hostSeen && head.authority != state.host) {
                 return Http3MessageHeadError::kMessageError;
             }
-            const bool authorityRequired = equalsAsciiCaseInsensitive(head.scheme, "http") ||
-                                           equalsAsciiCaseInsensitive(head.scheme, "https");
+            const bool authorityRequired = httpAsciiEqualsIgnoreCase(head.scheme, "http") ||
+                                           httpAsciiEqualsIgnoreCase(head.scheme, "https");
             if ((state.authoritySeen && !validAuthority(head.authority, head.scheme)) ||
                 (state.hostSeen && !validAuthority(state.host, head.scheme))) {
                 return Http3MessageHeadError::kMessageError;
@@ -347,9 +244,7 @@ std::optional<Http3MessageHeadError> finishHead(DecodeState& state) {
     } else if (!state.statusSeen) {
         return Http3MessageHeadError::kMessageError;
     }
-    if (state.contentLengthSeen) {
-        head.contentLength = state.contentLength;
-    }
+    head.contentLength = state.contentLength.value();
     return {};
 }
 

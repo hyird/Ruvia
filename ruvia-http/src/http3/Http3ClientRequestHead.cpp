@@ -11,45 +11,20 @@
 #include "ruvia/http/HttpMediaType.h"
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "ruvia/http/detail/coding/HttpContentLength.h"
+#include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
+#include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/util/AsciiCase.h"
 
 namespace ruvia {
 namespace {
-
-bool token(std::string_view text) noexcept {
-    constexpr std::string_view extra{"!#$%&'*+-.^_`|~"};
-    if (text.empty()) {
-        return false;
-    }
-    for (const unsigned char ch : text) {
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                (ch >= '0' && ch <= '9') || extra.find(static_cast<char>(ch)) != std::string_view::npos)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool equalIgnoreCase(std::string_view a, std::string_view b) noexcept {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        auto ch = static_cast<unsigned char>(a[i]);
-        if (ch >= 'A' && ch <= 'Z') {
-            ch = static_cast<unsigned char>(ch + ('a' - 'A'));
-        }
-        if (ch != static_cast<unsigned char>(b[i])) {
-            return false;
-        }
-    }
-    return true;
-}
 
 Http3ClientRequestHeadFailure failure(Http3ClientRequestHeadError kind) noexcept {
     return {kind};
@@ -58,49 +33,8 @@ Http3ClientRequestHeadFailure fieldFailure(Http3FieldSectionError error) noexcep
     return {Http3ClientRequestHeadError::kFieldSectionError, error};
 }
 
-bool validValue(std::string_view value) noexcept {
-    for (const unsigned char ch : value) {
-        if ((ch < 0x20 && ch != '\t') || ch == 0x7f) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool parseLength(std::string_view value, std::uint64_t& result) noexcept {
-    if (value.empty()) {
-        return false;
-    }
-    result = 0;
-    for (const unsigned char ch : value) {
-        if (ch < '0' || ch > '9') {
-            return false;
-        }
-        const auto digit = static_cast<std::uint64_t>(ch - '0');
-        if (result > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
-            return false;
-        }
-        result = result * 10 + digit;
-    }
-    return true;
-}
-
-bool validScheme(std::string_view scheme) noexcept {
-    if (scheme.empty() || !((scheme.front() >= 'a' && scheme.front() <= 'z') ||
-                              (scheme.front() >= 'A' && scheme.front() <= 'Z'))) {
-        return false;
-    }
-    for (const unsigned char ch : scheme) {
-        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                (ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.')) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool authorityValid(std::string_view authority, std::string_view scheme) noexcept {
-    if (equalIgnoreCase(scheme, "http") || equalIgnoreCase(scheme, "https")) {
+    if (httpAsciiEqualsIgnoreCase(scheme, "http") || httpAsciiEqualsIgnoreCase(scheme, "https")) {
         const auto host = parseHttpAuthorityHost(authority);
         return host && !host->empty();
     }
@@ -123,10 +57,10 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     const bool connect = view.method == "CONNECT";
     const bool extendedConnect = !view.protocol.empty();
     const bool trace = view.method == "TRACE";
-    if (!token(view.method)) {
+    if (!detail::isValidHttpHeaderName(view.method)) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidMethod));
     }
-    if (extendedConnect && (!connect || !token(view.protocol))) {
+    if (extendedConnect && (!connect || !detail::isValidHttpHeaderName(view.protocol))) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidProtocol));
     }
     if (extendedConnect && !view.peerEnableConnectProtocol) {
@@ -143,7 +77,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         if (view.bodyLength) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
         }
-    } else if (!validScheme(view.scheme) || !authorityValid(view.authority, view.scheme) ||
+    } else if (!detail::isValidUriScheme(view.scheme) || !authorityValid(view.authority, view.scheme) ||
                !((view.path == "*" && view.method == "OPTIONS") || isValidHttpOriginFormTarget(view.path))) {
         return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidTarget));
     }
@@ -156,89 +90,78 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     }
 
     std::size_t projectedCount = (connect && !extendedConnect ? 2 : 4) + (extendedConnect ? 1 : 0);
-    std::size_t decodedBytes = 0;
-    const auto countField = [&](std::string_view name, std::string_view value) noexcept {
-        if (name.size() > std::numeric_limits<std::size_t>::max() - 32 ||
-            value.size() > std::numeric_limits<std::size_t>::max() - name.size() - 32 ||
-            decodedBytes > std::numeric_limits<std::size_t>::max() - name.size() - value.size() - 32) {
-            return false;
-        }
-        decodedBytes += name.size() + value.size() + 32;
-        return true;
-    };
-    if ((extendedConnect && !countField(":protocol", view.protocol)) || !countField(":method", view.method) ||
-        ((!connect || extendedConnect) && !countField(":scheme", view.scheme)) ||
-        !countField(":authority", view.authority) ||
-        ((!connect || extendedConnect) && !countField(":path", view.path))) {
+    // Keep the original error precedence: overflow is checked while projecting
+    // each field, but the configured byte limit follows the field-count check.
+    detail::HttpHeaderSectionSize sectionSize(std::numeric_limits<std::size_t>::max());
+    if ((extendedConnect && !sectionSize.add(":protocol", view.protocol)) || !sectionSize.add(":method", view.method) ||
+        ((!connect || extendedConnect) && !sectionSize.add(":scheme", view.scheme)) ||
+        !sectionSize.add(":authority", view.authority) ||
+        ((!connect || extendedConnect) && !sectionSize.add(":path", view.path))) {
         return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
     }
     std::size_t lowercaseBytes = 0;
     bool hostSeen = false;
     bool contentTypeSeen = false;
-    bool lengthSeen = false;
-    std::uint64_t contentLength = 0;
+    detail::HttpContentLengthState<std::uint64_t> contentLength;
     for (const auto& field : view.fields) {
-        if (!token(field.name)) {
+        if (!detail::isValidHttpHeaderName(field.name)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
-        if (!validValue(field.value) ||
-            (equalIgnoreCase(field.name, "origin") &&
+        if (!detail::is_valid_http_field_value_bytes(field.value) ||
+            (httpAsciiEqualsIgnoreCase(field.name, "origin") &&
                 !detail::is_valid_http_origin_field_value(field.value)) ||
-            (equalIgnoreCase(field.name, "access-control-request-method") &&
+            (httpAsciiEqualsIgnoreCase(field.name, "access-control-request-method") &&
                 !detail::isValidHttpCorsRequestMethod(field.value)) ||
-            (equalIgnoreCase(field.name, "access-control-request-headers") &&
+            (httpAsciiEqualsIgnoreCase(field.name, "access-control-request-headers") &&
                 !detail::isValidHttpCorsRequestHeaderNames(field.value)) ||
-            (equalIgnoreCase(field.name, "expect") &&
+            (httpAsciiEqualsIgnoreCase(field.name, "expect") &&
                 !detail::isValidHttpExpectFieldValue(field.value))) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
         // RFC 9110 section 9.3.8: never generate known credential/cookie
         // fields in TRACE. Callers must also omit application-specific secrets.
-        if (trace && (equalIgnoreCase(field.name, "authorization") ||
-                         equalIgnoreCase(field.name, "proxy-authorization") ||
-                         equalIgnoreCase(field.name, "cookie"))) {
+        if (trace && (httpAsciiEqualsIgnoreCase(field.name, "authorization") ||
+                         httpAsciiEqualsIgnoreCase(field.name, "proxy-authorization") ||
+                         httpAsciiEqualsIgnoreCase(field.name, "cookie"))) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
         }
-        if (equalIgnoreCase(field.name, "connection") || equalIgnoreCase(field.name, "keep-alive") ||
-            equalIgnoreCase(field.name, "proxy-connection") || equalIgnoreCase(field.name, "transfer-encoding") ||
-            equalIgnoreCase(field.name, "upgrade")) {
+        if (detail::is_forbidden_http_binary_connection_field(field.name)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
         }
-        if (equalIgnoreCase(field.name, "te") && !equalIgnoreCase(field.value, "trailers")) {
+        if (httpAsciiEqualsIgnoreCase(field.name, "te") && !httpAsciiEqualsIgnoreCase(field.value, "trailers")) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kForbiddenField));
         }
-        if (equalIgnoreCase(field.name, "host")) {
+        if (httpAsciiEqualsIgnoreCase(field.name, "host")) {
             if (hostSeen || field.value != view.authority) {
                 return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidAuthority));
             }
             hostSeen = true;
         }
-        if (equalIgnoreCase(field.name, "content-type")) {
+        if (httpAsciiEqualsIgnoreCase(field.name, "content-type")) {
             if (contentTypeSeen || !isValidHttpContentTypeFieldValue(field.value)) {
                 return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
             }
             contentTypeSeen = true;
-        } else if (equalIgnoreCase(field.name, "content-encoding") &&
+        } else if (httpAsciiEqualsIgnoreCase(field.name, "content-encoding") &&
                    !detail::isValidHttpContentEncodingFieldValue(
                        field.value, detail::HttpFieldListRole::kSender)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
-        if (equalIgnoreCase(field.name, "trailer") &&
+        if (httpAsciiEqualsIgnoreCase(field.name, "trailer") &&
             !detail::isValidHttpRequestTrailerFieldValue(
                 field.value, detail::HttpFieldListRole::kSender)) {
             return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidField));
         }
-        if (equalIgnoreCase(field.name, "content-length")) {
+        if (httpAsciiEqualsIgnoreCase(field.name, "content-length")) {
             if (connect) {
                 return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
             }
-            std::uint64_t parsed{};
-            if (lengthSeen || !parseLength(field.value, parsed) || (trace && parsed != 0) ||
-                (view.bodyLength && parsed != *view.bodyLength)) {
+            if (contentLength.value() ||
+                contentLength.parse_single_value(field.value) != detail::HttpContentLengthParseStatus::kOk ||
+                (trace && *contentLength.value() != 0) ||
+                (view.bodyLength && *contentLength.value() != *view.bodyLength)) {
                 return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
             }
-            lengthSeen = true;
-            contentLength = parsed;
         }
         const bool hasUppercase = std::any_of(field.name.begin(), field.name.end(),
             [](unsigned char ch) { return ch >= 'A' && ch <= 'Z'; });
@@ -249,21 +172,18 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
             lowercaseBytes += field.name.size();
         }
         if (projectedCount == std::numeric_limits<std::size_t>::max() ||
-            !countField(field.name, field.value)) {
+            !sectionSize.add(field.name, field.value)) {
             return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
         }
         ++projectedCount;
         if (projectedCount > limits.maxFields) {
             return std::unexpected(fieldFailure(Http3FieldSectionError::kTooManyFields));
         }
-        if (decodedBytes > limits.maxDecodedBytes) {
+        if (sectionSize.bytes() > limits.maxDecodedBytes) {
             return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
         }
     }
-    if (view.bodyLength && lengthSeen && contentLength != *view.bodyLength) {
-        return std::unexpected(failure(Http3ClientRequestHeadError::kInvalidContentLength));
-    }
-    const bool emitLength = view.emit_content_length && view.bodyLength && !lengthSeen;
+    const bool emitLength = view.emit_content_length && view.bodyLength && !contentLength.value();
     std::array<char, 20> lengthBytes{};
     std::size_t lengthSize = 0;
     if (emitLength) {
@@ -273,7 +193,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         }
         lengthSize = static_cast<std::size_t>(end - lengthBytes.data());
         if (projectedCount == std::numeric_limits<std::size_t>::max() ||
-            !countField("content-length", {lengthBytes.data(), lengthSize})) {
+            !sectionSize.add("content-length", {lengthBytes.data(), lengthSize})) {
             return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
         }
         ++projectedCount;
@@ -281,7 +201,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     if (projectedCount > limits.maxFields) {
         return std::unexpected(fieldFailure(Http3FieldSectionError::kTooManyFields));
     }
-    if (decodedBytes > limits.maxDecodedBytes) {
+    if (sectionSize.bytes() > limits.maxDecodedBytes) {
         return std::unexpected(fieldFailure(Http3FieldSectionError::kFieldListTooLarge));
     }
 
@@ -307,9 +227,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
         if (hasUppercase) {
             const auto offset = lowercase.size();
             for (const unsigned char ch : name) {
-                lowercase.push_back(ch >= 'A' && ch <= 'Z'
-                                        ? static_cast<char>(ch + ('a' - 'A'))
-                                        : static_cast<char>(ch));
+                lowercase.push_back(static_cast<char>(httpAsciiToLower(ch)));
             }
             name = std::string_view(lowercase.data() + offset, field.name.size());
         }
@@ -330,8 +248,7 @@ static std::expected<Http3ClientRequestHead, Http3ClientRequestHeadFailure> enco
     result.fieldSection = std::move(*encoded);
     result.bodyPlan.expectedLength = trace             ? std::optional<std::uint64_t>{0}
                                      : view.bodyLength ? view.bodyLength
-                                     : lengthSeen      ? std::optional{contentLength}
-                                                       : std::nullopt;
+                                                       : contentLength.value();
     return result;
 }
 

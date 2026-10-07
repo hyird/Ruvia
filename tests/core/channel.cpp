@@ -30,8 +30,12 @@ public:
     ThrowingMove& operator=(const ThrowingMove&) = delete;
     // This fixture intentionally models a move that can throw.
     ThrowingMove(ThrowingMove&& other) noexcept(false) {
-        if (throwOnMove.load(std::memory_order_relaxed)) {
+        const auto moves_remaining = moves_before_failure.load(std::memory_order_relaxed);
+        if (throwOnMove.load(std::memory_order_relaxed) || moves_remaining == 0) {
             throw std::runtime_error("requested move failure");
+        }
+        if (moves_remaining > 0) {
+            moves_before_failure.fetch_sub(1, std::memory_order_relaxed);
         }
         value_ = std::exchange(other.value_, 0);
     }
@@ -41,6 +45,7 @@ public:
     }
 
     static inline std::atomic_bool throwOnMove{false};
+    static inline std::atomic_int moves_before_failure{-1};
 
 private:
     int value_{0};
@@ -62,15 +67,21 @@ ruvia::Task<void> receiveQueuedThenStopping(ruvia::ChannelReceiver<int>& receive
 
 ruvia::Task<void> receiveThrowingMove(
     ruvia::ChannelReceiver<ThrowingMove>& receiver, bool& success) {
-    const auto result = co_await receiver.receive();
+    const auto result = co_await receiver.receiveFor(std::chrono::seconds(1));
     success = result.hasValue() && result.value().value() == 6;
 }
 
 ruvia::Task<void> receiveAfterLateCancellation(
-    ruvia::ChannelReceiver<int>& receiver, ruvia::StopToken stopToken, bool& success) {
+    ruvia::ChannelReceiver<int>& receiver, ruvia::StopToken stopToken,
+    ruvia::StopToken next_stop_token, bool& success) {
     const auto first = co_await receiver.receive(std::move(stopToken));
-    const auto second = co_await receiver.receive();
+    const auto second = co_await receiver.receive(std::move(next_stop_token));
     success = first.hasValue() && first.value() == 1 && second.hasValue() && second.value() == 2;
+}
+
+ruvia::Task<void> receive_until_closed(ruvia::ChannelReceiver<int>& receiver, bool& success) {
+    const auto result = co_await receiver.receiveFor(std::chrono::seconds(1));
+    success = result.status() == ruvia::WorkerWaitStatus::kClosed;
 }
 
 ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdReceiveAfterReceiverClose(
@@ -126,10 +137,12 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
 
     {
         ruvia::StopSource source;
+        ruvia::StopSource next_source;
         auto [lateSender, lateReceiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
         bool generationSafe = false;
         ruvia::TaskScope scope(worker);
-        scope.spawn(receiveAfterLateCancellation(lateReceiver, source.token(), generationSafe));
+        scope.spawn(receiveAfterLateCancellation(
+            lateReceiver, source.token(), next_source.token(), generationSafe));
         if (!lateSender.send(1).accepted()) {
             co_return;
         }
@@ -141,6 +154,25 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         });
         co_await scope.join();
         if (!generationSafe) {
+            co_return;
+        }
+    }
+
+    {
+        auto [close_sender, close_receiver] = ruvia::makeChannel<int>(worker, {.capacity = 1});
+        bool pending_closed = false;
+        ruvia::TaskScope scope(worker);
+        scope.spawn(receive_until_closed(close_receiver, pending_closed));
+        bool duplicate_rejected = false;
+        try {
+            static_cast<void>(co_await close_receiver.receive());
+        } catch (const std::logic_error&) {
+            duplicate_rejected = true;
+        }
+        close_receiver.close();
+        co_await scope.join();
+        if (!pending_closed || !duplicate_rejected ||
+            close_sender.send(7).status() != ruvia::ChannelSendStatus::kClosed) {
             co_return;
         }
     }
@@ -225,6 +257,7 @@ int main() {
     }
 
     bool moveFailed = false;
+    bool result_move_failed = false;
     bool recoveredValue = false;
     bool recoveredSend = false;
     {
@@ -246,6 +279,15 @@ int main() {
                 moveFailed = true;
             }
             ThrowingMove::throwOnMove.store(false, std::memory_order_relaxed);
+            // Result construction moves the payload four times; fail when the
+            // shared completion state next takes ownership of that result.
+            ThrowingMove::moves_before_failure.store(4, std::memory_order_relaxed);
+            try {
+                static_cast<void>(sender.send(ThrowingMove(5)));
+            } catch (const std::runtime_error&) {
+                result_move_failed = true;
+            }
+            ThrowingMove::moves_before_failure.store(-1, std::memory_order_relaxed);
             recoveredSend = sender.send(ThrowingMove(6)).accepted();
         });
         ioContext.run();
@@ -256,6 +298,6 @@ int main() {
     }
 
     const bool allPassed = success && coldReceiverTasksSafe && workerStopping && stoppingSend &&
-                           moveFailed && recoveredValue && recoveredSend;
+                           moveFailed && result_move_failed && recoveredValue && recoveredSend;
     return allPassed ? 0 : 1;
 }

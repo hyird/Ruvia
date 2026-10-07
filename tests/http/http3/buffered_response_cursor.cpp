@@ -118,7 +118,7 @@ RUVIA_TEST(http3BufferedResponseWritePreservesEncodedDecodedFieldSectionSizeAcro
     if (!encoded) {
         return;
     }
-    const auto decodedSize = encoded->decodedFieldSectionSize();
+    const auto decodedSize = encoded->field_section.decodedFieldSectionSize();
     RUVIA_CHECK(decodedSize > 42U);
 
     Cursor cursor = makeCursor(response, plan, nullptr);
@@ -283,7 +283,7 @@ RUVIA_TEST(http3BufferedResponseWriteFileWithoutPayloadSendsOnlyMetadata) {
         if (!encoded) {
             return;
         }
-        const auto decodedSize = encoded->decodedFieldSectionSize();
+        const auto decodedSize = encoded->field_section.decodedFieldSectionSize();
         RUVIA_CHECK(decodedSize > 42U);
         auto cursor = makeCursor(response, plan, &memory);
         RUVIA_CHECK_EQ(cursor.decoded_field_section_size(), decodedSize);
@@ -420,7 +420,7 @@ RUVIA_TEST(http3_buffered_response_cursor_consumes_encoded_head_storage) {
         if (!head) {
             return;
         }
-        decoded_size = head->decodedFieldSectionSize();
+        decoded_size = head->field_section.decodedFieldSectionSize();
         auto created = Cursor::create(response, plan, std::move(*head), &cursor_memory);
         RUVIA_CHECK(created.has_value());
         if (!created) {

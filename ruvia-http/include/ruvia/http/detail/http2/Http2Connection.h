@@ -39,6 +39,8 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/Http2RequestContent.h"
+#include "ruvia/http/Http2RequestHeadSubmitResult.h"
 #include "ruvia/http/Http2ResponseHeadSubmitResult.h"
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/http/HttpClient.h"
@@ -55,7 +57,6 @@
 #include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/message/Http2RequestContent.h"
 #include "ruvia/http/detail/http2/settings/Http2LocalConnectionState.h"
 #include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
@@ -142,83 +143,6 @@ private:
     [[nodiscard]] static Http2WebSocketHandshakeSubmitResult makeFailure(
         Http2WebSocketHandshakeSubmitError error) noexcept {
         return Http2WebSocketHandshakeSubmitResult(Http2WebSocketHandshakeSubmitFailure(error));
-    }
-
-    Value value_;
-};
-
-class Http2RequestHeadSubmitResult;
-
-// A successfully submitted HEADERS transaction. The stream ID exists only in this
-// alternative; failure can never expose connection-control stream zero as a sentinel.
-class Http2SubmittedRequestHead final {
-public:
-    [[nodiscard]] constexpr std::uint32_t streamId() const noexcept {
-        return streamId_;
-    }
-
-private:
-    friend class Http2RequestHeadSubmitResult;
-
-    explicit constexpr Http2SubmittedRequestHead(std::uint32_t streamId) noexcept
-        : streamId_(streamId) {
-        if (streamId_ == 0 || streamId_ > 0x7fffffffU || (streamId_ & 1U) == 0) {
-            std::terminate();
-        }
-    }
-
-    std::uint32_t streamId_;
-};
-
-class Http2RequestHeadSubmitFailure final {
-public:
-    [[nodiscard]] constexpr Http2RequestHeadSubmitError error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class Http2RequestHeadSubmitResult;
-
-    explicit constexpr Http2RequestHeadSubmitFailure(Http2RequestHeadSubmitError error) noexcept
-        : error_(error) {}
-
-    Http2RequestHeadSubmitError error_;
-};
-
-// Exactly one alternative is observable: submitted() owns a nonzero request stream
-// ID, while failure() owns the refusal reason. There is no accepted status paired
-// with a default stream ID and no top-level streamId() accessor.
-class Http2RequestHeadSubmitResult final {
-public:
-    [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const& noexcept {
-        return value_ ? &*value_ : nullptr;
-    }
-    [[nodiscard]] constexpr const Http2SubmittedRequestHead* submitted() const&& = delete;
-
-    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const& noexcept {
-        return value_ ? nullptr : &value_.error();
-    }
-    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure* failure() const&& = delete;
-
-private:
-    friend class Http2Connection;
-
-    using Value = std::expected<Http2SubmittedRequestHead, Http2RequestHeadSubmitFailure>;
-
-    explicit constexpr Http2RequestHeadSubmitResult(Http2SubmittedRequestHead submitted) noexcept
-        : value_(submitted) {}
-
-    explicit constexpr Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure failure) noexcept
-        : value_(std::unexpected(failure)) {}
-
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeSubmitted(
-        std::uint32_t streamId) noexcept {
-        return Http2RequestHeadSubmitResult(Http2SubmittedRequestHead(streamId));
-    }
-
-    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult makeFailure(
-        Http2RequestHeadSubmitError error) noexcept {
-        return Http2RequestHeadSubmitResult(Http2RequestHeadSubmitFailure(error));
     }
 
     Value value_;

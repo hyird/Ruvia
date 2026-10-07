@@ -94,6 +94,26 @@ Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& networkIo,
     }
 }
 
+Http3QuicWireOwner::Http3QuicWireOwner(asio::io_context& worker_io,
+    http3_datagram_channel& channel, Http3DatagramEndpoint::udp::endpoint local_endpoint,
+    http3_quic_tls_context& tls, ruvia::quic_server_config transport_config,
+    std::pmr::memory_resource* timer_handler_resource, ProtocolPump protocol_pump)
+    : ownerThread_(std::this_thread::get_id()),
+      networkIo_(worker_io),
+      tls_(tls),
+      transportConfig_(transport_config),
+      endpoint_(channel, std::move(local_endpoint),
+          Http3DatagramEndpoint::notification{this, &endpointNotification}),
+      timer_(networkIo_),
+      timerHandlerAllocator_(timer_handler_resource != nullptr
+                                 ? timer_handler_resource
+                                 : std::pmr::get_default_resource()),
+      protocolPump_(protocol_pump) {
+    if ((protocolPump_.context == nullptr) != (protocolPump_.drive == nullptr)) {
+        throw std::invalid_argument("HTTP/3 wire protocol pump must be complete");
+    }
+}
+
 Http3QuicWireOwner::~Http3QuicWireOwner() {
     requireOwnerThread();
     if (!stopping_) {
@@ -157,6 +177,11 @@ void Http3QuicWireOwner::requestDrive() noexcept {
         driveRequested_ = true;
         drive();
     }
+}
+
+void Http3QuicWireOwner::poll_datagrams() noexcept {
+    requireOwnerThread();
+    endpoint_.poll_forwarded();
 }
 
 void Http3QuicWireOwner::deferTransportRetirement() noexcept {

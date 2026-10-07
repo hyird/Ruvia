@@ -31,6 +31,8 @@ void throwIfRedisTransactionReplyError(const RedisValue& value, std::size_t inde
     std::span<const std::string_view> args, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(
     std::initializer_list<std::string_view> args, std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(std::string_view first,
+    std::span<const std::string_view> rest, std::pmr::memory_resource* resource);
 
 Task<RedisValue> executeOwnedRedisCommand(RedisCommandExecutor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);

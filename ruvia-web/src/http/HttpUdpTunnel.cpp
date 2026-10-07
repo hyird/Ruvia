@@ -10,7 +10,7 @@ ScopedOperation<std::optional<HttpUdpDatagram>> HttpUdpTunnel::read() & {
         throw std::logic_error("UDP tunnel is empty");
     }
     state->require(false);
-    return detail::makeScopedOperation(state->readScope, readOwned(detail::CapsuleStatePin(*state)));
+    return ::ruvia::make_scoped_operation(state->readScope, readOwned(detail::CapsuleStatePin(*state)));
 }
 Task<std::optional<HttpUdpDatagram>> HttpUdpTunnel::readOwned(detail::CapsuleStatePin pin) {
     auto datagram = co_await HttpDatagramStream::readOwned(std::move(pin), true);

@@ -10,8 +10,8 @@
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/router/CompiledRoutePlan.h"
 #include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/server/ServerNetworkRuntime.h"
 #include "ruvia/web/detail/server/WebWorkerRuntime.h"
+#include "ruvia/web/detail/server/acceptor.h"
 
 namespace ruvia::detail {
 
@@ -39,17 +39,16 @@ struct AppRuntimeGraph final {
         : blockingPool(nullptr, PmrObjectDeleter<BlockingPool>{resource}),
           routePlan(nullptr, PmrObjectDeleter<CompiledRoutePlan>{resource}),
           workers(resource),
-          networkTargets(resource) {}
+          acceptor_targets(resource) {}
 
     // Declared before workers so it is destroyed after suspended worker tasks.
     std::unique_ptr<BlockingPool, PmrObjectDeleter<BlockingPool>> blockingPool;
     // Every worker-local handler table borrows this immutable lookup plan.
     CompiledRoutePlanPtr routePlan;
     std::pmr::vector<AppWorkerSlot> workers;
-    // Targets point to heap-stable worker runtimes. ServerNetworkRuntime takes its
-    // own copy so moving the graph cannot invalidate the target span.
-    std::pmr::vector<ServerNetworkRuntime::Target> networkTargets;
-    std::unique_ptr<ServerNetworkRuntime> network;
+    // Targets refer to heap-stable workers; the acceptor retains its own copy.
+    std::pmr::vector<acceptor::worker_target> acceptor_targets;
+    std::unique_ptr<acceptor> ingress;
 };
 
 }  // namespace ruvia::detail

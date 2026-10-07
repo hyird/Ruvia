@@ -28,6 +28,8 @@ struct quic_stream_open_result {
 // One owner-thread connection. It is address-stable and non-movable for the full
 // lifetime of the TLS driver borrow. Packet/stream/datagram buffers are always supplied
 // by the caller; accepted stream/datagram input is copied into bounded connection storage.
+// Generated server CIDs, including NEW_CONNECTION_ID, retain config.cid_partition.
+// A supplied server source CID must be 16 bytes and match a non-default partition.
 class quic_connection {
 public:
     quic_connection(quic_connection_config config, quic_crypto_provider_view crypto,

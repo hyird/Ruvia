@@ -6,16 +6,13 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/HttpClientTypes.h"
+#include "ruvia/web/detail/client/HttpClientOutputOperation.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
-struct HttpClientUploadWriteInput final {
-    HttpClientResponse pin;
-    std::pmr::string bytes;
-};
-struct HttpClientUploadEndInput final {
+struct http_client_upload_end_input final {
     HttpClientResponse pin;
     std::pmr::vector<HttpHeader> fields;
 };
@@ -26,13 +23,41 @@ void requireWritable(detail::HttpClientResponseState& state) {
     if (auto* domain = state.memoryDomain(); domain != nullptr && !domain->worker().isCurrent()) {
         throw std::logic_error("HTTP exchange must run on its owner worker");
     }
-    if (!state.upload || state.upload->stopped || state.upload->ended || state.upload->endRequested) {
+    if (!state.upload || state.upload->output.stopped || state.upload->output.ended || state.upload->output.endRequested) {
         throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload is no longer writable");
     }
-    if (state.upload->outputScope.hasPendingOperations()) {
+    if (state.upload->output.outputScope.has_pending_operations()) {
         throw std::logic_error("HTTP request upload operation is already active");
     }
 }
+struct upload_output_policy final {
+    static constexpr bool validate_chunk = true;
+    static detail::http_client_output_queue& output(detail::HttpClientResponseState& state) noexcept {
+        return state.upload->output;
+    }
+    static void require_write(detail::HttpClientResponseState& state) {
+        auto& queue = output(state);
+        if (queue.stopped || queue.endRequested) {
+            throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
+        }
+    }
+    static void require_empty_chunk(detail::http_client_output_queue& queue) {
+        if (queue.chunkReady) {
+            throw std::logic_error("HTTP upload queue still owns a chunk");
+        }
+    }
+    static bool begin_finish(detail::HttpClientResponseState& state, detail::http_client_upload_end_input& input) {
+        require_write(state);
+        state.upload->trailers = std::move(input.fields);
+        return true;
+    }
+    [[noreturn]] static void throw_stopped(detail::HttpClientResponseState& state) {
+        if (state.failure) {
+            std::rethrow_exception(state.failure);
+        }
+        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
+    }
+};
 }  // namespace
 
 HttpClientExchange::HttpClientExchange(HttpClientResponse response) noexcept
@@ -61,13 +86,13 @@ void HttpClientExchange::release() noexcept {
         return;
     }
     auto& upload = *state->upload;
-    upload.outputScope.close();
+    upload.output.outputScope.close();
     upload.responseScope.close();
     if (upload.responseTaken) {
         response_.consumer_ = false;
     }
-    if (!upload.ended) {
-        upload.stop();
+    if (!upload.output.ended) {
+        upload.output.stop();
     }
     response_.release();
     body_.state_ = nullptr;
@@ -84,34 +109,8 @@ ScopedOperation<void> HttpClientRequestBodyWriter::write(std::string_view bytes)
     if (bytes.size() > state_->upload->config.maxChunkBytes) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
-    return detail::makeScopedOperation(state_->upload->outputScope,
-        writeOwned(detail::HttpClientUploadWriteInput{HttpClientResponse(state_, true), std::pmr::string(bytes, state_->resource)}));
-}
-Task<void> HttpClientRequestBodyWriter::writeOwned(detail::HttpClientUploadWriteInput input) {
-    auto& state = *input.pin.state_;
-    auto& bytes = input.bytes;
-    auto& upload = *state.upload;
-    if (upload.stopped || upload.endRequested) {
-        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
-    }
-    if (bytes.empty()) {
-        co_return;
-    }
-    if (upload.chunkReady) {
-        throw std::logic_error("HTTP upload queue still owns a chunk");
-    }
-    upload.chunk = std::move(bytes);
-    upload.chunkReady = true;
-    upload.notifyData();
-    while (upload.chunkReady && !upload.stopped) {
-        co_await upload.space.wait();
-    }
-    if (upload.stopped) {
-        if (state.failure) {
-            std::rethrow_exception(state.failure);
-        }
-        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
-    }
+    return ::ruvia::make_scoped_operation(state_->upload->output.outputScope,
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{HttpClientResponse(state_, true), std::pmr::string(bytes, state_->resource)}));
 }
 ScopedOperation<void> HttpClientRequestBodyWriter::end(std::span<const HttpHeaderView> fields) & {
     if (state_ == nullptr) {
@@ -128,30 +127,11 @@ ScopedOperation<void> HttpClientRequestBodyWriter::end(std::span<const HttpHeade
             throw std::invalid_argument("invalid request trailer section");
         }
     }
-    return detail::makeScopedOperation(state_->upload->outputScope, endOwned(detail::HttpClientUploadEndInput{HttpClientResponse(state_, true), std::move(validation).takeFields()}));
-}
-Task<void> HttpClientRequestBodyWriter::endOwned(detail::HttpClientUploadEndInput input) {
-    auto& state = *input.pin.state_;
-    auto& fields = input.fields;
-    auto& upload = *state.upload;
-    if (upload.stopped || upload.endRequested) {
-        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
-    }
-    upload.trailers = std::move(fields);
-    upload.endRequested = true;
-    upload.notifyData();
-    while (!upload.ended && (!upload.stopped || upload.completionPending)) {
-        co_await upload.space.wait();
-    }
-    if (!upload.ended) {
-        if (state.failure) {
-            std::rethrow_exception(state.failure);
-        }
-        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP request upload stopped");
-    }
+    return ::ruvia::make_scoped_operation(state_->upload->output.outputScope,
+        detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{HttpClientResponse(state_, true), std::move(validation).takeFields()}));
 }
 bool HttpClientRequestBodyWriter::complete() const noexcept {
-    return state_ == nullptr || state_->upload->ended;
+    return state_ == nullptr || state_->upload->output.ended;
 }
 
 ScopedOperation<HttpClientResponse> HttpClientExchange::response() & {
@@ -162,10 +142,10 @@ ScopedOperation<HttpClientResponse> HttpClientExchange::response() & {
     if (auto* domain = state->memoryDomain(); domain != nullptr && !domain->worker().isCurrent()) {
         throw std::logic_error("HTTP exchange must run on its owner worker");
     }
-    if (state->upload->responseScope.hasPendingOperations()) {
+    if (state->upload->responseScope.has_pending_operations()) {
         throw std::logic_error("HTTP exchange response operation is already active");
     }
-    return detail::makeScopedOperation(state->upload->responseScope, receiveOwned(HttpClientResponse(state, true)));
+    return ::ruvia::make_scoped_operation(state->upload->responseScope, receiveOwned(HttpClientResponse(state, true)));
 }
 Task<HttpClientResponse> HttpClientExchange::receiveOwned(HttpClientResponse pin) {
     auto& state = *pin.state_;

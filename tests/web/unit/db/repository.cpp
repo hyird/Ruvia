@@ -48,15 +48,12 @@ using CompositeEntity = DbEntity<"composite_items",
     DbColumn<"revision", std::int64_t>>;
 
 struct Child;
-using ParentBase = DbEntity<"parents", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
-    DbOneToMany<"children", Child, "parent">>;
-using ChildBase = DbEntity<"children", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
+struct Parent;
+RUVIA_DB_ENTITY(Parent, "parents", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
+    DbOneToMany<"children", Child, "parent">)
+RUVIA_DB_ENTITY(Child, "children", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>,
     DbColumn<"parent_id", std::int64_t>,
-    DbManyToOne<"parent", ParentBase, DbJoinColumn<"parent_id", "id">>>;
-struct Child final : ChildBase {
-    using ChildBase::ChildBase;
-};
-using Parent = ParentBase;
+    DbManyToOne<"parent", Parent, DbJoinColumn<"parent_id", "id">>)
 
 struct RepositoryRuntime final {
     asio::io_context& context = test::newTestIoContext();
@@ -93,7 +90,7 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource source, target;
     detail::DbRegistry registry(runtime.context, runtime.worker, &target, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     const auto baseline = target.liveAllocations();
     for (int i = 0; i < 8; ++i) {
@@ -115,7 +112,7 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
             auto page = builder.getManyAndCount<ItemSummary>();
             RUVIA_CHECK(testing::throwsOn([&] { (void)builder.getMany(); }));
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(target.liveAllocations(), baseline);
     }
     auto partial = repository.createQueryBuilder();
@@ -130,7 +127,7 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
     RepositoryRuntime runtime;
     test::CountingMemoryResource source;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto update = repository.createUpdateBuilder("i");
     {
@@ -186,7 +183,7 @@ RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource, source;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto archive = registry.get(scope).getRepository<Archive>();
     const auto baseline = resource.liveAllocations();
@@ -225,7 +222,7 @@ RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
             RUVIA_CHECK_EQ(detail::DbValueAccess::text(statement.params()[2]).size(), std::size_t{300});
             auto operation = insert.getMany();
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
 }
@@ -234,7 +231,7 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_snapshots) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource, input;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     StopSource stop;
     stop.requestStop();
     auto repository = registry.get(scope).withOptions({.stopToken = stop.token()}).getRepository<Entity>();
@@ -270,7 +267,7 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_snapshots) {
             std::rethrow_exception(failure);
         }
         RUVIA_CHECK(cancelled);
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
 }
@@ -278,7 +275,7 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_snapshots) {
 RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto builder = repository.createQueryBuilder("i");
     {
@@ -306,7 +303,7 @@ RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) 
 RUVIA_TEST(db_repository_grouped_projection_reuses_imported_parameters) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto builder = registry.get(scope).getRepository<Entity>().createQueryBuilder("i");
     {
         DbExpressions x;
@@ -323,7 +320,7 @@ RUVIA_TEST(db_repository_expression_writes_and_returning_release_cold_storage) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource, source;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, {.driver = DbDriver::kPostgreSql});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     Entity entity;
     entity.set<"id">(8);
@@ -347,13 +344,13 @@ RUVIA_TEST(db_repository_expression_writes_and_returning_release_cold_storage) {
             DbUpsertOptions options{.conflictPaths = {"id"}, .skipUpdateIfNoValuesChanged = true, .updateExpressions = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .updateWhere = x.binary(x.column("id", "items"), DbBinaryOperator::kGreater, x.value(0))};
             auto upsert = repository.upsertReturning(entity, options);
             auto directResult = repository.update(where, {{"name", x.value("replacement")}});
-            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(scope.has_pending_operations());
             RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
             RUVIA_CHECK(testing::throwsOn([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
             options.updateExpressions.push_back(options.updateExpressions.front());
             RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(entity, options); }));
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
 }
@@ -363,7 +360,7 @@ RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
     RepositoryRuntime runtime;
     const auto config = databaseConfig();
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, config);
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto builder = repository.createQueryBuilder("i");
     builder.where(Entity::column<"id">() >= 7).andWhere(Entity::column<"name">() == std::string("temporary"));
@@ -382,7 +379,7 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Parent>();
     const auto baseline = resource.liveAllocations();
     for (int i = 0; i < 12; ++i) {
@@ -396,9 +393,9 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
             auto count = builder.getCount();
             auto page = builder.getManyAndCount();
             auto exists = builder.getExists();
-            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(scope.has_pending_operations());
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
     scope.close();
@@ -409,7 +406,7 @@ RUVIA_TEST(db_repository_relation_cold_operations_release_owned_plans_and_argume
 RUVIA_TEST(db_repository_relation_pagination_keeps_page_alias_safe) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Parent>();
     auto builder = repository.createQueryBuilder("__ruvia_page");
     builder.leftJoinAndSelect("children", "c").take(1);
@@ -423,7 +420,7 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
     RepositoryRuntime runtime;
     test::CountingMemoryResource resource;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     Entity input;
     input.set<"id">(8);
@@ -439,7 +436,7 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
     for (int i = 0; i < 8; ++i) {
         {
             const auto operation = repository.find({.where = Entity::column<"name">() == std::string(400, 'x')});
-            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(scope.has_pending_operations());
         }
         {
             const auto operation = repository.findOne({.where = Entity::column<"id">() == 8});
@@ -480,7 +477,7 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
             const auto one = builder.getOne();
             const auto count = builder.getCount();
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
     }
     RUVIA_CHECK(resource.deallocationCount() > 0);
@@ -494,7 +491,7 @@ RUVIA_TEST(db_repository_cold_operations_release_all_operation_allocations) {
 RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     Entity changes;
     changes.set<"name">("new");
@@ -510,13 +507,13 @@ RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
     batch[0].set<"name">("new");
     batch[1].set<"id">(2);
     RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(batch, {.conflictPaths = {"id"}}); }));
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
 }
 
 RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<ComputedEntity>();
     ComputedEntity changes;
     changes.set<"name_length">(3);
@@ -531,7 +528,7 @@ RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
     input.set<"name_length">(999);
     {
         const auto operation = repository.insert(input);
-        RUVIA_CHECK(scope.hasPendingOperations());
+        RUVIA_CHECK(scope.has_pending_operations());
     }
     scope.close();
 }
@@ -550,7 +547,7 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
         test::CountingMemoryResource resource;
         const DbConfig config{.driver = driver};
         detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config);
-        detail::ScopedOperationScope scope;
+        ::ruvia::operation_scope scope;
         auto repository = registry.get(scope).getRepository<Entity>();
         Entity input;
         input.set<"id">(1);
@@ -569,7 +566,7 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
                 RUVIA_CHECK(testing::throwsOn([&] { (void)repository.upsert(input, {.anyUniqueKey = true, .indexPredicate = Entity::column<"name">().isNotNull()}); }));
             }
             RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
-            RUVIA_CHECK(!scope.hasPendingOperations());
+            RUVIA_CHECK(!scope.has_pending_operations());
         }
         using KeyOnly = DbEntity<"keys", DbColumn<"id", std::int64_t, DbColumnOptions{.primaryKey = true}>>;
         auto keys = registry.get(scope).getRepository<KeyOnly>();
@@ -584,7 +581,7 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
             }
             if (config.driver == DbDriver::kPostgreSql) {
                 const auto operation = keys.upsert(key, options);
-                RUVIA_CHECK(scope.hasPendingOperations());
+                RUVIA_CHECK(scope.has_pending_operations());
             } else {
                 RUVIA_CHECK(testing::throwsOn([&] { (void)keys.upsert(key, options); }));
             }
@@ -597,7 +594,7 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
     RepositoryRuntime runtime;
     const auto config = databaseConfig();
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, config);
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
     auto builder = repository.createQueryBuilder("i");
     builder.where(Entity::column<"id">() >= 1)
@@ -644,15 +641,15 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
         Entity patch;
         patch.set<"name">("cold");
         auto write = repository.update(Entity::column<"id">() == 1, patch);
-        RUVIA_CHECK(scope.hasPendingOperations());
+        RUVIA_CHECK(scope.has_pending_operations());
     }
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
 }
 
 RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composite_keys) {
     RepositoryRuntime runtime;
     detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, databaseConfig());
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto repository = registry.get(scope).getRepository<Entity>();
 
     // A single entity with no explicit values uses DEFAULT VALUES. Bulk
@@ -660,13 +657,13 @@ RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composit
     {
         Entity defaults;
         auto operation = repository.insert(defaults);
-        RUVIA_CHECK(scope.hasPendingOperations());
+        RUVIA_CHECK(scope.has_pending_operations());
     }
     std::array<Entity, 2> sparse;
     sparse[0].set<"id">(1);
     sparse[1].set<"name">("only-name");
     auto sparseInsert = repository.insert(std::span<const Entity>(sparse));
-    RUVIA_CHECK(scope.hasPendingOperations());
+    RUVIA_CHECK(scope.has_pending_operations());
     RUVIA_CHECK(testing::throwsOn([&] {
         std::array<Entity, 2> defaults;
         (void)repository.insert(std::span<const Entity>(defaults));
@@ -691,7 +688,7 @@ RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composit
     key.set<"tenant_id">(10);
     key.set<"item_id">(20);
     auto removed = composite.remove(key);
-    RUVIA_CHECK(scope.hasPendingOperations());
+    RUVIA_CHECK(scope.has_pending_operations());
     CompositeEntity partial;
     partial.set<"tenant_id">(10);
     RUVIA_CHECK(testing::throwsOn([&] { (void)composite.remove(partial); }));
@@ -709,7 +706,7 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
     for (const auto driver : drivers) {
         RepositoryRuntime runtime;
         detail::DbRegistry registry(runtime.context, runtime.worker, nullptr, DbConfig{.driver = driver});
-        detail::ScopedOperationScope scope;
+        ::ruvia::operation_scope scope;
         auto repository = registry.get(scope).getRepository<Entity>();
         Entity input;
         input.set<"id">(1);
@@ -722,7 +719,7 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
             options.skipUpdateIfNoValuesChanged = true;
             options.indexPredicate = Entity::column<"name">().isNotNull();
             auto conditional = repository.upsert(input, options);
-            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(scope.has_pending_operations());
             (void)conditional;
 
             options = {};
@@ -750,7 +747,7 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
         RUVIA_CHECK(testing::throwsOn([&] {
             (void)repository.upsert(input, DbUpsertOptions{.updateColumns = {"missing"}});
         }));
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
     }
 }
 
@@ -762,10 +759,10 @@ RUVIA_TEST(db_repository_cached_operations_own_inputs_and_release_cold_storage) 
         auto config = databaseConfig();
         detail::RedisClientRuntime redis(runtime.context, runtime.worker,
             detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
-        detail::ScopedOperationScope redis_scope;
+        ::ruvia::operation_scope redis_scope;
         auto store = redis.handle(redis_scope);
         detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config, store, DbCacheConfig{});
-        detail::ScopedOperationScope scope;
+        ::ruvia::operation_scope scope;
         auto handle = registry.get(scope);
         auto cache = handle.queryResultCache();
         auto repository = handle.getRepository<Entity>();
@@ -786,9 +783,9 @@ RUVIA_TEST(db_repository_cached_operations_own_inputs_and_release_cold_storage) 
                 auto remove = cache.remove(ids);
                 auto clear = cache.clear();
                 options.cache = false;
-                RUVIA_CHECK(scope.hasPendingOperations());
+                RUVIA_CHECK(scope.has_pending_operations());
             }
-            RUVIA_CHECK(!scope.hasPendingOperations());
+            RUVIA_CHECK(!scope.has_pending_operations());
             RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
         }
         auto pending = repository.find({.cache = true});
@@ -807,19 +804,19 @@ RUVIA_TEST(db_query_result_cache_cold_drop_and_shutdown_report_typed_failures) {
     auto config = databaseConfig();
     detail::RedisClientRuntime redis(runtime.context, runtime.worker,
         detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
-    detail::ScopedOperationScope redis_scope;
+    ::ruvia::operation_scope redis_scope;
     auto store = redis.handle(redis_scope);
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource, config, store, DbCacheConfig{});
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto handle = registry.get(scope);
     auto cache = handle.queryResultCache();
     const auto baseline = resource.liveAllocations();
 
     {
         auto cold = cache.clear();
-        RUVIA_CHECK(scope.hasPendingOperations());
+        RUVIA_CHECK(scope.has_pending_operations());
     }
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
     RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
 
     const std::array<std::string_view, 1> emptyId{""};
@@ -833,7 +830,7 @@ RUVIA_TEST(db_query_result_cache_cold_drop_and_shutdown_report_typed_failures) {
         invalidIdentifier = true;
     }
     RUVIA_CHECK(invalidIdentifier);
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
     RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
 
     registry.closeNow();
@@ -847,7 +844,7 @@ RUVIA_TEST(db_query_result_cache_cold_drop_and_shutdown_report_typed_failures) {
         closing = error.code() == DbError::Code::kClosing;
     }
     RUVIA_CHECK(closing);
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
     RUVIA_CHECK_EQ(resource.liveAllocations(), baseline);
 }
 RUVIA_TEST(db_cache_policy_snapshots_settings_and_bypasses_writes_and_locks) {
@@ -856,7 +853,7 @@ RUVIA_TEST(db_cache_policy_snapshots_settings_and_bypasses_writes_and_locks) {
     DbCacheConfig config{.alwaysEnabled = true};
     detail::RedisClientRuntime redis(runtime.context, runtime.worker,
         detail::RedisConfigStorage(RedisConfig{}, resource), resource);
-    detail::ScopedOperationScope redis_scope;
+    ::ruvia::operation_scope redis_scope;
     auto store = redis.handle(redis_scope);
     detail::DbQueryCacheState cache(store, detail::DbCacheConfigStorage(config, resource), config.nameSpace, resource);
     DbQuery query;
@@ -895,9 +892,9 @@ RUVIA_TEST(db_query_cache_binding_preserves_store_and_expires_with_its_scope) {
     test::CountingMemoryResource resource;
     detail::RedisClientRuntime redis(runtime.context, runtime.worker,
         detail::RedisConfigStorage(RedisConfig{}, &resource), &resource);
-    detail::ScopedOperationScope redis_scope;
+    ::ruvia::operation_scope redis_scope;
     auto store = redis.handle(redis_scope);
-    detail::ScopedOperationScope db_scope;
+    ::ruvia::operation_scope db_scope;
     detail::DbRegistry registry(runtime.context, runtime.worker, &resource,
         databaseConfig(), store, DbCacheConfig{});
     auto cache = registry.get(db_scope).queryResultCache();
@@ -906,9 +903,9 @@ RUVIA_TEST(db_query_cache_binding_preserves_store_and_expires_with_its_scope) {
     RUVIA_CHECK(testing::throwsOn([&] {
         runVoid([&]() -> Task<void> { co_await std::move(pending); }());
     }));
-    RUVIA_CHECK(!db_scope.hasPendingOperations());
+    RUVIA_CHECK(!db_scope.has_pending_operations());
 
-    detail::ScopedOperationScope second_scope;
+    ::ruvia::operation_scope second_scope;
     auto second_store = redis.handle(second_scope);
     detail::DbRegistry second(runtime.context, runtime.worker, &resource,
         databaseConfig(), second_store, DbCacheConfig{});
@@ -916,7 +913,7 @@ RUVIA_TEST(db_query_cache_binding_preserves_store_and_expires_with_its_scope) {
     {
         auto ping = second_store.ping();
     }
-    RUVIA_CHECK(!second_scope.hasPendingOperations());
+    RUVIA_CHECK(!second_scope.has_pending_operations());
 }
 
 RUVIA_TEST(db_query_cache_binding_rejects_another_worker) {
@@ -925,7 +922,7 @@ RUVIA_TEST(db_query_cache_binding_rejects_another_worker) {
     auto* resource = std::pmr::get_default_resource();
     detail::RedisClientRuntime redis(redis_runtime.context, redis_runtime.worker,
         detail::RedisConfigStorage(RedisConfig{}, resource), resource);
-    detail::ScopedOperationScope scope;
+    ::ruvia::operation_scope scope;
     auto store = redis.handle(scope);
     RUVIA_CHECK(testing::throwsOn([&] {
         detail::DbRegistry registry(database_runtime.context, database_runtime.worker,
@@ -951,7 +948,7 @@ RUVIA_TEST(db_query_cache_registration_owns_policy_and_resolves_registered_alias
         RUVIA_CHECK_EQ(databases[0].query_cache->policy.nameSpace, std::string_view(std::string(200, 'n')));
         {
             detail::DbRegistry registry(runtime.context, runtime.worker, &resource, databases, &redis);
-            detail::ScopedOperationScope scope;
+            ::ruvia::operation_scope scope;
             auto cache = registry.get(scope).queryResultCache();
             const auto baseline = resource.liveAllocations();
             {

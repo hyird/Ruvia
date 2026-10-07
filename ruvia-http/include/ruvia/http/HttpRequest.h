@@ -14,6 +14,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpProtocolVersion.h"
+#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/request/HttpRequestHeaderBlock.h"
 
 namespace ruvia {
@@ -131,7 +132,7 @@ private:
     friend struct detail::HttpRequestAccess;
     friend class Http3ServerRequest;
 
-    static constexpr std::size_t kCachedHeaderSlots = 29;
+    static constexpr std::size_t kCachedHeaderSlots = detail::kRequestHeaderKindCount - 1;
 
     HttpRequest() noexcept = default;
 

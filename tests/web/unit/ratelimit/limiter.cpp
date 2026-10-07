@@ -13,7 +13,7 @@ namespace {
 
 using ruvia::RateLimitOverflowPolicy;
 using ruvia::RateLimitRule;
-using ruvia::detail::BasicRateLimiter;
+using ruvia::detail::rate_limiter;
 using ruvia::detail::RateLimitDecision;
 using ruvia::detail::RateLimiter;
 using ruvia::detail::RouteRateLimitPresence;
@@ -38,7 +38,7 @@ struct ManualRateLimiterClock final {
     inline static std::int64_t value{0};
 };
 
-using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
+using ManualRateLimiter = rate_limiter<ManualRateLimiterClock>;
 
 // A window long enough that no reset happens during a test.
 RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {

@@ -405,28 +405,28 @@ RUVIA_TEST(http3ClientRequestDriverStreamsBoundedChunksAndTrailingHeadersAfterCo
         auto finish = [&](auto) { ++fins; return ruvia::quic_operation_status::accepted; };
         RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) == Driver::Result::kProgress);
         const auto headSize = wire.size();
-        upload.chunk.assign("abc");
-        upload.chunkReady = true;
+        upload.output.chunk.assign("abc");
+        upload.output.chunkReady = true;
         RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) == Driver::Result::kBlocked);
         RUVIA_CHECK(driver.waitingForContent());
         RUVIA_CHECK_EQ(wire.size(), headSize);
         upload.contentReleased = true;
-        for (int tick = 0; tick < 4 && upload.chunkReady; ++tick) {
+        for (int tick = 0; tick < 4 && upload.output.chunkReady; ++tick) {
             RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) != Driver::Result::kFatal);
         }
-        RUVIA_CHECK(!upload.chunkReady && upload.chunk.empty());
+        RUVIA_CHECK(!upload.output.chunkReady && upload.output.chunk.empty());
         RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) == Driver::Result::kBlocked);
-        upload.chunk.assign("def");
-        upload.chunkReady = true;
-        for (int tick = 0; tick < 4 && upload.chunkReady; ++tick) {
+        upload.output.chunk.assign("def");
+        upload.output.chunkReady = true;
+        for (int tick = 0; tick < 4 && upload.output.chunkReady; ++tick) {
             RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) != Driver::Result::kFatal);
         }
         upload.trailers.push_back(ruvia::HttpHeader::copyOf("x-end", "retained", &pool));
-        upload.endRequested = true;
+        upload.output.endRequested = true;
         for (int tick = 0; tick < 4 && !driver.finished(); ++tick) {
             RUVIA_CHECK(driver.drive(open, registerResponse, write, finish) != Driver::Result::kFatal);
         }
-        RUVIA_CHECK(driver.finished() && upload.ended);
+        RUVIA_CHECK(driver.finished() && upload.output.ended);
         RUVIA_CHECK_EQ(fins, 1);
         ruvia::Http3Connection server(ruvia::Http3PeerRole::kServer, &pool);
         Received received;
@@ -464,10 +464,10 @@ RUVIA_TEST(http3ClientRequestTrailersHonorPeerFieldLimitAfterCursorMove) {
         RUVIA_CHECK(head.has_value());
         RUVIA_CHECK(moved.acknowledge(head->size()).has_value());
         upload.trailers.push_back(ruvia::HttpHeader::copyOf("x-end", std::string(513, 't'), &pool));
-        upload.endRequested = true;
+        upload.output.endRequested = true;
         const auto rejected = moved.next();
         RUVIA_CHECK(!rejected && moved.failed());
-        RUVIA_CHECK(!upload.ended);
+        RUVIA_CHECK(!upload.output.ended);
         attachment.stop();
         co_return;
     };

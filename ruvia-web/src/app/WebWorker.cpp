@@ -12,7 +12,6 @@
 #include "ruvia/web/detail/app/WebWorkerDispatch.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
-#include "ruvia/web/detail/integration/WorkerState.h"
 
 namespace ruvia {
 
@@ -20,31 +19,12 @@ WebWorkerContext::WebWorkerContext(const WorkerHandle& worker, std::pmr::memory_
     const detail::WorkerClientRegistryView& clientRegistries,
     const detail::WorkerStateRegistry* workerStates, BlockingPool* blockingPool,
     const StopToken& stopToken) noexcept
-    : worker_(worker),
+    : capabilities_(worker, stopToken, workerStates, blockingPool),
       resource_(detail::pmrResourceOrDefault(resource)),
-      clientRegistries_(clientRegistries),
-      workerStates_(workerStates),
-      blockingPool_(blockingPool),
-      stopToken_(stopToken) {}
-
-BlockingPool& WebWorkerContext::blockingPool() const {
-    if (blockingPool_ == nullptr) {
-        throw std::logic_error("blocking pool is disabled");
-    }
-    return *blockingPool_;
-}
-
-void* WebWorkerContext::workerStateInstance(const void* typeKey) const {
-    auto* instance = workerStates_ == nullptr ? nullptr : workerStates_->instance(typeKey);
-    if (instance == nullptr) {
-        throw std::logic_error(
-            "worker state type is not registered: call App::useWorkerState<T>() before App::run()");
-    }
-    return instance;
-}
+      clientRegistries_(clientRegistries) {}
 
 const WorkerHandle& WebWorkerContext::worker() const& noexcept {
-    return worker_;
+    return capabilities_.worker();
 }
 
 std::pmr::memory_resource* WebWorkerContext::pool() const noexcept {
@@ -52,34 +32,34 @@ std::pmr::memory_resource* WebWorkerContext::pool() const noexcept {
 }
 
 StopToken WebWorkerContext::stopToken() const noexcept {
-    return stopToken_;
+    return capabilities_.stop_token();
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
 DbHandle WebWorkerContext::db() const {
-    return clientRegistries_.db(operationScope_, stopToken_);
+    return clientRegistries_.db(operationScope_, capabilities_.stop_token());
 }
 
 DbHandle WebWorkerContext::db(std::string_view alias) const {
-    return clientRegistries_.db(alias, operationScope_, stopToken_);
+    return clientRegistries_.db(alias, operationScope_, capabilities_.stop_token());
 }
 #endif
 
 HttpClientHandle WebWorkerContext::httpClient() const {
-    return clientRegistries_.httpClient(operationScope_, stopToken_);
+    return clientRegistries_.httpClient(operationScope_, capabilities_.stop_token());
 }
 
 HttpClientHandle WebWorkerContext::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, operationScope_, stopToken_);
+    return clientRegistries_.httpClient(alias, operationScope_, capabilities_.stop_token());
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 RedisHandle WebWorkerContext::redis() const {
-    return clientRegistries_.redis(operationScope_, stopToken_);
+    return clientRegistries_.redis(operationScope_, capabilities_.stop_token());
 }
 
 RedisHandle WebWorkerContext::redis(std::string_view alias) const {
-    return clientRegistries_.redis(alias, operationScope_, stopToken_);
+    return clientRegistries_.redis(alias, operationScope_, capabilities_.stop_token());
 }
 #endif
 
@@ -173,13 +153,12 @@ WebWorkerPostResult WebWorkerDispatch::post(Task task) {
     // past detach; its only obligation is then to return an abandonment guard.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
     AbandonReservation reservation(this);
-    const auto status = WorkerHandleAccess::postFactory(
-        worker_, [&task, &reservation]() mutable -> MoveOnlyFunction<void()> {
-            return [task = std::move(task), reservation = std::move(reservation)]() mutable {
-                WebWorkerDispatch* self = reservation.release();
-                self->start(std::move(task));
-            };
-        });
+    const auto status = (worker_).post_factory([&task, &reservation]() mutable -> MoveOnlyFunction<void()> {
+        return [task = std::move(task), reservation = std::move(reservation)]() mutable {
+            WebWorkerDispatch* self = reservation.release();
+            self->start(std::move(task));
+        };
+    });
     postCounters_.record(status);
     if (status == PostStatus::kAccepted) {
         return WebWorkerPostResult::accept();

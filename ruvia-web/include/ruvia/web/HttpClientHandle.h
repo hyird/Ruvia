@@ -30,7 +30,7 @@ class HttpClientRegistry;
 
 class Context;
 
-class HttpClientHandle final : private detail::ScopedCapabilityNode {
+class HttpClientHandle final {
 public:
     HttpClientHandle(const HttpClientHandle& other);
     HttpClientHandle& operator=(const HttpClientHandle&) = delete;
@@ -63,14 +63,15 @@ private:
     friend class Context;
     friend class WebWorkerContext;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& scope) noexcept;
+        ::ruvia::operation_scope& scope) noexcept;
     HttpClientHandle(detail::HttpClientPool& pool, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& scope, OperationOptions options) noexcept;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+        ::ruvia::operation_scope& scope, OperationOptions options) noexcept;
+    static void expire_capability(void* target) noexcept;
 
     detail::HttpClientPool* pool_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     OperationOptions options_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

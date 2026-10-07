@@ -18,7 +18,7 @@
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/app/AppConfiguration.h"
+#include "ruvia/web/detail/app/app_configuration.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -57,8 +57,39 @@ struct HttpClientRegistrationConfig final {
     HttpClientConfig config{};
 };
 
-class App final : public detail::AppConfiguration<App> {
+class App final {
 public:
+    // Registers per-worker middleware instances in order before the matched
+    // route's controller and route middleware. Arguments are retained at
+    // registration; route model validators must be declared on their route.
+    template <typename middleware_type, typename... args_types>
+    App& use(args_types&&... args) {
+        return useMiddleware(
+            detail::makeMiddlewareDescriptor<middleware_type>(std::forward<args_types>(args)...));
+    }
+
+    // Prefix membership is compiled into the route plan, using whole path
+    // segments and normalized trailing slashes. Middleware constructor
+    // arguments cannot be confused with the separately named scope.
+    template <typename middleware_type, typename... args_types>
+    App& useAt(const MiddlewareScopeOptions& options, args_types&&... args) {
+        return useMiddleware(
+            detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
+    }
+
+    // One recipe per type; every worker owns an independent instance. A
+    // request or posted job only borrows its own worker's instance.
+    template <typename state_type, typename factory_type>
+    App& useWorkerState(factory_type&& factory) {
+        return useWorkerStateDefinition(
+            detail::WorkerStateDefinition::make<state_type>(std::forward<factory_type>(factory)));
+    }
+
+    template <typename state_type>
+    App& useWorkerState() {
+        return useWorkerStateDefinition(detail::make_default_worker_state<state_type>());
+    }
+
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
@@ -128,7 +159,12 @@ public:
     // committed or the error handler itself failed. Without a listener these
     // are reported to stderr; they are never silently dropped.
     App& onConnectionFailure(ConnectionFailureCallback callback);
+    // Runs on the run() caller after worker capabilities are ready, before
+    // TCP/QUIC admission. All hooks must succeed before serving; failure or a
+    // stop request rolls back startup. Ready workers can execute posted jobs.
     App& onStart(AppHook hook);
+    // Runs on the run() caller after admission closes, before runtime join.
+    // Also runs when published startup is cancelled or a start hook fails.
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_DATABASE
     App& database(DbRegistrationConfig config);
@@ -156,8 +192,6 @@ public:
 
 private:
     friend App& app();
-
-    friend class detail::AppConfiguration<App>;
 
     App& useMiddleware(detail::ControllerMiddlewareDescriptor descriptor);
     App& useWorkerStateDefinition(detail::WorkerStateDefinition definition);

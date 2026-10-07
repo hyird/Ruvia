@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -23,6 +24,12 @@ RUVIA_MODEL(JsonBagRequest, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue, RUVI
 
 RUVIA_MODEL(JsonBagResponse, RUVIA_OPTIONAL_FIELD(payload, ruvia::JsonValue),
     RUVIA_OPTIONAL_FIELD(object, ruvia::JsonObject));
+
+RUVIA_MODEL(emission_options,
+    RUVIA_OPTIONAL_FIELD_NAME("p\"lain", plain, ruvia::String, RUVIA_NULLABLE),
+    RUVIA_OPTIONAL_FIELD(omitted, ruvia::String, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY),
+    RUVIA_OPTIONAL_FIELD(emitted, ruvia::String, RUVIA_NULLABLE, RUVIA_EMIT_NULL),
+    RUVIA_OPTIONAL_FIELD(both, ruvia::String, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL));
 
 }  // namespace
 
@@ -151,4 +158,45 @@ RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
     response.set<"object">(std::move(parsed->ensure<"object">()));
     RUVIA_CHECK_EQ(std::string_view(ruvia::toJson(response, {.resource = &resource})),
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));
+}
+
+RUVIA_TEST(model_json_emission_options_share_exact_string_size_and_output_for_all_states) {
+    // Each pair of bits selects missing, explicit null, empty, or text. The
+    // Cartesian product also covers every comma position after omitted fields.
+    constexpr std::string_view names[] = {R"("p\"lain")", R"("omitted")", R"("emitted")", R"("both")"};
+    for (unsigned combination = 0; combination != 256; ++combination) {
+        emission_options value;
+        const auto assign = [&]<ruvia::FixedString field>(unsigned state) {
+            if (state == 1) {
+                value.set<field>(nullptr);
+            } else if (state == 2) {
+                value.set<field>("");
+            } else if (state == 3) {
+                value.set<field>("\"\n");
+            }
+        };
+        assign.template operator()<"plain">(combination & 3);
+        assign.template operator()<"omitted">((combination >> 2) & 3);
+        assign.template operator()<"emitted">((combination >> 4) & 3);
+        assign.template operator()<"both">((combination >> 6) & 3);
+
+        std::string expected("{");
+        for (unsigned index = 0; index != 4; ++index) {
+            const auto state = (combination >> (index * 2)) & 3;
+            if ((state == 0 && index < 2) || (state == 2 && (index == 1 || index == 3))) {
+                continue;
+            }
+            if (expected.size() != 1) {
+                expected.push_back(',');
+            }
+            expected.append(names[index]);
+            expected.push_back(':');
+            expected.append(state < 2 ? "null" : state == 2 ? R"("")"
+                                                            : R"("\"\n")");
+        }
+        expected.push_back('}');
+        const auto output = ruvia::toJson(value);
+        RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
+        RUVIA_CHECK_EQ(ruvia::detail::ModelJsonAccess::sizeHint(value), output.size());
+    }
 }

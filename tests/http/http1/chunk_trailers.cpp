@@ -99,19 +99,12 @@ RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
     // few of each; the rest were unpinned even though the source comment warns
     // that "dropping one reopens trailer smuggling". Cover them all here.
     //
-    // Upgrade is a NOTABLE case: the HTTP/1 list forbids it as a trailer, but the
-    // HTTP/2 request-trailer set (http2IsForbiddenRequestTrailerHeader) omits it,
-    // because HTTP/2 already bans Upgrade as a connection-specific regular header
-    // upstream. Over HTTP/1 there is no such upstream ban, so the trailer check is
-    // the guard that stops a smuggled protocol-switch request modifier -- pin it.
+    // All protocols share this trailer policy. HTTP/2 and HTTP/3 also reject
+    // Upgrade as a connection-specific field before applying trailer policy.
     RUVIA_CHECK(
         validateHttpChunkTrailers("Upgrade: websocket\r\n") == HttpChunkScanError::kInvalidTrailer);
-    // Proxy-Connection is the fifth connection-specific field, alongside
-    // Connection / Keep-Alive / Transfer-Encoding / Upgrade (all pinned here). The
-    // HTTP/1 list previously covered four of the five and dropped this one, so a
-    // "Proxy-Connection" trailer slipped through even though HTTP/2 rejects it as a
-    // connection-specific header -- the same upstream/trailer asymmetry noted for
-    // Upgrade above. Pin it so the two protocols agree on the connection set.
+    // Proxy-Connection is forbidden both as a binary-protocol connection field
+    // and by the shared trailer policy.
     RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Connection: keep-alive\r\n") ==
                 HttpChunkScanError::kInvalidTrailer);
 

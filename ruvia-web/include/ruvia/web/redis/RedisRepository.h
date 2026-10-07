@@ -56,21 +56,21 @@ struct RedisRepositoryMapExists final {
 namespace ruvia {
 
 template <typename Entity>
-class RedisRepository final : private detail::ScopedCapabilityNode {
-    static_assert(requires { typename Entity::RedisEntityType; }, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
+class RedisRepository final {
+    static_assert(detail::redis_entity_schema<Entity>, "Redis repositories require a RUVIA_REDIS_ENTITY declaration");
 
 public:
     RedisRepository(const RedisRepository&) = delete;
     RedisRepository& operator=(const RedisRepository&) = delete;
 
     // A repository is tied to its worker operation scope. Moving it transfers
-    // the capability node and its PMR mapping; copying would create a second
+    // its value registration and PMR mapping; copying would create a second
     // owner with ambiguous mapping lifetime.
     RedisRepository(RedisRepository&& other) noexcept
-        : detail::ScopedCapabilityNode(std::move(other)),
-          handle_(other.handle_),
-          mapping_(std::move(other.mapping_)) {
-        // The source no longer has a scope node. Destroy even empty moved-from
+        : handle_(other.handle_),
+          mapping_(std::move(other.mapping_)),
+          registration_(std::move(other.registration_), this) {
+        // The source no longer has a registration. Destroy moved-from
         // PMR containers now: implementations may retain allocator-owned state.
         other.mapping_.reset();
     }
@@ -203,13 +203,13 @@ private:
     friend class RedisHandle;
 
     explicit RedisRepository(const RedisHandle& handle, const RedisRepositoryConfig& config)
-        : detail::ScopedCapabilityNode(handle.operationScope(), &RedisRepository::expireCapability),
-          handle_(handle),
-          mapping_(detail::normalizeRedisMapping<Entity>(config, handle.resource_)) {}
+        : handle_(handle),
+          mapping_(detail::normalizeRedisMapping<Entity>(config, handle.resource_)),
+          registration_(handle.registration_.scope(), this, &RedisRepository::expire_capability) {}
 
     [[nodiscard]] std::pmr::memory_resource* resource() const {
-        detail::ScopedCapabilityNode::requireActive();
-        handle_.requireActive();
+        registration_.require_active();
+        handle_.registration_.require_active();
         if (!mapping_) {
             throw std::logic_error("Redis repository mapping has expired");
         }
@@ -223,8 +223,8 @@ private:
         return *mapping_;
     }
 
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-        auto& repository = static_cast<RedisRepository&>(capability);
+    static void expire_capability(void* target) noexcept {
+        auto& repository = *static_cast<RedisRepository*>(target);
         repository.mapping_.reset();
     }
 
@@ -366,11 +366,12 @@ private:
 
     RedisHandle handle_;
     std::optional<detail::RedisMapping> mapping_;
+    scoped_capability_registration registration_;
 };
 
 template <typename Entity>
 RedisRepository<Entity> RedisHandle::getRepository(const RedisRepositoryConfig& config) const {
-    requireActive();
+    registration_.require_active();
     return RedisRepository<Entity>(*this, config);
 }
 

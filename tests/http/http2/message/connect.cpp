@@ -18,6 +18,7 @@
 
 namespace {
 
+using ruvia::Http2RequestHeadSubmitResult;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
 using ruvia::detail::Http2ConnectForm;
@@ -33,7 +34,6 @@ using ruvia::detail::Http2FrameType;
 using ruvia::detail::http2IsPendingWebSocketConnect;
 using ruvia::detail::Http2NotConnect;
 using ruvia::detail::Http2RequestHeadSubmitError;
-using ruvia::detail::Http2RequestHeadSubmitResult;
 using ruvia::detail::Http2Role;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2SubmitStatus;

@@ -27,7 +27,7 @@ std::optional<std::string_view> DispatchResponse::header(std::string_view name) 
 }
 
 ScopedOperation<DispatchResponse> Context::dispatch(DispatchOptions options) {
-    if (!routes_ || !worker_.isCurrent()) {
+    if (!routes_ || !capabilities_.worker().isCurrent()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
     }
     if (dispatchDepth_ >= 8) {
@@ -58,7 +58,7 @@ ScopedOperation<DispatchResponse> Context::dispatch(DispatchOptions options) {
         throw std::invalid_argument("subrequest headers exceed the configured limit");
     }
     wire.append("Content-Length: ").append(std::to_string(options.body.size())).append("\r\n\r\n").append(options.body);
-    return detail::makeScopedOperation(operationScope_, dispatchTask(std::move(wire), std::move(options.operation)));
+    return ::ruvia::make_scoped_operation(operationScope_, dispatchTask(std::move(wire), std::move(options.operation)));
 }
 
 Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOptions options) {
@@ -69,12 +69,12 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
     }
     const auto& request = parsed.parsed()->request();
     const auto resolution = routes_->resolve(request);
-    const auto stop = combineStopTokens(stopToken_, std::move(options.stopToken));
+    const auto stop = combineStopTokens(capabilities_.stop_token(), std::move(options.stopToken));
     if (stop.stopRequested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
     detail::RequestDeadline deadline(stop);
-    auto services = detail::ContextServices(worker_, stop, clientRegistries_, rateLimiter_, maxDecodedBodyBytes_)
+    auto services = detail::ContextServices(capabilities_.worker(), stop, clientRegistries_, rateLimiter_, maxDecodedBodyBytes_)
                         .withSubrequest(connInfo_, dispatchDepth_ + 1)
                         .withRoutes(*routes_)
                         .withRequestDeadline(deadline);
@@ -84,11 +84,11 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
     if (env_) {
         services = services.withEnv(*env_);
     }
-    if (workerStates_) {
-        services = services.withWorkerStates(*workerStates_);
+    if (const auto* worker_states = capabilities_.worker_states()) {
+        services = services.withWorkerStates(*worker_states);
     }
-    if (blockingPool_) {
-        services = services.withBlockingPool(*blockingPool_);
+    if (auto* blocking_pool = capabilities_.blocking_pool()) {
+        services = services.withBlockingPool(*blocking_pool);
     }
     services = services.withErrorHandler(errorHandler_).withNotFoundHandler(notFoundHandler_);
     auto timeout = options.timeout;
@@ -107,7 +107,7 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
         }
     }
     if (timeout) {
-        deadline.arm(worker_, *timeout);
+        deadline.arm(capabilities_.worker(), *timeout);
     }
     auto response = rejected ? std::move(*rejected) : co_await routes_->dispatch(request, resolution, memory, services);
     if (response.fileBody()) {

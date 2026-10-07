@@ -10,6 +10,7 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/FixedString.h"
+#include "ruvia/web/detail/redis/RedisEntityTraits.h"
 #include "ruvia/web/detail/redis/RedisPredicateStorage.h"
 
 namespace ruvia {
@@ -83,6 +84,7 @@ struct redis_predicate_access final {
 
 template <typename entity_type, FixedString name>
 class redis_field_reference final {
+    static_assert(detail::redis_entity_schema<entity_type>, "Redis field references require a Redis entity");
     static_assert(entity_type::template columnIndex<name>() < std::tuple_size_v<typename entity_type::Columns>);
     using operation = detail::redis_binary_operator;
     using kind = detail::redis_expression_inspection::kind_type;

@@ -45,10 +45,10 @@ public:
 
     void closeNow() noexcept;
     [[nodiscard]] Task<void> join();
-    [[nodiscard]] HttpClientHandle get(ScopedOperationScope& scope) const;
+    [[nodiscard]] HttpClientHandle get(::ruvia::operation_scope& scope) const;
     [[nodiscard]] HttpClientHandle get(
-        ScopedOperationScope& scope, OperationOptions options) const;
-    [[nodiscard]] HttpClientHandle get(std::string_view alias, ScopedOperationScope& scope) const;
+        ::ruvia::operation_scope& scope, OperationOptions options) const;
+    [[nodiscard]] HttpClientHandle get(std::string_view alias, ::ruvia::operation_scope& scope) const;
 
 private:
     using PoolOwner = std::unique_ptr<HttpClientPool, PmrObjectDeleter<HttpClientPool>>;

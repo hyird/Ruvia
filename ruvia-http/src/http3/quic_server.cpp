@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "ruvia/http/detail/http3/quic_cid_partition.h"
 #include "ruvia/http/detail/http3/quic_cid_registry.h"
 
 namespace ruvia {
@@ -67,7 +68,45 @@ bool valid_varint(std::uint64_t value) noexcept {
     return value < (std::uint64_t{1} << 62);
 }
 
+struct parsed_quic_header final {
+    ngtcp2_version_cid ids{};
+    int decode_result{};
+    bool short_header{};
+};
+
+std::optional<parsed_quic_header> parse_quic_header(
+    std::span<const std::byte> packet) noexcept {
+    if (packet.empty()) {
+        return std::nullopt;
+    }
+    parsed_quic_header result;
+    result.short_header = (std::to_integer<unsigned char>(packet.front()) & 0x80U) == 0;
+    result.decode_result = ngtcp2_pkt_decode_version_cid(&result.ids,
+        reinterpret_cast<const std::uint8_t*>(packet.data()), packet.size(),
+        detail::quic_server_connection_id_size);
+    if ((result.decode_result != 0 && result.decode_result != NGTCP2_ERR_VERSION_NEGOTIATION) ||
+        !result.ids.dcid || result.ids.dcidlen > quic_max_connection_id_size ||
+        result.ids.scidlen > quic_max_connection_id_size) {
+        return std::nullopt;
+    }
+    return result;
+}
+
 }  // namespace
+
+std::optional<std::uint32_t> quic_datagram_partition(
+    std::span<const std::byte> packet, std::uint32_t partition_count) noexcept {
+    if (partition_count == 0) {
+        return std::nullopt;
+    }
+    const auto header = parse_quic_header(packet);
+    if (!header) {
+        return std::nullopt;
+    }
+    return detail::quic_connection_id_partition(std::span<const std::byte>(
+                                                    reinterpret_cast<const std::byte*>(header->ids.dcid), header->ids.dcidlen),
+        partition_count);
+}
 
 quic_version_negotiation_plan::quic_version_negotiation_plan(
     quic_version_negotiation_plan&& other) noexcept
@@ -197,6 +236,7 @@ quic_server::quic_server(quic_server_config config, quic_crypto_provider_view cr
         throw std::invalid_argument("QUIC server requires a memory resource");
     }
     crypto.validate();
+    detail::validate_quic_cid_partition(config.cid_partition);
     const auto& transport = config.local_transport_parameters;
     const auto& limits = config.limits;
     constexpr std::uint64_t stream_count_max = (std::uint64_t{1} << 60) - 1;
@@ -260,23 +300,22 @@ quic_server_route quic_server::route_datagram(const quic_datagram_view& datagram
     if (!impl_ || datagram.bytes.empty()) {
         return {};
     }
-    ngtcp2_version_cid decoded{};
+    const auto parsed_header = parse_quic_header(datagram.bytes);
+    if (!parsed_header) {
+        return {};
+    }
+    const auto& decoded = parsed_header->ids;
+    const auto decode_result = parsed_header->decode_result;
     const auto* packet = reinterpret_cast<const std::uint8_t*>(datagram.bytes.data());
-    const int decode_result = ngtcp2_pkt_decode_version_cid(&decoded, packet,
-        datagram.bytes.size(), 16);
-    if (decode_result != 0 && decode_result != NGTCP2_ERR_VERSION_NEGOTIATION) {
-        return {};
-    }
-
-    if (!decoded.dcid || decoded.dcidlen > quic_max_connection_id_size ||
-        decoded.scidlen > quic_max_connection_id_size) {
-        return {};
-    }
     quic_connection_id dcid(std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(decoded.dcid), decoded.dcidlen));
+    if (detail::quic_connection_id_partition(dcid.view(), impl_->config.cid_partition.count) !=
+        impl_->config.cid_partition.index) {
+        return {};
+    }
     // Short headers carry no version. Route their destination CID before
     // interpreting version zero as a long-header Version Negotiation packet.
-    if ((std::to_integer<unsigned char>(datagram.bytes.front()) & 0x80U) == 0) {
+    if (parsed_header->short_header) {
         if (const auto found = impl_->cid_to_token.find(dcid); found != impl_->cid_to_token.end()) {
             return {.kind = quic_server_route_kind::existing_connection, .connection = found->second};
         }
@@ -436,12 +475,14 @@ quic_server_admit_result quic_server::admit_initial(const quic_initial_offer& of
         .peer_address = offer.peer_address,
         .destination_connection_id = offer.source_connection_id,
         .original_destination_connection_id = offer.original_destination_connection_id,
+        .cid_partition = impl_->config.cid_partition,
         .local_transport_parameters = impl_->config.local_transport_parameters,
         .limits = impl_->config.limits};
-    std::array<std::byte, 16> server_source_id_bytes{};
+    std::array<std::byte, detail::quic_server_connection_id_size> server_source_id_bytes{};
     bool source_id_selected{};
     for (std::size_t attempt = 0; attempt < 4; ++attempt) {
-        impl_->crypto.random_bytes(impl_->crypto.context, server_source_id_bytes);
+        detail::generate_quic_server_connection_id(
+            impl_->crypto, server_source_id_bytes, config.cid_partition);
         const quic_connection_id candidate(server_source_id_bytes);
         if (candidate != offer.original_destination_connection_id &&
             !impl_->cid_to_token.contains(candidate)) {

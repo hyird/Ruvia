@@ -222,7 +222,7 @@ public:
                 std::move(config)}};
         detail::DbRegistry registry(ioContext, worker, resolved, databases);
         co_await registry.connect();
-        detail::ScopedOperationScope operationScope;
+        ::ruvia::operation_scope operationScope;
         auto handle = registry.get(operationScope);
 
         co_await acquireLock(handle, driver, lockName, options.lockTimeout, resolved);

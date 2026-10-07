@@ -153,7 +153,7 @@ bool detail::DbRegistry::empty() const noexcept {
     return entries_.empty();
 }
 
-DbHandle detail::DbRegistry::get(ScopedOperationScope& operationScope) const {
+DbHandle detail::DbRegistry::get(::ruvia::operation_scope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
         throw DbError(
@@ -163,7 +163,7 @@ DbHandle detail::DbRegistry::get(ScopedOperationScope& operationScope) const {
 }
 
 DbHandle detail::DbRegistry::get(
-    std::string_view alias, ScopedOperationScope& operationScope) const {
+    std::string_view alias, ::ruvia::operation_scope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         return DbHandle(poolRef(entries_[*match].pool), resource_, operationScope, entries_[*match].cache.get());

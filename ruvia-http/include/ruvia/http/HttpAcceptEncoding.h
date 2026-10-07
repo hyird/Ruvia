@@ -55,6 +55,7 @@ private:
     friend class HttpResponseCodingSelection;
 
     [[nodiscard]] int score(HttpContentCoding coding) const noexcept {
+        const HttpAcceptedEncodingQuality* coding_quality = nullptr;
         switch (coding) {
             case HttpContentCoding::kIdentity:
                 if (fieldPresent && !hasNonEmptyItem) {
@@ -67,35 +68,25 @@ private:
                 // default. A wildcard only excludes it when q=0.
                 return identity.wildcardQuality == 0 ? -1 : 1000;
             case HttpContentCoding::kGzip:
-                if (!fieldPresent) {
-                    return 999;
-                }
-                return gzip.accepts() ? (gzip.explicitQuality >= 0 ? gzip.explicitQuality
-                                                                   : gzip.wildcardQuality)
-                                      : -1;
+                coding_quality = &gzip;
+                break;
             case HttpContentCoding::deflate:
-                if (!fieldPresent) {
-                    return 999;
-                }
-                return deflate.accepts() ? (deflate.explicitQuality >= 0 ? deflate.explicitQuality
-                                                                         : deflate.wildcardQuality)
-                                         : -1;
+                coding_quality = &deflate;
+                break;
             case HttpContentCoding::kBrotli:
-                if (!fieldPresent) {
-                    return 999;
-                }
-                return brotli.accepts() ? (brotli.explicitQuality >= 0 ? brotli.explicitQuality
-                                                                       : brotli.wildcardQuality)
-                                        : -1;
+                coding_quality = &brotli;
+                break;
             case HttpContentCoding::kZstd:
-                if (!fieldPresent) {
-                    return 999;
-                }
-                return zstd.accepts() ? (zstd.explicitQuality >= 0 ? zstd.explicitQuality
-                                                                   : zstd.wildcardQuality)
-                                      : -1;
+                coding_quality = &zstd;
+                break;
         }
-        return -1;
+        if (coding_quality == nullptr) {
+            return -1;
+        }
+        if (!fieldPresent) {
+            return 999;
+        }
+        return coding_quality->accepts() ? (coding_quality->explicitQuality >= 0 ? coding_quality->explicitQuality : coding_quality->wildcardQuality) : -1;
     }
 };
 
@@ -179,39 +170,22 @@ public:
     // missing Accept-Encoding field accepts every coding; an explicitly
     // present field uses the parsed q-value set, including wildcard rules.
     [[nodiscard]] constexpr bool accepts(HttpContentCoding coding) const noexcept {
-        const auto codingBit = bit(coding);
-        return codingBit != 0 &&
-               (!acceptEncodingPresent_ || (acceptableBits_ & codingBit) != 0);
+        return HttpResponseCodingCandidates::all().contains(coding) &&
+               (!acceptEncodingPresent_ || acceptable_codings_.contains(coding));
     }
 
 private:
     constexpr HttpResponseCodingSelection(HttpContentCoding coding, bool identityAccepted,
-        bool acceptEncodingPresent, std::uint8_t acceptableBits) noexcept
+        bool acceptEncodingPresent, HttpResponseCodingCandidates acceptable_codings) noexcept
         : coding_(coding),
           identityAccepted_(identityAccepted),
           acceptEncodingPresent_(acceptEncodingPresent),
-          acceptableBits_(acceptableBits) {}
-
-    [[nodiscard]] static constexpr std::uint8_t bit(HttpContentCoding coding) noexcept {
-        switch (coding) {
-            case HttpContentCoding::kIdentity:
-                return 1u;
-            case HttpContentCoding::kGzip:
-                return 2u;
-            case HttpContentCoding::deflate:
-                return 16u;
-            case HttpContentCoding::kBrotli:
-                return 4u;
-            case HttpContentCoding::kZstd:
-                return 8u;
-        }
-        return 0u;
-    }
+          acceptable_codings_(acceptable_codings) {}
 
     HttpContentCoding coding_;
     bool identityAccepted_;
     bool acceptEncodingPresent_;
-    std::uint8_t acceptableBits_;
+    HttpResponseCodingCandidates acceptable_codings_;
 };
 
 enum class HttpResponseCodingSelectionError : std::uint8_t {
@@ -284,10 +258,10 @@ inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
         HttpContentCoding::deflate,
         HttpContentCoding::kIdentity,
     };
-    std::uint8_t acceptableBits = 0;
+    auto acceptable_codings = HttpResponseCodingCandidates::empty();
     for (const auto coding : availableCodings) {
         if (qualities.accepts(coding)) {
-            acceptableBits = static_cast<std::uint8_t>(acceptableBits | bit(coding));
+            acceptable_codings.include(coding);
         }
     }
     HttpContentCoding best = HttpContentCoding::kIdentity;
@@ -309,7 +283,7 @@ inline HttpResponseCodingSelectionResult HttpResponseCodingSelection::select(
             HttpResponseCodingSelectionError::kNoAcceptableCoding));
     }
     return HttpResponseCodingSelectionResult(HttpResponseCodingSelection(
-        best, identityScore >= 0, qualities.fieldPresent, acceptableBits));
+        best, identityScore >= 0, qualities.fieldPresent, acceptable_codings));
 }
 
 }  // namespace ruvia

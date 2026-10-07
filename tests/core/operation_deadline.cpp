@@ -63,10 +63,10 @@ bool positiveTimeoutRemainderDoesNotBecomeImmediate() {
     const auto exact = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(3));
     const auto fractional = exact +
                             std::chrono::duration_cast<Clock::duration>(std::chrono::microseconds(1));
-    return ruvia::detail::workerTimerCeilMilliseconds(exact) == std::chrono::milliseconds(3) &&
-           ruvia::detail::workerTimerCeilMilliseconds(fractional) ==
+    return ruvia::workerTimerCeilMilliseconds(exact) == std::chrono::milliseconds(3) &&
+           ruvia::workerTimerCeilMilliseconds(fractional) ==
                std::chrono::milliseconds(4) &&
-           ruvia::detail::workerTimerCeilMilliseconds(Clock::duration::zero()) ==
+           ruvia::workerTimerCeilMilliseconds(Clock::duration::zero()) ==
                std::chrono::milliseconds(0);
 }
 

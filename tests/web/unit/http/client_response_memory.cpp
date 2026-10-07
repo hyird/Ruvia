@@ -118,7 +118,7 @@ void runOperation(TestWorker& worker, asio::io_context& io, Operation&& operatio
 ruvia::Task<void> awaitCancelledResponse(ruvia::detail::HttpClientResponseState& state,
     bool& caughtExpectedError) {
     try {
-        (void)co_await ruvia::detail::makeScopedOperation(
+        (void)co_await ruvia::make_scoped_operation(
             state.bodyOperationScope, state.readAll(2 * 1024 * 1024));
     } catch (const ruvia::HttpClientError& error) {
         caughtExpectedError = error.code() == ruvia::HttpClientError::Code::kCancelled;
@@ -128,7 +128,7 @@ ruvia::Task<void> awaitCancelledResponse(ruvia::detail::HttpClientResponseState&
 ruvia::Task<void> awaitFailedResponse(ruvia::detail::HttpClientResponseState& state,
     bool& caughtExpectedError) {
     try {
-        (void)co_await ruvia::detail::makeScopedOperation(
+        (void)co_await ruvia::make_scoped_operation(
             state.bodyOperationScope, state.readAll(2 * 1024 * 1024));
     } catch (const std::runtime_error& error) {
         caughtExpectedError = std::string_view(error.what()) == "response fixture failed";
@@ -167,16 +167,16 @@ RUVIA_TEST(client_response_memory_output_queues_stop_once_and_retire_transport_w
 
         std::size_t tunnel_wake_count{};
         std::size_t upload_wake_count{};
-        state->tunnel->wakeTarget = &tunnel_wake_count;
-        state->tunnel->wake = count_queue_wake;
-        state->upload->wakeTarget = &upload_wake_count;
-        state->upload->wake = count_queue_wake;
+        state->tunnel->output.wakeTarget = &tunnel_wake_count;
+        state->tunnel->output.wake = count_queue_wake;
+        state->upload->output.wakeTarget = &upload_wake_count;
+        state->upload->output.wake = count_queue_wake;
         const std::string tunnel_payload(512, 't');
         const std::string upload_payload(512, 'u');
-        state->tunnel->chunk.assign(tunnel_payload);
-        state->tunnel->chunkReady = true;
-        state->upload->chunk.assign(upload_payload);
-        state->upload->chunkReady = true;
+        state->tunnel->output.chunk.assign(tunnel_payload);
+        state->tunnel->output.chunkReady = true;
+        state->upload->output.chunk.assign(upload_payload);
+        state->upload->output.chunkReady = true;
         const auto live_allocations = upstream.liveAllocations();
         const auto live_bytes = upstream.liveBytes();
         RUVIA_CHECK(live_allocations > 0);
@@ -187,13 +187,13 @@ RUVIA_TEST(client_response_memory_output_queues_stop_once_and_retire_transport_w
         bool upload_data_woke = false;
         bool upload_space_woke = false;
         ruvia::TaskScope waiters(worker.handle);
-        waiters.spawn(await_signal(state->tunnel->data.wait(), tunnel_data_woke));
-        waiters.spawn(await_signal(state->tunnel->space.wait(), tunnel_space_woke));
-        waiters.spawn(await_signal(state->upload->data.wait(), upload_data_woke));
-        waiters.spawn(await_signal(state->upload->space.wait(), upload_space_woke));
+        waiters.spawn(await_signal(state->tunnel->output.data.wait(), tunnel_data_woke));
+        waiters.spawn(await_signal(state->tunnel->output.space.wait(), tunnel_space_woke));
+        waiters.spawn(await_signal(state->upload->output.data.wait(), upload_data_woke));
+        waiters.spawn(await_signal(state->upload->output.space.wait(), upload_space_woke));
 
-        state->tunnel->stop();
-        state->upload->stop();
+        state->tunnel->output.stop();
+        state->upload->output.stop();
         co_await waiters.join();
         RUVIA_CHECK(tunnel_data_woke);
         RUVIA_CHECK(tunnel_space_woke);
@@ -206,24 +206,24 @@ RUVIA_TEST(client_response_memory_output_queues_stop_once_and_retire_transport_w
 
         // Repeated stop is a no-op for external wake registrations, and the
         // queued span remains alive until its consumer explicitly releases it.
-        state->tunnel->stop();
-        state->upload->stop();
+        state->tunnel->output.stop();
+        state->upload->output.stop();
         RUVIA_CHECK_EQ(tunnel_wake_count, std::size_t{1});
         RUVIA_CHECK_EQ(upload_wake_count, std::size_t{1});
-        RUVIA_CHECK_EQ(std::string_view(state->tunnel->chunk), tunnel_payload);
-        RUVIA_CHECK_EQ(std::string_view(state->upload->chunk), upload_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->tunnel->output.chunk), tunnel_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->upload->output.chunk), upload_payload);
         RUVIA_CHECK_EQ(upstream.liveAllocations(), live_allocations);
         RUVIA_CHECK_EQ(upstream.liveBytes(), live_bytes);
 
         domain->detachTransportBindings(pool);
-        RUVIA_CHECK(state->tunnel->wake == nullptr);
-        RUVIA_CHECK(state->tunnel->wakeTarget == nullptr);
-        RUVIA_CHECK(state->upload->wake == nullptr);
-        RUVIA_CHECK(state->upload->wakeTarget == nullptr);
+        RUVIA_CHECK(state->tunnel->output.wake == nullptr);
+        RUVIA_CHECK(state->tunnel->output.wakeTarget == nullptr);
+        RUVIA_CHECK(state->upload->output.wake == nullptr);
+        RUVIA_CHECK(state->upload->output.wakeTarget == nullptr);
         RUVIA_CHECK_EQ(tunnel_wake_count, std::size_t{1});
         RUVIA_CHECK_EQ(upload_wake_count, std::size_t{1});
-        RUVIA_CHECK_EQ(std::string_view(state->tunnel->chunk), tunnel_payload);
-        RUVIA_CHECK_EQ(std::string_view(state->upload->chunk), upload_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->tunnel->output.chunk), tunnel_payload);
+        RUVIA_CHECK_EQ(std::string_view(state->upload->output.chunk), upload_payload);
         RUVIA_CHECK_EQ(upstream.liveAllocations(), live_allocations);
         RUVIA_CHECK_EQ(upstream.liveBytes(), live_bytes);
 
@@ -258,7 +258,7 @@ RUVIA_TEST(client_response_memory_result_releases_after_client_worker_owner_dies
             state->buffered.assign(body);
             state->complete = true;
 
-            held.emplace(co_await ruvia::detail::makeScopedOperation(
+            held.emplace(co_await ruvia::make_scoped_operation(
                 state->bodyOperationScope, state->readAll(body.size())));
             RUVIA_CHECK_EQ(held->size(), body.size());
             RUVIA_CHECK_EQ(budget->retainedBytes(), body.size());
@@ -324,7 +324,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
         auto operation = [&]() -> ruvia::Task<void> {
             std::optional<ruvia::HttpClientResponseBytes> budgetFiller;
             {
-                auto cold = ruvia::detail::makeScopedOperation(
+                auto cold = ruvia::make_scoped_operation(
                     state->bodyOperationScope, state->readAll(body.size() + 4));
             }
             RUVIA_CHECK_EQ(std::string_view(state->buffered), body);
@@ -332,7 +332,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
 
             bool sizeRejected = false;
             try {
-                (void)co_await ruvia::detail::makeScopedOperation(
+                (void)co_await ruvia::make_scoped_operation(
                     state->bodyOperationScope, state->readAll(1));
             } catch (const ruvia::HttpClientError& error) {
                 sizeRejected = error.code() == ruvia::HttpClientError::Code::kResponseTooLarge;
@@ -347,7 +347,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
                     state->pending.assign("tail");
                     state->offset = 0;
                 }
-                auto result = co_await ruvia::detail::makeScopedOperation(
+                auto result = co_await ruvia::make_scoped_operation(
                     state->bodyOperationScope, state->readAll(body.size() + 4));
                 RUVIA_CHECK_EQ(result.size(), body.size() + 4);
                 RUVIA_CHECK_EQ(result.bytes().front(), std::byte{'b'});
@@ -363,7 +363,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
                     RUVIA_CHECK_EQ(budgetLifetime.lock()->retainedBytes(), body.size() + 4);
                     state->buffered.assign(body);
                     state->pending.assign("tail");
-                    auto second = co_await ruvia::detail::makeScopedOperation(
+                    auto second = co_await ruvia::make_scoped_operation(
                         state->bodyOperationScope, state->readAll(body.size() + 4));
                     budgetFiller.emplace(std::move(second));
 
@@ -371,7 +371,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
                     state->pending.assign("tail");
                     bool budgetFull = false;
                     try {
-                        (void)co_await ruvia::detail::makeScopedOperation(
+                        (void)co_await ruvia::make_scoped_operation(
                             state->bodyOperationScope, state->readAll(body.size() + 4));
                     } catch (const ruvia::HttpClientError& error) {
                         budgetFull = error.code() ==
@@ -381,7 +381,7 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
                     RUVIA_CHECK_EQ(std::string_view(state->buffered), body);
                     RUVIA_CHECK_EQ(std::string_view(state->pending), "tail");
                     budgetFiller.reset();
-                    auto retry = co_await ruvia::detail::makeScopedOperation(
+                    auto retry = co_await ruvia::make_scoped_operation(
                         state->bodyOperationScope, state->readAll(body.size() + 4));
                     RUVIA_CHECK_EQ(retry.size(), body.size() + 4);
                 } else {
@@ -394,10 +394,10 @@ RUVIA_TEST(client_response_memory_domain_pins_state_and_releases_pooled_storage_
                 }
             }
             state->bodyOperationScope.close();
-            co_await state->bodyOperationScope.closeAndJoin();
+            co_await state->bodyOperationScope.close_and_join();
             bool expiredScopeRejected = false;
             try {
-                auto expired = ruvia::detail::makeScopedOperation(
+                auto expired = ruvia::make_scoped_operation(
                     state->bodyOperationScope, state->readAll(body.size()));
                 (void)co_await std::move(expired);
             } catch (const std::logic_error&) {
@@ -477,7 +477,7 @@ RUVIA_TEST(client_response_memory_domain_joins_error_waiters_before_releasing_st
         cancelledState->dataSignal.notify();
         co_await cancelledTasks.join();
         cancelledState->bodyOperationScope.close();
-        co_await cancelledState->bodyOperationScope.closeAndJoin();
+        co_await cancelledState->bodyOperationScope.close_and_join();
         RUVIA_CHECK(cancelledAsExpected);
         RUVIA_CHECK_EQ(std::string_view(cancelledState->buffered), body);
         RUVIA_CHECK_EQ(cancelledState->headers.front().value(), std::string_view(header));
@@ -491,7 +491,7 @@ RUVIA_TEST(client_response_memory_domain_joins_error_waiters_before_releasing_st
         failedState->dataSignal.notify();
         co_await failedTasks.join();
         failedState->bodyOperationScope.close();
-        co_await failedState->bodyOperationScope.closeAndJoin();
+        co_await failedState->bodyOperationScope.close_and_join();
         RUVIA_CHECK(failureAsExpected);
         RUVIA_CHECK_EQ(std::string_view(failedState->buffered), body);
         RUVIA_CHECK_EQ(failedState->headers.front().value(), std::string_view(header));

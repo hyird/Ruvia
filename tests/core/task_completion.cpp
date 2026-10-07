@@ -141,6 +141,55 @@ bool checkFrameCompletion(bool fail) {
     return called && valid && counts.allocations == counts.deallocations;
 }
 
+template <typename result_type>
+ruvia::Task<result_type> cold_frame(FrameAllocation frame, bool& ran) {
+    ran = true;
+    if constexpr (std::is_void_v<result_type>) {
+        co_return;
+    } else {
+        co_return static_cast<int>(frame.values.size());
+    }
+}
+
+template <typename result_type>
+bool check_cold_frame() {
+    AllocationCounts counts;
+    bool ran = false;
+    {
+        auto task = cold_frame<result_type>(FrameAllocation(counts), ran);
+        if (ran || counts.allocations == counts.deallocations) {
+            return false;
+        }
+    }
+    return !ran && counts.allocations == counts.deallocations;
+}
+
+struct throwing_result final {
+    explicit throwing_result(int) {
+        throw std::runtime_error("return construction failed");
+    }
+    throwing_result(throwing_result&&) noexcept = default;
+};
+
+ruvia::Task<throwing_result> fail_return_construction(FrameAllocation frame) {
+    co_return static_cast<int>(frame.values.size());
+}
+
+bool check_failed_return_construction() {
+    AllocationCounts counts;
+    asio::io_context context(1);
+    bool observed = false;
+    ruvia::detail::asyncStartTask(fail_return_construction(FrameAllocation(counts)),
+        asio::bind_executor(context.get_executor(),
+            asio::bind_allocator(CountingAllocator<std::byte>(counts), [&](auto result) {
+                observed = result.failure() != nullptr && result.success() == nullptr &&
+                           hasFailureMessage(*result.failure(), "return construction failed") &&
+                           counts.allocations == counts.deallocations;
+            })));
+    context.run();
+    return observed && counts.allocations != 0 && counts.allocations == counts.deallocations;
+}
+
 struct ValueDeleter final {
     AllocationCounts* counts{nullptr};
 
@@ -274,12 +323,9 @@ int main() {
     valid = checkFrameCompletion<void>(true) && valid;
     valid = checkRetainedValue() && valid;
 
-    AllocationCounts coldCounts;
-    {
-        auto cold = completeVoidWithFrame(FrameAllocation(coldCounts));
-        valid = valid && coldCounts.allocations > coldCounts.deallocations;
-    }
-    valid = valid && coldCounts.allocations == coldCounts.deallocations;
+    valid = check_cold_frame<void>() && valid;
+    valid = check_cold_frame<int>() && valid;
+    valid = check_failed_return_construction() && valid;
 
     return valid && completed == 5 ? 0 : 1;
 }

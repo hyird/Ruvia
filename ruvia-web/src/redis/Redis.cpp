@@ -46,7 +46,7 @@ bool RedisRegistry::empty() const noexcept {
     return pools_.empty();
 }
 
-RedisHandle RedisRegistry::get(ScopedOperationScope& operationScope) const {
+RedisHandle RedisRegistry::get(::ruvia::operation_scope& operationScope) const {
     const auto defaultPoolIndex = aliasIndex_.defaultIndex();
     if (!defaultPoolIndex.has_value()) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
@@ -55,7 +55,7 @@ RedisHandle RedisRegistry::get(ScopedOperationScope& operationScope) const {
 }
 
 RedisHandle RedisRegistry::get(
-    std::string_view alias, ScopedOperationScope& operationScope) const {
+    std::string_view alias, ::ruvia::operation_scope& operationScope) const {
     const auto match = aliasIndex_.find(alias);
     if (match.has_value()) {
         return pools_[*match]->handle(operationScope);

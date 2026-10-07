@@ -26,6 +26,8 @@ struct Captured final {
     std::vector<std::string> paths;
     std::vector<std::string> bodies;
     std::vector<std::string> trailers;
+    std::vector<std::string> trailer_values;
+    std::vector<bool> never_indexed;
     std::unordered_map<std::uint64_t, std::size_t> bodyIndex;
     std::vector<std::uint64_t> ended;
     std::vector<std::uint64_t> reset;
@@ -133,6 +135,8 @@ void capture(void* opaque, const ruvia::Http3ConnectionEvent& event) {
             break;
         case ruvia::Http3ConnectionEventKind::kTrailerField:
             result.trailers.emplace_back(event.trailer.name);
+            result.trailer_values.emplace_back(event.trailer.value);
+            result.never_indexed.push_back(event.trailer.neverIndexed);
             break;
     }
 }
@@ -314,7 +318,9 @@ RUVIA_TEST(http3_connection_delivers_trailers_synchronously_and_finishes_the_mes
     const auto initial = requestWire(&resource, "GET", "/trailers", "");
     RUVIA_CHECK(connection.feed(0, initial, false, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kNeedMoreData);
-    const std::array<ruvia::Http3FieldSectionFieldView, 1> fields{{{"x-end", "yes"}}};
+    const std::string name = "x-" + std::string(80, 'n');
+    const std::string value(100, 'v');
+    const std::array<ruvia::Http3FieldSectionFieldView, 1> fields{{{name, value, true}}};
     const auto section = ruvia::encodeHttp3FieldSection(fields, &resource);
     std::array<char, 16> frame{};
     const auto header = ruvia::encodeHttp3FrameHeader(frame, 1, section->size());
@@ -323,7 +329,9 @@ RUVIA_TEST(http3_connection_delivers_trailers_synchronously_and_finishes_the_mes
     RUVIA_CHECK(connection.feed(0, wire, true, false, capture, &captured).status ==
                 ruvia::Http3ConnectionStatus::kMessageEnd);
     RUVIA_CHECK_EQ(captured.trailers.size(), 1U);
-    RUVIA_CHECK_EQ(captured.trailers[0], "x-end");
+    RUVIA_CHECK_EQ(captured.trailers[0], name);
+    RUVIA_CHECK_EQ(captured.trailer_values[0], value);
+    RUVIA_CHECK(captured.never_indexed[0]);
     RUVIA_CHECK_EQ(captured.ended.size(), 1U);
 }
 

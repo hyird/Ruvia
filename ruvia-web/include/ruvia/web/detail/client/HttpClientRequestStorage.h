@@ -12,7 +12,7 @@ namespace ruvia::detail {
 struct HttpClientRequestStorageAccess;
 class HttpClientUploadState;
 class HttpClientTunnelState;
-class HttpClientOutputQueue;
+class http_client_output_queue;
 
 class HttpClientRequestStorage final {
 public:
@@ -45,7 +45,7 @@ public:
     [[nodiscard]] HttpClientTunnelState* tunnel() const noexcept {
         return tunnel_;
     }
-    [[nodiscard]] HttpClientOutputQueue* output() const noexcept;
+    [[nodiscard]] http_client_output_queue* output() const noexcept;
     [[nodiscard]] bool isTunnel() const noexcept {
         return isTunnel_;
     }

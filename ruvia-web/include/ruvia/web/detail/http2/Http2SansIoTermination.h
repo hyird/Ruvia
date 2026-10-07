@@ -149,7 +149,7 @@ public:
             return false;
         }
         try {
-            WorkerHandleAccess::scheduleTimer(worker_, timer_, workerTimerDeadlineAfter(duration_),
+            worker_.schedule_timer(timer_, workerTimerDeadlineAfter(duration_),
                 [this](WorkerTimerOutcome outcome) noexcept {
                     timerOutcome_ = outcome;
                     termination_.detach(observer_);

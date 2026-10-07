@@ -5,8 +5,6 @@
 #include <system_error>
 #include <utility>
 
-#include <asio/bind_executor.hpp>
-
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/web/detail/client/WebSocketClientInternal.h"
 #include "ruvia/web/detail/client/WebSocketClientState.h"
@@ -51,12 +49,12 @@ void WebSocketClientState::closeOnWorker(AbortReason reason) noexcept {
 }
 
 void WebSocketClientState::requestAbort(AbortReason reason) noexcept {
-    const auto phase = phase_.load(std::memory_order_acquire);
+    auto phase = phase_.load(std::memory_order_acquire);
     if (phase == Phase::kClosed) {
         return;
     }
-    if (phase == Phase::kFresh) {
-        phase_.store(Phase::kClosed, std::memory_order_release);
+    if (phase == Phase::kFresh && phase_.compare_exchange_strong(phase, Phase::kClosed,
+                                      std::memory_order_acq_rel, std::memory_order_acquire)) {
         return;
     }
     if (worker_.isCurrent()) {
@@ -65,12 +63,15 @@ void WebSocketClientState::requestAbort(AbortReason reason) noexcept {
     }
     try {
         auto state = shared_from_this();
-        if (!WorkerHandleAccess::deferIfAttached(
-                worker_, [state = std::move(state), reason] { state->closeOnWorker(reason); })) {
-            phase_.store(Phase::kClosed, std::memory_order_release);
+        if (!loop_.defer_cleanup(
+                [state = std::move(state), reason] { state->closeOnWorker(reason); }) &&
+            phase_.load(std::memory_order_acquire) != Phase::kClosed) {
+            std::terminate();
         }
     } catch (...) {
-        phase_.store(Phase::kClosed, std::memory_order_release);
+        if (phase_.load(std::memory_order_acquire) != Phase::kClosed) {
+            std::terminate();
+        }
     }
 }
 
@@ -84,14 +85,8 @@ void WebSocketClientState::requestCancel() noexcept {
 
 Task<void> WebSocketClientState::shutdownOwned(
     std::shared_ptr<WebSocketClientState> state, ClientCloseState::ObservationMode mode) {
-    if (!state->worker_.isCurrent()) {
-        throw std::logic_error("WebSocket client shutdown must run on its bound event loop");
-    }
-    state->startCloseOnWorker();
-    while (!state->closeState_.complete()) {
-        co_await state->closeState_.wait();
-    }
-    state->closeState_.observeFailure(mode);
+    auto* owner = state.get();
+    return owner->closeState_.shutdown_owned(std::move(state), [owner] { owner->startCloseOnWorker(); }, mode);
 }
 
 void WebSocketClientState::startCloseOnWorker() noexcept {
@@ -100,25 +95,14 @@ void WebSocketClientState::startCloseOnWorker() noexcept {
     }
     closeOnWorker(AbortReason::kClosing);
     stopSource_.requestStop();
-    if (!closeState_.startTask()) {
-        return;
-    }
-    try {
-        auto state = shared_from_this();
-        asyncStartTask(closeOnWorker(),
-            asio::bind_executor(loop_.executor(),
-                [state](const TaskCompletionResult<void>& result) { state->finishClose(result); }));
-    } catch (...) {
-        phase_.store(Phase::kClosed, std::memory_order_release);
-        std::terminate();
-    }
+    closeState_.start_cleanup(shared_from_this(), [this] { return closeOnWorker(); }, [this](std::exception_ptr failure) { finishClose(std::move(failure)); });
 }
 
 Task<void> WebSocketClientState::closeOnWorker() {
     while (connectInFlight_ || heartbeatInFlight_) {
         co_await closeState_.wait();
     }
-    co_await operationScope_.closeAndJoin();
+    co_await operationScope_.close_and_join();
     if (http2_) {
         co_await http2_->join();
     }
@@ -127,13 +111,12 @@ Task<void> WebSocketClientState::closeOnWorker() {
     }
 }
 
-void WebSocketClientState::finishClose(const TaskCompletionResult<void>& result) {
-    if (connectInFlight_ || heartbeatInFlight_ || operationScope_.hasPendingOperations()) {
+void WebSocketClientState::finishClose(std::exception_ptr failure) {
+    if (connectInFlight_ || heartbeatInFlight_ || operationScope_.has_pending_operations()) {
         std::terminate();
     }
     phase_.store(Phase::kClosed, std::memory_order_release);
-    const auto* failure = result.failure();
-    closeState_.finish(failure == nullptr ? std::exception_ptr{} : failure->exception());
+    closeState_.finish(std::move(failure));
 }
 
 Task<void> WebSocketClientState::shutdown() {
@@ -145,17 +128,18 @@ ScopedOperation<void> WebSocketClientState::close(
     validateOperationOptions(operationOptions);
     requireCurrent();
     std::pmr::string reason(options.reason.view(), memory_.resource());
-    return makeScopedOperation(operationScope_,
+    auto readActivity = claim_activity(readActive_, "WebSocket client close cannot overlap read");
+    auto writeActivity = claim_activity(writeActive_, "WebSocket client close cannot overlap write");
+    auto closeActivity = claim_activity(closeActive_, "WebSocket client close is already in progress");
+    return ::ruvia::make_scoped_operation(operationScope_,
         closeOwned(shared_from_this(), options, std::move(reason), std::move(operationOptions),
-            ActivityLease(readActive_, "WebSocket client close cannot overlap read"),
-            ActivityLease(writeActive_, "WebSocket client close cannot overlap write"),
-            ActivityLease(closeActive_, "WebSocket client close is already in progress")),
+            std::move(readActivity), std::move(writeActivity), std::move(closeActivity)),
         &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<void> WebSocketClientState::closeOwned(std::shared_ptr<WebSocketClientState> state,
     WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions,
-    ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity) {
+    operation_lane_lease readActivity, operation_lane_lease writeActivity, operation_lane_lease closeActivity) {
     static_cast<void>(readActivity);
     static_cast<void>(writeActivity);
     static_cast<void>(closeActivity);

@@ -629,7 +629,7 @@ RUVIA_TEST(redis_repository_cold_operations_release_owned_arguments) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationResource, definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto handle = registry.get(scope);
     const auto repository = handle.getRepository<TestRedisUser>(kTestRedisRepositoryConfig);
     auto entity = makeUser(&operationResource);
@@ -666,9 +666,9 @@ RUVIA_TEST(redis_repository_cold_operations_release_owned_arguments) {
             (void)ttl;
             (void)createIndex;
             (void)dropIndex;
-            RUVIA_CHECK(scope.hasPendingOperations());
+            RUVIA_CHECK(scope.has_pending_operations());
         }
-        RUVIA_CHECK(!scope.hasPendingOperations());
+        RUVIA_CHECK(!scope.has_pending_operations());
         RUVIA_CHECK_EQ(operationResource.liveAllocations(), baseline);
     }
     RUVIA_CHECK(operationResource.allocationCount() > 0);
@@ -683,7 +683,7 @@ RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationResource, definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto repository = registry.get(scope).getRepository<TestRedisUser>(kTestRedisRepositoryConfig);
 
     std::optional<TestRedisUser> input;
@@ -697,10 +697,10 @@ RUVIA_TEST(redis_repository_owns_input_before_entity_is_destroyed) {
     RUVIA_CHECK(!inputResource.deallocatedAfterRelease());
     // The pending command owns its copied key/field/value arguments and can
     // be discarded after the caller-owned entity and allocator are gone.
-    RUVIA_CHECK(scope.hasPendingOperations());
+    RUVIA_CHECK(scope.has_pending_operations());
     (void)pending;
     scope.close();
-    RUVIA_CHECK(!scope.hasPendingOperations());
+    RUVIA_CHECK(!scope.has_pending_operations());
     RUVIA_CHECK(!inputResource.deallocatedAfterRelease());
 }
 
@@ -720,7 +720,7 @@ RUVIA_TEST(redis_repository_insert_owns_input_through_async_handoff) {
         ruvia::detail::RedisRegistry registry(
             ioContext, &operationResource,
             std::span<const ruvia::detail::RedisDefinition>(&definition, 1), worker.handle());
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         const auto repository =
             registry.get(scope).getRepository<TestRedisUser>(kTestRedisRepositoryConfig);
         const std::string inputId(160, 'i');
@@ -812,7 +812,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_release_each_operation) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationResource, definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto handle = registry.get(scope);
     ruvia::StopSource cancellation;
     cancellation.requestStop();
@@ -860,7 +860,7 @@ RUVIA_TEST(redis_repository_input_may_die_before_a_cancelled_await) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationResource, definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto handle = registry.get(scope);
     ruvia::StopSource cancellation;
     cancellation.requestStop();
@@ -919,7 +919,7 @@ RUVIA_TEST(redis_repository_inflight_cancellation_releases_operation_storage) {
         ruvia::detail::RedisRegistry registry(
             ioContext, &operationResource,
             std::span<const ruvia::detail::RedisDefinition>(&definition, 1), worker.handle());
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         const auto handle = registry.get(scope);
         ruvia::StopSource cancellation;
         const auto repository = handle.withOptions({.stopToken = cancellation.token()})
@@ -979,7 +979,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto repository = registry.get(scope).getRepository<TestRedisUser>(kTestRedisRepositoryConfig);
 
     TestRedisUser missingId;
@@ -1003,7 +1003,7 @@ RUVIA_TEST(redis_repository_rejects_operations_after_scope_closes) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, std::pmr::get_default_resource(), definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto repository = registry.get(scope).getRepository<TestRedisUser>(kTestRedisRepositoryConfig);
     scope.close();
 
@@ -1021,7 +1021,7 @@ RUVIA_TEST(redis_repository_expired_escaped_repository_releases_owned_mapping) {
     const std::array definitions{redisDefinition("default")};
     ruvia::detail::RedisRegistry registry(
         ioContext, &operationResource, definitions, worker.handle());
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     ruvia::RedisRepositoryConfig config;
     config.prefix.assign(256, 'p');
     config.indexes.push_back({.field = "name", .kind = RedisIndexKind::kTag});

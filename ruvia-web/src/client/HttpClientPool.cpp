@@ -476,29 +476,28 @@ bool HttpClientPool::armDeadline(
     }
     const auto deadline = *timeout.deadline();
     connection.deadline.arm(deadline, kind);
-    WorkerHandleAccess::scheduleTimer(worker_, *connection.deadlineTimer, deadline,
-        [&connection](WorkerTimerOutcome outcome) noexcept {
-            if (outcome != WorkerTimerOutcome::kExpired) {
-                return;
+    (worker_).schedule_timer(*connection.deadlineTimer, deadline, [&connection](WorkerTimerOutcome outcome) noexcept {
+        if (outcome != WorkerTimerOutcome::kExpired) {
+            return;
+        }
+        const auto expired = connection.deadline.expire(std::chrono::steady_clock::now());
+        if (!expired) {
+            return;
+        }
+        connection.abortReason = AbortReason::kTimeout;
+        if (connection.activeHttp1Response != nullptr) {
+            if (auto* output = connection.activeHttp1Response->output()) {
+                output->stop();
             }
-            const auto expired = connection.deadline.expire(std::chrono::steady_clock::now());
-            if (!expired) {
-                return;
-            }
-            connection.abortReason = AbortReason::kTimeout;
-            if (connection.activeHttp1Response != nullptr) {
-                if (auto* output = connection.activeHttp1Response->output()) {
-                    output->stop();
-                }
-                connection.activeHttp1Response->spaceSignal.notify();
-            }
-            std::error_code ignored;
-            if (*expired == DeadlineKind::kResolve) {
-                connection.resolver.cancel();
-            } else if (*expired == DeadlineKind::kSocket) {
-                (void)connection.stream.lowest_layer().cancel(ignored);
-            }
-        });
+            connection.activeHttp1Response->spaceSignal.notify();
+        }
+        std::error_code ignored;
+        if (*expired == DeadlineKind::kResolve) {
+            connection.resolver.cancel();
+        } else if (*expired == DeadlineKind::kSocket) {
+            (void)connection.stream.lowest_layer().cancel(ignored);
+        }
+    });
     return true;
 }
 
@@ -946,12 +945,11 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
 
             WorkerTimerRegistration timer;
             if (const auto remaining = timeout.remaining()) {
-                WorkerHandleAccess::scheduleTimer(worker_, timer,
-                    workerTimerDeadlineAfter(*remaining), [this](WorkerTimerOutcome outcome) noexcept {
-                        if (outcome == WorkerTimerOutcome::kExpired) {
-                            http3GenerationSignal_.notify();
-                        }
-                    });
+                (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*remaining), [this](WorkerTimerOutcome outcome) noexcept {
+                    if (outcome == WorkerTimerOutcome::kExpired) {
+                        http3GenerationSignal_.notify();
+                    }
+                });
             }
             StopRegistration stopRegistration;
             const auto cancellationId = cancellationMailbox_->nextOperationId();

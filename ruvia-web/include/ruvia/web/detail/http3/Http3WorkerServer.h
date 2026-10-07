@@ -34,9 +34,9 @@ class RouteTable;
 class WorkerCapabilities;
 struct HttpServerOptions;
 
-// Worker-affine half of the production HTTP/3 bridge. One instance serves all
-// QUIC connections pinned to this business worker through one request mailbox,
-// one response mailbox, and fixed startup-allocated scheduler/channel slots.
+// Worker-affine handler half of HTTP/3. Its protocol/wire half lives on the
+// same worker; one request mailbox, one response mailbox and fixed
+// startup-allocated scheduler/channel slots cover all its QUIC connections.
 class Http3WorkerServer final {
 public:
     struct Install final {
@@ -64,8 +64,8 @@ public:
         return responseMailbox_;
     }
 
-    // Startup-thread staging followed by worker-owner activation. The network
-    // owner keeps every supplied object stable through the finalization handshake.
+    // Stage and activate on the worker owner. Its protocol half keeps the
+    // supplied storage stable through both halves' finalization handshake.
     [[nodiscard]] bool stageInstall(Install link) noexcept;
     [[nodiscard]] bool install() noexcept;
     [[nodiscard]] Task<void> run();

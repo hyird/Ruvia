@@ -7,7 +7,7 @@
 
 #include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 
 namespace ruvia {
 

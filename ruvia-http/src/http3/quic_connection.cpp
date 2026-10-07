@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/http3/quic_address_codec.h"
+#include "ruvia/http/detail/http3/quic_cid_partition.h"
 #include "ruvia/http/detail/http3/quic_connection_state.h"
 #include "ruvia/http/detail/http3/quic_crypto_bridge.h"
 #include "ruvia/http/detail/http3/quic_stream.h"
@@ -180,14 +181,17 @@ int get_new_cid_callback(ngtcp2_conn*, ngtcp2_cid* cid,
         if (cid_length > sizeof(cid->data)) {
             throw quic_error(quic_error_code::resource_limit, "ngtcp2 requested an oversized connection ID");
         }
-        state->crypto_.random_bytes(state->crypto_.context,
-            std::span<std::byte>(reinterpret_cast<std::byte*>(cid->data), cid_length));
+        auto bytes = std::span<std::byte>(reinterpret_cast<std::byte*>(cid->data), cid_length);
+        if (state->config_.role == quic_role::server) {
+            detail::generate_quic_server_connection_id(
+                state->crypto_, bytes, state->config_.cid_partition);
+        } else {
+            state->crypto_.random_bytes(state->crypto_.context, bytes);
+        }
         state->crypto_.random_bytes(state->crypto_.context,
             std::span<std::byte>(reinterpret_cast<std::byte*>(token->data), sizeof(token->data)));
         cid->datalen = cid_length;
         if (state->config_.role == quic_role::server && state->server_cid_registry_) {
-            const auto bytes = std::span<const std::byte>(
-                reinterpret_cast<const std::byte*>(cid->data), cid->datalen);
             detail::quic_publish_connection_id(state->server_cid_registry_, bytes);
             try {
                 state->server_cid_publication_journal_.ids.emplace_back(bytes);
@@ -393,6 +397,7 @@ state_owner make_connection(quic_connection_config config, quic_crypto_provider_
     std::span<const std::byte> early_transport_parameters = {}) {
     crypto.validate();
     tls_driver.validate();
+    detail::validate_quic_cid_partition(config.cid_partition);
     switch (config.role) {
         case quic_role::client:
             if (config.original_destination_connection_id) {
@@ -415,9 +420,19 @@ state_owner make_connection(quic_connection_config config, quic_crypto_provider_
             throw std::invalid_argument("invalid QUIC connection role");
     }
     if (!config.source_connection_id) {
-        std::array<std::byte, 16> random{};
-        crypto.random_bytes(crypto.context, random);
+        std::array<std::byte, detail::quic_server_connection_id_size> random{};
+        if (config.role == quic_role::server) {
+            detail::generate_quic_server_connection_id(crypto, random, config.cid_partition);
+        } else {
+            crypto.random_bytes(crypto.context, random);
+        }
         config.source_connection_id = quic_connection_id(random);
+    }
+    if (config.role == quic_role::server && config.cid_partition.count != 1 &&
+        (config.source_connection_id->size() != detail::quic_server_connection_id_size ||
+            detail::quic_connection_id_partition(config.source_connection_id->view(),
+                config.cid_partition.count) != config.cid_partition.index)) {
+        throw std::invalid_argument("server QUIC source CID does not match its routing partition");
     }
     auto state = make_state(std::move(config), crypto, tls_driver, resource, now,
         early_transport_parameters);

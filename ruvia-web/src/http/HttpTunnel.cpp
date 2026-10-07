@@ -4,30 +4,17 @@
 #include <utility>
 
 #include "ruvia/core/Bytes.h"
+#include "ruvia/web/detail/util/operation_lane_lease.h"
 
 namespace ruvia {
 namespace {
-class TunnelOperationLease final {
-public:
-    explicit TunnelOperationLease(bool& active)
-        : active_(&active) {
-        if (active) {
-            throw std::logic_error("HTTP tunnel operation already in progress on this direction");
-        }
-        active = true;
+detail::operation_lane_lease claim_tunnel_lane(bool& active) {
+    detail::operation_lane_lease lease(active);
+    if (!lease) {
+        throw std::logic_error("HTTP tunnel operation already in progress on this direction");
     }
-    TunnelOperationLease(const TunnelOperationLease&) = delete;
-    TunnelOperationLease(TunnelOperationLease&& other) noexcept
-        : active_(std::exchange(other.active_, nullptr)) {}
-    ~TunnelOperationLease() {
-        if (active_ != nullptr) {
-            *active_ = false;
-        }
-    }
-
-private:
-    bool* active_;
-};
+    return lease;
+}
 class RunningTunnelOperation final {
 public:
     explicit RunningTunnelOperation(unsigned& count) noexcept
@@ -47,19 +34,19 @@ void checkTunnelWorker(void* raw) noexcept {
     }
 }
 Task<std::optional<std::pmr::string>> readTunnel(void* target,
-    Task<std::optional<std::pmr::string>> (*read)(void*), TunnelOperationLease lease, unsigned& running) {
+    Task<std::optional<std::pmr::string>> (*read)(void*), detail::operation_lane_lease lease, unsigned& running) {
     static_cast<void>(lease);
     RunningTunnelOperation active(running);
     co_return co_await read(target);
 }
 Task<void> writeTunnel(void* target, Task<void> (*write)(void*, std::string_view),
-    std::pmr::string bytes, TunnelOperationLease lease, unsigned& running) {
+    std::pmr::string bytes, detail::operation_lane_lease lease, unsigned& running) {
     static_cast<void>(lease);
     RunningTunnelOperation active(running);
     co_await write(target, bytes);
 }
 Task<void> finishTunnel(void* target, Task<void> (*finish)(void*),
-    bool& ended, TunnelOperationLease lease, unsigned& running) {
+    bool& ended, detail::operation_lane_lease lease, unsigned& running) {
     static_cast<void>(lease);
     RunningTunnelOperation active(running);
     if (!ended) {
@@ -89,7 +76,7 @@ void HttpTunnel::requireActive() const {
 }
 ScopedOperation<std::optional<std::pmr::string>> HttpTunnel::read() & {
     requireActive();
-    return detail::makeScopedOperation(operations_, readTunnel(target_, read_, TunnelOperationLease(readActive_), runningOperations_),
+    return ::ruvia::make_scoped_operation(operations_, readTunnel(target_, read_, claim_tunnel_lane(readActive_), runningOperations_),
         &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
 }
 ScopedOperation<void> HttpTunnel::write(std::string_view bytes) & {
@@ -105,35 +92,35 @@ ScopedOperation<void> HttpTunnel::write(std::pmr::string&& bytes) & {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     std::pmr::string owned(std::move(bytes), &resource_);
-    return detail::makeScopedOperation(operations_, writeTunnel(target_, write_, std::move(owned), TunnelOperationLease(writeActive_), runningOperations_),
+    return ::ruvia::make_scoped_operation(operations_, writeTunnel(target_, write_, std::move(owned), claim_tunnel_lane(writeActive_), runningOperations_),
         &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
 }
 ScopedOperation<void> HttpTunnel::finish() & {
     requireActive();
-    return detail::makeScopedOperation(operations_, finishTunnel(target_, finish_, sendEnded_, TunnelOperationLease(writeActive_), runningOperations_),
+    return ::ruvia::make_scoped_operation(operations_, finishTunnel(target_, finish_, sendEnded_, claim_tunnel_lane(writeActive_), runningOperations_),
         &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
 }
 ScopedOperation<std::optional<detail::HttpDatagramInput>> HttpTunnel::readDatagramInput() {
     requireActive();
-    const auto read = +[](void* target, ReadDatagramInput fn, TunnelOperationLease lease, unsigned& count) -> Task<std::optional<detail::HttpDatagramInput>> {
+    const auto read = +[](void* target, ReadDatagramInput fn, detail::operation_lane_lease lease, unsigned& count) -> Task<std::optional<detail::HttpDatagramInput>> {
         static_cast<void>(lease);
         RunningTunnelOperation running(count);
         co_return co_await fn(target);
     };
-    return detail::makeScopedOperation(operations_, read(target_, readDatagramInput_, TunnelOperationLease(readActive_), runningOperations_), &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, read(target_, readDatagramInput_, claim_tunnel_lane(readActive_), runningOperations_), &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
 }
 ScopedOperation<void> HttpTunnel::sendDatagram(std::string_view bytes) {
     requireActive();
     if (sendEnded_ || !sendDatagram_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
-    const auto send = +[](void* target, SendDatagram fn, std::pmr::string owned, TunnelOperationLease lease, unsigned& count) -> Task<void> {
+    const auto send = +[](void* target, SendDatagram fn, std::pmr::string owned, detail::operation_lane_lease lease, unsigned& count) -> Task<void> {
         static_cast<void>(lease);
         RunningTunnelOperation running(count);
         fn(target, std::as_bytes(std::span(owned.data(), owned.size())));
         co_return;
     };
-    return detail::makeScopedOperation(operations_, send(target_, sendDatagram_, std::pmr::string(bytes, &resource_), TunnelOperationLease(writeActive_), runningOperations_), &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, send(target_, sendDatagram_, std::pmr::string(bytes, &resource_), claim_tunnel_lane(writeActive_), runningOperations_), &checkTunnelWorker, const_cast<WorkerHandle*>(&worker_));
 }
 void HttpTunnel::abort() noexcept {
     if (!worker_.isCurrent()) {

@@ -100,7 +100,7 @@ ScopedOperation<std::optional<HttpCapsule>> HttpCapsuleStream::read() & {
         throw std::logic_error("capsule stream is empty");
     }
     state_->require(false);
-    return detail::makeScopedOperation(state_->readScope, readOwned(detail::CapsuleStatePin(*state_)));
+    return ::ruvia::make_scoped_operation(state_->readScope, readOwned(detail::CapsuleStatePin(*state_)));
 }
 Task<std::optional<HttpCapsule>> HttpCapsuleStream::readOwned(detail::CapsuleStatePin pin) {
     auto& state = pin.state();
@@ -154,7 +154,7 @@ ScopedOperation<void> HttpCapsuleStream::writeFrame(std::string_view prefix, std
     };
     std::pmr::string bytes(prefix, state_->resource);
     bytes.append(payload);
-    return detail::makeScopedOperation(state_->outputScope, write(detail::CapsuleWriteInput{detail::CapsuleStatePin(*state_), std::move(bytes)}));
+    return ::ruvia::make_scoped_operation(state_->outputScope, write(detail::CapsuleWriteInput{detail::CapsuleStatePin(*state_), std::move(bytes)}));
 }
 ScopedOperation<void> HttpCapsuleStream::finish() & {
     if (!state_) {
@@ -173,6 +173,6 @@ ScopedOperation<void> HttpCapsuleStream::finish() & {
             state.sendEnded = true;
         }
     };
-    return detail::makeScopedOperation(state_->outputScope, finish(detail::CapsuleStatePin(*state_)));
+    return ::ruvia::make_scoped_operation(state_->outputScope, finish(detail::CapsuleStatePin(*state_)));
 }
 }  // namespace ruvia

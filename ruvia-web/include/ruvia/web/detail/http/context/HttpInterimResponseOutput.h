@@ -21,7 +21,7 @@ public:
 
     [[nodiscard]] ScopedOperation<void> inform(const HttpInterimResponseHead& response);
     void commitFinal() {
-        if (scope_.hasPendingOperations()) {
+        if (scope_.has_pending_operations()) {
             throw std::logic_error("interim response output is still active");
         }
         finalCommitted_ = true;
@@ -30,7 +30,7 @@ public:
         return finalCommitted_;
     }
     [[nodiscard]] bool busy() const noexcept {
-        return scope_.hasPendingOperations();
+        return scope_.has_pending_operations();
     }
 
 private:
@@ -39,6 +39,6 @@ private:
     void* target_;
     Write write_;
     bool finalCommitted_{};
-    ScopedOperationScope scope_;
+    ::ruvia::operation_scope scope_;
 };
 }  // namespace ruvia::detail

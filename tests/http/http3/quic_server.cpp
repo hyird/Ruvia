@@ -778,4 +778,217 @@ RUVIA_TEST(quic_server_cid_collision_rolls_back_admission_and_preserves_existing
     RUVIA_CHECK_EQ(server.connection_count(), std::size_t{2});
 }
 
+RUVIA_TEST(quic_server_initial_partition_never_falls_back_to_another_worker) {
+    std::pmr::monotonic_buffer_resource memory;
+    const auto packet = initialPacket();
+    constexpr std::uint32_t count = 7;
+    const auto partition = ruvia::quic_datagram_partition(packet, count);
+    RUVIA_CHECK(partition.has_value());
+    if (!partition) {
+        return;
+    }
+    ruvia::quic_server_config wrong_config;
+    wrong_config.cid_partition = {.index = (*partition + 1) % count, .count = count};
+    ruvia::quic_server wrong_worker(wrong_config, provider(), &memory);
+    RUVIA_CHECK_EQ(wrong_worker.route_datagram({.bytes = packet}).kind,
+        ruvia::quic_server_route_kind::dropped);
+    RUVIA_CHECK_EQ(wrong_worker.pending_connection_count(), std::size_t{0});
+    ruvia::quic_server_config full_config;
+    full_config.cid_partition = {.index = *partition, .count = count};
+    full_config.max_pending_connections = 0;
+    ruvia::quic_server full_worker(full_config, provider(), &memory);
+    RUVIA_CHECK_EQ(full_worker.route_datagram({.bytes = packet}).kind,
+        ruvia::quic_server_route_kind::rejected);
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(packet, count), partition);
+}
+
+RUVIA_TEST(quic_datagram_partition_parses_long_and_short_headers_without_state) {
+    auto initial = initialPacket();
+    constexpr std::uint32_t word = 0x10111213;
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(initial, 7),
+        std::optional<std::uint32_t>(word % 7));
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(initial, 1),
+        std::optional<std::uint32_t>(0));
+    RUVIA_CHECK(!ruvia::quic_datagram_partition(initial, 0));
+    RUVIA_CHECK(!ruvia::quic_datagram_partition({}, 7));
+    for (std::size_t size = 0; size < 23; ++size) {
+        RUVIA_CHECK(!ruvia::quic_datagram_partition(std::span(initial).first(size), 7));
+    }
+    auto malformed = initial;
+    malformed[5] = std::byte{21};
+    RUVIA_CHECK(!ruvia::quic_datagram_partition(malformed, 7));
+    malformed = initial;
+    malformed[14] = std::byte{21};
+    RUVIA_CHECK(!ruvia::quic_datagram_partition(malformed, 7));
+    // v2 retains the same version-independent CID layout.
+    auto v2 = initial;
+    v2[0] = std::byte{0xd0};
+    v2[1] = std::byte{0x6b};
+    v2[2] = std::byte{0x33};
+    v2[3] = std::byte{0x43};
+    v2[4] = std::byte{0xcf};
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(v2, 7),
+        ruvia::quic_datagram_partition(initial, 7));
+    const auto unknown_version = unsupportedVersionPacket();
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(unknown_version, 7),
+        ruvia::quic_datagram_partition(initial, 7));
+    std::array<std::byte, 64> short_packet{};
+    short_packet[0] = std::byte{0x40};
+    std::ranges::copy(std::span(initial).subspan(6, 8), short_packet.begin() + 1);
+    RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(short_packet, 7),
+        ruvia::quic_datagram_partition(initial, 7));
+    for (std::size_t size = 0; size < 17; ++size) {
+        RUVIA_CHECK(!ruvia::quic_datagram_partition(std::span(short_packet).first(size), 7));
+    }
+}
+
+RUVIA_TEST(quic_server_rejects_invalid_cid_partitions) {
+    std::pmr::monotonic_buffer_resource memory;
+    for (const auto partition : {ruvia::quic_cid_partition{.count = 0},
+             ruvia::quic_cid_partition{.index = 3, .count = 3},
+             ruvia::quic_cid_partition{.index = 1, .count = 1}}) {
+        ruvia::quic_server_config config;
+        config.cid_partition = partition;
+        bool rejected{};
+        try {
+            ruvia::quic_server server(config, provider(), &memory);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+}
+
+RUVIA_TEST(quic_server_generated_cids_preserve_partition_through_migration_and_retirement) {
+    for (const auto count : {std::uint32_t{1}, std::uint32_t{7},
+             std::numeric_limits<std::uint32_t>::max()}) {
+        std::pmr::unsynchronized_pool_resource memory;
+        deterministic_crypto client_crypto;
+        deterministic_crypto server_crypto;
+        fake_tls_pair tls_pair;
+        fake_tls_endpoint client_tls{.pair = &tls_pair, .client = true};
+        fake_tls_endpoint server_tls{.pair = &tls_pair, .client = false};
+        const auto server_address = testAddress(4433);
+        const auto client_address = testAddress(43001);
+        std::array<std::byte, 8> initial_dcid{};
+        std::array<std::byte, 8> client_scid{};
+        for (std::size_t i = 0; i < initial_dcid.size(); ++i) {
+            initial_dcid[i] = static_cast<std::byte>(0x10 + i);
+            client_scid[i] = static_cast<std::byte>(0x30 + i);
+        }
+        ruvia::quic_connection_config client_config;
+        client_config.local_address = client_address;
+        client_config.peer_address = server_address;
+        client_config.destination_connection_id = ruvia::quic_connection_id(initial_dcid);
+        client_config.source_connection_id = ruvia::quic_connection_id(client_scid);
+        ruvia::quic_connection client(client_config, deterministic_provider(client_crypto),
+            fake_tls_driver(client_tls), &memory, {});
+        std::array<std::byte, 2048> packet{};
+        auto now = ruvia::quic_timestamp{};
+        const auto initial = client.write_packet(packet, now);
+        RUVIA_CHECK_EQ(initial.status, ruvia::quic_operation_status::accepted);
+        const auto initial_bytes = std::span(packet).first(initial.size);
+        const auto partition = ruvia::quic_datagram_partition(initial_bytes, count);
+        RUVIA_CHECK(partition.has_value());
+        if (!partition) {
+            continue;
+        }
+        ruvia::quic_server_config server_config;
+        server_config.cid_partition = {.index = *partition, .count = count};
+        server_config.local_transport_parameters.disable_active_migration = false;
+        ruvia::quic_server server(server_config, deterministic_provider(server_crypto), &memory);
+        const auto offer = server.route_datagram({.bytes = initial_bytes,
+            .local = server_address,
+            .peer = client_address});
+        RUVIA_CHECK_EQ(offer.kind, ruvia::quic_server_route_kind::initial_offer);
+        const auto admitted = server.admit_initial(offer.offer, fake_tls_driver(server_tls), now);
+        RUVIA_CHECK_EQ(admitted.status, ruvia::quic_operation_status::accepted);
+        const auto parameters = server.connection(admitted.connection).tls_handshake().local_transport_parameters();
+        ngtcp2_transport_params decoded_parameters{};
+        RUVIA_CHECK_EQ(ngtcp2_transport_params_decode(&decoded_parameters,
+                           reinterpret_cast<const std::uint8_t*>(parameters.data()), parameters.size()),
+            0);
+        const auto& native_scid = decoded_parameters.initial_scid;
+        RUVIA_CHECK_EQ(native_scid.datalen, std::size_t{16});
+        const ruvia::quic_connection_id server_scid(std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(native_scid.data), native_scid.datalen));
+        const auto initial_probe = cidProbePacket(server_scid);
+        RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(initial_probe, count), partition);
+        RUVIA_CHECK_EQ(server.route_datagram({.bytes = initial_probe}).connection, admitted.connection);
+        RUVIA_CHECK(!server_crypto.random_outputs.empty());
+        if (!server_crypto.random_outputs.empty()) {
+            RUVIA_CHECK(std::ranges::equal(server_scid.view().subspan(4),
+                std::span(server_crypto.random_outputs.front()).subspan(4)));
+            if (count == 1) {
+                RUVIA_CHECK(std::ranges::equal(server_scid.view(), server_crypto.random_outputs.front()));
+            }
+        }
+        std::vector<ruvia::quic_connection_id> observed_cids{server_scid};
+        auto pump = [&] {
+            now += std::chrono::milliseconds(10);
+            if (const auto expiry = server.next_expiry(); expiry && *expiry <= now) {
+                (void)server.handle_expiry(now);
+            }
+            if (const auto expiry = client.next_expiry(); expiry && *expiry <= now) {
+                (void)client.handle_expiry(now);
+            }
+            const auto outbound = server.connection(admitted.connection).write_packet(packet, now);
+            if (outbound.size != 0) {
+                (void)client.receive({.bytes = std::span(packet).first(outbound.size),
+                                         .local = outbound.peer,
+                                         .peer = outbound.local},
+                    now);
+            }
+            const auto inbound = client.write_packet(packet, now);
+            if (inbound.size != 0) {
+                const auto bytes = std::span(packet).first(inbound.size);
+                RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(bytes, count), partition);
+                ngtcp2_version_cid ids{};
+                RUVIA_CHECK_EQ(ngtcp2_pkt_decode_version_cid(&ids,
+                                   reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size(), 16),
+                    0);
+                const ruvia::quic_connection_id cid(std::span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(ids.dcid), ids.dcidlen));
+                if (cid.size() == 16 && std::ranges::find(observed_cids, cid) == observed_cids.end()) {
+                    observed_cids.push_back(cid);
+                }
+                const ruvia::quic_datagram_view datagram{.bytes = bytes,
+                    .local = inbound.peer,
+                    .peer = inbound.local};
+                const auto routed = server.route_datagram(datagram);
+                RUVIA_CHECK_EQ(routed.kind, ruvia::quic_server_route_kind::existing_connection);
+                RUVIA_CHECK_EQ(routed.connection, admitted.connection);
+                (void)server.receive(admitted.connection, datagram, now);
+            }
+        };
+        for (std::size_t i = 0; i < 16; ++i) {
+            pump();
+        }
+        RUVIA_CHECK(client.info().confirmed);
+        for (const auto port : {std::uint16_t{43002}, std::uint16_t{43003}}) {
+            const auto migration = client.start_path_migration(testAddress(port));
+            RUVIA_CHECK(migration.status == ruvia::quic_migration_status::started ||
+                        migration.status == ruvia::quic_migration_status::validated);
+            for (std::size_t i = 0; i < 32; ++i) {
+                pump();
+            }
+            const auto result = client.path_migration(migration.id);
+            RUVIA_CHECK(result.has_value());
+            if (result) {
+                RUVIA_CHECK_EQ(result->status, ruvia::quic_migration_status::validated);
+            }
+        }
+        // Both migrations consume server-issued NEW_CONNECTION_IDs rather than
+        // retaining the handshake CID. Every observed CID selected this worker.
+        RUVIA_CHECK(observed_cids.size() >= 3);
+        RUVIA_CHECK_EQ(server.retire(admitted.connection), ruvia::quic_operation_status::retired);
+        for (const auto& cid : observed_cids) {
+            const auto probe = cidProbePacket(cid);
+            RUVIA_CHECK_EQ(ruvia::quic_datagram_partition(probe, count), partition);
+            RUVIA_CHECK_EQ(server.route_datagram({.bytes = probe}).kind,
+                ruvia::quic_server_route_kind::dropped);
+        }
+    }
+}
+
 }  // namespace

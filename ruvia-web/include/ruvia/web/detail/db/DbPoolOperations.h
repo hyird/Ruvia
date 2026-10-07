@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -132,6 +133,45 @@ private:
     Slot& slot_;
 };
 
+// Slots keep their existing address-stable timer registration. Only the expiry
+// action is driver-specific; installation, rollback and retirement are shared.
+template <typename slot_type>
+void clear_db_slot_deadline(slot_type& slot) noexcept {
+    slot.deadlineTimer->cancel();
+    (void)slot.deadline.clear();
+    if constexpr (requires { slot.deadlineContinuation; }) {
+        slot.deadlineContinuation = {};
+    }
+}
+
+template <typename slot_type, typename deadline_kind, auto expiry_action = &slot_type::expire_deadline>
+void arm_db_slot_deadline(const WorkerHandle& worker, slot_type& slot,
+    std::chrono::milliseconds timeout, deadline_kind kind) {
+    static_assert(noexcept(expiry_action(slot, kind)));
+    clear_db_slot_deadline(slot);
+    if (timeout.count() <= 0) {
+        return;
+    }
+    const auto deadline = workerTimerDeadlineAfter(timeout);
+    slot.deadline.arm(deadline, kind);
+    try {
+        worker.schedule_timer(*slot.deadlineTimer, deadline,
+            [&slot](WorkerTimerOutcome outcome) noexcept {
+                if (outcome != WorkerTimerOutcome::kExpired) {
+                    return;
+                }
+                const auto expired = slot.deadline.expire(std::chrono::steady_clock::now());
+                if (expired.has_value()) {
+                    expiry_action(slot, *expired);
+                }
+            });
+    } catch (...) {
+        slot.deadlineTimer->cancelQuietly();
+        slot.deadline.reset();
+        throw;
+    }
+}
+
 // Taking and giving back a slot is pure lease bookkeeping: no driver is
 // involved, so both pools share these. A release that names no live lease is a
 // bug in the caller, not a runtime condition, and cannot be reported through a
@@ -166,14 +206,22 @@ void releaseDbSlot(Pool& pool, std::size_t slot) noexcept {
     }
 }
 
-// Driver pools share their worker-affine lifecycle. The driver-specific slot
-// close and connect operations remain on the pool so this base only owns the
-// scheduling and cancellation rules.
+// Driver pools compose this worker-affine lifecycle policy. It borrows an
+// address-stable backend; slot connect/close stay driver-specific, while lease
+// scheduling and cancellation have one implementation.
 template <typename Pool>
-class DbPoolLifecycleBase {
+class db_pool_lifecycle final {
 public:
+    explicit db_pool_lifecycle(Pool& owner) noexcept
+        : owner_(owner) {}
+
+    db_pool_lifecycle(const db_pool_lifecycle&) = delete;
+    db_pool_lifecycle& operator=(const db_pool_lifecycle&) = delete;
+    db_pool_lifecycle(db_pool_lifecycle&&) = delete;
+    db_pool_lifecycle& operator=(db_pool_lifecycle&&) = delete;
+
     [[nodiscard]] Task<void> connect() {
-        auto& pool = derived();
+        auto& pool = owner_;
         const ruvia::OperationTimeout operationTimeout(std::nullopt);
         for (auto& slot : pool.slots_) {
             co_await pool.connectUnlocked(slot, operationTimeout);
@@ -181,7 +229,7 @@ public:
     }
 
     void closeNow() noexcept {
-        auto& pool = derived();
+        auto& pool = owner_;
         (void)pool.scheduler_.close();
         for (auto& slot : pool.slots_) {
             pool.closeSlot(slot);
@@ -189,15 +237,15 @@ public:
     }
 
     [[nodiscard]] Task<std::size_t> acquireSlot(ruvia::OperationTimeout timeout, StopToken stopToken) {
-        return acquireDbSlot(derived(), timeout, std::move(stopToken));
+        return acquireDbSlot(owner_, timeout, std::move(stopToken));
     }
 
     void releaseSlot(std::size_t slot) noexcept {
-        releaseDbSlot(derived(), slot);
+        releaseDbSlot(owner_, slot);
     }
 
     void cancelOperationById(std::uint64_t cancellationId) noexcept {
-        auto& pool = derived();
+        auto& pool = owner_;
         for (auto& slot : pool.slots_) {
             if (slot.cancellationId != cancellationId) {
                 continue;
@@ -212,17 +260,12 @@ public:
     void throwIfCancelled(const Slot& slot) const {
         if (slot.abortReason == DbSlotAbortReason::kCancelled) {
             throw DbError(
-                DbError::Code::kCancelled, derived().config_.driver, "database operation cancelled");
+                DbError::Code::kCancelled, owner_.config_.driver, "database operation cancelled");
         }
     }
 
 private:
-    [[nodiscard]] Pool& derived() noexcept {
-        return static_cast<Pool&>(*this);
-    }
-    [[nodiscard]] const Pool& derived() const noexcept {
-        return static_cast<const Pool&>(*this);
-    }
+    Pool& owner_;
 };
 
 // Ending a transaction is the same for every driver: run the control statement
@@ -385,7 +428,7 @@ Task<DbExecResult> executeDbCommand(Pool& pool, std::pmr::string sql,
 // timer may have fired while this coroutine was suspended.
 //
 // Only the backend's name in the diagnostics differs, so it is the argument.
-// `Pool` supplies config_, resource_, setSlotDeadline() and clearSlotDeadline();
+// `Pool` supplies config_, resource_ and worker_;
 // it declares this a friend so the shared rule stays out of the drivers.
 template <typename Pool, typename Slot>
 Task<DbResolvedAddresses> resolveDbHost(
@@ -401,9 +444,9 @@ Task<DbResolvedAddresses> resolveDbHost(
         throw timedOut();
     }
     if (remaining.has_value()) {
-        pool.setSlotDeadline(slot, *remaining, Slot::DeadlineKind::kResolve);
+        arm_db_slot_deadline(pool.worker_, slot, *remaining, Slot::DeadlineKind::kResolve);
     } else {
-        pool.clearSlotDeadline(slot);
+        clear_db_slot_deadline(slot);
     }
 
     DbSlotActiveWaitGuard activeResolve(slot);
@@ -419,7 +462,7 @@ Task<DbResolvedAddresses> resolveDbHost(
         auto results = std::move(completion).takeResult();
         const auto afterResolve = deadline.remaining();
         const bool slotDeadlineExpired = slot.deadline.expired();
-        pool.clearSlotDeadline(slot);
+        clear_db_slot_deadline(slot);
         const bool deadlineExpired =
             slotDeadlineExpired || (afterResolve.has_value() && afterResolve->count() <= 0);
         pool.throwIfCancelled(slot);
@@ -439,7 +482,7 @@ Task<DbResolvedAddresses> resolveDbHost(
         }
         co_return collectDbResolvedAddresses(results, pool.config_.driver, pool.resource_);
     } catch (...) {
-        pool.clearSlotDeadline(slot);
+        clear_db_slot_deadline(slot);
         throw;
     }
 }

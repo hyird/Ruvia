@@ -1,19 +1,48 @@
+#include <optional>
 #include <stdexcept>
 
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "ruvia/web/detail/redis/RedisOwnedCommand.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 namespace ruvia::detail {
 
-std::pmr::vector<std::pmr::string> ownRedisArgs(
+namespace {
+
+std::pmr::vector<std::pmr::string> own_redis_args(std::optional<std::string_view> first,
     std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
     std::pmr::vector<std::pmr::string> owned(resource);
-    owned.reserve(args.size());
+    owned.reserve(args.size() + static_cast<std::size_t>(first.has_value()));
+    if (first.has_value()) {
+        emplaceRedisString(owned, *first);
+    }
     for (const auto arg : args) {
         emplaceRedisString(owned, arg);
     }
     return owned;
+}
+
+}  // namespace
+
+std::pmr::vector<std::pmr::string> ownRedisArgs(
+    std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
+    return own_redis_args(std::nullopt, args, resource);
+}
+
+std::pmr::vector<std::pmr::string> ownRedisArgs(std::string_view first,
+    std::span<const std::string_view> rest, std::pmr::memory_resource* resource) {
+    return own_redis_args(first, rest, resource);
+}
+
+redis_owned_command make_owned_redis_command(
+    std::pmr::memory_resource* resource, std::span<const std::string_view> args) {
+    return {ownRedisArgs(args, resource)};
+}
+
+redis_owned_command make_owned_redis_command(std::pmr::memory_resource* resource,
+    std::string_view first, std::span<const std::string_view> rest) {
+    return {ownRedisArgs(first, rest, resource)};
 }
 
 std::pmr::vector<std::pmr::string> ownRedisArgs(

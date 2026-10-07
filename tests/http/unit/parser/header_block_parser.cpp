@@ -62,7 +62,7 @@ Parsed parse(std::string_view head) {
 }
 
 RUVIA_TEST(content_length_field_updates_are_transactional) {
-    HttpContentLengthState state;
+    HttpContentLengthState<> state;
     RUVIA_CHECK(state.parseField("5") == HttpContentLengthParseStatus::kOk);
     RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
 
@@ -71,6 +71,19 @@ RUVIA_TEST(content_length_field_updates_are_transactional) {
 
     RUVIA_CHECK(state.parseField("6, 6") == HttpContentLengthParseStatus::kConflicting);
     RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
+
+    HttpContentLengthState<std::uint64_t> wide;
+    RUVIA_CHECK(wide.parseField(" \t18446744073709551615, 018446744073709551615\t ") ==
+                HttpContentLengthParseStatus::kOk);
+    RUVIA_CHECK(wide.value() == std::optional<std::uint64_t>(UINT64_MAX));
+    RUVIA_CHECK(wide.parse_single_value("18446744073709551615") == HttpContentLengthParseStatus::kOk);
+    for (const std::string_view invalid : {"", " 18446744073709551615", "18446744073709551615 ",
+             "18446744073709551615,18446744073709551615", "18446744073709551616"}) {
+        RUVIA_CHECK(wide.parse_single_value(invalid) == HttpContentLengthParseStatus::kInvalid);
+        RUVIA_CHECK(wide.value() == std::optional<std::uint64_t>(UINT64_MAX));
+    }
+    RUVIA_CHECK(wide.parse_single_value("0") == HttpContentLengthParseStatus::kConflicting);
+    RUVIA_CHECK(wide.value() == std::optional<std::uint64_t>(UINT64_MAX));
 }
 
 RUVIA_TEST(transfer_encoding_field_allocation_failures_preserve_committed_value) {

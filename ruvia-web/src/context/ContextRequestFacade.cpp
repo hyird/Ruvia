@@ -20,7 +20,7 @@ std::pmr::memory_resource* ContextRequest::contextResource(const Context* contex
     return context->arena();
 }
 
-detail::ScopedOperationScope& ContextRequest::contextOperationScope(
+::ruvia::operation_scope& ContextRequest::contextOperationScope(
     const Context* context) noexcept {
     return context->operationScope_;
 }
@@ -120,7 +120,7 @@ const RequestNameValueList& ContextRequest::paramFields() const {
 }
 
 ScopedOperation<std::string_view> ContextRequest::text() const {
-    return detail::makeScopedOperation(context_->operationScope_, context_->requestBody());
+    return ::ruvia::make_scoped_operation(context_->operationScope_, context_->requestBody());
 }
 
 Task<std::span<const std::byte>> ContextRequest::bytesTask(const Context* context) {
@@ -129,7 +129,7 @@ Task<std::span<const std::byte>> ContextRequest::bytesTask(const Context* contex
 }
 
 ScopedOperation<std::span<const std::byte>> ContextRequest::bytes() const {
-    return detail::makeScopedOperation(context_->operationScope_, bytesTask(context_));
+    return ::ruvia::make_scoped_operation(context_->operationScope_, bytesTask(context_));
 }
 
 Task<ContextRequest::RequestBlob> ContextRequest::blobTask(const Context* context) {
@@ -139,15 +139,15 @@ Task<ContextRequest::RequestBlob> ContextRequest::blobTask(const Context* contex
 }
 
 ScopedOperation<ContextRequest::RequestBlob> ContextRequest::blob() const {
-    return detail::makeScopedOperation(context_->operationScope_, blobTask(context_));
+    return ::ruvia::make_scoped_operation(context_->operationScope_, blobTask(context_));
 }
 
 ScopedOperation<void> ContextRequest::discardBody() const {
-    return detail::makeScopedOperation(context_->operationScope_, context_->requestDiscardBody());
+    return ::ruvia::make_scoped_operation(context_->operationScope_, context_->requestDiscardBody());
 }
 
 ScopedOperation<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
-    return detail::makeScopedOperation(context_->operationScope_, context_->requestMultipart());
+    return ::ruvia::make_scoped_operation(context_->operationScope_, context_->requestMultipart());
 }
 
 BodyReader& ContextRequest::bodyReader() const {

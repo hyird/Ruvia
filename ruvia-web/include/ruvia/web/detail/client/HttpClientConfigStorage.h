@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <memory_resource>
 #include <string_view>
 
@@ -52,43 +53,34 @@ private:
         return source;
     }
 
-    HttpClientConfigStorage(
-        ValidatedConfigTag, const HttpClientConfig& source, std::pmr::memory_resource* resource)
-        : host(source.host, resource),
-          scheme(source.scheme),
-          port(source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80)),
-          connectionCount(source.connectionCount),
-          maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection),
-          maxBufferedRequests(source.maxBufferedRequests),
-          maxCookies(source.maxCookies),
-          maxCookieBytes(source.maxCookieBytes),
-          connectTimeout(source.connectTimeout),
-          writeTimeout(source.writeTimeout),
-          requestTimeout(source.requestTimeout),
-          acquireTimeout(source.acquireTimeout),
-          maxResponseBytes(source.maxResponseBytes),
-          protocol(source.protocol),
-          initial_quic_version(source.initial_quic_version),
-          http3_early_data(source.http3_early_data),
-          http3Qpack(source.qpack),
-          advertisements(source.advertisements),
-          push(source.push),
-          transport(clientTransportConfigView(source), resource),
-          receivedCookies(source.receivedCookies),
-          userAgent(source.userAgent, resource),
-          cookies(resource) {
-        cookies.reserve(source.cookies.size());
-        for (const auto& [name, value] : source.cookies) {
-            cookies.emplace_back(
-                std::pmr::string(name, resource), std::pmr::string(value, resource));
+    template <typename source_type>
+    [[nodiscard]] static std::uint16_t resolved_port(const source_type& source) noexcept {
+        if constexpr (std::same_as<source_type, HttpClientConfig>) {
+            return source.port.value_or(source.scheme == HttpScheme::kHttps ? 443 : 80);
+        } else {
+            return source.port;
         }
     }
 
-    HttpClientConfigStorage(ValidatedConfigTag, const HttpClientConfigStorage& source,
-        std::pmr::memory_resource* resource)
+    template <typename source_type>
+    [[nodiscard]] static const Http3QpackConfig& qpack_config(const source_type& source) noexcept {
+        if constexpr (std::same_as<source_type, HttpClientConfig>) {
+            return source.qpack;
+        } else {
+            return source.http3Qpack;
+        }
+    }
+
+    // Resolve representation differences at the boundary, then own every field
+    // and cookie through one allocator-bound construction path.
+    template <typename source_type>
+        requires(std::same_as<source_type, HttpClientConfig> ||
+                    std::same_as<source_type, HttpClientConfigStorage>)
+    HttpClientConfigStorage(
+        ValidatedConfigTag, const source_type& source, std::pmr::memory_resource* resource)
         : host(source.host, resource),
           scheme(source.scheme),
-          port(source.port),
+          port(resolved_port(source)),
           connectionCount(source.connectionCount),
           maxConcurrentHttp2StreamsPerConnection(source.maxConcurrentHttp2StreamsPerConnection),
           maxBufferedRequests(source.maxBufferedRequests),
@@ -102,10 +94,10 @@ private:
           protocol(source.protocol),
           initial_quic_version(source.initial_quic_version),
           http3_early_data(source.http3_early_data),
-          http3Qpack(source.http3Qpack),
+          http3Qpack(qpack_config(source)),
           advertisements(source.advertisements),
           push(source.push),
-          transport(source.transport, resource),
+          transport(clientTransportConfigView(source), resource),
           receivedCookies(source.receivedCookies),
           userAgent(source.userAgent, resource),
           cookies(resource) {

@@ -194,9 +194,11 @@ private:
     Value value_;
 };
 
-[[nodiscard]] bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept;
 [[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(
     std::string_view trailers) noexcept;
+// Scans one complete request body without retaining payload. Payload and total
+// framing each have kDefaultMaxBufferedBodyBytes budgets; individual size lines
+// and encoded trailer sections are bounded by kMaxHttpHeaderBytes.
 [[nodiscard]] HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;
 
 }  // namespace ruvia::detail

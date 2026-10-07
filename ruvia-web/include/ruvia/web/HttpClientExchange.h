@@ -1,9 +1,7 @@
 #pragma once
 
 #include <span>
-#include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/core/ScopedOperation.h"
 #include "ruvia/web/HttpClientResponse.h"
@@ -13,8 +11,6 @@ namespace ruvia {
 namespace detail {
 class HttpClientPool;
 class HttpClientResponseState;
-struct HttpClientUploadWriteInput;
-struct HttpClientUploadEndInput;
 }  // namespace detail
 
 // One upload lane embedded in its exchange. Each chunk/trailer input is owned
@@ -38,8 +34,6 @@ private:
     explicit HttpClientRequestBodyWriter(detail::HttpClientResponseState* state) noexcept
         : state_(state) {}
     ~HttpClientRequestBodyWriter() = default;
-    static Task<void> writeOwned(detail::HttpClientUploadWriteInput input);
-    static Task<void> endOwned(detail::HttpClientUploadEndInput input);
     detail::HttpClientResponseState* state_;
 };
 

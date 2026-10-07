@@ -7,12 +7,13 @@
 #include "ruvia/web/detail/client/HttpClientOutputQueue.h"
 
 namespace ruvia::detail {
-class HttpClientTunnelState final : public HttpClientOutputQueue {
+class HttpClientTunnelState final {
 public:
     HttpClientTunnelState(const WorkerHandle& worker, std::pmr::memory_resource* resource, HttpClientTunnelConfig config)
-        : HttpClientOutputQueue(worker, resource),
+        : output(worker, resource),
           config(config),
           datagrams(resource) {}
+    http_client_output_queue output;
     HttpClientTunnelConfig config;
     std::pmr::deque<std::pmr::string> datagrams;
     bool udp{};

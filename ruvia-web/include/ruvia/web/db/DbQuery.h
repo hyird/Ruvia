@@ -26,6 +26,7 @@ class DbQueryStorage;
 class DbQueryCompiler;
 class DbRelationPlan;
 class DbQueryCacheState;
+struct db_query_plan;
 }  // namespace detail
 
 enum class DbParameterMode : std::uint8_t { kBound,
@@ -248,6 +249,7 @@ private:
     friend class DbQuery;
     friend class DbHandle;
     friend class DbTransaction;
+    friend struct detail::db_query_plan;
     DbStatement(std::pmr::string sql, std::pmr::vector<DbValue> params, bool rows)
         : sql_(std::move(sql)),
           params_(std::move(params)),
@@ -429,6 +431,7 @@ private:
     friend class detail::DbQueryCacheState;
     friend class DbTransaction;
     friend class DbHandle;
+    friend struct detail::db_query_plan;
     template <typename, typename>
     friend class DbQueryBuilder;
     template <typename, typename>

@@ -174,7 +174,7 @@ private:
     [[nodiscard]] static Task<std::string_view> contextTextTask(const Context* context);
     [[nodiscard]] static bool contextContentTypeMatches(const Context* context, std::string_view expected) noexcept;
     [[nodiscard]] static std::pmr::memory_resource* contextResource(const Context* context) noexcept;
-    [[nodiscard]] static detail::ScopedOperationScope& contextOperationScope(const Context* context) noexcept;
+    [[nodiscard]] static ::ruvia::operation_scope& contextOperationScope(const Context* context) noexcept;
     const Context* context_{nullptr};
 };
 

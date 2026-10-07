@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -10,12 +8,14 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 
+#include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
@@ -30,11 +30,11 @@
 #include "ruvia/web/detail/http3/Http3ServerConnectionChannel.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamOutput.h"
 #include "ruvia/web/detail/http3/Http3StreamMailbox.h"
-
+#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+#include "ruvia/web/detail/server/HttpServerListener.h"
 namespace ruvia::detail {
 
 class Http3WorkerServer;
-struct HttpServerListenerDefinition;
 
 [[nodiscard]] bool queue_http3_initial_offer(
     std::pmr::vector<ruvia::quic_initial_offer>& pending_offers,
@@ -43,43 +43,48 @@ struct HttpServerListenerDefinition;
     ruvia::quic_server& server, ruvia::quic_version_negotiation_plan& plan,
     Http3DatagramEndpoint& endpoint, std::span<std::byte> packet_buffer);
 
-// Runs on the server network thread and owns long-lived HTTP/3 UDP/QUIC wire
-// I/O. SSL*, BIO, UDP, timers, critical streams, and response output stay here.
-class Http3NetworkRuntime final {
+// One worker owns TLS, QUIC, HTTP/3, timers and the existing stream/mailbox
+// protocol driver. Its only cross-thread packet boundary is the bounded channel.
+class http3_worker_runtime final {
 public:
-    struct WorkerTarget final {
+    struct worker_target final {
         Http3WorkerServer* server{};
-        std::size_t maxConnections{};
-        std::uint32_t mailboxCapacity{};
-        std::size_t maxRequestsPerConnection{};
-        std::optional<std::chrono::milliseconds> idleTimeout{};
-        std::optional<std::chrono::milliseconds> requestHeaderTimeout{};
-        std::optional<std::chrono::milliseconds> requestBodyTimeout{};
-        std::optional<std::chrono::milliseconds> writeTimeout{};
+        std::size_t max_connections{};
+        std::uint32_t mailbox_capacity{};
+        std::size_t max_requests_per_connection{};
+        std::optional<std::chrono::milliseconds> idle_timeout{};
+        std::optional<std::chrono::milliseconds> request_header_timeout{};
+        std::optional<std::chrono::milliseconds> request_body_timeout{};
+        std::optional<std::chrono::milliseconds> write_timeout{};
     };
 
-    struct FailureNotification final {
+    struct failure_notification final {
         void* context{};
         void (*notify)(void*, std::exception_ptr) noexcept {};
     };
 
-    Http3NetworkRuntime(ruvia::WorkerRuntimeContext& networkRuntime,
-        const HttpServerListenerDefinition& listener,
-        std::span<const WorkerTarget> workers, FailureNotification failure);
-    ~Http3NetworkRuntime();
+    http3_worker_runtime(ruvia::WorkerRuntimeContext& runtime,
+        asio::ip::udp::endpoint local, const HttpServerListenerDefinition::Tls& tls_config,
+        const Http3ListenConfig& http3_config, worker_target worker,
+        http3_datagram_channel& datagrams, ruvia::quic_cid_partition partition,
+        failure_notification failure);
+    ~http3_worker_runtime();
 
-    Http3NetworkRuntime(const Http3NetworkRuntime&) = delete;
-    Http3NetworkRuntime& operator=(const Http3NetworkRuntime&) = delete;
+    http3_worker_runtime(const http3_worker_runtime&) = delete;
+    http3_worker_runtime& operator=(const http3_worker_runtime&) = delete;
 
-    // Called on the server network owner before worker loops start or either runtime serves.
-    void stageWorkerLinks();
-    // All following methods are server-network-owner only except wake(), which is the
-    // bounded cross-thread notification endpoint used by worker publications.
+    // All methods are worker-owner only. Stage before Http3WorkerServer install;
+    // spawn its run and run_datagrams before releasing the serving barrier.
+    void stage();
     void start();
     void wake() noexcept;
     void stop() noexcept;
     [[nodiscard]] bool drained() const noexcept;
-    [[nodiscard]] asio::ip::udp::endpoint localEndpoint() const;
+    [[nodiscard]] asio::ip::udp::endpoint local_endpoint() const;
+    [[nodiscard]] Task<void> run_datagrams();
+    // No datagram runner was launched. Complete ordered stop, then ACK the
+    // detached endpoint once drained() is true; the caller keeps the loop alive.
+    void abandon_before_launch() noexcept;
 
 private:
     enum class TunnelEstablishedResult : std::uint8_t {
@@ -158,7 +163,8 @@ private:
             bool terminalNotified{};
         };
         explicit Connection(std::pmr::memory_resource* resource)
-            : streams(resource),
+            : remote_address(resource),
+              streams(resource),
               pushStreams(resource),
               output(nullptr, PmrObjectDeleter<Http3ServerStreamOutput>{resource}),
               critical(nullptr, PmrObjectDeleter<Http3CriticalStreamDriver>{resource}) {}
@@ -167,6 +173,9 @@ private:
         bool hasLastIdentity{};
         ruvia::quic_connection_token transportId{};
         std::optional<std::chrono::steady_clock::time_point> handshakeDeadline{};
+        // Bind borrows worker-owned storage. It remains immutable until both
+        // same-worker protocol halves finalize this generation.
+        std::pmr::string remote_address;
         std::pmr::vector<Stream> streams;
         std::pmr::vector<PushStream> pushStreams;
         std::size_t nextInputStreamIndex{};
@@ -216,11 +225,11 @@ private:
         bool revokeAcknowledged{};
     };
 
-    struct WorkerLink final {
-        WorkerLink(std::pmr::memory_resource* resource, Http3NetworkRuntime& network,
-            WorkerTarget configured);
+    struct worker_link final {
+        worker_link(std::pmr::memory_resource* resource, http3_worker_runtime& runtime,
+            worker_target configured);
 
-        WorkerTarget target;
+        worker_target target;
         Http3StreamMailbox requestMailbox;
         std::pmr::vector<std::unique_ptr<Http3ServerConnectionChannel,
             PmrObjectDeleter<Http3ServerConnectionChannel>>>
@@ -238,17 +247,19 @@ private:
         Http3DatagramEndpoint* endpoint = nullptr) noexcept;
     void requireOwnerThread() const noexcept;
     void requestStopOnOwner() noexcept;
+    void finish_datagrams() noexcept;
+    [[nodiscard]] bool protocol_drained() const noexcept;
     void reportFailure(std::exception_ptr failure) noexcept;
     void scheduleMonitor() noexcept;
     void monitor(const asio::error_code& error) noexcept;
-    [[nodiscard]] bool pumpWorker(WorkerLink& worker) noexcept;
-    [[nodiscard]] bool pumpChannels(WorkerLink& worker) noexcept;
-    [[nodiscard]] bool admit(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool retireUnbound(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool requestRevoke(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool attach(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool pumpInput(WorkerLink& worker, std::size_t index);
-    [[nodiscard]] bool pumpResponses(WorkerLink& worker) noexcept;
+    [[nodiscard]] bool pumpWorker(worker_link& worker) noexcept;
+    [[nodiscard]] bool pumpChannels(worker_link& worker) noexcept;
+    [[nodiscard]] bool admit(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool retireUnbound(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool requestRevoke(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool attach(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool pumpInput(worker_link& worker, std::size_t index);
+    [[nodiscard]] bool pumpResponses(worker_link& worker) noexcept;
     [[nodiscard]] static TunnelEstablishedResult acceptTunnelEstablished(Connection& connection,
         const Http3StreamControl& control, std::uint64_t acceptedWireBytes) noexcept;
     [[nodiscard]] static bool confirmTunnelEstablished(Connection& connection,
@@ -264,46 +275,46 @@ private:
         std::uint64_t streamId, std::uint64_t errorCode);
     void stopRequestInput(Connection& connection,
         std::uint64_t streamId) noexcept;
-    [[nodiscard]] bool pumpOutput(WorkerLink& worker, std::size_t index);
-    [[nodiscard]] bool announceGoaway(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool sealAdmission(WorkerLink& worker, std::size_t index) noexcept;
-    [[nodiscard]] bool rejectRequestStream(WorkerLink& worker, std::size_t index,
+    [[nodiscard]] bool pumpOutput(worker_link& worker, std::size_t index);
+    [[nodiscard]] bool announceGoaway(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool sealAdmission(worker_link& worker, std::size_t index) noexcept;
+    [[nodiscard]] bool rejectRequestStream(worker_link& worker, std::size_t index,
         std::uint64_t streamId);
-    [[nodiscard]] bool retire(WorkerLink& worker, std::size_t index);
-    [[nodiscard]] bool pump_datagrams(WorkerLink& worker, std::size_t index);
+    [[nodiscard]] bool retire(worker_link& worker, std::size_t index);
+    [[nodiscard]] bool pump_datagrams(worker_link& worker, std::size_t index);
     [[nodiscard]] Connection* findConnection(
-        WorkerLink& worker, Http3StreamMessageId id) noexcept;
-    [[nodiscard]] Connection* findConnection(WorkerLink& worker, std::uint64_t epoch, std::uint64_t generation) noexcept;
+        worker_link& worker, Http3StreamMessageId id) noexcept;
+    [[nodiscard]] Connection* findConnection(worker_link& worker, std::uint64_t epoch, std::uint64_t generation) noexcept;
     void closeConnection(Connection& connection,
         Http3ConnectionErrorCode reason) noexcept;
-    void notifyWorker(WorkerLink& worker) noexcept;
+    void notifyWorker(worker_link& worker) noexcept;
 
-    ruvia::WorkerRuntimeContext& networkRuntime_;
     asio::io_context& ioContext_;
     const std::thread::id ownerThread_;
     WorkerMemory memory_;
     asio::ip::address bindAddress_;
     http3_quic_tls_context tls_;
     Http3QuicWireOwner wire_;
-    std::pmr::vector<std::unique_ptr<WorkerLink, PmrObjectDeleter<WorkerLink>>> workers_;
+    std::unique_ptr<worker_link, PmrObjectDeleter<worker_link>> worker_;
+    http3_datagram_channel* datagrams_;
     std::pmr::vector<ruvia::quic_initial_offer> pendingOffers_;
     asio::steady_timer monitorTimer_;
-    FailureNotification failureNotification_{};
+    failure_notification failureNotification_{};
     std::exception_ptr failure_;
-    std::atomic<bool> wakeScheduled_{};
-    std::size_t nextWorker_{};
     std::size_t pumpBudget_{512};
     std::chrono::milliseconds drainTimeout_{};
     std::chrono::milliseconds handshakeTimeout_{};
     Http3Settings localSettings_{};
-    std::array<std::byte, Http3UdpSocket::kDatagramBufferSize> packetBuffer_{};
     bool staged_{};
     bool running_{};
     bool stopping_{};
     bool monitorScheduled_{};
     bool failureReported_{};
+    bool datagram_run_started_{};
+    bool datagram_run_retired_{};
+    bool abandon_requested_{};
     bool transportActivityForPump_{};
-    friend struct Http3NetworkRuntimeTestAccess;
+    friend struct http3_worker_runtime_test_access;
 };
 
 }  // namespace ruvia::detail

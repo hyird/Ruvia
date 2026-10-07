@@ -2,9 +2,8 @@
 
 #include <stdexcept>
 
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
-
 namespace ruvia {
 
 WorkerHandle::WorkerHandle(std::shared_ptr<detail::WorkerDispatcher> dispatcher) noexcept
@@ -95,20 +94,17 @@ void detail::WorkerHandleAccess::waitForReservations(const WorkerHandle& worker)
     }
 }
 
-void detail::WorkerHandleAccess::scheduleTimer(const WorkerHandle& worker,
-    WorkerTimerRegistration& registration, std::chrono::steady_clock::time_point deadline,
-    MoveOnlyFunction<void(WorkerTimerOutcome)> completion) {
-    const auto& dispatcher = worker.dispatcher_;
-    if (!dispatcher) {
+void WorkerHandle::schedule_timer(WorkerTimerRegistration& registration,
+    std::chrono::steady_clock::time_point deadline,
+    MoveOnlyFunction<void(WorkerTimerOutcome)> completion) const& {
+    if (!dispatcher_) {
         throw std::runtime_error("cannot schedule a timer on a stopped worker");
     }
-    dispatcher->scheduleTimer(registration, deadline, std::move(completion));
+    dispatcher_->scheduleTimer(registration, deadline, std::move(completion));
 }
 
-PostStatus detail::WorkerHandleAccess::postFactory(
-    const WorkerHandle& worker, MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) {
-    const auto& dispatcher = worker.dispatcher_;
-    return dispatcher ? dispatcher->postFactory(std::move(factory)) : PostStatus::kWorkerStopping;
+PostStatus WorkerHandle::post_factory(MoveOnlyFunction<MoveOnlyFunction<void()>()> factory) const {
+    return dispatcher_ ? dispatcher_->postFactory(std::move(factory)) : PostStatus::kWorkerStopping;
 }
 
 }  // namespace ruvia

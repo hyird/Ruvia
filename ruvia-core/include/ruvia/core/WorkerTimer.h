@@ -132,7 +132,7 @@ private:
     void bind(detail::WorkerDispatcher& dispatcher, std::size_t slot, std::uint64_t generation) noexcept;
     void release() noexcept;
 
-    // The handle supplied to scheduleTimer() must outlive this registration.
+    // The handle supplied to schedule_timer() must outlive this registration.
     // Destruction only removes it; it never queues a callback referencing the
     // destroyed owner.
     detail::WorkerDispatcher* dispatcher_{nullptr};

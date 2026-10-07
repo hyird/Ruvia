@@ -17,7 +17,7 @@
 
 namespace ruvia::detail {
 
-// UDP-owner-thread adapter for the HTTP sans-I/O server and per-connection TLS
+// Worker-affine adapter for the HTTP sans-I/O server and per-connection TLS
 // sessions. HTTP owns packet classification, CID routing, Initial offers and tokens.
 class http3_quic_server_transport final {
 public:

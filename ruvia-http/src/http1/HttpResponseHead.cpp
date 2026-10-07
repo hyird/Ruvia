@@ -38,7 +38,7 @@ inline constexpr std::string_view kChunkedTransferEncodingHeader = "Transfer-Enc
     // A kOk parseField always populates the state's value, and a Content-Length
     // that fails to parse throws below, so the accumulated optional already
     // encodes presence: empty means no Content-Length line was seen.
-    HttpContentLengthState state;
+    HttpContentLengthState<> state;
     for (const auto& header : response.headers()) {
         if (responseHeaderKnownBit(header) != kResponseHeaderContentLength) {
             continue;

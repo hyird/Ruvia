@@ -257,7 +257,7 @@ RUVIA_TEST(multipart_reader_rejects_after_body_reader_teardown) {
 }
 
 RUVIA_TEST(scoped_capability_move_relinks_and_parent_close_expires_destination) {
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     int expiredCount = 0;
     TestScopedCapability first(scope, expiredCount);
     TestScopedCapability moved(std::move(first));
@@ -275,7 +275,7 @@ RUVIA_TEST(scoped_capability_move_relinks_and_parent_close_expires_destination) 
 
 RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
     int expiredCount = 0;
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     TestScopedCapability source(scope, expiredCount);
     {
         TestScopedCapability destroyedEarly(source);
@@ -295,10 +295,10 @@ RUVIA_TEST(scoped_capability_copy_relinks_and_early_destruction_unlinks) {
 }
 
 RUVIA_TEST(scoped_operation_parent_close_destroys_cold_frame_immediately) {
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     bool destroyed = false;
     auto operation =
-        ruvia::detail::makeScopedOperation(scope, coldFrameTask(ColdFrameProbe(destroyed)));
+        ruvia::make_scoped_operation(scope, coldFrameTask(ColdFrameProbe(destroyed)));
     RUVIA_CHECK(!destroyed);
     scope.close();
     RUVIA_CHECK(destroyed);

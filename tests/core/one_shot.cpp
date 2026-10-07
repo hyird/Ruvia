@@ -29,8 +29,11 @@ public:
     ThrowingMove& operator=(const ThrowingMove&) = delete;
     // This fixture intentionally models a move that can throw.
     ThrowingMove(ThrowingMove&& other) noexcept(false) {
-        if (throwOnMove) {
+        if (throwOnMove || moves_before_failure == 0) {
             throw std::runtime_error("requested move failure");
+        }
+        if (moves_before_failure > 0) {
+            --moves_before_failure;
         }
         value_ = std::exchange(other.value_, 0);
     }
@@ -40,6 +43,7 @@ public:
     }
 
     static inline bool throwOnMove{false};
+    static inline int moves_before_failure{-1};
 
 private:
     int value_{0};
@@ -54,6 +58,19 @@ ruvia::Task<void> waitForValue(ruvia::OneShotReceiver<int>& receiver, int expect
 ruvia::Task<void> waitForWorkerStopping(ruvia::OneShotReceiver<int>& receiver, bool& success) {
     const auto result = co_await receiver.wait();
     success = result.status() == ruvia::WorkerWaitStatus::kWorkerStopping && !result.hasValue();
+}
+
+ruvia::Task<void> wait_until_closed(ruvia::OneShotReceiver<int>& receiver, bool& success) {
+    const auto result = co_await receiver.waitFor(std::chrono::seconds(1));
+    success = result.status() == ruvia::WorkerWaitStatus::kClosed;
+}
+
+ruvia::Task<void> wait_for_throwing_value(
+    ruvia::OneShotReceiver<ThrowingMove>& receiver, bool& success) {
+    const auto result = co_await receiver.waitFor(std::chrono::seconds(1));
+    const auto consumed = co_await receiver.wait();
+    success = result.hasValue() && result.value().value() == 6 &&
+              consumed.status() == ruvia::WorkerWaitStatus::kClosed;
 }
 
 ruvia::Task<ruvia::WorkerWaitResult<int>> makeColdWaitAfterReceiverClose(
@@ -94,6 +111,28 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     }
 
     {
+        auto [completion, receiver] = ruvia::makeOneShot<ThrowingMove>(worker);
+        bool recovered_value = false;
+        bool result_move_failed = false;
+        ruvia::TaskScope scope(worker);
+        scope.spawn(wait_for_throwing_value(receiver, recovered_value));
+        // Fail when completion takes ownership of the constructed wait result.
+        ThrowingMove::moves_before_failure = 4;
+        try {
+            static_cast<void>(completion.complete(ThrowingMove(5)));
+        } catch (const std::runtime_error&) {
+            result_move_failed = true;
+        }
+        ThrowingMove::moves_before_failure = -1;
+        const bool retry_completed = completion.complete(ThrowingMove(6)).accepted();
+        co_await scope.join();
+        if (!result_move_failed || !retry_completed || !recovered_value ||
+            completion.complete(ThrowingMove(7)).status() != ruvia::OneShotCompleteStatus::kAlreadyCompleted) {
+            co_return;
+        }
+    }
+
+    {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto completed = completion.complete(7);
         const auto duplicate = completion.complete(8);
@@ -125,7 +164,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         ruvia::StopSource source;
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         ruvia::detail::WorkerHandleAccess::defer(worker, [&source] { source.requestStop(); });
-        const auto cancelled = co_await receiver.wait(source.token());
+        const auto cancelled = co_await receiver.waitFor(std::chrono::seconds(1), source.token());
         if (cancelled.status() != ruvia::WorkerWaitStatus::kCancelled ||
             !completion.complete(11).accepted()) {
             co_return;
@@ -159,6 +198,25 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
         if (closed.status() != ruvia::WorkerWaitStatus::kClosed ||
             rejected.status() != ruvia::OneShotCompleteStatus::kReceiverClosed ||
             rejected.rejected() == nullptr || *rejected.rejected() != 10) {
+            co_return;
+        }
+    }
+
+    {
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        bool pending_closed = false;
+        ruvia::TaskScope scope(worker);
+        scope.spawn(wait_until_closed(receiver, pending_closed));
+        bool duplicate_rejected = false;
+        try {
+            static_cast<void>(co_await receiver.wait());
+        } catch (const std::logic_error&) {
+            duplicate_rejected = true;
+        }
+        receiver.close();
+        co_await scope.join();
+        if (!pending_closed || !duplicate_rejected ||
+            completion.complete(13).status() != ruvia::OneShotCompleteStatus::kReceiverClosed) {
             co_return;
         }
     }

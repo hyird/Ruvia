@@ -10,9 +10,9 @@ namespace ruvia::detail {
 // Owned by the response memory domain, not by a connection/session arena.
 // At most one application chunk is queued; wire drivers borrow it until their
 // protocol cursor commits it. Terminal wakeups never free a pending SSL span.
-class HttpClientOutputQueue {
+class http_client_output_queue final {
 public:
-    HttpClientOutputQueue(const WorkerHandle& worker, std::pmr::memory_resource* resource)
+    http_client_output_queue(const WorkerHandle& worker, std::pmr::memory_resource* resource)
         : data(worker),
           space(worker),
           chunk(resource) {}
@@ -52,6 +52,6 @@ public:
     bool stopped{};
     void* wakeTarget{};
     void (*wake)(void*) noexcept {};
-    ScopedOperationScope outputScope;
+    ::ruvia::operation_scope outputScope;
 };
 }  // namespace ruvia::detail

@@ -10,13 +10,13 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <utility>
 #include <vector>
 
 #include <asio/signal_set.hpp>
 
 #include "ruvia/core/FailureReport.h"
+#include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/web/detail/app/AppRuntimeGraph.h"
@@ -37,16 +37,21 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-void networkFailed(void* object) noexcept {
+void acceptor_failed(void* object) noexcept {
     static_cast<App*>(object)->stop();
 }
 
-bool networkTargetAvailable(void* object) noexcept {
+bool acceptor_target_available(void* object) noexcept {
     return static_cast<detail::WebWorkerRuntime*>(object)->availableForNetworkDispatch();
 }
 
-void networkTargetAccept(void* object, detail::NativeAcceptedSocketTicket&& ticket) noexcept {
+void acceptor_target_accept(void* object, detail::NativeAcceptedSocketTicket&& ticket) noexcept {
     static_cast<detail::WebWorkerRuntime*>(object)->acceptTransferredConnection(std::move(ticket));
+}
+
+void stage_worker_quic(void* object, detail::http3_datagram_channel& channel,
+    asio::ip::udp::endpoint endpoint, quic_cid_partition partition) {
+    static_cast<detail::WebWorkerRuntime*>(object)->stage_quic(channel, endpoint, partition);
 }
 
 void invokeStopHooks(detail::AppState& state) noexcept {
@@ -67,27 +72,7 @@ buildWorkerRouter(const detail::AppState& state, std::pmr::memory_resource* runt
     auto router = detail::makePmrObject<detail::Router>(runtimeResource);
     detail::registerControllers(*router, controllers, controllerRegistrars);
     auto& routes = detail::RouterImpl::from(*router);
-    routes.setErrorHandler(detail::CallbackAccess::ref(state.errorHandler));
-    routes.setNotFoundHandler(detail::CallbackAccess::ref(state.notFoundHandler));
-    if (!state.prefixErrorHandlers.empty()) {
-        std::pmr::vector<detail::HttpPrefixErrorHandler> views(runtimeResource);
-        views.reserve(state.prefixErrorHandlers.size());
-        for (const auto& [prefix, handler] : state.prefixErrorHandlers) {
-            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
-        }
-        routes.setPrefixErrorHandlers(views);
-    }
-    if (!state.prefixNotFoundHandlers.empty()) {
-        std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(runtimeResource);
-        views.reserve(state.prefixNotFoundHandlers.size());
-        for (const auto& [prefix, handler] : state.prefixNotFoundHandlers) {
-            views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
-        }
-        routes.setPrefixNotFoundHandlers(views);
-    }
-    if (!state.globalMiddlewares.empty()) {
-        routes.setGlobalMiddlewares(state.globalMiddlewares);
-    }
+    state.configuration.apply(routes, runtimeResource);
     routes.finalize(compiledPlan);
     return router;
 }
@@ -98,8 +83,20 @@ public:
         : owner_(owner),
           state_(state),
           runtimeResource_(detail::appResource()),
-          signalContext_(1),
-          signals_(signalContext_) {}
+          signal_runtime_({.mailbox_capacity = 128}),
+          signals_(signal_runtime_.context().ioContext()) {
+        signal_runtime_.configure({
+            .stop_admission = [this] {
+                std::error_code ignored;
+                signals_.cancel(ignored);
+                signal_runtime_.finalize(); },
+            .failure = [this](std::exception_ptr) noexcept { owner_.stop(); },
+        });
+    }
+
+    ~AppRunCoordinator() {
+        stopSignalHandling();
+    }
 
     void run() {
         beginRun();
@@ -116,7 +113,9 @@ public:
             if (!stopRequested()) {
                 startSignalHandling();
                 startWorkers();
-                runStartHooksAndWait();
+                run_start_hooks();
+                start_serving();
+                wait_for_stop();
             }
         } catch (...) {
             primaryFailure = std::current_exception();
@@ -127,10 +126,14 @@ public:
         stopSignalHandling();
         invokeStopHooks(state_);
         const auto workerFailure = joinWorkers();
+        const auto signal_failure = signal_runtime_.failure();
         retireRuntime();
 
         if (primaryFailure != nullptr) {
             std::rethrow_exception(primaryFailure);
+        }
+        if (signal_failure != nullptr) {
+            std::rethrow_exception(signal_failure);
         }
         if (workerFailure != nullptr) {
             std::rethrow_exception(workerFailure);
@@ -205,7 +208,7 @@ private:
 #ifdef RUVIA_ENABLE_REDIS
                 .redis = std::span<const detail::RedisDefinition>(state_.redis),
 #endif
-                .workerStates = std::span<const detail::WorkerStateDefinition>(state_.workerStates),
+                .workerStates = state_.configuration.worker_states(),
                 .httpClients = std::span<const detail::HttpClientDefinition>(state_.httpClients),
             };
             auto worker = detail::makePmrObject<detail::WebWorkerRuntime>(
@@ -219,38 +222,20 @@ private:
             [](const detail::HttpServerListenerDefinition& listener) {
                 return listener.http3.has_value();
             });
-        const auto& serverOptions = validatedConfiguration.options();
-        runtime->networkTargets.reserve(runtime->workers.size());
+        runtime->acceptor_targets.reserve(runtime->workers.size());
         for (auto& slot : runtime->workers) {
             auto* target = slot.runtime.get();
-            auto* http3Server = target->http3Server();
-            if (hasHttp3 && http3Server == nullptr) {
-                throw std::logic_error("HTTP/3 listener has no worker-side server");
-            }
-            runtime->networkTargets.push_back({
+            runtime->acceptor_targets.push_back({
                 .submission = target->networkSubmission(),
                 .object = target,
-                .available = &networkTargetAvailable,
-                .accept = &networkTargetAccept,
-                .http3Server = http3Server,
-                .http3MaxConnections = hasHttp3 ? *serverOptions.maxConnections : 0,
-                .http3MailboxCapacity = hasHttp3
-                                            ? static_cast<std::uint32_t>(
-                                                  serverOptions.workerMailboxCapacity)
-                                            : 0,
-                .http3MaxRequestsPerConnection =
-                    hasHttp3 ? *serverOptions.maxRequestsPerConnection : 0,
-                .http3IdleTimeout = hasHttp3 ? serverOptions.idleTimeout : std::nullopt,
-                .http3RequestHeaderTimeout =
-                    hasHttp3 ? serverOptions.requestHeaderTimeout : std::nullopt,
-                .http3RequestBodyTimeout =
-                    hasHttp3 ? serverOptions.requestBodyTimeout : std::nullopt,
-                .http3WriteTimeout = hasHttp3 ? serverOptions.writeTimeout : std::nullopt,
+                .available = &acceptor_target_available,
+                .accept = &acceptor_target_accept,
+                .stage_quic = hasHttp3 ? &stage_worker_quic : nullptr,
             });
         }
-        runtime->network = std::make_unique<detail::ServerNetworkRuntime>(
-            validatedConfiguration.listeners(), runtime->networkTargets, &owner_, &networkFailed);
-        runtime->network->prepare();
+        runtime->ingress = std::make_unique<detail::acceptor>(
+            validatedConfiguration.listeners(), runtime->acceptor_targets, &owner_, &acceptor_failed);
+        runtime->ingress->prepare();
 
         std::lock_guard lock(state_.mutex);
         state_.runtime = std::move(runtime);
@@ -282,21 +267,21 @@ private:
                 owner_.stop();
             }
         });
-        signalThread_ = std::thread([this] { signalContext_.run(); });
+        signal_runtime_.start();
     }
 
     void startWorkers() {
-        // The server network runtime constructs fixed HTTP/3 channels and stages them on
-        // each worker before any worker is allowed to install its server loop.
+        // Bind ingress and stage the datagram channels before workers construct
+        // their own QUIC/TLS and HTTP/3 state.
         {
             std::lock_guard lock(state_.mutex);
             if (state_.lifecycle.stopRequested()) {
                 return;
             }
-            state_.runtime->network->launch();
+            state_.runtime->ingress->launch();
         }
-        state_.runtime->network->waitUntilReady();
-        state_.runtime->network->rethrowFailure();
+        state_.runtime->ingress->wait_until_ready();
+        state_.runtime->ingress->rethrow_failure();
         if (stopRequested()) {
             return;
         }
@@ -316,6 +301,9 @@ private:
             }
             worker.runtime->waitUntilReady();
         }
+    }
+
+    void start_serving() {
         for (auto& worker : state_.runtime->workers) {
             if (stopRequested()) {
                 return;
@@ -334,25 +322,27 @@ private:
             }
         }
         if (!stopRequested()) {
-            state_.runtime->network->requestServe();
-            if (!state_.runtime->network->waitUntilServing()) {
-                state_.runtime->network->rethrowFailure();
+            state_.runtime->ingress->request_serve();
+            if (!state_.runtime->ingress->wait_until_serving()) {
+                state_.runtime->ingress->rethrow_failure();
                 if (stopRequested()) {
                     return;
                 }
-                throw std::runtime_error("server network runtime stopped before the application began serving");
+                throw std::runtime_error("acceptor stopped before the application began serving");
             }
         }
     }
 
-    void runStartHooksAndWait() {
-        if (stopRequested()) {
-            return;
-        }
+    void run_start_hooks() {
         for (auto& hook : state_.onStartHooks) {
+            if (stopRequested()) {
+                return;
+            }
             hook();
         }
+    }
 
+    void wait_for_stop() {
         std::unique_lock lock(state_.mutex);
         if (!state_.lifecycle.markRunning()) {
             return;
@@ -361,8 +351,8 @@ private:
     }
 
     void stopWorkers() noexcept {
-        if (state_.runtime->network) {
-            state_.runtime->network->stop();
+        if (state_.runtime->ingress) {
+            state_.runtime->ingress->stop();
         }
         for (auto& worker : state_.runtime->workers) {
             try {
@@ -374,35 +364,28 @@ private:
     }
 
     void stopSignalHandling() noexcept {
-        std::error_code ignored;
-        signals_.cancel(ignored);
-        signalContext_.stop();
-        if (signalThread_.joinable()) {
-            signalThread_.join();
-        }
+        signal_runtime_.request_stop();
+        signal_runtime_.join();
     }
 
     [[nodiscard]] std::exception_ptr joinWorkers() noexcept {
         std::exception_ptr firstFailure;
-        // Server network join waits for each H3 channel's two-owner finalization
-        // and each worker H3 pump to stop touching its channels before destroying
-        // server-network-owned transport state.
-        bool networkQuiesced = state_.runtime->network == nullptr;
-        if (state_.runtime->network) {
+        // The acceptor joins after datagram publishers acknowledge closure.
+        // Workers retain their own protocol state until their task scopes join.
+        bool acceptor_quiesced = state_.runtime->ingress == nullptr;
+        if (state_.runtime->ingress) {
             try {
-                state_.runtime->network->join();
-                networkQuiesced = true;
-                state_.runtime->network->rethrowFailure();
+                state_.runtime->ingress->join();
+                acceptor_quiesced = true;
+                state_.runtime->ingress->rethrow_failure();
             } catch (...) {
-                if (!networkQuiesced) {
-                    // Destroying worker-owned callback state without the server network
-                    // thread barrier would leave a live producer dangling.
+                if (!acceptor_quiesced) {
                     std::terminate();
                 }
                 firstFailure = std::current_exception();
             }
         }
-        if (!networkQuiesced) {
+        if (!acceptor_quiesced) {
             std::terminate();
         }
         for (auto& worker : state_.runtime->workers) {
@@ -438,9 +421,8 @@ private:
     App& owner_;
     detail::AppState& state_;
     std::pmr::memory_resource* runtimeResource_;
-    asio::io_context signalContext_;
+    worker_runtime signal_runtime_;
     asio::signal_set signals_;
-    std::thread signalThread_;
 };
 
 }  // namespace

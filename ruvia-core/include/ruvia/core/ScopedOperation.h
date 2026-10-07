@@ -14,142 +14,142 @@ namespace ruvia {
 
 template <typename T>
 class ScopedOperation;
+class scoped_capability_registration;
 
 namespace detail {
+class scoped_operation_registration;
+}
 
-class ScopedOperationNode;
-class ScopedCapabilityNode;
-
-class ScopedOperationScope final {
+// Worker-affine owner of borrowed capabilities and their lazy operations.
+// Close discards cold frames before capability cleanup. Started operations must
+// finish; close_and_join waits for their frames and leases to retire first.
+class operation_scope final {
 public:
-    ScopedOperationScope() noexcept = default;
-    ~ScopedOperationScope() {
+    operation_scope() noexcept = default;
+    ~operation_scope() {
         close();
     }
 
-    ScopedOperationScope(const ScopedOperationScope&) = delete;
-    ScopedOperationScope& operator=(const ScopedOperationScope&) = delete;
-    ScopedOperationScope(ScopedOperationScope&&) = delete;
-    ScopedOperationScope& operator=(ScopedOperationScope&&) = delete;
+    operation_scope(const operation_scope&) = delete;
+    operation_scope& operator=(const operation_scope&) = delete;
+    operation_scope(operation_scope&&) = delete;
+    operation_scope& operator=(operation_scope&&) = delete;
 
     void close() noexcept;
-    // Expires cold operations, waits for every running operation to release
-    // its completed frame, then expires capabilities. The caller must run this on the execution
-    // context that owns the scope.
-    [[nodiscard]] Task<void> closeAndJoin() &;
-    Task<void> closeAndJoin() && = delete;
+    [[nodiscard]] Task<void> close_and_join() &;
+    Task<void> close_and_join() && = delete;
     [[nodiscard]] bool active() const noexcept {
         return active_;
     }
-
-    // A cold operation still owns a coroutine frame that may borrow its
-    // capability owner. Owners can use this to inspect whether teardown must
-    // first discard cold frames; a running frame remains a fatal lifetime
-    // violation when the scope closes.
-    [[nodiscard]] bool hasPendingOperations() const noexcept {
+    [[nodiscard]] bool has_pending_operations() const noexcept {
         return head_ != nullptr;
     }
 
 private:
-    friend class ScopedOperationNode;
-    friend class ScopedCapabilityNode;
-    struct DrainGuard;
-    struct JoinAwaiter;
-    void retireColdOperations() noexcept;
-    void expireForJoin() noexcept;
-    void expireCapabilities() noexcept;
-    void resumeJoiner() noexcept;
-    void link(ScopedOperationNode& operation) noexcept;
-    void unlink(ScopedOperationNode& operation) noexcept;
+    friend class detail::scoped_operation_registration;
+    friend class scoped_capability_registration;
+    struct drain_guard;
+    struct join_awaiter;
+    void retire_cold_operations() noexcept;
+    void expire_for_join() noexcept;
+    void expire_capabilities() noexcept;
+    void resume_joiner() noexcept;
+    void link(detail::scoped_operation_registration& operation) noexcept;
+    void unlink(detail::scoped_operation_registration& operation) noexcept;
 
-    ScopedOperationNode* head_{nullptr};
-    ScopedCapabilityNode* capabilityHead_{nullptr};
-    std::coroutine_handle<> joinContinuation_{};
+    detail::scoped_operation_registration* head_{nullptr};
+    scoped_capability_registration* capability_head_{nullptr};
+    std::coroutine_handle<> join_continuation_{};
     bool active_{true};
-    bool joinStarted_{false};
-    bool joinComplete_{false};
+    bool join_started_{false};
+    bool join_complete_{false};
 };
 
-// Intrusive, allocation-free capability lifetime. Moving a public capability
-// relinks it into the same parent scope; closing that scope invokes typed
-// cleanup while the owning request or worker memory domain is still alive.
-class ScopedCapabilityNode {
+// Allocation-free value registration. An owner must explicitly rebind the
+// cleanup target when copying or moving; ordinary copy/move is forbidden.
+// Declare it after the payload so destruction unlinks before payload teardown.
+class scoped_capability_registration final {
 public:
-    ScopedCapabilityNode(const ScopedCapabilityNode& other) noexcept;
-    ScopedCapabilityNode& operator=(const ScopedCapabilityNode&) = delete;
-    ScopedCapabilityNode(ScopedCapabilityNode&& other) noexcept;
-    ScopedCapabilityNode& operator=(ScopedCapabilityNode&&) = delete;
-    ~ScopedCapabilityNode();
+    scoped_capability_registration() noexcept = default;
+    scoped_capability_registration(operation_scope& scope, void* target,
+        void (*cleanup)(void*) noexcept) noexcept;
+    scoped_capability_registration(const scoped_capability_registration& other, void* target) noexcept;
+    scoped_capability_registration(scoped_capability_registration&& other, void* target) noexcept;
+    ~scoped_capability_registration();
 
-protected:
-    ScopedCapabilityNode() noexcept
-        : active_(false) {}
-    ScopedCapabilityNode(
-        ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
-    void requireActive() const;
-    [[nodiscard]] ScopedOperationScope& operationScope() const;
-    void bind(ScopedOperationScope& scope, void (*expire)(ScopedCapabilityNode&) noexcept) noexcept;
+    scoped_capability_registration(const scoped_capability_registration&) = delete;
+    scoped_capability_registration& operator=(const scoped_capability_registration&) = delete;
+    scoped_capability_registration(scoped_capability_registration&&) = delete;
+    scoped_capability_registration& operator=(scoped_capability_registration&&) = delete;
+
+    void require_active() const;
+    [[nodiscard]] operation_scope& scope() const;
+    void bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept;
 
 private:
-    friend class ScopedOperationScope;
-    void link(ScopedOperationScope& scope) noexcept;
+    friend class operation_scope;
+    void link(operation_scope& scope) noexcept;
     void unlink() noexcept;
     void expire() noexcept;
 
-    ScopedOperationScope* scope_{nullptr};
-    ScopedCapabilityNode* previous_{nullptr};
-    ScopedCapabilityNode* next_{nullptr};
-    void (*expire_)(ScopedCapabilityNode&) noexcept {nullptr};
-    bool active_{true};
+    operation_scope* scope_{nullptr};
+    scoped_capability_registration* previous_{nullptr};
+    scoped_capability_registration* next_{nullptr};
+    void* target_{nullptr};
+    void (*cleanup_)(void*) noexcept {nullptr};
+    bool active_{false};
 };
 
-class ScopedOperationNode {
-public:
-    ScopedOperationNode(const ScopedOperationNode&) = delete;
-    ScopedOperationNode& operator=(const ScopedOperationNode&) = delete;
-    ScopedOperationNode(ScopedOperationNode&&) = delete;
-    ScopedOperationNode& operator=(ScopedOperationNode&&) = delete;
-    ~ScopedOperationNode();
+template <typename T>
+[[nodiscard]] ScopedOperation<T> make_scoped_operation(operation_scope& scope, Task<T> task);
+template <typename T>
+[[nodiscard]] ScopedOperation<T> make_scoped_operation(
+    operation_scope& scope, Task<T> task, void (*check_affinity)(void*) noexcept, void* target);
 
-protected:
-    explicit ScopedOperationNode(ScopedOperationScope& scope) noexcept;
-    // Bind only after the typed frame owner has been fully constructed.
-    // An inactive scope consumes the cold frame without retaining any borrow.
-    void bindFrame(void (*retireCold)(ScopedOperationNode&) noexcept,
-        void (*checkAffinity)(void*) noexcept, void* affinityTarget) noexcept;
+namespace detail {
+
+// Internal registration is composed by the typed frame owner and the drain
+// obligation. The list never relies on inheritance or a downcast to that owner.
+class scoped_operation_registration final {
+public:
+    explicit scoped_operation_registration(operation_scope& scope) noexcept;
+    ~scoped_operation_registration();
+
+    scoped_operation_registration(const scoped_operation_registration&) = delete;
+    scoped_operation_registration& operator=(const scoped_operation_registration&) = delete;
+    scoped_operation_registration(scoped_operation_registration&&) = delete;
+    scoped_operation_registration& operator=(scoped_operation_registration&&) = delete;
+
+    void bind_frame(void* target, void (*retire_cold)(void*) noexcept,
+        void (*check_affinity)(void*) noexcept, void* affinity_target) noexcept;
     void begin();
-    void prepareCompletion() const noexcept;
+    void prepare_completion() const noexcept;
     void complete() noexcept;
-    void retireFrame() noexcept;
+    void retire_frame() noexcept;
 
 private:
-    friend class ScopedOperationScope;
-    enum class Phase : std::uint8_t { kCold,
-        kRunning,
-        kRetiring,
-        kComplete,
-        kExpired };
-    void clearFrameBinding() noexcept;
+    friend class ::ruvia::operation_scope;
+    enum class phase : std::uint8_t { cold,
+        running,
+        retiring,
+        complete,
+        expired };
+    void clear_frame_binding() noexcept;
 
-    ScopedOperationScope* scope_{nullptr};
-    ScopedOperationNode* previous_{nullptr};
-    ScopedOperationNode* next_{nullptr};
-    Phase phase_{Phase::kCold};
-    void (*retireCold_)(ScopedOperationNode&) noexcept {nullptr};
-    void (*checkAffinity_)(void*) noexcept {nullptr};
-    void* affinityTarget_{nullptr};
+    operation_scope* scope_{nullptr};
+    scoped_operation_registration* previous_{nullptr};
+    scoped_operation_registration* next_{nullptr};
+    phase phase_{phase::cold};
+    void* frame_target_{nullptr};
+    void (*retire_cold_)(void*) noexcept {nullptr};
+    void (*check_affinity_)(void*) noexcept {nullptr};
+    void* affinity_target_{nullptr};
 };
-
-template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task);
-template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope, Task<T> task, void (*checkAffinity)(void*) noexcept, void* target);
 
 }  // namespace detail
 
 template <typename T = void>
-class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode {
+class [[nodiscard]] ScopedOperation final {
     class Awaiter final {
     public:
         Awaiter(const Awaiter&) = delete;
@@ -164,14 +164,13 @@ class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode 
             return awaiter_.await_suspend(continuation);
         }
         T await_resume() {
-            owner_->prepareCompletion();
+            owner_->registration_.prepare_completion();
             struct Complete final {
                 Awaiter& awaiter;
                 ~Complete() {
                     awaiter.awaiter_.retireCompletedFrame();
-                    // This may synchronously resume join and retire the owner.
-                    // Do not touch the frame or its borrowed state afterwards.
-                    awaiter.owner_->complete();
+                    // Completion may resume join and destroy the owner inline.
+                    awaiter.owner_->registration_.complete();
                 }
             } complete{*this};
             if constexpr (std::is_void_v<T>) {
@@ -189,7 +188,7 @@ class [[nodiscard]] ScopedOperation final : private detail::ScopedOperationNode 
         explicit Awaiter(ScopedOperation& owner)
             : owner_(std::addressof(owner)),
               awaiter_([&owner]() {
-                  owner.begin();
+                  owner.registration_.begin();
                   auto awaiter = std::move(*owner.task_).operator co_await();
                   owner.task_.reset();
                   return awaiter;
@@ -204,8 +203,7 @@ public:
     ScopedOperation(ScopedOperation&&) = delete;
     ScopedOperation& operator=(ScopedOperation&&) = delete;
     ~ScopedOperation() {
-        // Check while frame-held PMR data and leases are still alive.
-        retireFrame();
+        registration_.retire_frame();
     }
 
     [[nodiscard]] Awaiter operator co_await() && {
@@ -219,37 +217,31 @@ public:
 
 private:
     template <typename U>
-    friend ScopedOperation<U> detail::makeScopedOperation(detail::ScopedOperationScope&, Task<U>);
+    friend ScopedOperation<U> make_scoped_operation(operation_scope&, Task<U>);
     template <typename U>
-    friend ScopedOperation<U> detail::makeScopedOperation(
-        detail::ScopedOperationScope&, Task<U>, void (*)(void*) noexcept, void*);
+    friend ScopedOperation<U> make_scoped_operation(
+        operation_scope&, Task<U>, void (*)(void*) noexcept, void*);
 
-    ScopedOperation(detail::ScopedOperationScope& scope, Task<T> task,
-        void (*checkAffinity)(void*) noexcept = nullptr, void* affinityTarget = nullptr)
-        : detail::ScopedOperationNode(scope),
-          task_(std::move(task)) {
-        bindFrame([](detail::ScopedOperationNode& node) noexcept {
-            static_cast<ScopedOperation&>(node).task_.reset();
-        },
-            checkAffinity, affinityTarget);
+    ScopedOperation(operation_scope& scope, Task<T> task,
+        void (*check_affinity)(void*) noexcept = nullptr, void* affinity_target = nullptr)
+        : task_(std::move(task)),
+          registration_(scope) {
+        registration_.bind_frame(std::addressof(task_), [](void* target) noexcept { static_cast<std::optional<Task<T>>*>(target)->reset(); }, check_affinity, affinity_target);
     }
 
     std::optional<Task<T>> task_;
+    detail::scoped_operation_registration registration_;
 };
 
-namespace detail {
-
 template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(ScopedOperationScope& scope, Task<T> task) {
+[[nodiscard]] ScopedOperation<T> make_scoped_operation(operation_scope& scope, Task<T> task) {
     return ScopedOperation<T>(scope, std::move(task));
 }
 
 template <typename T>
-[[nodiscard]] ScopedOperation<T> makeScopedOperation(
-    ScopedOperationScope& scope, Task<T> task, void (*checkAffinity)(void*) noexcept, void* target) {
-    return ScopedOperation<T>(scope, std::move(task), checkAffinity, target);
+[[nodiscard]] ScopedOperation<T> make_scoped_operation(
+    operation_scope& scope, Task<T> task, void (*check_affinity)(void*) noexcept, void* target) {
+    return ScopedOperation<T>(scope, std::move(task), check_affinity, target);
 }
-
-}  // namespace detail
 
 }  // namespace ruvia

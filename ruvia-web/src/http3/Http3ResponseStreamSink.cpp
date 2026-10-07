@@ -52,7 +52,7 @@ Task<void> Http3ResponseStreamSink::commit(http_response_trailer_intent trailers
         }
         throw std::invalid_argument("invalid HTTP/3 streaming response head");
     }
-    if (!publisher_.responseFieldSectionAllowed(prepared->head.decodedFieldSectionSize())) {
+    if (!publisher_.responseFieldSectionAllowed(prepared->head.field_section.decodedFieldSectionSize())) {
         publisher_.reject_peer_field_section();
     }
     data_.emplace(prepared->head.bodyPlan, prepared->head.declaredContentLength);
@@ -61,7 +61,7 @@ Task<void> Http3ResponseStreamSink::commit(http_response_trailer_intent trailers
     // entering that operation so recovery never emits a second response head.
     publisher_.commitFinalResponse();
     state_.markCommitted(prepared->commit_plan);
-    co_await publisher_.publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), prepared->head.fieldSection);
+    co_await publisher_.publishResponseFrame(static_cast<std::uint64_t>(Http3FrameType::kHeaders), prepared->head.field_section.fieldSection);
     if (prepared->commit_plan.head_disposition() == http_response_stream_head_disposition::message_ended) {
         co_await publisher_.finishResponse();
     }

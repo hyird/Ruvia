@@ -8,7 +8,6 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/http/static/StaticFileTypes.h"
 #include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
-#include "ruvia/web/detail/router/PrefixFallback.h"
 
 namespace ruvia {
 
@@ -102,18 +101,9 @@ App& App::documentRoot(std::nullptr_t) {
 }
 
 App& App::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
-    if (!descriptor.valid() || descriptor.create() == nullptr || descriptor.destroy() == nullptr) {
-        throw std::invalid_argument("app middleware must be constructible and invocable");
-    }
-    if (descriptor.validatedModelTypeKey() != nullptr) {
-        // A validator binds one model type to one route's body/fields; running
-        // it for every route would fail requests that legitimately carry no
-        // such payload. Attach JsonBody<T> / QueryModel<T> / PathModel<T> on the route instead.
-        throw std::invalid_argument("validator middleware binds to a route and cannot be app-wide");
-    }
     return detail::mutateStoppedApp(*this, *state_,
         "cannot add app middleware while app is running",
-        [descriptor](detail::AppState& state) { state.globalMiddlewares.push_back(descriptor); });
+        [descriptor](detail::AppState& state) { state.configuration.add_middleware(descriptor); });
 }
 
 App& App::blockingPool(BlockingPoolOptions config) {
@@ -132,7 +122,7 @@ App& App::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot register worker state while app is running",
         [&definition](detail::AppState& state) {
-            detail::appendWorkerStateDefinition(state.workerStates, std::move(definition));
+            state.configuration.add_worker_state(std::move(definition));
         });
 }
 
@@ -140,34 +130,21 @@ App& App::onError(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change error handler while app is running",
         [handler = std::move(handler)](
-            detail::AppState& state) mutable { state.errorHandler = std::move(handler); });
+            detail::AppState& state) mutable { state.configuration.on_error(std::move(handler)); });
 }
 
 App& App::onNotFound(HttpNotFoundHandler handler) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change not found handler while app is running",
         [handler = std::move(handler)](
-            detail::AppState& state) mutable { state.notFoundHandler = std::move(handler); });
+            detail::AppState& state) mutable { state.configuration.on_not_found(std::move(handler)); });
 }
-
-namespace {
-
-// Storage differs from TestApp's -- these live on the app resource -- but the
-// rule that decides what is accepted is shared.
-template <typename Handlers, typename Handler>
-void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
-    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
-    handlers.emplace_back(std::pmr::string(normalized, detail::appResource()), std::move(handler));
-}
-
-}  // namespace
 
 App& App::onError(ScopedErrorHandlerOptions options) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change error handler while app is running",
         [options = std::move(options)](detail::AppState& state) mutable {
-            appendPrefixHandler(
-                state.prefixErrorHandlers, options.prefix, std::move(options.handler));
+            state.configuration.on_error(std::move(options));
         });
 }
 
@@ -175,8 +152,7 @@ App& App::onNotFound(ScopedNotFoundHandlerOptions options) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change not found handler while app is running",
         [options = std::move(options)](detail::AppState& state) mutable {
-            appendPrefixHandler(
-                state.prefixNotFoundHandlers, options.prefix, std::move(options.handler));
+            state.configuration.on_not_found(std::move(options));
         });
 }
 

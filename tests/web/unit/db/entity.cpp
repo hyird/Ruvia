@@ -52,10 +52,10 @@ RUVIA_TEST(db_entity_array_codec_preserves_null_text_precision_and_boolean_value
     RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
 }
 
-using Entity = ruvia::DbEntity<ruvia::FixedString{"users"},
+RUVIA_DB_ENTITY(Entity, "users",
     ruvia::DbColumn<ruvia::FixedString{"id"}, int>,
     ruvia::DbColumn<ruvia::FixedString{"name"}, std::pmr::string,
-        ruvia::DbColumnOptions{.nullable = true}>>;
+        ruvia::DbColumnOptions{.nullable = true}>)
 using ComputedEntity = ruvia::DbEntity<"computed_users",
     ruvia::DbColumn<"first_name", std::pmr::string>,
     ruvia::DbColumn<"display_name", std::pmr::string,
@@ -106,11 +106,8 @@ using RelationOwner = ruvia::DbEntity<"relation_owners", ruvia::DbColumn<"id", s
     ruvia::DbManyToMany<"tags", RelationTarget, ruvia::DbJoinTable<"owner_tags", ruvia::DbJoinColumns<ruvia::DbJoinColumn<"owner_id", "id">>, ruvia::DbJoinColumns<ruvia::DbJoinColumn<"tag_id", "id">>>>>;
 
 struct SelfNode;
-using SelfNodeBase = ruvia::DbEntity<"self_nodes", ruvia::DbColumn<"id", std::int64_t>,
-    ruvia::DbManyToOne<"parent", SelfNode, ruvia::DbJoinColumn<"parent_id", "id">>>;
-struct SelfNode final : SelfNodeBase {
-    using SelfNodeBase::SelfNodeBase;
-};
+RUVIA_DB_ENTITY(SelfNode, "self_nodes", ruvia::DbColumn<"id", std::int64_t>,
+    ruvia::DbManyToOne<"parent", SelfNode, ruvia::DbJoinColumn<"parent_id", "id">>)
 
 RUVIA_TEST(db_entity_tracks_unset_null_and_value_states) {
     Entity entity;
@@ -217,6 +214,31 @@ RUVIA_TEST(db_entity_self_referential_relation_can_build_a_finite_graph) {
     RUVIA_CHECK_EQ(root.get<"parent">().get<"parent">().get<"id">(), 3);
     root.reset<"parent">();
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+}
+
+RUVIA_TEST(db_entity_relation_replacement_preserves_loaded_value_on_allocation_failure) {
+    ruvia::test::CountingMemoryResource upstream;
+    equivalent_memory_resource target(&upstream);
+    {
+        SelfNode root(&target);
+        auto& parent = ruvia::detail::DbEntityAccess<SelfNode>::emplaceRelation<"parent">(root);
+        parent.set<"id">(7);
+        const auto allocations = upstream.liveAllocations();
+        target.reject_allocations();
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            (void)ruvia::detail::DbEntityAccess<SelfNode>::emplaceRelation<"parent">(root);
+        }));
+        target.reject_allocations(false);
+        RUVIA_CHECK(root.isSet<"parent">());
+        RUVIA_CHECK(!root.isNull<"parent">());
+        RUVIA_CHECK_EQ(root.get<"parent">().get<"id">(), 7);
+        RUVIA_CHECK(root.get<"parent">().resource() == &target);
+        RUVIA_CHECK_EQ(upstream.liveAllocations(), allocations);
+        auto moved = std::move(root);
+        RUVIA_CHECK_EQ(moved.get<"parent">().get<"id">(), 7);
+        moved.reset<"parent">();
+    }
+    RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
 }
 
 RUVIA_TEST(db_entity_set_normalizes_nested_owned_values_to_entity_resource) {

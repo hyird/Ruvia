@@ -196,7 +196,7 @@ void Http3ClientResponseDelivery::deliver(const Http3ConnectionEvent& event) {
                     }
                 }
                 if (!state_.tunnel->accepted) {
-                    state_.tunnel->stop();
+                    state_.tunnel->output.stop();
                 }
             }
             if (!state_.tunnel || !state_.tunnel->accepted) {

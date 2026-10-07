@@ -37,14 +37,13 @@ public:
     // Starts the clock. `worker` must outlive this object; the session that owns
     // the request guarantees that.
     void arm(const WorkerHandle& worker, std::chrono::milliseconds deadline) {
-        WorkerHandleAccess::scheduleTimer(
-            worker, timer_, workerTimerDeadlineAfter(deadline), [this](WorkerTimerOutcome outcome) {
-                if (outcome != WorkerTimerOutcome::kExpired) {
-                    return;
-                }
-                exceeded_ = true;
-                source_.requestStop();
-            });
+        worker.schedule_timer(timer_, workerTimerDeadlineAfter(deadline), [this](WorkerTimerOutcome outcome) {
+            if (outcome != WorkerTimerOutcome::kExpired) {
+                return;
+            }
+            exceeded_ = true;
+            source_.requestStop();
+        });
     }
 
     // Held by value and handed out by reference: ContextServices stores the

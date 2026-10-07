@@ -1,5 +1,8 @@
+#include <optional>
+
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/http/HttpResponseStream.h"
+#include "ruvia/web/detail/util/operation_lane_lease.h"
 
 #include "memory_resource_fixture.h"
 #include "streaming_fixture.h"
@@ -20,6 +23,30 @@ ruvia::Task<void> writePrebuiltTextFrame(ruvia::WebSocket& socket) {
 }
 
 }  // namespace
+
+RUVIA_TEST(operation_lane_lease_move_keeps_one_owner_and_failed_claim_preserves_lane) {
+    bool active = false;
+    std::optional<ruvia::detail::operation_lane_lease> owner;
+    {
+        ruvia::detail::operation_lane_lease source(active);
+        RUVIA_CHECK(static_cast<bool>(source));
+        owner.emplace(std::move(source));
+        RUVIA_CHECK(!source);
+        {
+            ruvia::detail::operation_lane_lease conflict(active);
+            RUVIA_CHECK(!conflict);
+        }
+        RUVIA_CHECK(active);
+    }
+    RUVIA_CHECK(active);
+    owner.reset();
+    RUVIA_CHECK(!active);
+    {
+        ruvia::detail::operation_lane_lease reclaimed(active);
+        RUVIA_CHECK(static_cast<bool>(reclaimed));
+    }
+    RUVIA_CHECK(!active);
+}
 
 RUVIA_TEST(body_reader_rejects_concurrent_consumers_of_one_borrowed_buffer) {
     asio::io_context io(1);
@@ -102,6 +129,8 @@ RUVIA_TEST(websocket_rejects_overlapping_cold_operations) {
         }
         RUVIA_CHECK(writeRejected);
         RUVIA_CHECK(closeRejected);
+        // close claimed read before finding the occupied output lane; unwinding must release read.
+        auto independentRead = socket.read();
     }
 
     {

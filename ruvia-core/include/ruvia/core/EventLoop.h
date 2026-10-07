@@ -76,6 +76,17 @@ public:
         return dispatchHandle().post(std::forward<Fn>(fn));
     }
 
+    // Cold-path cleanup for an already owned resource, not new business work.
+    // Bypasses bounded admission but acquires retirement protection; returns
+    // false once final retirement begins. Accepted callbacks and their owned
+    // inputs retire before the loop can release its execution context.
+    template <typename fn_type>
+        requires detail::MoveOnlyFunctionTarget<void, fn_type>
+    [[nodiscard]] bool defer_cleanup(fn_type&& fn) const {
+        const EventLoop snapshot = *this;
+        return snapshot.defer_cleanup_task(MoveOnlyFunction<void()>(std::forward<fn_type>(fn)));
+    }
+
     // Starts one lazy Task on this loop and returns its structured completion
     // owner. The loop owns the started coroutine until completion; abandoning
     // the RootTask never destroys a suspended frame, and an abandoned failure
@@ -196,6 +207,7 @@ private:
         MoveOnlyFunction<Task<void>()> callback) const;
     [[nodiscard]] detail::EventLoopFailureSink failureSink() const;
     [[nodiscard]] std::shared_ptr<void> acquireRootLease() const;
+    [[nodiscard]] bool defer_cleanup_task(MoveOnlyFunction<void()> task) const;
 
     std::shared_ptr<detail::EventLoopState> state_;
     friend class EventLoopPool;

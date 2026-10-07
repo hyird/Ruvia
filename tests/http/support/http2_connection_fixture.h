@@ -29,10 +29,14 @@
 
 namespace http2_connection_test {
 
+using ruvia::Http2RequestContent;
+using ruvia::Http2RequestHeadSubmitFailure;
+using ruvia::Http2RequestHeadSubmitResult;
 using ruvia::Http2ResponseHeadSubmitError;
 using ruvia::Http2ResponseHeadSubmitFailure;
 using ruvia::Http2ResponseHeadSubmitResult;
 using ruvia::Http2StreamingResponseHeadSubmitResult;
+using ruvia::Http2SubmittedRequestHead;
 using ruvia::http_response_stream_head_disposition;
 using ruvia::http_response_stream_trailer_framing;
 using ruvia::http_response_trailer_intent;
@@ -52,14 +56,10 @@ using ruvia::detail::Http2LocalContentKnownLength;
 using ruvia::detail::Http2LocalContentState;
 using ruvia::detail::Http2LocalSendState;
 using ruvia::detail::Http2LocalSettings;
-using ruvia::detail::Http2RequestContent;
 using ruvia::detail::Http2RequestHeadSubmitError;
-using ruvia::detail::Http2RequestHeadSubmitFailure;
-using ruvia::detail::Http2RequestHeadSubmitResult;
 using ruvia::detail::Http2StreamCloseSource;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2SubmitStatus;
-using ruvia::detail::Http2SubmittedRequestHead;
 using ruvia::detail::Http2TunnelState;
 using ruvia::detail::Http2WebSocketHandshakeSubmitFailure;
 using ruvia::detail::Http2WebSocketHandshakeSubmitResult;

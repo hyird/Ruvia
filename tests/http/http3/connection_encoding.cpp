@@ -72,7 +72,7 @@ std::expected<std::size_t, ruvia::Http3ResponseHeadFailure> encode_response(
         if (!result) {
             return std::unexpected(result.error());
         }
-        return result->decodedFieldSectionSize();
+        return result->field_section.decodedFieldSectionSize();
     }
     ruvia::HttpResponse response;
     response.header("date", "Thu, 01 Jan 1970 00:00:00 GMT");
@@ -83,7 +83,7 @@ std::expected<std::size_t, ruvia::Http3ResponseHeadFailure> encode_response(
         if (!result) {
             return std::unexpected(result.error());
         }
-        return result->head.decodedFieldSectionSize();
+        return result->head.field_section.decodedFieldSectionSize();
     }
     auto result = kind == response_kind::connect
                       ? connection.encodeConnectResponseHead(0, response, limits)
@@ -91,7 +91,7 @@ std::expected<std::size_t, ruvia::Http3ResponseHeadFailure> encode_response(
     if (!result) {
         return std::unexpected(result.error());
     }
-    return result->decodedFieldSectionSize();
+    return result->field_section.decodedFieldSectionSize();
 }
 }  // namespace
 
@@ -155,7 +155,7 @@ RUVIA_TEST(http3_connection_response_encoding_applies_normalized_local_budgets) 
     const auto baseline = encode({}, 512, requested);
     RUVIA_CHECK(baseline.has_value());
     if (baseline) {
-        RUVIA_CHECK_EQ(baseline->decodedFieldSectionSize(), std::size_t{391});
+        RUVIA_CHECK_EQ(baseline->field_section.decodedFieldSectionSize(), std::size_t{391});
     }
     const ruvia::Http3ConnectionConfig decoded_limit{.maxFieldSectionSize = 256};
     for (const auto peer_limit : {512, 384}) {

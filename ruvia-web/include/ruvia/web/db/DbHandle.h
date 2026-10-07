@@ -27,7 +27,7 @@ class DbRepository;
 template <typename Entity, typename Executor>
 class DbQueryBuilder;
 
-class DbHandle final : private detail::ScopedCapabilityNode {
+class DbHandle final {
 public:
     DbHandle(const DbHandle& other) noexcept;
     DbHandle& operator=(const DbHandle&) = delete;
@@ -125,33 +125,34 @@ private:
     [[nodiscard]] Task<std::pair<DbRows, DbRows>> queryAndCountTask(const DbQuery& query, const DbQuery& count) const;
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<std::pair<Result, std::uint64_t>> queryMappedAndCount(const DbQuery& query, const DbQuery& count, Mapper mapper) const {
-        requireActive();
+        registration_.require_active();
         auto task = queryAndCountTask(query, count);
-        return detail::makeScopedOperation(operationScope(),
+        return make_scoped_operation(registration_.scope(),
             detail::mapDbQueryAndCount<Result>(std::move(task), resource_, std::move(mapper)));
     }
     template <typename Result, typename Mapper>
     [[nodiscard]] ScopedOperation<Result> queryMapped(const DbQuery& query, Mapper mapper) const {
-        requireActive();
+        registration_.require_active();
         auto task = queryTask(query);
-        return detail::makeScopedOperation(operationScope(),
+        return make_scoped_operation(registration_.scope(),
             detail::mapDbQuery<Result>(std::move(task), resource_, std::move(mapper)));
     }
 
     DbHandle(detail::DbPoolRef client, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope, detail::DbQueryCacheState* cache = nullptr) noexcept;
+        operation_scope& operationScope, detail::DbQueryCacheState* cache = nullptr) noexcept;
     static Task<DbStreamResult> queryStreamPrepared(detail::DbPoolRef client, std::pmr::string sql,
         std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
-        detail::ScopedOperationScope& operationScope, OperationOptions options);
+        operation_scope& operationScope, OperationOptions options);
     static Task<DbTransaction> beginTransactionPrepared(detail::DbPoolRef client,
-        std::pmr::memory_resource* resource, detail::ScopedOperationScope& operationScope,
+        std::pmr::memory_resource* resource, operation_scope& operationScope,
         OperationOptions operationOptions, DbTransactionOptions transactionOptions, detail::DbQueryCacheState* cache);
 
     detail::DbQueryCacheState* cache_{nullptr};
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
     OperationOptions options_;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    static void expire_capability(void* target) noexcept;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

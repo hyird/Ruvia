@@ -14,18 +14,22 @@ namespace ruvia::detail {
 struct ModelValidationAccess final {
     template <FixedString Field, typename ModelT>
     [[nodiscard]] static ModelFieldState fieldState(const ModelT& model) {
-        return model.template ruviaFieldState<Field>();
+        return model::modelFieldState<Field>(model, model::model_access::schema<ModelT>());
     }
 
     template <FixedString Field, typename ModelT>
     [[nodiscard]] static const auto& fieldValue(const ModelT& model) {
-        return model.template ruviaFieldValue<Field>();
+        const auto& slot = [&]<typename... descriptor_types>(model::ModelSchema<descriptor_types...>) -> const auto& {
+            constexpr auto index = model::modelFieldIndex<Field, descriptor_types...>();
+            return model::model_access::slot<index>(model);
+        }(model::model_access::schema<ModelT>());
+        return slot.value();
     }
 
     template <typename ModelT>
     [[nodiscard]] static bool structureValid(const ModelT& model) {
         bool valid = true;
-        model::visitModelFields(model, ModelT::ruviaSchema(), [&](const auto&, const auto& slot) {
+        model::visitModelFields(model, model::model_access::schema<ModelT>(), [&](const auto&, const auto& slot) {
             using SlotT = std::remove_cvref_t<decltype(slot)>;
             const auto state = slot.state();
             if (state == ModelFieldState::kDuplicate || state == ModelFieldState::kInvalidType ||
@@ -44,7 +48,7 @@ struct ModelValidationAccess final {
     static void validateStructure(
         const ModelT& modelValue, std::string_view prefix, ValidatorT& validator) {
         model::visitModelFields(
-            modelValue, ModelT::ruviaSchema(), [&](const auto&, const auto& slot) {
+            modelValue, model::model_access::schema<ModelT>(), [&](const auto&, const auto& slot) {
                 if (validator.full()) {
                     return;
                 }
@@ -85,7 +89,7 @@ struct ModelValidationAccess final {
     static void validateFieldRules(
         const ModelT& modelValue, std::string_view prefix, ValidatorT& validator) {
         model::visitModelFields(
-            modelValue, ModelT::ruviaSchema(), [&](const auto& descriptor, const auto& slot) {
+            modelValue, model::model_access::schema<ModelT>(), [&](const auto& descriptor, const auto& slot) {
                 if (validator.full()) {
                     return;
                 }

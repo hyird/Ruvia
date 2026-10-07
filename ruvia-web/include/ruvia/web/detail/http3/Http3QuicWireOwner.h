@@ -20,9 +20,9 @@
 
 namespace ruvia::detail {
 
-// Owner-thread-only driver for long-lived HTTP/3 QUIC wire I/O on the server
-// server network thread. It does not admit connections or connect the listener to
-// App/workers. The io_context and borrowed TLS context must outlive this owner.
+// Owner-thread-only driver for long-lived HTTP/3 QUIC wire I/O. Standalone use
+// owns UDP; production worker use borrows an acceptor datagram channel. Both
+// backends use this driver. The io_context and TLS context must outlive it.
 class Http3QuicWireOwner final {
 public:
     using Clock = std::chrono::steady_clock;
@@ -61,6 +61,10 @@ public:
         Http3DatagramEndpoint::udp::endpoint bindEndpoint, http3_quic_tls_context& tls,
         ruvia::quic_server_config transportConfig,
         std::pmr::memory_resource* timerHandlerResource, ProtocolPump protocolPump);
+    Http3QuicWireOwner(asio::io_context& worker_io, http3_datagram_channel& channel,
+        Http3DatagramEndpoint::udp::endpoint local_endpoint, http3_quic_tls_context& tls,
+        ruvia::quic_server_config transport_config,
+        std::pmr::memory_resource* timer_handler_resource, ProtocolPump protocol_pump);
     ~Http3QuicWireOwner();
 
     Http3QuicWireOwner(const Http3QuicWireOwner&) = delete;
@@ -79,12 +83,13 @@ public:
     // pollStop() reports complete.
     void start();
     void requestStop() noexcept;
-    // NetworkRuntime uses this gate when it must retire connections and channels
+    // The worker runtime uses this gate when it must retire connections/channels
     // after a fatal socket stop but before destroying the QUIC transport.
     void deferTransportRetirement() noexcept;
     void releaseTransportRetirement() noexcept;
     // Requests another bounded owner-thread turn after a worker/channel wake.
     void requestDrive() noexcept;
+    void poll_datagrams() noexcept;
 
     // Call on the owner thread outside I/O callbacks to perform the final ordered
     // destruction once socket and timer completion handlers have really retired.

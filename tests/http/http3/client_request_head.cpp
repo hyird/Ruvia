@@ -155,6 +155,17 @@ RUVIA_TEST(http3_client_request_head_normalizes_headers_and_rejects_invalid_inpu
     RUVIA_CHECK(!encode("POST", "/", std::array{Http3FieldSectionFieldView{"content-length", "3"}}, 4));
     RUVIA_CHECK(!encode("GET", "/", std::array{Http3FieldSectionFieldView{":path", "/"}}));
     RUVIA_CHECK(!encode("GET", "/", std::array{Http3FieldSectionFieldView{"x@bad", "value"}}));
+    for (const std::string_view value : {"", " 1", "1 ", "1, 1", "+1", "-1", "18446744073709551616"}) {
+        const auto invalid = encode("POST", "/", std::array{Http3FieldSectionFieldView{"content-length", value}});
+        RUVIA_CHECK(!invalid && invalid.error().kind == Http3ClientRequestHeadError::kInvalidContentLength);
+    }
+    const auto wide = encode("POST", "/",
+        std::array{Http3FieldSectionFieldView{"content-length", "18446744073709551615"}});
+    RUVIA_CHECK(wide.has_value());
+    if (wide) {
+        RUVIA_CHECK(wide->bodyPlan.expectedLength == UINT64_MAX);
+    }
+    RUVIA_CHECK(encode("GET", "/", std::array{Http3FieldSectionFieldView{"x-ows", " value\t"}}).has_value());
 }
 
 RUVIA_TEST(http3_client_request_head_rejects_invalid_cors_preflight_fields) {
@@ -222,6 +233,14 @@ RUVIA_TEST(http3_client_request_head_enforces_limits_and_releases_resource_alloc
         RUVIA_CHECK(pseudoLimit.error().fieldSectionError ==
                     Http3FieldSectionError::kFieldListTooLarge);
     }
+    const auto exact = encodeHttp3ClientRequestHead(
+        {.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/"},
+        {.maxDecodedBytes = 182, .maxFields = 4});
+    RUVIA_CHECK(exact.has_value());
+    const auto bothLimited = encodeHttp3ClientRequestHead(
+        {.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/", .fields = std::array{Http3FieldSectionFieldView{"x", "y"}}},
+        {.maxDecodedBytes = 1, .maxFields = 4});
+    RUVIA_CHECK(!bothLimited && bothLimited.error().fieldSectionError == Http3FieldSectionError::kTooManyFields);
     {
         auto result = encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test:443", .path = "/"}, {}, &resource);
         RUVIA_CHECK(result.has_value());

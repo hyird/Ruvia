@@ -7,14 +7,11 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <utility>
 #include <vector>
 
-#include <asio/io_context.hpp>
-
 #include "ruvia/core/ConnectionScanner.h"
-#include "ruvia/core/EventLoopAttachment.h"
+#include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"
@@ -33,12 +30,6 @@
 namespace ruvia {
 
 namespace {
-
-template <typename Handlers, typename Handler>
-void appendPrefixHandler(Handlers& handlers, std::string_view prefix, Handler handler) {
-    const auto normalized = detail::validateFallbackPrefix(handlers, prefix, handler);
-    handlers.emplace_back(std::string(normalized), std::move(handler));
-}
 
 Task<void> startTestWorker(
     ruvia::ConnectionScanner& scanner, detail::WorkerCapabilities& capabilities) {
@@ -75,30 +66,20 @@ struct TestApp::Impl final {
         kReady,
         kFailed };
 
+    detail::app_configuration configuration{detail::registrationResource()};
     detail::Router router;
     detail::ControllerStore controllers;
     WorkerMemory memory;
     Env env;
-    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares{
-        detail::registrationResource()};
-    std::pmr::vector<detail::WorkerStateDefinition> workerStateDefinitions{
-        detail::registrationResource()};
-    std::vector<std::pair<std::string, HttpErrorHandler>> prefixErrorHandlers;
-    std::vector<std::pair<std::string, HttpNotFoundHandler>> prefixNotFoundHandlers;
-    HttpErrorHandler errorHandler{nullptr};
-    HttpNotFoundHandler notFoundHandler{nullptr};
-    asio::io_context eventLoopContext{};
-    EventLoopAttachment eventLoopAttachment{attachEventLoop(eventLoopContext)};
-    EventLoop eventLoop{eventLoopAttachment.loop()};
+    EventLoopPool event_loop_pool{{.loopCount = 1}};
+    EventLoop eventLoop{event_loop_pool.loop(0)};
     WorkerHandle worker{eventLoop.handle()};
-    std::thread eventLoopThread;
     StopSource stopSource;
     StopToken stopToken{stopSource.token()};
     std::optional<ruvia::ConnectionScanner> connectionScanner;
     std::optional<detail::WorkerCapabilities> capabilities;
     Lifecycle lifecycle{Lifecycle::kConfiguring};
     std::exception_ptr startupFailure{};
-    bool eventLoopStarted{false};
 
     ~Impl() {
         if (lifecycle == Lifecycle::kReady) {
@@ -109,12 +90,8 @@ struct TestApp::Impl final {
                 std::terminate();
             }
         }
-        if (eventLoopStarted) {
-            eventLoopAttachment.stop();
-            if (eventLoopThread.joinable()) {
-                eventLoopThread.join();
-            }
-        }
+        event_loop_pool.stop();
+        event_loop_pool.join();
     }
 
     void requireConfigurable() const {
@@ -139,33 +116,12 @@ struct TestApp::Impl final {
             const auto controllerRegistrars = detail::sealControllerRegistrars();
             detail::registerControllers(router, controllers, controllerRegistrars);
             auto& routes = detail::RouterImpl::from(router);
-            routes.setErrorHandler(detail::CallbackAccess::ref(errorHandler));
-            routes.setNotFoundHandler(detail::CallbackAccess::ref(notFoundHandler));
-            if (!prefixErrorHandlers.empty()) {
-                std::pmr::vector<detail::HttpPrefixErrorHandler> views(detail::registrationResource());
-                views.reserve(prefixErrorHandlers.size());
-                for (const auto& [prefix, handler] : prefixErrorHandlers) {
-                    views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
-                }
-                routes.setPrefixErrorHandlers(views);
-            }
-            if (!prefixNotFoundHandlers.empty()) {
-                std::pmr::vector<detail::HttpPrefixNotFoundHandler> views(
-                    detail::registrationResource());
-                views.reserve(prefixNotFoundHandlers.size());
-                for (const auto& [prefix, handler] : prefixNotFoundHandlers) {
-                    views.push_back({std::string_view(prefix), detail::CallbackAccess::ref(handler)});
-                }
-                routes.setPrefixNotFoundHandlers(views);
-            }
-            if (!globalMiddlewares.empty()) {
-                routes.setGlobalMiddlewares(globalMiddlewares);
-            }
+            configuration.apply(routes, memory.resource());
             routes.finalize();
 
             connectionScanner.emplace(worker, ruvia::ConnectionScannerOptions{});
             capabilities.emplace(eventLoop.ioContext(), worker, memory.resource(),
-                detail::WorkerCapabilityDefinitions{.workerStates = workerStateDefinitions},
+                detail::WorkerCapabilityDefinitions{.workerStates = configuration.worker_states()},
                 detail::WorkerCapabilityOptions{
                     .routeRateLimits = routes.routeTable().hasRouteRateLimit()
                                            ? detail::RouteRateLimitPresence::kPresent
@@ -173,14 +129,7 @@ struct TestApp::Impl final {
                     .rateLimitCapacity = 1024,
                     .env = &env,
                 });
-            eventLoopThread = std::thread([this] {
-                try {
-                    eventLoopAttachment.run();
-                } catch (...) {
-                    std::terminate();
-                }
-            });
-            eventLoopStarted = true;
+            event_loop_pool.start();
             eventLoop.start(startTestWorker(*connectionScanner, *capabilities)).get();
             lifecycle = Lifecycle::kReady;
         } catch (...) {
@@ -198,37 +147,37 @@ TestApp::~TestApp() = default;
 
 TestApp& TestApp::onError(HttpErrorHandler handler) {
     impl_->requireConfigurable();
-    impl_->errorHandler = std::move(handler);
+    impl_->configuration.on_error(std::move(handler));
     return *this;
 }
 
 TestApp& TestApp::onNotFound(HttpNotFoundHandler handler) {
     impl_->requireConfigurable();
-    impl_->notFoundHandler = std::move(handler);
+    impl_->configuration.on_not_found(std::move(handler));
     return *this;
 }
 
 TestApp& TestApp::onError(ScopedErrorHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixErrorHandlers, options.prefix, std::move(options.handler));
+    impl_->configuration.on_error(std::move(options));
     return *this;
 }
 
 TestApp& TestApp::onNotFound(ScopedNotFoundHandlerOptions options) {
     impl_->requireConfigurable();
-    appendPrefixHandler(impl_->prefixNotFoundHandlers, options.prefix, std::move(options.handler));
+    impl_->configuration.on_not_found(std::move(options));
     return *this;
 }
 
 TestApp& TestApp::useMiddleware(detail::ControllerMiddlewareDescriptor descriptor) {
     impl_->requireConfigurable();
-    impl_->globalMiddlewares.push_back(descriptor);
+    impl_->configuration.add_middleware(descriptor);
     return *this;
 }
 
 TestApp& TestApp::useWorkerStateDefinition(detail::WorkerStateDefinition definition) {
     impl_->requireConfigurable();
-    detail::appendWorkerStateDefinition(impl_->workerStateDefinitions, std::move(definition));
+    impl_->configuration.add_worker_state(std::move(definition));
     return *this;
 }
 

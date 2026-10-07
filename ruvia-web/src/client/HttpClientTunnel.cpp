@@ -5,17 +5,12 @@
 
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/HttpUdpTunnel.h"
+#include "ruvia/web/detail/client/HttpClientOutputOperation.h"
 #include "ruvia/web/detail/client/HttpClientPool.h"
 #include "ruvia/web/detail/client/HttpClientResponseMemory.h"
 #include "ruvia/web/detail/client/HttpClientResponseState.h"
 #include "ruvia/web/detail/http3/Http3ClientConnection.h"
 
-namespace ruvia::detail {
-struct HttpClientTunnelWriteInput final {
-    HttpClientResponse pin;
-    std::pmr::string bytes;
-};
-}  // namespace ruvia::detail
 namespace ruvia {
 namespace {
 void requireOutput(detail::HttpClientResponseState* state, bool finishing) {
@@ -28,31 +23,53 @@ void requireOutput(detail::HttpClientResponseState* state, bool finishing) {
     // Normal retirement stops the queue after both directions complete, but
     // cannot invalidate a finish that has already succeeded. Writes and failed
     // or abandoned tunnels still reject terminal output operations.
-    const bool completed_finish = finishing && state->tunnel && state->tunnel->ended && state->complete;
-    if (!state->tunnel || (state->pool == nullptr && !completed_finish) || (state->tunnel->stopped && !completed_finish) || !state->tunnel->accepted ||
+    const bool completed_finish = finishing && state->tunnel && state->tunnel->output.ended && state->complete;
+    if (!state->tunnel || (state->pool == nullptr && !completed_finish) || (state->tunnel->output.stopped && !completed_finish) || !state->tunnel->accepted ||
         state->abandoned || state->failure || state->errorCode) {
         throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel is closed");
     }
-    if (finishing && state->tunnel->ended && !state->tunnel->outputScope.hasPendingOperations()) {
+    if (finishing && state->tunnel->output.ended && !state->tunnel->output.outputScope.has_pending_operations()) {
         return;
     }
-    auto& output = *state->tunnel;
-    if (output.outputScope.hasPendingOperations()) {
+    auto& output = state->tunnel->output;
+    if (output.outputScope.has_pending_operations()) {
         throw std::logic_error("HTTP client tunnel output operation is already active");
     }
     if (!finishing && (output.ended || output.endRequested)) {
         throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel sending direction is closed");
     }
 }
-void throwOutputStopped(detail::HttpClientResponseState& state) {
-    if (state.failure) {
-        std::rethrow_exception(state.failure);
+struct tunnel_output_policy final {
+    static constexpr bool validate_chunk = false;
+    static detail::http_client_output_queue& output(detail::HttpClientResponseState& state) noexcept {
+        return state.tunnel->output;
     }
-    if (state.errorCode) {
-        throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), "HTTP client tunnel failed");
+    static void require_write(detail::HttpClientResponseState& state) {
+        auto& queue = output(state);
+        if (queue.stopped || queue.endRequested || state.abandoned) {
+            throw_stopped(state);
+        }
     }
-    throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel output stopped");
-}
+    static bool begin_finish(detail::HttpClientResponseState& state, HttpClientResponse&) {
+        auto& queue = output(state);
+        if (queue.ended) {
+            return false;
+        }
+        if (queue.stopped || state.abandoned) {
+            throw_stopped(state);
+        }
+        return true;
+    }
+    [[noreturn]] static void throw_stopped(detail::HttpClientResponseState& state) {
+        if (state.failure) {
+            std::rethrow_exception(state.failure);
+        }
+        if (state.errorCode) {
+            throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), "HTTP client tunnel failed");
+        }
+        throw HttpClientError(HttpClientError::Code::kCancelled, "HTTP client tunnel output stopped");
+    }
+};
 }  // namespace
 HttpClientTunnel::HttpClientTunnel(HttpClientResponse response) noexcept
     : response_(std::move(response)) {}
@@ -70,20 +87,20 @@ HttpClientTunnel::~HttpClientTunnel() {
 }
 void HttpClientTunnel::release() noexcept {
     if (auto* state = response_.state_; state != nullptr) {
-        state->tunnel->outputScope.close();
-        state->tunnel->stop();
+        state->tunnel->output.outputScope.close();
+        state->tunnel->output.stop();
     }
     response_.release();
 }
 void HttpClientTunnel::abort() & noexcept {
     if (auto* state = response_.state_) {
-        if (!state->tunnel || state->tunnel->stopped || state->pool == nullptr) {
+        if (!state->tunnel || state->tunnel->output.stopped || state->pool == nullptr) {
             return;
         }
         if (!state->memoryDomain()->worker().isCurrent()) {
             std::terminate();
         }
-        state->tunnel->stop();
+        state->tunnel->output.stop();
         if (!state->complete && !state->abandoned) {
             if (state->http3Connection) {
                 state->http3Connection->abandonResponse(state->http3RequestId);
@@ -114,49 +131,13 @@ ScopedOperation<void> HttpClientTunnel::write(std::string_view bytes) & {
     if (bytes.size() > state.tunnel->config.maxChunkBytes) {
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
     }
-    return detail::makeScopedOperation(state.tunnel->outputScope, writeOwned(detail::HttpClientTunnelWriteInput{HttpClientResponse(&state, true), std::pmr::string(bytes, state.resource)}));
-}
-Task<void> HttpClientTunnel::writeOwned(detail::HttpClientTunnelWriteInput input) {
-    auto& state = *input.pin.state_;
-    auto& bytes = input.bytes;
-    auto& output = *state.tunnel;
-    if (output.stopped || output.endRequested || state.abandoned) {
-        throwOutputStopped(state);
-    }
-    if (bytes.empty()) {
-        co_return;
-    }
-    output.chunk = std::move(bytes);
-    output.chunkReady = true;
-    output.notifyData();
-    while (output.chunkReady && !output.stopped) {
-        co_await output.space.wait();
-    }
-    if (output.stopped) {
-        throwOutputStopped(state);
-    }
+    return ::ruvia::make_scoped_operation(state.tunnel->output.outputScope,
+        detail::write_client_output<tunnel_output_policy>(&state, detail::http_client_output_write_input{HttpClientResponse(&state, true), std::pmr::string(bytes, state.resource)}));
 }
 ScopedOperation<void> HttpClientTunnel::finish() & {
     requireOutput(response_.state_, true);
     auto& state = *response_.state_;
-    return detail::makeScopedOperation(state.tunnel->outputScope, finishOwned(HttpClientResponse(&state, true)));
-}
-Task<void> HttpClientTunnel::finishOwned(HttpClientResponse pin) {
-    auto& state = *pin.state_;
-    auto& output = *state.tunnel;
-    if (output.ended) {
-        co_return;
-    }
-    if (output.stopped || state.abandoned) {
-        throwOutputStopped(state);
-    }
-    output.endRequested = true;
-    output.notifyData();
-    while (!output.ended && (!output.stopped || output.completionPending)) {
-        co_await output.space.wait();
-    }
-    if (!output.ended) {
-        throwOutputStopped(state);
-    }
+    return ::ruvia::make_scoped_operation(state.tunnel->output.outputScope,
+        detail::finish_client_output<tunnel_output_policy>(&state, HttpClientResponse(&state, true)));
 }
 }  // namespace ruvia

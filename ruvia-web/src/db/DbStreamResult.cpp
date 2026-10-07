@@ -59,8 +59,8 @@ DbStreamResult::DbStreamResult(detail::DbPoolRef client, std::size_t slot, void*
           resource, client, slot, result, resource, std::move(options))) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
-    : detail::ScopedCapabilityNode(std::move(other)),
-      state_(std::move(other.state_)) {}
+    : state_(std::move(other.state_)),
+      registration_(std::move(other.registration_), this) {}
 
 DbStreamResult::~DbStreamResult() = default;
 
@@ -68,19 +68,19 @@ bool DbStreamResult::active() const noexcept {
     return state_ != nullptr && state_->operation.active();
 }
 
-void DbStreamResult::bindOperationScope(detail::ScopedOperationScope& scope) noexcept {
-    bind(scope, &DbStreamResult::expireCapability);
+void DbStreamResult::bindOperationScope(::ruvia::operation_scope& scope) noexcept {
+    registration_.bind(scope, this, &DbStreamResult::expire_capability);
 }
 
-void DbStreamResult::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    auto& result = static_cast<DbStreamResult&>(capability);
+void DbStreamResult::expire_capability(void* target) noexcept {
+    auto& result = *static_cast<DbStreamResult*>(target);
     result.reset();
 }
 
 ScopedOperation<std::optional<DbRow>> DbStreamResult::read() & {
-    requireActive();
-    return detail::makeScopedOperation(
-        operationScope(), readTask(OperationGuard(state_->operation)));
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), readTask(OperationGuard(state_->operation)));
 }
 
 Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard pending) {
@@ -98,9 +98,9 @@ Task<std::optional<DbRow>> DbStreamResult::readTask(OperationGuard pending) {
 }
 
 ScopedOperation<void> DbStreamResult::close() & {
-    requireActive();
-    return detail::makeScopedOperation(
-        operationScope(), closeTask(OperationGuard(state_->operation)));
+    registration_.require_active();
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), closeTask(OperationGuard(state_->operation)));
 }
 
 Task<void> DbStreamResult::closeTask(OperationGuard pending) {

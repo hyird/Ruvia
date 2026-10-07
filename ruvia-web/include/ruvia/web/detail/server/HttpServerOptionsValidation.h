@@ -155,8 +155,8 @@ inline void validateHttp3ServerLimits(
     ruvia::ensurePositiveSize(*maxConnections,
         "HTTP/3 per-worker connection limit must be greater than zero");
 
-    // Keep the aggregate slot count representable as a container difference and
-    // as the network transport's total active-connection capacity.
+    // Keep the aggregate startup-allocated slot count representable as a
+    // container difference across all worker-local protocol drivers.
     const auto maxConnectionCapacity =
         static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
     if (*maxConnections > maxConnectionCapacity / workerCount) {

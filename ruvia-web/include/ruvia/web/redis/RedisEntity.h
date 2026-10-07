@@ -37,19 +37,14 @@ struct IsRedisColumn<RedisColumn<Name, T, Options>> : std::true_type {};
 }  // namespace detail
 
 template <FixedString Prefix, typename... ColumnTypes>
-class RedisEntity {
+class RedisEntity final {
     static_assert((detail::IsRedisColumn<ColumnTypes>::value && ...),
         "Redis entities require RUVIA_REDIS_COLUMN descriptors");
     static_assert((std::size_t{ColumnTypes::options.primaryKey} + ... + std::size_t{0}) == 1,
         "Redis entities require exactly one primary key");
     static_assert(detail::uniqueEntityColumns<ColumnTypes...>(), "duplicate Redis entity column name");
-    using slots_type = std::tuple<detail::entity_value_slot<typename ColumnTypes::value_type>...>;
-    template <FixedString Name>
-    static consteval std::size_t index() {
-        constexpr auto value = detail::entityColumnIndex<Name, ColumnTypes...>();
-        static_assert(value < sizeof...(ColumnTypes), "unknown Redis entity column");
-        return value;
-    }
+    using column_storage = detail::entity_value_storage<ColumnTypes...>;
+    column_storage values_;
 
 public:
     using RedisEntityType = RedisEntity;
@@ -59,11 +54,11 @@ public:
     }
     template <FixedString Name>
     static consteval std::size_t columnIndex() {
-        return index<Name>();
+        return column_storage::template index<Name>();
     }
     template <FixedString Name>
     static consteval std::string_view columnName() {
-        (void)index<Name>();
+        (void)columnIndex<Name>();
         return Name.view();
     }
     template <FixedString Name>
@@ -72,74 +67,43 @@ public:
     }
 
     explicit RedisEntity(std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
-          slots_(detail::entity_value_slot<typename ColumnTypes::value_type>(resource_)...) {}
+        : values_(resource) {}
     RedisEntity(const RedisEntity&) = delete;
     RedisEntity& operator=(const RedisEntity&) = delete;
     RedisEntity(RedisEntity&&) noexcept = default;
     RedisEntity& operator=(RedisEntity&&) = delete;
 
-    template <FixedString Name>
-    auto& get() & {
-        auto& slot = std::get<index<Name>()>(slots_);
-        if (slot.state != decltype(slot.state)::value) {
-            throw std::logic_error("Redis entity value is not set");
-        }
-        return slot.value;
-    }
-    template <FixedString Name>
-    const auto& get() const& {
-        const auto& slot = std::get<index<Name>()>(slots_);
-        if (slot.state != decltype(slot.state)::value) {
-            throw std::logic_error("Redis entity value is not set");
-        }
-        return slot.value;
-    }
-    template <FixedString Name>
-    const auto& get() const&& = delete;
-    template <FixedString Name, typename Value>
-    void set(Value&& value) {
-        auto& slot = std::get<index<Name>()>(slots_);
-        detail::assignEntityValue(slot.value, std::forward<Value>(value), resource_);
-        slot.state = decltype(slot.state)::value;
-    }
-    template <FixedString Name>
-    void setNull()
-        requires(std::tuple_element_t<index<Name>(), Columns>::options.nullable)
-    {
-        auto& slot = std::get<index<Name>()>(slots_);
-        slot.clear();
-        slot.state = decltype(slot.state)::null;
-    }
-    template <FixedString Name>
-    void reset() {
-        auto& slot = std::get<index<Name>()>(slots_);
-        slot.clear();
-        slot.state = decltype(slot.state)::unset;
-    }
-    template <FixedString Name>
-    bool isSet() const {
-        const auto& slot = std::get<index<Name>()>(slots_);
-        return slot.state != decltype(slot.state)::unset;
-    }
-    template <FixedString Name>
-    bool isNull() const {
-        const auto& slot = std::get<index<Name>()>(slots_);
-        return slot.state == decltype(slot.state)::null;
-    }
-    std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
-private:
-    std::pmr::memory_resource* resource_;
-    slots_type slots_;
+    RUVIA_DETAIL_ENTITY_VALUE_API(values_, set_null, is_set, is_null)
 };
 
 #define RUVIA_REDIS_COLUMN(Name, Type, ...) ::ruvia::RedisColumn<::ruvia::FixedString{#Name}, Type __VA_OPT__(, ) __VA_ARGS__>
-#define RUVIA_REDIS_ENTITY(Name, Prefix, ...)                                               \
-    struct Name final : ::ruvia::RedisEntity<::ruvia::FixedString{Prefix}, __VA_ARGS__> {   \
-        using ::ruvia::RedisEntity<::ruvia::FixedString{Prefix}, __VA_ARGS__>::RedisEntity; \
+#define RUVIA_REDIS_ENTITY(Name, Prefix, ...)                                                 \
+    struct Name final {                                                                       \
+    private:                                                                                  \
+        using storage_type = ::ruvia::RedisEntity<::ruvia::FixedString{Prefix}, __VA_ARGS__>; \
+        storage_type entity_;                                                                 \
+                                                                                              \
+    public:                                                                                   \
+        using RedisEntityType = Name;                                                         \
+        using Columns = typename storage_type::Columns;                                       \
+        explicit Name(std::pmr::memory_resource* resource = nullptr)                          \
+            : entity_(resource) {}                                                            \
+        static constexpr std::string_view prefix() noexcept {                                 \
+            return storage_type::prefix();                                                    \
+        }                                                                                     \
+        template <::ruvia::FixedString name>                                                  \
+        static consteval std::size_t columnIndex() {                                          \
+            return storage_type::template columnIndex<name>();                                \
+        }                                                                                     \
+        template <::ruvia::FixedString name>                                                  \
+        static consteval std::string_view columnName() {                                      \
+            return storage_type::template columnName<name>();                                 \
+        }                                                                                     \
+        template <::ruvia::FixedString name>                                                  \
+        static ::ruvia::redis_field_reference<Name, name> field() {                           \
+            return {};                                                                        \
+        }                                                                                     \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_, setNull, isSet, isNull)                        \
     };
 
 }  // namespace ruvia

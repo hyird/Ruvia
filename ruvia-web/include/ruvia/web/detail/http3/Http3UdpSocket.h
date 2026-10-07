@@ -43,7 +43,7 @@ public:
     Http3UdpSocket(Http3UdpSocket&&) = delete;
     Http3UdpSocket& operator=(Http3UdpSocket&&) = delete;
 
-    // Synchronously opens, configures pktinfo, and binds on the server network owner.
+    // Synchronously opens, configures pktinfo, and binds on the UDP owner.
     // Throws std::system_error (or std::logic_error) if preparation fails.
     void prepare();
     [[nodiscard]] std::uint16_t boundPort() const noexcept;

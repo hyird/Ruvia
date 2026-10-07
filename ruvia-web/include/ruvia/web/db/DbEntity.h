@@ -323,39 +323,23 @@ template <FixedString Name, typename Target, typename Mapping>
 struct is_db_relation<DbManyToMany<Name, Target, Mapping>> : std::true_type {};
 
 template <FixedString Table, typename... Members>
-class DbEntity {
+class DbEntity final {
     static_assert(((is_db_column<Members>::value || is_db_relation<Members>::value) && ...),
         "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
     using ColumnsTuple = detail::tuple_filter_t<is_db_column, Members...>;
     using RelationsTuple = detail::tuple_filter_t<is_db_relation, Members...>;
     static_assert(detail::uniqueEntityColumns<Members...>(), "duplicate database entity member name");
-    template <typename C>
-    using ColumnSlot = detail::entity_value_slot<typename C::value_type>;
     template <typename R>
     using RelationSlot = detail::DbRelationSlot<typename R::TargetEntity, R::isCollection>;
-    template <std::size_t... I>
-    static auto makeColumnSlots(std::pmr::memory_resource* r, std::index_sequence<I...>) {
-        return std::tuple<ColumnSlot<std::tuple_element_t<I, ColumnsTuple>>...>(ColumnSlot<std::tuple_element_t<I, ColumnsTuple>>(r)...);
-    }
     template <std::size_t... I>
     static auto makeRelationSlots(std::pmr::memory_resource* r, std::index_sequence<I...>) {
         return std::tuple<RelationSlot<std::tuple_element_t<I, RelationsTuple>>...>(RelationSlot<std::tuple_element_t<I, RelationsTuple>>(r)...);
     }
-    using ColumnSlots = decltype(makeColumnSlots(nullptr, std::make_index_sequence<std::tuple_size_v<ColumnsTuple>>{}));
+    using column_storage = typename detail::entity_storage_from_tuple<ColumnsTuple>::type;
     using RelationSlots = decltype(makeRelationSlots(nullptr, std::make_index_sequence<std::tuple_size_v<RelationsTuple>>{}));
     template <FixedString Name>
     static consteval std::size_t index() {
-        constexpr auto result = []<std::size_t... I>(std::index_sequence<I...>) consteval {
-            constexpr bool matches[] = {std::tuple_element_t<I, ColumnsTuple>::name == Name...};
-            for (std::size_t i = 0; i < sizeof...(I); ++i) {
-                if (matches[i]) {
-                    return i;
-                }
-            }
-            return sizeof...(I);
-        }(std::make_index_sequence<std::tuple_size_v<ColumnsTuple>>{});
-        static_assert(result < std::tuple_size_v<ColumnsTuple>, "unknown database entity column");
-        return result;
+        return column_storage::template index<Name>();
     }
     template <FixedString Name>
     static consteval std::size_t relationIndex() {
@@ -383,30 +367,12 @@ class DbEntity {
         return false;
     }
     template <FixedString Name>
-    auto& slot() {
-        return std::get<index<Name>()>(columnSlots_);
-    }
-    template <FixedString Name>
-    const auto& slot() const {
-        return std::get<index<Name>()>(columnSlots_);
-    }
-    template <FixedString Name>
     auto& relationSlot() {
         return std::get<relationIndex<Name>()>(relationSlots_);
     }
     template <FixedString Name>
     const auto& relationSlot() const {
         return std::get<relationIndex<Name>()>(relationSlots_);
-    }
-    template <FixedString Name>
-    static consteval std::size_t memberIndex() {
-        constexpr bool matches[] = {Members::name == Name...};
-        for (std::size_t i = 0; i < sizeof...(Members); ++i) {
-            if (matches[i]) {
-                return i;
-            }
-        }
-        return sizeof...(Members);
     }
 
 public:
@@ -428,9 +394,8 @@ public:
     template <FixedString Name>
     static DbFieldReference<DbEntity, Name> column();
     explicit DbEntity(std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
-          columnSlots_(makeColumnSlots(resource_, std::make_index_sequence<std::tuple_size_v<ColumnsTuple>>{})),
-          relationSlots_(makeRelationSlots(resource_, std::make_index_sequence<std::tuple_size_v<RelationsTuple>>{})) {}
+        : columns_(resource),
+          relationSlots_(makeRelationSlots(columns_.resource(), std::make_index_sequence<std::tuple_size_v<RelationsTuple>>{})) {}
     DbEntity(const DbEntity&) = delete;
     DbEntity& operator=(const DbEntity&) = delete;
     DbEntity(DbEntity&&) noexcept = default;
@@ -443,11 +408,7 @@ public:
             }
             return *s.value;
         } else {
-            auto& s = slot<Name>();
-            if (s.state != decltype(s.state)::value) {
-                throw std::logic_error("database entity value is not set");
-            }
-            return s.value;
+            return columns_.template get<Name>();
         }
     }
     template <FixedString Name>
@@ -459,24 +420,20 @@ public:
     template <FixedString Name, typename V>
     void set(V&& value) {
         static_assert(!isRelation<Name>(), "relations cannot be assigned; use relation loading access");
-        auto& s = slot<Name>();
-        detail::assignEntityValue(s.value, std::forward<V>(value), resource_);
-        s.state = decltype(s.state)::value;
+        columns_.template set<Name>(std::forward<V>(value));
     }
     template <FixedString Name>
     void setNull()
         requires(!isRelation<Name>() && std::tuple_element_t<index<Name>(), Columns>::options.nullable)
     {
-        slot<Name>().clear();
-        slot<Name>().state = decltype(slot<Name>().state)::null;
+        columns_.template set_null<Name>();
     }
     template <FixedString Name>
     void reset() {
         if constexpr (isRelation<Name>()) {
             relationSlot<Name>().reset();
         } else {
-            slot<Name>().clear();
-            slot<Name>().state = decltype(slot<Name>().state)::unset;
+            columns_.template reset<Name>();
         }
     }
     template <FixedString Name>
@@ -484,7 +441,7 @@ public:
         if constexpr (isRelation<Name>()) {
             return relationSlot<Name>().state != decltype(relationSlot<Name>().state)::unset;
         } else {
-            return slot<Name>().state != decltype(slot<Name>().state)::unset;
+            return columns_.template is_set<Name>();
         }
     }
     template <FixedString Name>
@@ -492,19 +449,48 @@ public:
         if constexpr (isRelation<Name>()) {
             return relationSlot<Name>().state == decltype(relationSlot<Name>().state)::null;
         } else {
-            return slot<Name>().state == decltype(slot<Name>().state)::null;
+            return columns_.template is_null<Name>();
         }
     }
     std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
+        return columns_.resource();
     }
 
 private:
     template <typename>
     friend struct detail::DbEntityAccess;
-    std::pmr::memory_resource* resource_;
-    ColumnSlots columnSlots_;
+    DbEntity& sql_storage() noexcept {
+        return *this;
+    }
+    column_storage columns_;
     RelationSlots relationSlots_;
+};
+
+namespace detail {
+template <typename columns>
+inline constexpr bool sql_columns = []<std::size_t... indices>(std::index_sequence<indices...>) {
+    return (is_db_column<std::tuple_element_t<indices, columns>>::value && ...);
+}(std::make_index_sequence<std::tuple_size_v<columns>>{});
+}  // namespace detail
+
+template <typename entity>
+concept sql_entity = requires(const entity& value) {
+    typename entity::Columns;
+    typename entity::Relations;
+    typename entity::SqlEntityType;
+    requires std::same_as<entity, typename entity::SqlEntityType>;
+    requires detail::sql_columns<typename entity::Columns>;
+    { entity::tableName() } -> std::convertible_to<std::string_view>;
+    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
+};
+
+template <typename projection>
+concept sql_projection = requires(const projection& value) {
+    typename projection::Columns;
+    typename projection::DbProjectionType;
+    requires std::same_as<projection, typename projection::DbProjectionType>;
+    requires detail::sql_columns<typename projection::Columns>;
+    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 
 #define RUVIA_DB_COLUMN(Name, Type, ...) ::ruvia::DbColumn<::ruvia::FixedString{#Name}, Type __VA_OPT__(, ) __VA_ARGS__>
@@ -516,9 +502,39 @@ private:
 #define RUVIA_DB_ONE_TO_ONE(Name, Target, ...) ::ruvia::DbOneToOne<::ruvia::FixedString{#Name}, Target, __VA_ARGS__>
 #define RUVIA_DB_ONE_TO_MANY(Name, Target, Inverse) ::ruvia::DbOneToMany<::ruvia::FixedString{#Name}, Target, ::ruvia::FixedString{#Inverse}>
 #define RUVIA_DB_MANY_TO_MANY(Name, Target, Mapping) ::ruvia::DbManyToMany<::ruvia::FixedString{#Name}, Target, Mapping>
-#define RUVIA_DB_ENTITY(Name, Table, ...)                                             \
-    struct Name final : ::ruvia::DbEntity<::ruvia::FixedString{Table}, __VA_ARGS__> { \
-        using ::ruvia::DbEntity<::ruvia::FixedString{Table}, __VA_ARGS__>::DbEntity;  \
+#define RUVIA_DB_ENTITY(Name, Table, ...)                                                 \
+    struct Name final {                                                                   \
+    private:                                                                              \
+        using storage_type = ::ruvia::DbEntity<::ruvia::FixedString{Table}, __VA_ARGS__>; \
+        storage_type entity_;                                                             \
+        template <typename>                                                               \
+        friend struct ::ruvia::detail::DbEntityAccess;                                    \
+        storage_type& sql_storage() noexcept {                                            \
+            return entity_;                                                               \
+        }                                                                                 \
+                                                                                          \
+    public:                                                                               \
+        using SqlEntityType = Name;                                                       \
+        using Columns = typename storage_type::Columns;                                   \
+        using Relations = typename storage_type::Relations;                               \
+        explicit Name(std::pmr::memory_resource* resource = nullptr)                      \
+            : entity_(resource) {}                                                        \
+        static constexpr std::string_view tableName() noexcept {                          \
+            return storage_type::tableName();                                             \
+        }                                                                                 \
+        template <::ruvia::FixedString name>                                              \
+        static consteval std::size_t columnIndex() {                                      \
+            return storage_type::template columnIndex<name>();                            \
+        }                                                                                 \
+        template <::ruvia::FixedString name>                                              \
+        static consteval std::string_view columnName() {                                  \
+            return storage_type::template columnName<name>();                             \
+        }                                                                                 \
+        template <::ruvia::FixedString name>                                              \
+        static ::ruvia::DbFieldReference<Name, name> column() {                           \
+            return {};                                                                    \
+        }                                                                                 \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_, setNull, isSet, isNull)                    \
     };
 
 }  // namespace ruvia

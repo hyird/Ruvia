@@ -32,7 +32,7 @@ private:
     void* target_;
     Origins origins_;
     AlternativeService service_;
-    ScopedOperationScope scope_;
+    ::ruvia::operation_scope scope_;
 };
 
 }  // namespace ruvia::detail

@@ -34,16 +34,14 @@ void WebSocketClientState::armHeartbeatTimer(std::chrono::milliseconds delay) {
     }
     heartbeatTimer_.cancel();
     std::weak_ptr<WebSocketClientState> weak = shared_from_this();
-    WorkerHandleAccess::scheduleTimer(worker_, heartbeatTimer_,
-        workerTimerDeadlineAfter(std::max(delay, std::chrono::milliseconds{1})),
-        [weak = std::move(weak)](WorkerTimerOutcome outcome) noexcept {
-            if (outcome != WorkerTimerOutcome::kExpired) {
-                return;
-            }
-            if (const auto state = weak.lock()) {
-                state->heartbeatTimerFired();
-            }
-        });
+    (worker_).schedule_timer(heartbeatTimer_, workerTimerDeadlineAfter(std::max(delay, std::chrono::milliseconds{1})), [weak = std::move(weak)](WorkerTimerOutcome outcome) noexcept {
+        if (outcome != WorkerTimerOutcome::kExpired) {
+            return;
+        }
+        if (const auto state = weak.lock()) {
+            state->heartbeatTimerFired();
+        }
+    });
 }
 
 void WebSocketClientState::touchActivity() noexcept {

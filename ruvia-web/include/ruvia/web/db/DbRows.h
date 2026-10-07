@@ -65,7 +65,7 @@ private:
     std::variant<NoRawResult, OwnedRawResult> rawResult_;
 };
 
-class DbStreamResult final : private detail::ScopedCapabilityNode {
+class DbStreamResult final {
 public:
     DbStreamResult(const DbStreamResult&) = delete;
     DbStreamResult& operator=(const DbStreamResult&) = delete;
@@ -107,12 +107,13 @@ private:
     DbStreamResult(detail::DbPoolRef client, std::size_t slot, void* result,
         std::pmr::memory_resource* resource, OperationOptions options);
     void reset() noexcept;
-    void bindOperationScope(detail::ScopedOperationScope& scope) noexcept;
-    static void expireCapability(detail::ScopedCapabilityNode& capability) noexcept;
+    void bindOperationScope(::ruvia::operation_scope& scope) noexcept;
+    static void expire_capability(void* target) noexcept;
     static Task<std::optional<DbRow>> readTask(OperationGuard operation);
     static Task<void> closeTask(OperationGuard operation);
 
     StateOwner state_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

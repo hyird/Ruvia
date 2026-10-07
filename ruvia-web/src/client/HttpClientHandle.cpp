@@ -289,63 +289,77 @@ bool HttpClientResponseBody::complete() const noexcept {
 }
 
 ScopedOperation<std::optional<std::span<const std::byte>>> HttpClientResponseBody::read() & {
-    if (state_->bodyOperationScope.hasPendingOperations()) {
+    if (state_->bodyOperationScope.has_pending_operations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     checkResponseOperationAffinity(state_);
-    return detail::makeScopedOperation(state_->bodyOperationScope,
-        state_->read<std::span<const std::byte>>(), checkResponseOperationAffinity, state_);
+    return ::ruvia::make_scoped_operation(state_->bodyOperationScope,
+        state_->consume_body<std::span<const std::byte>>(), checkResponseOperationAffinity, state_);
 }
 
 ScopedOperation<std::optional<std::string_view>> HttpClientResponseBody::text() & {
-    if (state_->bodyOperationScope.hasPendingOperations()) {
+    if (state_->bodyOperationScope.has_pending_operations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     checkResponseOperationAffinity(state_);
-    return detail::makeScopedOperation(state_->bodyOperationScope,
-        state_->read<std::string_view>(), checkResponseOperationAffinity, state_);
+    return ::ruvia::make_scoped_operation(state_->bodyOperationScope,
+        state_->consume_body<std::string_view>(), checkResponseOperationAffinity, state_);
 }
 
-template <typename View>
-Task<std::optional<View>> detail::HttpClientResponseState::read() {
+template <typename view>
+Task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::HttpClientResponseState::consume_body(ResponseStreamWriter* output) {
     auto& state = *this;
-    state.releaseConsumedBodyPrefix();
-    state.incrementalRead = true;
-    while ((state.bodyDecodeRequired && !state.receiveComplete()) ||
-           (state.buffered.empty() && state.pending.empty() && !state.receiveComplete())) {
-        co_await state.dataSignal.wait();
-    }
-    promotePendingData();
-    if (state.offset == state.buffered.size()) {
-        if (state.failure) {
-            std::rethrow_exception(state.failure);
+    for (;;) {
+        // Reclaim a returned borrow only at the next consumption step. A pipe
+        // commits its cursor only after the downstream write succeeds.
+        state.releaseConsumedBodyPrefix();
+        state.incrementalRead = true;
+        while ((state.bodyDecodeRequired && !state.receiveComplete()) ||
+               (state.buffered.empty() && state.pending.empty() && !state.receiveComplete())) {
+            co_await state.dataSignal.wait();
         }
-        if (state.errorCode) {
-            throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode),
-                "HTTP response body read failed");
+        promotePendingData();
+        if (state.offset == state.buffered.size()) {
+            if (state.failure) {
+                std::rethrow_exception(state.failure);
+            }
+            if (state.errorCode) {
+                constexpr auto message = std::is_void_v<view> ? "HTTP response body forwarding failed" : "HTTP response body read failed";
+                throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode), message);
+            }
+            state.discardResponseBody();
+            if constexpr (std::is_void_v<view>) {
+                co_return;
+            } else {
+                co_return std::nullopt;
+            }
         }
-        state.discardResponseBody();
-        co_return std::nullopt;
-    }
-    const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
-    const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
-    state.offset += count;
-    if constexpr (std::same_as<View, std::string_view>) {
-        co_return chunk;
-    } else {
-        co_return std::as_bytes(std::span(chunk.data(), chunk.size()));
+        const auto count = std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
+        const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
+        if constexpr (std::is_void_v<view>) {
+            co_await output->write(std::as_bytes(std::span(chunk.data(), chunk.size())));
+            state.offset += count;
+        } else {
+            state.offset += count;
+            if constexpr (std::same_as<view, std::string_view>) {
+                co_return chunk;
+            } else {
+                co_return std::as_bytes(std::span(chunk.data(), chunk.size()));
+            }
+        }
     }
 }
 
-template Task<std::optional<std::span<const std::byte>>> detail::HttpClientResponseState::read<std::span<const std::byte>>();
-template Task<std::optional<std::string_view>> detail::HttpClientResponseState::read<std::string_view>();
+template Task<std::optional<std::span<const std::byte>>> detail::HttpClientResponseState::consume_body<std::span<const std::byte>>(ResponseStreamWriter*);
+template Task<std::optional<std::string_view>> detail::HttpClientResponseState::consume_body<std::string_view>(ResponseStreamWriter*);
+template Task<void> detail::HttpClientResponseState::consume_body<void>(ResponseStreamWriter*);
 
 ScopedOperation<HttpClientResponseBytes> HttpClientResponseBody::readAll(std::size_t maxBytes) & {
-    if (state_->bodyOperationScope.hasPendingOperations()) {
+    if (state_->bodyOperationScope.has_pending_operations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     checkResponseOperationAffinity(state_);
-    return detail::makeScopedOperation(state_->bodyOperationScope,
+    return ::ruvia::make_scoped_operation(state_->bodyOperationScope,
         state_->readAll(maxBytes), checkResponseOperationAffinity, state_);
 }
 
@@ -398,41 +412,12 @@ Task<HttpClientResponseBytes> detail::HttpClientResponseState::readAll(std::size
 }
 
 ScopedOperation<void> HttpClientResponseBody::pipeTo(ResponseStreamWriter& output) & {
-    if (state_->bodyOperationScope.hasPendingOperations()) {
+    if (state_->bodyOperationScope.has_pending_operations()) {
         throw std::logic_error("HTTP client response body operation is already active");
     }
     checkResponseOperationAffinity(state_);
-    return detail::makeScopedOperation(state_->bodyOperationScope,
-        state_->pipeTo(output), checkResponseOperationAffinity, state_);
-}
-
-Task<void> detail::HttpClientResponseState::pipeTo(ResponseStreamWriter& output) {
-    auto& state = *this;
-    state.incrementalRead = true;
-    for (;;) {
-        state.releaseConsumedBodyPrefix();
-        while ((state.bodyDecodeRequired && !state.receiveComplete()) ||
-               (state.buffered.empty() && state.pending.empty() && !state.receiveComplete())) {
-            co_await state.dataSignal.wait();
-        }
-        promotePendingData();
-        if (state.offset == state.buffered.size()) {
-            if (state.failure) {
-                std::rethrow_exception(state.failure);
-            }
-            if (state.errorCode) {
-                throw HttpClientError(static_cast<HttpClientError::Code>(*state.errorCode),
-                    "HTTP response body forwarding failed");
-            }
-            state.discardResponseBody();
-            co_return;
-        }
-        const auto count =
-            std::min(kResponseBodyReadChunkBytes, state.buffered.size() - state.offset);
-        const auto chunk = std::string_view(state.buffered).substr(state.offset, count);
-        co_await output.write(std::as_bytes(std::span(chunk.data(), chunk.size())));
-        state.offset += count;
-    }
+    return ::ruvia::make_scoped_operation(state_->bodyOperationScope,
+        state_->consume_body<void>(&output), checkResponseOperationAffinity, state_);
 }
 
 std::optional<std::string_view> HttpClientResponse::header(std::string_view name) const& noexcept {
@@ -450,28 +435,32 @@ std::optional<std::string_view> HttpClientResponse::trailer(std::string_view nam
 }
 
 HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
-    std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope) noexcept
-    : detail::ScopedCapabilityNode(scope, &HttpClientHandle::expireCapability),
-      pool_(&pool),
-      resource_(resource) {}
+    std::pmr::memory_resource* resource, ::ruvia::operation_scope& scope) noexcept
+    : pool_(&pool),
+      resource_(resource),
+      registration_(scope, this, &HttpClientHandle::expire_capability) {}
 
 HttpClientHandle::HttpClientHandle(detail::HttpClientPool& pool,
-    std::pmr::memory_resource* resource, detail::ScopedOperationScope& scope,
+    std::pmr::memory_resource* resource, ::ruvia::operation_scope& scope,
     OperationOptions options) noexcept
-    : detail::ScopedCapabilityNode(scope, &HttpClientHandle::expireCapability),
-      pool_(&pool),
+    : pool_(&pool),
       resource_(resource),
-      options_(std::move(options)) {}
+      options_(std::move(options)),
+      registration_(scope, this, &HttpClientHandle::expire_capability) {}
 
-HttpClientHandle::HttpClientHandle(const HttpClientHandle& other) = default;
+HttpClientHandle::HttpClientHandle(const HttpClientHandle& other)
+    : pool_(other.pool_),
+      resource_(other.resource_),
+      options_(other.options_),
+      registration_(other.registration_, this) {}
 
-void HttpClientHandle::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    static_cast<HttpClientHandle&>(capability).pool_ = nullptr;
+void HttpClientHandle::expire_capability(void* target) noexcept {
+    static_cast<HttpClientHandle*>(target)->pool_ = nullptr;
 }
 
 HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
     detail::validateOperationOptions(options);
-    requireActive();
+    registration_.require_active();
     HttpClientHandle copy(*this);
     copy.options_ = detail::mergeOperationOptions(options_, std::move(options));
     return copy;
@@ -479,7 +468,7 @@ HttpClientHandle HttpClientHandle::withOptions(OperationOptions options) const {
 
 ScopedOperation<HttpClientResponse> HttpClientHandle::send(
     const HttpClientRequestView& view) const {
-    requireActive();
+    registration_.require_active();
     detail::HttpClientRequestStorage request(
         view.method.view(), view.target.view(), detail::pmrResourceOrDefault(resource_));
     for (const auto& header : view.headers) {
@@ -489,12 +478,12 @@ ScopedOperation<HttpClientResponse> HttpClientHandle::send(
         request.setBody(bytes->value());
     }
     detail::validateOperationOptions(options_);
-    return detail::makeScopedOperation(
-        operationScope(), pool_->execute(std::move(request), options_));
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), pool_->execute(std::move(request), options_));
 }
 
 ScopedOperation<HttpClientExchange> HttpClientHandle::openRequest(const HttpClientRequestView& head, HttpClientUploadConfig upload) const {
-    requireActive();
+    registration_.require_active();
     if (head.content.borrowedBytes() != nullptr || upload.maxChunkBytes == 0 || upload.continueTimeout <= std::chrono::milliseconds::zero() ||
         upload.continueTimeout > std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration::max()) ||
         (upload.expectation != HttpClientRequestExpectation::kNone && upload.expectation != HttpClientRequestExpectation::kContinue)) {
@@ -504,11 +493,11 @@ ScopedOperation<HttpClientExchange> HttpClientHandle::openRequest(const HttpClie
     for (const auto& field : head.headers) {
         request.appendHeader(field.name(), field.value());
     }
-    return detail::makeScopedOperation(operationScope(), pool_->openRequest(std::move(request), upload, options_));
+    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->openRequest(std::move(request), upload, options_));
 }
 
 ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openUdpTunnel(const HttpClientUdpTunnelRequestView& head, HttpClientTunnelConfig config) const {
-    requireActive();
+    registration_.require_active();
     auto* resource = detail::pmrResourceOrDefault(resource_);
     std::pmr::vector<HttpHeaderView> fields(resource);
     fields.reserve(head.headers.size() + 1);
@@ -531,7 +520,7 @@ ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openUdpTunnel(const Ht
 }
 
 ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openTunnel(const HttpClientTunnelRequestView& head, HttpClientTunnelConfig config) const {
-    requireActive();
+    registration_.require_active();
     if ((config.datagrams && head.protocol.empty()) || config.maxChunkBytes == 0 || config.maxChunkBytes > kDefaultMaxBufferedBodyBytes ||
         (head.protocol.empty() ? (!isValidHttpConnectAuthority(head.authority) || !head.target.empty()) : (!isValidHttpMethodToken(head.protocol) || !isValidHttpOriginFormTarget(head.target) || !parseHttpAuthorityHost(BorrowedText(head.authority)) || head.authority.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
@@ -548,61 +537,61 @@ ScopedOperation<HttpClientTunnelResult> HttpClientHandle::openTunnel(const HttpC
     for (const auto& field : head.headers) {
         request.appendHeader(field.name(), field.value());
     }
-    return detail::makeScopedOperation(operationScope(), pool_->openTunnel(std::move(request), config, options_));
+    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->openTunnel(std::move(request), config, options_));
 }
 
 quic_path_migration HttpClientHandle::start_quic_path_migration(
     const asio::ip::udp::endpoint& local_endpoint) const {
-    requireActive();
+    registration_.require_active();
     return pool_->start_quic_path_migration(local_endpoint);
 }
 
 std::optional<quic_path_migration> HttpClientHandle::path_migration(
     std::uint64_t id) const {
-    requireActive();
+    registration_.require_active();
     return pool_->path_migration(id);
 }
 
 quic_operation_status HttpClientHandle::cancel_quic_path_migration(std::uint64_t id) const {
-    requireActive();
+    registration_.require_active();
     return pool_->cancel_quic_path_migration(id);
 }
 
 HttpClientStats HttpClientHandle::stats() const {
-    requireActive();
+    registration_.require_active();
     return pool_->stats();
 }
 std::optional<HttpClientPush> HttpClientHandle::nextPush() const {
-    requireActive();
+    registration_.require_active();
     return pool_->nextPush();
 }
 
 std::optional<HttpClientAdvertisement> HttpClientHandle::nextAdvertisement() const {
-    requireActive();
+    registration_.require_active();
     return pool_->nextAdvertisement();
 }
 
 std::string_view HttpClientHandle::host() const& {
-    requireActive();
+    registration_.require_active();
     return pool_->host();
 }
 
 std::uint16_t HttpClientHandle::port() const {
-    requireActive();
+    registration_.require_active();
     return pool_->port();
 }
 
 HttpScheme HttpClientHandle::scheme() const {
-    requireActive();
+    registration_.require_active();
     return pool_->scheme();
 }
 
 HttpClientHandle Context::httpClient() const {
-    return clientRegistries_.httpClient(operationScope_, stopToken_);
+    return clientRegistries_.httpClient(operationScope_, capabilities_.stop_token());
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, operationScope_, stopToken_);
+    return clientRegistries_.httpClient(alias, operationScope_, capabilities_.stop_token());
 }
 
 }  // namespace ruvia

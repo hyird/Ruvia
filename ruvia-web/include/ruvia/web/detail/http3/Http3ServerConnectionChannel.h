@@ -61,6 +61,8 @@ public:
         Http3WorkerMailboxScheduler::Registration registration{};
     };
 
+    // Wire-half-owned immutable text, borrowed until AttachResult is consumed.
+    // The handler half copies it before publishing that result.
     struct ConnectionMetadataView final {
         std::string_view remoteAddress{};
         std::string_view clientCertificateSubject{};
@@ -140,9 +142,8 @@ public:
         Identity identity{};
     };
 
-    // Construct on the server network owner. Grant/commit/revoke and all network
-    // controls are serialized there; worker controls are worker-affine. No
-    // WorkerHandle::post fallback is used.
+    // Construct on the wire-half owner. Each half serializes its controls;
+    // production runs both halves on one worker. No WorkerHandle::post fallback.
     explicit Http3ServerConnectionChannel(
         Notification networkWake, Notification workerWake, std::pmr::memory_resource* datagramResource = nullptr);
     [[nodiscard]] Status publishRequestDatagram(Identity identity, std::uint64_t streamId, std::span<const std::byte> bytes) noexcept;
@@ -168,11 +169,10 @@ public:
     // a single acquire/release ordering point.
     [[nodiscard]] Status stopGrantPublication() noexcept;
 
-    // Side-effect-free observation on the server network owner. A Grant remains
-    // pending until commitAccepted() or revokeGrant(). Call commitAccepted() only after
-    // transport.acceptConnections(1) returns exactly one real connection id.
-    // An empty accept leaves this Grant untouched. If commit then fails, the
-    // server network owner still owns and must physically retire the accepted id/SSL.
+    // Side-effect-free observation by the wire half. A Grant remains pending
+    // until commitAccepted() or revokeGrant(). Commit only after QUIC admission
+    // returns a real connection token; an empty admission leaves it untouched.
+    // A failed commit still requires physical connection/TLS retirement.
     [[nodiscard]] Status peekGrant(Identity& identity) const noexcept;
     [[nodiscard]] Status commitAccepted(Identity identity) noexcept;
     [[nodiscard]] Status commitAccepted(
@@ -212,7 +212,7 @@ public:
         std::optional<Connection::PushStreamOpenResult> pushStream = {}) noexcept;
     [[nodiscard]] Status receiveIntentAck(TransportIntentAck& acknowledgement) noexcept;
 
-    // The server network owner records physical retirement only after its
+    // The wire half records physical retirement only after its transport has
     // actually released the connection. The sticky fact is also a one-shot
     // worker signal; attached/rejected generations must consume it before closing
     // worker publications. WorkerFinalized requires the worker's scheduler/
@@ -246,19 +246,68 @@ public:
     // rearm leaves the worker-owned identity untouched until the next reservation.
     [[nodiscard]] bool readyToRearm() const noexcept;
     [[nodiscard]] Status rearm() noexcept;
-    // Query/destroy only after both owner threads and generation callbacks join.
+    // Query/destroy only after both halves and generation callbacks have joined.
     [[nodiscard]] bool readyToDestroy() const noexcept;
     [[nodiscard]] std::uint32_t notificationBorrows() const noexcept;
 
 private:
+    // Admission has one authoritative phase, including owner handoff windows.
+    // worker: vacant -> granted; network: granted -> binding/revoking;
+    // worker: binding -> bound -> attaching/rejecting, revoking -> revoke_received
+    //         -> revocation_pending;
+    // network: attaching/rejecting/revocation_pending -> attached/rejected/revoked.
     enum class Lifecycle : std::uint8_t {
         kVacant,
         kGrantAvailable,
         kRevokeRequested,
+        revoke_received,
+        revocation_pending,
         kBinding,
+        bound,
+        attaching,
+        rejecting,
         kAttached,
         kRejected,
         kRevoked,
+    };
+
+    // Sticky terminal handshake: empty -> published -> received -> acknowledged.
+    // Publication belongs to one owner; receive/acknowledge to the other. Reset
+    // is allowed only after both publication gates close and both owners quiesce.
+    // Records belong to identity_: no second copy of the generation is needed.
+    class finalization_record final {
+    public:
+        [[nodiscard]] bool published() const noexcept {
+            return phase_.load(std::memory_order_acquire) != phase::empty;
+        }
+        [[nodiscard]] bool available() const noexcept {
+            return phase_.load(std::memory_order_acquire) == phase::published;
+        }
+        [[nodiscard]] bool received() const noexcept {
+            return phase_.load(std::memory_order_acquire) == phase::received;
+        }
+        [[nodiscard]] bool acknowledged() const noexcept {
+            return phase_.load(std::memory_order_acquire) == phase::acknowledged;
+        }
+        void publish() noexcept {
+            phase_.store(phase::published, std::memory_order_release);
+        }
+        void receive() noexcept {
+            phase_.store(phase::received, std::memory_order_release);
+        }
+        void acknowledge() noexcept {
+            phase_.store(phase::acknowledged, std::memory_order_release);
+        }
+        void reset() noexcept {
+            phase_.store(phase::empty, std::memory_order_relaxed);
+        }
+
+    private:
+        enum class phase : std::uint8_t { empty,
+            published,
+            received,
+            acknowledged };
+        std::atomic<phase> phase_{phase::empty};
     };
 
     template <typename T, std::size_t Capacity>
@@ -345,6 +394,7 @@ private:
     [[nodiscard]] bool onNetworkOwner() const noexcept;
     [[nodiscard]] bool onWorkerOwner() const noexcept;
     [[nodiscard]] bool allControlEmpty() const noexcept;
+    [[nodiscard]] bool generation_quiesced() const noexcept;
     [[nodiscard]] bool terminalRecordsComplete() const noexcept;
     [[nodiscard]] bool hasOutstandingIntent(Identity identity,
         const TransportIntentToken& token) const noexcept;
@@ -371,7 +421,6 @@ private:
     std::thread::id workerOwner_{};
     std::atomic<bool> workerOwnerBound_{};
     std::atomic<bool> workerStopping_{};
-    std::atomic<bool> attachSucceeded_{};
     std::atomic<Lifecycle> lifecycle_{Lifecycle::kVacant};
     Identity identity_{};  // worker-owned; published before lifecycle release
     std::atomic<bool> hasLastIdentity_{};
@@ -380,8 +429,6 @@ private:
 
     Bind bind_{};
     std::atomic<bool> bindPublished_{};
-    bool bindTaken_{};
-    bool revokeTaken_{};
     RevokeAck revokeAck_{};
     std::atomic<bool> revokeAckPublished_{};
     AttachResult attachResult_{AttachAck{}};
@@ -392,7 +439,7 @@ private:
     std::array<PendingIntent, kIntentTrackingCapacity> pendingIntents_{};
     std::array<OutstandingIntent, kIntentTrackingCapacity> outstandingIntents_{};
     std::atomic<bool> closeIntentPublished_{};
-    bool closeIntentReceived_{};   // server-network-owned
+    bool closeIntentReceived_{};   // wire-half-owned
     bool closingGeneration_{};     // worker-owned until both gates close
     bool hasLastResetSequence_{};  // worker-owned
     std::uint64_t lastResetSequence_{};
@@ -405,21 +452,15 @@ private:
     std::atomic<bool> networkPublicationsClosed_{};
     Identity transportRetiredIdentity_{};
     std::atomic<bool> transportRetiredPublished_{};
-    AdmissionSealed admissionSealed_{};  // server-network-owned; release-published
+    AdmissionSealed admissionSealed_{};  // wire-half-owned; release-published
     std::atomic<bool> admissionSealedPublished_{};
     bool admissionSealedTaken_{};    // worker-owned
     DrainComplete drainComplete_{};  // worker-owned; release-published
     std::atomic<bool> drainCompletePublished_{};
-    bool drainCompleteTaken_{};  // server-network-owned
-    Identity workerFinalizedIdentity_{};
-    std::atomic<bool> workerFinalizedPublished_{};
-    Identity networkFinalizedIdentity_{};
-    std::atomic<bool> networkFinalizedPublished_{};
-    std::atomic<bool> workerFinalizedAcknowledged_{};
-    std::atomic<bool> networkFinalizedAcknowledged_{};
+    bool drainCompleteTaken_{};  // wire-half-owned
+    finalization_record worker_finalization_;
+    finalization_record network_finalization_;
     bool transportRetiredTaken_{};  // worker-owned
-    bool workerFinalizedTaken_{};   // server-network-owned
-    bool networkFinalizedTaken_{};  // worker-owned
     std::atomic<std::uint32_t> notificationBorrows_{};
 };
 

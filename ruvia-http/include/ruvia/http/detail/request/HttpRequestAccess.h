@@ -15,38 +15,6 @@
 
 namespace ruvia::detail {
 
-enum class RequestKnownHeader : std::uint8_t {
-    kAccept,
-    kAcceptEncoding,
-    kAccessControlRequestHeaders,
-    kAccessControlRequestMethod,
-    kAuthorization,
-    kConnection,
-    kContentEncoding,
-    kContentLength,
-    kContentType,
-    kCookie,
-    kExpect,
-    kHost,
-    kIfMatch,
-    kIfModifiedSince,
-    kIfNoneMatch,
-    kIfRange,
-    kIfUnmodifiedSince,
-    kOrigin,
-    kRange,
-    kSecWebSocketKey,
-    kSecWebSocketProtocol,
-    kSecWebSocketVersion,
-    kTransferEncoding,
-    kUpgrade,
-    kUserAgent,
-    kForwarded,
-    kXForwardedFor,
-    kXForwardedProto,
-    kSecWebSocketExtensions,
-};
-
 struct HttpRequestAccess final {
     static constexpr std::size_t kCachedHeaderSlots = HttpRequest::kCachedHeaderSlots;
 
@@ -54,13 +22,13 @@ struct HttpRequestAccess final {
         return HttpRequest();
     }
 
-    [[nodiscard]] static constexpr std::size_t knownHeaderSlot(RequestKnownHeader name) noexcept {
-        const auto slot = static_cast<std::size_t>(name);
+    [[nodiscard]] static constexpr std::size_t knownHeaderSlot(RequestHeaderKind name) noexcept {
+        const auto slot = requestHeaderKindKnownSlot(name);
         return slot < kCachedHeaderSlots ? slot : kCachedHeaderSlots;
     }
 
     [[nodiscard]] static std::string_view knownHeader(
-        const HttpRequest& request, RequestKnownHeader name) noexcept {
+        const HttpRequest& request, RequestHeaderKind name) noexcept {
         const auto slot = knownHeaderSlot(name);
         if (slot >= kCachedHeaderSlots) {
             return {};
@@ -72,7 +40,7 @@ struct HttpRequestAccess final {
     }
 
     [[nodiscard]] static bool hasKnownHeader(
-        const HttpRequest& request, RequestKnownHeader name) noexcept {
+        const HttpRequest& request, RequestHeaderKind name) noexcept {
         const auto slot = knownHeaderSlot(name);
         return slot < kCachedHeaderSlots && request.cachedHeaders_[slot] != 0 &&
                request.cachedHeaders_[slot] <= request.headers_.size();
@@ -167,16 +135,13 @@ struct HttpRequestAccess final {
     }
 };
 
-static_assert(std::to_underlying(RequestKnownHeader::kSecWebSocketExtensions) + 1 ==
-              HttpRequestAccess::kCachedHeaderSlots);
-
 [[nodiscard]] inline std::string_view requestKnownHeader(
-    const HttpRequest& request, RequestKnownHeader name) noexcept {
+    const HttpRequest& request, RequestHeaderKind name) noexcept {
     return HttpRequestAccess::knownHeader(request, name);
 }
 
 [[nodiscard]] inline bool requestHasKnownHeader(
-    const HttpRequest& request, RequestKnownHeader name) noexcept {
+    const HttpRequest& request, RequestHeaderKind name) noexcept {
     return HttpRequestAccess::hasKnownHeader(request, name);
 }
 

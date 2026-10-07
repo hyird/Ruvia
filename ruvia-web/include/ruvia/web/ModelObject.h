@@ -6,12 +6,12 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/web/detail/json/JsonSkip.h"
+#include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/detail/model/parse/JsonParser.h"
 #include "ruvia/web/detail/model/parse/JsonWriter.h"
 
@@ -83,22 +83,12 @@ public:
           storage_(std::move(other.storage_)) {}
 
     JsonValue& operator=(JsonValue&& other) {
-        if (this == &other) {
-            return *this;
-        }
-
-        auto rebound = std::move(other).rebindForModel(resource_);
-        std::destroy_at(&storage_);
-        std::construct_at(&storage_, std::move(rebound.storage_));
+        storage_.assign_from(std::move(other.storage_), resource_);
         return *this;
     }
 
     [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
-            return *borrowed;
-        }
-        const auto& owned = std::get<std::pmr::string>(storage_);
-        return std::string_view(owned);
+        return storage_.view();
     }
     [[nodiscard]] std::string_view view() const&& = delete;
 
@@ -187,37 +177,30 @@ private:
     friend std::optional<ViewT> detail::parseJsonViewValue(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool, detail::json_parse_budget&);
 
-    using Storage = std::variant<std::string_view, std::pmr::string>;
-
     JsonValue(detail::ResolvedPmrResourceTag, std::string_view body,
         std::pmr::memory_resource* resource) noexcept
         : resource_(resource),
-          storage_(std::in_place_type<std::string_view>, body) {}
+          storage_(body) {}
+
+    JsonValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource,
+        detail::model_text_storage&& storage) noexcept
+        : resource_(resource),
+          storage_(std::move(storage)) {}
 
     void assignOwned(std::string_view value) {
-        storage_.template emplace<std::pmr::string>(value, resource_);
+        storage_.assign_owned(value, resource_);
     }
 
     [[nodiscard]] JsonValue rebindForModel(std::pmr::memory_resource* resource) const& {
-        JsonValue rebound(detail::ResolvedPmrResourceTag{}, {}, resource);
-        rebound.assignOwned(view());
-        return rebound;
+        return JsonValue(detail::ResolvedPmrResourceTag{}, resource, storage_.rebind(resource));
     }
 
     [[nodiscard]] JsonValue rebindForModel(std::pmr::memory_resource* resource) && {
-        JsonValue rebound(detail::ResolvedPmrResourceTag{}, {}, resource);
-        if (auto* owned = std::get_if<std::pmr::string>(&storage_)) {
-            if (owned->get_allocator().resource() == resource) {
-                rebound.storage_.template emplace<std::pmr::string>(std::move(*owned));
-                return rebound;
-            }
-        }
-        rebound.assignOwned(view());
-        return rebound;
+        return JsonValue(detail::ResolvedPmrResourceTag{}, resource, std::move(storage_).rebind(resource));
     }
 
     std::pmr::memory_resource* resource_;
-    Storage storage_;
+    detail::model_text_storage storage_;
 };
 
 // Object-only dynamic token with the same borrowing, ownership and move
@@ -258,22 +241,12 @@ public:
           storage_(std::move(other.storage_)) {}
 
     JsonObject& operator=(JsonObject&& other) {
-        if (this == &other) {
-            return *this;
-        }
-
-        auto rebound = std::move(other).rebindForModel(resource_);
-        std::destroy_at(&storage_);
-        std::construct_at(&storage_, std::move(rebound.storage_));
+        storage_.assign_from(std::move(other.storage_), resource_);
         return *this;
     }
 
     [[nodiscard]] std::string_view view() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
-            return *borrowed;
-        }
-        const auto& owned = std::get<std::pmr::string>(storage_);
-        return std::string_view(owned);
+        return storage_.view();
     }
     [[nodiscard]] std::string_view view() const&& = delete;
 
@@ -331,37 +304,30 @@ private:
     friend std::optional<ViewT> detail::parseJsonViewValue(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::ModelStringStorage, bool, detail::json_parse_budget&);
 
-    using Storage = std::variant<std::string_view, std::pmr::string>;
-
     JsonObject(detail::ResolvedPmrResourceTag, std::string_view body,
         std::pmr::memory_resource* resource) noexcept
         : resource_(resource),
-          storage_(std::in_place_type<std::string_view>, body) {}
+          storage_(body) {}
+
+    JsonObject(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource,
+        detail::model_text_storage&& storage) noexcept
+        : resource_(resource),
+          storage_(std::move(storage)) {}
 
     void assignOwned(std::string_view value) {
-        storage_.template emplace<std::pmr::string>(value, resource_);
+        storage_.assign_owned(value, resource_);
     }
 
     [[nodiscard]] JsonObject rebindForModel(std::pmr::memory_resource* resource) const& {
-        JsonObject rebound(detail::ResolvedPmrResourceTag{}, {}, resource);
-        rebound.assignOwned(view());
-        return rebound;
+        return JsonObject(detail::ResolvedPmrResourceTag{}, resource, storage_.rebind(resource));
     }
 
     [[nodiscard]] JsonObject rebindForModel(std::pmr::memory_resource* resource) && {
-        JsonObject rebound(detail::ResolvedPmrResourceTag{}, {}, resource);
-        if (auto* owned = std::get_if<std::pmr::string>(&storage_)) {
-            if (owned->get_allocator().resource() == resource) {
-                rebound.storage_.template emplace<std::pmr::string>(std::move(*owned));
-                return rebound;
-            }
-        }
-        rebound.assignOwned(view());
-        return rebound;
+        return JsonObject(detail::ResolvedPmrResourceTag{}, resource, std::move(storage_).rebind(resource));
     }
 
     std::pmr::memory_resource* resource_;
-    Storage storage_;
+    detail::model_text_storage storage_;
 };
 
 template <typename T>
@@ -462,7 +428,7 @@ template <typename ViewT>
         }
         value.assignOwned(token);
     } else {
-        value.storage_.template emplace<std::string_view>(token);
+        value.storage_.assign_borrowed(token);
     }
     return value;
 }

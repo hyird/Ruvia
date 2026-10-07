@@ -13,8 +13,8 @@
 
 namespace ruvia::detail::model {
 
-template <typename DerivedT, typename... DescriptorTs>
-class ModelStorage;
+template <typename... descriptor_types>
+class model_storage;
 
 [[nodiscard]] constexpr std::uint64_t modelFieldNameHash(std::string_view name) noexcept {
     // FNV-1a is only a dispatch prefilter. The parser still compares the full
@@ -161,8 +161,8 @@ public:
     }
 
 private:
-    template <typename DerivedT, typename... DescriptorTs>
-    friend class ModelStorage;
+    template <typename... descriptor_types>
+    friend class model_storage;
     friend struct ::ruvia::detail::ModelValueFactory;
 
     void assignNull() noexcept {
@@ -176,13 +176,12 @@ private:
         state_ = detail::ModelFieldState::kParsed;
     }
 
-    [[nodiscard]] ModelField rebindForModel(
-        const ModelField& source, std::pmr::memory_resource* resource) const {
+    [[nodiscard]] ModelField rebind(std::pmr::memory_resource* resource) const {
         ModelField rebound;
-        rebound.state_ = source.state_;
-        rebound.present_ = source.present_;
-        if (source.value_) {
-            rebound.value_.emplace(detail::rebindModelValue(*source.value_, resource));
+        rebound.state_ = state_;
+        rebound.present_ = present_;
+        if (value_) {
+            rebound.value_.emplace(detail::rebindModelValue(*value_, resource));
         }
         return rebound;
     }

@@ -131,7 +131,7 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
     std::string_view name, std::string_view value, std::uint32_t knownBit) noexcept {
     if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value) ||
         http2FieldValueHasLeadingOrTrailingWhitespace(value) ||
-        http2IsForbiddenResponseConnectionField(name)) {
+        is_forbidden_http_binary_response_field(name)) {
         return false;
     }
     if (knownBit == kResponseHeaderContentType && !isValidHttpContentTypeFieldValue(value)) {
@@ -166,7 +166,7 @@ inline void appendHttp2EncodedResponseHeader(std::pmr::string& headerBlock, std:
         const auto name = header.name();
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
-        if (http2IsForbiddenResponseConnectionField(name) ||
+        if (is_forbidden_http_binary_response_field(name) ||
             http2FieldValueHasLeadingOrTrailingWhitespace(header.value()) ||
             !sectionSize.add(name, header.value())) {
             return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;

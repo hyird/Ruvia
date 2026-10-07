@@ -56,9 +56,4 @@ HttpServerSessionConfig::HttpServerSessionConfig(
       sniContexts(pmrResourceOrDefault(resource)),
       sniLookup(pmrResourceOrDefault(resource)) {}
 
-HttpServerAcceptor::HttpServerAcceptor(asio::io_context& ioContext,
-    const HttpServerListenerDefinition& definition)
-    : acceptor(ioContext),
-      endpoint(definition.endpoint) {}
-
 }  // namespace ruvia::detail

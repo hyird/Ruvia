@@ -1,14 +1,13 @@
 #pragma once
 
-#include <atomic>
 #include <memory>
+#include <string_view>
 
 #include "ruvia/core/EventLoop.h"
-#include "ruvia/core/StopToken.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/HttpClient.h"
-#include "ruvia/web/detail/client/ClientCloseState.h"
 #include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "ruvia/web/detail/client/client_lifecycle.h"
 
 namespace ruvia::detail {
 
@@ -16,14 +15,19 @@ class HttpClientState final : public std::enable_shared_from_this<HttpClientStat
 public:
     HttpClientState(EventLoop loop, const HttpClientConfig& config,
         HttpClientResultBudgetConfig resultBudget);
-    ~HttpClientState();
 
     HttpClientState(const HttpClientState&) = delete;
     HttpClientState& operator=(const HttpClientState&) = delete;
 
-    void bindStop();
-    void requestClose() noexcept;
-    [[nodiscard]] Task<void> shutdown();
+    void bindStop() {
+        lifecycle_.bind_stop();
+    }
+    void requestClose() noexcept {
+        lifecycle_.request_close();
+    }
+    [[nodiscard]] Task<void> shutdown() {
+        return lifecycle_.shutdown();
+    }
 
     [[nodiscard]] HttpClientHandle handle(OperationOptions options);
     [[nodiscard]] HttpClientStats stats();
@@ -36,30 +40,19 @@ public:
     }
 
 private:
-    enum class Phase : unsigned char {
-        kOpen,
-        kClosing,
-        kClosed,
-    };
-
-    [[nodiscard]] static EventLoop requireLoop(EventLoop loop);
-    [[nodiscard]] static Task<void> shutdownOwned(std::shared_ptr<HttpClientState> state,
-        ClientCloseState::ObservationMode mode);
-    void requireOpenOnWorker() const;
-    void startCloseOnWorker() noexcept;
-    [[nodiscard]] Task<void> closeOnWorker();
-    void finishClose(const TaskCompletionResult<void>& result);
+    friend class client_lifecycle<HttpClientState>;
+    static constexpr std::string_view client_name{"HTTP"};
+    [[noreturn]] static void throw_not_ready();
+    [[nodiscard]] HttpClientRegistry& backend() noexcept {
+        return clients_;
+    }
 
     EventLoop loop_;
     WorkerHandle worker_;
     WorkerMemory memory_;
     HttpClientRegistry clients_;
-    StopSource stopSource_;
-    EventLoopStopRegistration stopRegistration_;
-    ClientCloseState closeState_;
-    std::atomic<Phase> phase_{Phase::kOpen};
-    // Declared last so operations expire before their pools and worker memory.
-    ScopedOperationScope operationScope_;
+    // Retires scopes before backend storage and its allocator are destroyed.
+    client_lifecycle<HttpClientState> lifecycle_;
 };
 
 }  // namespace ruvia::detail

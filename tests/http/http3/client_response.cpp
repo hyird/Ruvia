@@ -1,14 +1,18 @@
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ruvia/http/Http3ClientResponse.h"
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3VarInt.h"
 
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 namespace {
@@ -16,6 +20,8 @@ struct Events final {
     std::vector<ruvia::Http3ClientResponseEventKind> kinds;
     std::string body;
     std::vector<std::string> trailers;
+    std::vector<std::string> trailer_values;
+    std::vector<bool> never_indexed;
     std::vector<std::optional<ruvia::HttpResponseBodyPlan>> responseBodyPlans;
     std::vector<std::optional<std::uint64_t>> contentLengths;
     std::vector<std::optional<ruvia::HttpClientRequestContentSignal>> requestContentSignals;
@@ -52,6 +58,8 @@ void collect(void* p, const ruvia::Http3ClientResponseEvent& event) {
     out.contentLengths.emplace_back(event.head == nullptr ? std::nullopt : event.head->contentLength);
     if (event.kind == ruvia::Http3ClientResponseEventKind::kTrailerField) {
         out.trailers.emplace_back(event.trailer.name);
+        out.trailer_values.emplace_back(event.trailer.value);
+        out.never_indexed.push_back(event.trailer.neverIndexed);
     }
 }
 std::vector<char> frame(std::uint64_t type, std::span<const char> payload) {
@@ -215,6 +223,46 @@ RUVIA_TEST(http3_client_response_validates_all_trailers_before_callback) {
     result = rejected.feed(invalidFrame, false, false, collect, &rejectedEvents);
     RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kStreamError);
     RUVIA_CHECK(rejectedEvents.trailers.empty());
+}
+
+RUVIA_TEST(http3_client_response_trailer_storage_is_atomic_and_reclaimed_on_allocation_failure) {
+    const std::string name = "x-" + std::string(80, 'n');
+    const std::string value(100, 'v');
+    const std::array fields{ruvia::Http3FieldSectionFieldView{name, value, true},
+        ruvia::Http3FieldSectionFieldView{"x-final", "done", false}};
+    const auto trailer_wire = frame(1, fieldSection(fields));
+    const auto head_wire = responseHead(200);
+    bool succeeded = false;
+    std::size_t failures = 0;
+    for (std::size_t allowance = 0; allowance != 64 && !succeeded; ++allowance) {
+        failing_memory_resource memory;
+        {
+            ruvia::Http3ClientResponse response(0, ruvia::HttpKnownMethod::kGet, &memory);
+            Events events;
+            RUVIA_CHECK(response.feed(head_wire, false, false, collect, &events).status ==
+                        ruvia::Http3ClientResponseStatus::kNeedMoreData);
+            memory.fail_after(allowance);
+            try {
+                const auto result = response.feed(trailer_wire, true, false, collect, &events);
+                RUVIA_CHECK(result.status == ruvia::Http3ClientResponseStatus::kMessageEnd);
+                succeeded = true;
+                RUVIA_CHECK_EQ(events.trailers.size(), std::size_t{2});
+                if (events.trailers.size() == 2) {
+                    RUVIA_CHECK_EQ(events.trailers.front(), name);
+                    RUVIA_CHECK_EQ(events.trailer_values.front(), value);
+                    RUVIA_CHECK(events.never_indexed.front());
+                    RUVIA_CHECK(!events.never_indexed.back());
+                }
+            } catch (const std::bad_alloc&) {
+                ++failures;
+                RUVIA_CHECK(events.trailers.empty());
+            }
+            memory.allow_allocations();
+        }
+        RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(succeeded);
+    RUVIA_CHECK(failures >= 2);
 }
 
 RUVIA_TEST(http3_client_response_rejects_forbidden_response_trailer_fields) {

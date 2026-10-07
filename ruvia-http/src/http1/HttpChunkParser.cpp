@@ -1,9 +1,13 @@
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
+#include <limits>
+#include <utility>
+
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/http_chunk_framing.h"
 
 namespace ruvia::detail {
 
@@ -64,100 +68,42 @@ std::optional<HttpChunkScanError> validateHttpChunkTrailers(std::string_view tra
     }
 }
 
-bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept {
-    return parseHttpChunkSizeLine(value, size) == ChunkSizeLineStatus::kOk;
-}
-
 HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
-    std::size_t cursor = 0;
-    std::size_t decoded = 0;
-    std::size_t encodedOverhead = 0;
-    const auto addOverhead = [&encodedOverhead](std::size_t bytes) noexcept {
-        if (bytes > kDefaultMaxBufferedBodyBytes ||
-            encodedOverhead > kDefaultMaxBufferedBodyBytes - bytes) {
-            return false;
-        }
-        encodedOverhead += bytes;
-        return true;
-    };
+    http_chunk_framing framing({
+        .body_limit = ProtocolByteLimit::limited(kDefaultMaxBufferedBodyBytes),
+        .framing_limit = kDefaultMaxBufferedBodyBytes,
+        .trailer_section_limit = ProtocolByteLimit::limited(kMaxHttpHeaderBytes),
+        .trailer_role = chunk_trailer_role::request,
+    });
+    std::size_t consumed = 0;
     for (;;) {
-        const auto lineEnd = body.find("\r\n", cursor);
-        if (lineEnd == std::string_view::npos) {
-            // A future CRLF can begin at most one byte before the current end.
-            // Once the unterminated line itself reaches the framing-line byte
-            // limit, no completion can make this a bounded chunk-size line.
-            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
-                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
+        const auto result = framing.decode(body.substr(consumed), std::numeric_limits<std::size_t>::max());
+        if (const auto* complete = std::get_if<chunk_framing_complete>(&result)) {
+            return HttpChunkScanResult::makeComplete(consumed + complete->consumed_bytes);
+        }
+        if (const auto* failure = std::get_if<chunk_framing_failure>(&result)) {
+            switch (failure->error) {
+                case chunk_framing_error::invalid_size:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidSize);
+                case chunk_framing_error::size_overflow:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kSizeOverflow);
+                case chunk_framing_error::invalid_extension:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidExtension);
+                case chunk_framing_error::invalid_crlf:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidCrlf);
+                case chunk_framing_error::invalid_trailer:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidTrailer);
+                case chunk_framing_error::trailer_limit_exceeded:
+                case chunk_framing_error::body_limit_exceeded:
+                case chunk_framing_error::framing_limit_exceeded:
+                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
             }
+            std::unreachable();
+        }
+        if (std::holds_alternative<chunk_framing_need_more>(result)) {
             return HttpChunkScanResult::makeNeedMore();
         }
-        if (lineEnd - cursor + 2 > kMaxHttpHeaderBytes) {
-            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-        }
-
-        std::size_t chunkSize = 0;
-        switch (parseHttpChunkSizeLine(body.substr(cursor, lineEnd - cursor), chunkSize)) {
-            case ChunkSizeLineStatus::kOk:
-                break;
-            case ChunkSizeLineStatus::kInvalidSize:
-                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidSize);
-            case ChunkSizeLineStatus::kOverflow:
-                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kSizeOverflow);
-            case ChunkSizeLineStatus::kInvalidExtension:
-                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidExtension);
-        }
-        if (!addOverhead(lineEnd - cursor + 2)) {
-            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-        }
-        cursor = lineEnd + 2;
-
-        if (chunkSize == 0) {
-            if (body.substr(cursor, 2) == "\r\n") {
-                if (!addOverhead(2)) {
-                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-                }
-                return HttpChunkScanResult::makeComplete(cursor + 2);
-            }
-            const auto trailerEnd = body.find("\r\n\r\n", cursor);
-            if (trailerEnd != std::string_view::npos) {
-                if (trailerEnd - cursor > kMaxHttpHeaderBytes - 4) {
-                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-                }
-                if (const auto trailerError =
-                        validateHttpChunkTrailers(body.substr(cursor, trailerEnd - cursor));
-                    trailerError.has_value()) {
-                    return HttpChunkScanResult::makeFailure(*trailerError);
-                }
-                if (!addOverhead(trailerEnd - cursor + 4)) {
-                    return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-                }
-                return HttpChunkScanResult::makeComplete(trailerEnd + 4);
-            }
-            // Preserve the last three bytes as a possible delimiter prefix.
-            // At kMaxHttpHeaderBytes available bytes, even the earliest future
-            // CRLFCRLF would exceed the complete trailer-section limit.
-            if (body.size() - cursor >= kMaxHttpHeaderBytes) {
-                return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-            }
-            return HttpChunkScanResult::makeNeedMore();
-        }
-
-        if (chunkSize > kDefaultMaxBufferedBodyBytes ||
-            decoded > kDefaultMaxBufferedBodyBytes - chunkSize) {
-            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-        }
-        if (body.size() < cursor + chunkSize + 2) {
-            return HttpChunkScanResult::makeNeedMore();
-        }
-        if (body.substr(cursor + chunkSize, 2) != "\r\n") {
-            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kInvalidCrlf);
-        }
-        if (!addOverhead(2)) {
-            return HttpChunkScanResult::makeFailure(HttpChunkScanError::kTooLarge);
-        }
-
-        decoded += chunkSize;
-        cursor += chunkSize + 2;
+        consumed += std::get<chunk_framing_body>(result).consumed_bytes;
     }
 }
 

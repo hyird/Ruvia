@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -25,6 +26,7 @@
 #include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
 #include "ruvia/web/detail/http2/WebSocketHttp2Transport.h"
 #include "ruvia/web/detail/http3/WebSocketHttp3Transport.h"
+#include "ruvia/web/detail/util/operation_lane_lease.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
 namespace ruvia::detail {
@@ -101,32 +103,13 @@ private:
         WritePhase phase_;
     };
 
-    class ActivityLease final {
-    public:
-        explicit ActivityLease(bool& active, const char* message)
-            : active_(&active) {
-            if (*active_) {
-                active_ = nullptr;
-                throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, message);
-            }
-            *active_ = true;
+    [[nodiscard]] static operation_lane_lease claim_activity(bool& active, const char* message) {
+        operation_lane_lease lease(active);
+        if (!lease) {
+            throw WebSocketClientError(WebSocketClientError::Code::kInvalidState, message);
         }
-
-        ActivityLease(const ActivityLease&) = delete;
-        ActivityLease& operator=(const ActivityLease&) = delete;
-        ActivityLease(ActivityLease&& other) noexcept
-            : active_(std::exchange(other.active_, nullptr)) {}
-        ActivityLease& operator=(ActivityLease&&) = delete;
-
-        ~ActivityLease() {
-            if (active_ != nullptr) {
-                *active_ = false;
-            }
-        }
-
-    private:
-        bool* active_;
-    };
+        return lease;
+    }
 
     class OperationGuard final {
     public:
@@ -147,13 +130,13 @@ private:
         ClientCloseState::ObservationMode mode);
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readOwned(
         std::shared_ptr<WebSocketClientState> state, OperationOptions options,
-        ActivityLease activity);
+        operation_lane_lease activity);
     [[nodiscard]] static Task<void> writeOwned(std::shared_ptr<WebSocketClientState> state,
         WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, WebSocketSendOptions sendOptions,
-        ActivityLease activity);
+        operation_lane_lease activity);
     [[nodiscard]] static Task<void> closeOwned(std::shared_ptr<WebSocketClientState> state,
         WebSocketCloseOptions options, std::pmr::string reason, OperationOptions operationOptions,
-        ActivityLease readActivity, ActivityLease writeActivity, ActivityLease closeActivity);
+        operation_lane_lease readActivity, operation_lane_lease writeActivity, operation_lane_lease closeActivity);
 
     void requireCurrent() const;
     void requireOpen() const;
@@ -162,7 +145,7 @@ private:
     void closeOnWorker(AbortReason reason) noexcept;
     void startCloseOnWorker() noexcept;
     [[nodiscard]] Task<void> closeOnWorker();
-    void finishClose(const TaskCompletionResult<void>& result);
+    void finishClose(std::exception_ptr failure);
     void requestAbort(AbortReason reason) noexcept;
     [[nodiscard]] Task<void> establishTransport();
     [[nodiscard]] Task<void> performTlsHandshake();
@@ -224,7 +207,7 @@ private:
     std::int64_t lastActiveMs_{0};
     bool connectInFlight_{false};
     bool heartbeatInFlight_{false};
-    ScopedOperationScope operationScope_;
+    ::ruvia::operation_scope operationScope_;
 };
 
 }  // namespace ruvia::detail

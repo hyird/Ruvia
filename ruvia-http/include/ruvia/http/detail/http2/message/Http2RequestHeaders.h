@@ -238,7 +238,7 @@ struct Http2HeaderDecodeContext final {
         }
     }
     if (kind == RequestHeaderKind::kContentLength) {
-        HttpContentLengthState contentLength;
+        HttpContentLengthState<> contentLength;
         if (contentLength.parseField(value) != HttpContentLengthParseStatus::kOk) {
             return false;
         }
@@ -256,7 +256,7 @@ struct Http2HeaderDecodeContext final {
     }
 
     return context.acceptRegularField() && http2IsValidRegularHeader(name, value) &&
-           !http2IsForbiddenRequestTrailerHeader(name) &&
+           !isForbiddenHttpRequestTrailerName(name) &&
            context.stream.appendRemoteTrailer(name, value);
 }
 

@@ -366,12 +366,18 @@ struct GatedResponseSink final {
     ruvia::WorkerSignal entered;
     ruvia::WorkerSignal release;
     std::string output;
+    std::string_view borrowed;
+    bool fail_write{};
 };
 
 ruvia::Task<void> writeGatedResponse(void* target, std::string_view chunk) {
     auto& sink = *static_cast<GatedResponseSink*>(target);
+    sink.borrowed = chunk;
     sink.entered.notify();
     co_await sink.release.wait();
+    if (sink.fail_write) {
+        throw std::runtime_error("downstream output rejected chunk");
+    }
     sink.output.append(chunk);
 }
 
@@ -745,7 +751,7 @@ RUVIA_TEST(client_body_chunks_preserve_octets_and_pending_data_does_not_invalida
         RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{4});
         state.complete = true;
         auto operation = [&]() -> ruvia::Task<void> {
-            const auto first = co_await state.read<std::span<const std::byte>>();
+            const auto first = co_await state.consume_body<std::span<const std::byte>>();
             RUVIA_CHECK(first.has_value());
             RUVIA_CHECK_EQ(first->size(), std::size_t{3});
             RUVIA_CHECK((*first)[0] == std::byte{0});
@@ -754,11 +760,11 @@ RUVIA_TEST(client_body_chunks_preserve_octets_and_pending_data_does_not_invalida
             state.reconcileProducerBodyBytes();
             RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{8});
             RUVIA_CHECK((*first)[2] == std::byte{0xc3});
-            const auto next = co_await state.read<std::span<const std::byte>>();
+            const auto next = co_await state.consume_body<std::span<const std::byte>>();
             RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{5});
             RUVIA_CHECK_EQ(next->size(), std::size_t{5});
             RUVIA_CHECK((*next)[0] == std::byte{0xa9});
-            RUVIA_CHECK(!(co_await state.read<std::string_view>()));
+            RUVIA_CHECK(!(co_await state.consume_body<std::string_view>()));
             RUVIA_CHECK_EQ(receiveBudget.used(), std::size_t{0});
         };
         runOperation(worker, io, operation);
@@ -1566,7 +1572,7 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
     {
         ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
             std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1), budget);
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         server.start();
         auto operation = [&]() -> ruvia::Task<void> {
             auto handle = registry.get(scope, {.timeout = std::chrono::seconds(2)});
@@ -1630,7 +1636,7 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_repeated_real_tcp_operations
             // retire the client's request/transport allocations.
             RUVIA_CHECK_EQ(resource.liveAllocations(), beforeHeaderRelease);
             scope.close();
-            co_await scope.closeAndJoin();
+            co_await scope.close_and_join();
             registry.closeNow();
             co_await registry.join();
         };
@@ -1657,7 +1663,7 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
     {
         ruvia::detail::HttpClientRegistry registry(io, worker.handle, &resource,
             std::span<const ruvia::detail::HttpClientDefinition>(&*definition, 1));
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         ruvia::StopSource preCancelled;
         preCancelled.requestStop();
         server.start();
@@ -1697,7 +1703,7 @@ RUVIA_TEST(configured_http_registry_handle_reclaims_io_failure_and_precancel) {
             }
             RUVIA_CHECK(cancelled);
             scope.close();
-            co_await scope.closeAndJoin();
+            co_await scope.close_and_join();
             registry.closeNow();
             co_await registry.join();
             RUVIA_CHECK(resource.liveAllocations() <= failureBaseline);
@@ -1725,7 +1731,7 @@ RUVIA_TEST(client_registry_aliases_share_the_worker_result_budget_domain) {
         ruvia::HttpClientResultBudgetConfig{.maxRetainedBytes = 3});
     ruvia::detail::HttpClientRegistry registry(
         io, worker.handle, resource, definitions, budgetDomain);
-    ruvia::detail::ScopedOperationScope scope;
+    ruvia::operation_scope scope;
     const auto firstClient = registry.get("first", scope);
     const auto secondClient = registry.get("second", scope);
     RUVIA_CHECK_EQ(firstClient.host(), std::string_view("127.0.0.1"));
@@ -1789,7 +1795,7 @@ RUVIA_TEST(worker_capabilities_keep_result_budgets_independent) {
             .httpClientResultBudget = {.maxRetainedBytes = 3}};
         ruvia::detail::WorkerCapabilities firstCapabilities(
             firstIo, firstWorker.handle, firstResource, firstDefinitions, options);
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         const ruvia::StopToken stopToken;
         const auto client = firstCapabilities.clientRegistries().httpClient(
             "first", scope, stopToken);
@@ -1824,7 +1830,7 @@ RUVIA_TEST(worker_capabilities_keep_result_budgets_independent) {
             .httpClientResultBudget = {.maxRetainedBytes = 3}};
         ruvia::detail::WorkerCapabilities capabilities(
             secondIo, secondWorker.handle, secondResource, definitions, options);
-        ruvia::detail::ScopedOperationScope scope;
+        ruvia::operation_scope scope;
         const ruvia::StopToken stopToken;
         const auto client = capabilities.clientRegistries().httpClient(
             "second", scope, stopToken);
@@ -1870,13 +1876,58 @@ RUVIA_TEST(client_body_consumed_buffer_wakes_backpressured_producer_before_waiti
         };
         tasks.spawn(producer());
         tasks.spawn(watchdog());
-        const auto first = co_await state.read<std::string_view>();
+        const auto first = co_await state.consume_body<std::string_view>();
         RUVIA_CHECK(first && first->size() == 1024 && first->front() == 'a');
         RUVIA_CHECK(!produced);  // Reading a view alone does not release it.
-        const auto second = co_await state.read<std::string_view>();
+        const auto second = co_await state.consume_body<std::string_view>();
         RUVIA_CHECK(second && *second == "next");
         co_await tasks.join();
         RUVIA_CHECK(produced && !watchdogNeeded);
+    };
+    runOperation(worker, io, operation);
+    RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocationCount(), resource.deallocationCount());
+}
+
+RUVIA_TEST(client_body_pipe_keeps_cursor_and_borrow_until_downstream_accepts_chunk) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    ruvia::test::CountingMemoryResource resource;
+    auto operation = [&]() -> ruvia::Task<void> {
+        ruvia::detail::HttpClientResponseState state(worker.handle, &resource);
+        const std::string payload(1024, 'p');
+        state.buffered.assign(payload);
+        state.complete = true;
+        GatedResponseSink sink(worker.handle);
+        sink.fail_write = true;
+        auto writer = makeGatedResponseWriter(sink);
+        bool rejected = false;
+        ruvia::TaskScope tasks(worker.handle, {.resource = &resource});
+        auto pipe = [&]() -> ruvia::Task<void> {
+            try {
+                co_await state.consume_body<void>(&writer);
+            } catch (const std::runtime_error&) {
+                rejected = true;
+            }
+        };
+        tasks.spawn(pipe());
+        co_await sink.entered.wait();
+        RUVIA_CHECK_EQ(state.offset, std::size_t{0});
+        RUVIA_CHECK_EQ(sink.borrowed, std::string_view(payload));
+        // Network progress cannot mutate the chunk borrowed by the downstream.
+        state.pending.assign("tail");
+        RUVIA_CHECK_EQ(sink.borrowed, std::string_view(payload));
+        sink.release.notify();
+        co_await tasks.join();
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK(sink.output.empty());
+        RUVIA_CHECK_EQ(state.offset, std::size_t{0});
+        RUVIA_CHECK_EQ(std::string_view(state.buffered), std::string_view(payload));
+        const auto retry = co_await state.consume_body<std::string_view>();
+        RUVIA_CHECK(retry && *retry == payload);
+        const auto tail = co_await state.consume_body<std::string_view>();
+        RUVIA_CHECK(tail && *tail == "tail");
+        RUVIA_CHECK(!(co_await state.consume_body<std::string_view>()));
     };
     runOperation(worker, io, operation);
     RUVIA_CHECK_EQ(resource.liveAllocations(), std::size_t{0});
@@ -1916,7 +1967,7 @@ RUVIA_TEST(client_body_collection_reclaims_temporaries_and_retains_results_and_h
             {
                 const auto before = resource.liveAllocations();
                 {
-                    auto discarded = ruvia::detail::makeScopedOperation(state.bodyOperationScope, state.readAll(4096));
+                    auto discarded = ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(4096));
                 }
                 RUVIA_CHECK_EQ(resource.liveAllocations(), before);
                 RUVIA_CHECK_EQ(state.offset, std::size_t{0});
@@ -2228,7 +2279,7 @@ RUVIA_TEST(client_body_collection_cancellation_joins_before_storage_is_released)
         std::exception_ptr failure;
         auto operation = [&]() -> ruvia::Task<void> {
             try {
-                (void)co_await ruvia::detail::makeScopedOperation(state.bodyOperationScope, state.readAll(4096));
+                (void)co_await ruvia::make_scoped_operation(state.bodyOperationScope, state.readAll(4096));
             } catch (const std::system_error& error) {
                 cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
             }

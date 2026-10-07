@@ -41,7 +41,7 @@
 #include "ruvia/core/OneShot.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/core/detail/worker/WorkerTimer.h"
+#include "ruvia/core/WorkerTimer.h"
 #include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia {
@@ -436,7 +436,7 @@ template <typename Rep, typename Period, typename Fn>
     // turning a long deadline into an immediate timeout. Use the same saturating
     // conversion as worker timers so all bounded waits share one interpretation.
     return detail::tryRunBlockingUntil(pool, std::move(worker),
-        detail::workerTimerSaturatingDurationCast(timeout), {}, std::move(fn));
+        ::ruvia::workerTimerSaturatingDurationCast(timeout), {}, std::move(fn));
 }
 
 template <typename Rep, typename Period, typename Fn>
@@ -444,7 +444,7 @@ template <typename Rep, typename Period, typename Fn>
     std::chrono::duration<Rep, Period> timeout, StopToken stopToken, Fn fn)
     -> Task<BlockingResult<std::invoke_result_t<Fn&>>> {
     return detail::tryRunBlockingUntil(pool, std::move(worker),
-        detail::workerTimerSaturatingDurationCast(timeout), std::move(stopToken), std::move(fn));
+        ::ruvia::workerTimerSaturatingDurationCast(timeout), std::move(stopToken), std::move(fn));
 }
 
 // The throwing form has the same name and semantics in core and web: callable

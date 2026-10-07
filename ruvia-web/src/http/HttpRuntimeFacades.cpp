@@ -7,66 +7,29 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/context/ContextCapabilities.h"
+#include "ruvia/web/detail/util/operation_lane_lease.h"
 
 namespace {
 
-class ResponseStreamOutputGuard final {
-public:
-    explicit ResponseStreamOutputGuard(bool& active)
-        : active_(&active) {
-        if (*active_) {
-            active_ = nullptr;
-            throw std::logic_error("response stream output operation is already in progress");
-        }
-        *active_ = true;
+ruvia::detail::operation_lane_lease claim_output_lane(bool& active) {
+    ruvia::detail::operation_lane_lease lease(active);
+    if (!lease) {
+        throw std::logic_error("response stream output operation is already in progress");
     }
+    return lease;
+}
 
-    ResponseStreamOutputGuard(const ResponseStreamOutputGuard&) = delete;
-    ResponseStreamOutputGuard& operator=(const ResponseStreamOutputGuard&) = delete;
-    ResponseStreamOutputGuard(ResponseStreamOutputGuard&& other) noexcept
-        : active_(std::exchange(other.active_, nullptr)) {}
-    ResponseStreamOutputGuard& operator=(ResponseStreamOutputGuard&&) = delete;
-
-    ~ResponseStreamOutputGuard() {
-        if (active_ != nullptr) {
-            *active_ = false;
-        }
+ruvia::detail::operation_lane_lease claim_websocket_lane(bool& active, const char* message) {
+    ruvia::detail::operation_lane_lease lease(active);
+    if (!lease) {
+        throw std::logic_error(message);
     }
-
-private:
-    bool* active_;
-};
-
-class WebSocketActivityLease final {
-public:
-    explicit WebSocketActivityLease(bool& active, const char* message)
-        : active_(&active) {
-        if (*active_) {
-            active_ = nullptr;
-            throw std::logic_error(message);
-        }
-        *active_ = true;
-    }
-
-    WebSocketActivityLease(const WebSocketActivityLease&) = delete;
-    WebSocketActivityLease& operator=(const WebSocketActivityLease&) = delete;
-    WebSocketActivityLease(WebSocketActivityLease&& other) noexcept
-        : active_(std::exchange(other.active_, nullptr)) {}
-    WebSocketActivityLease& operator=(WebSocketActivityLease&&) = delete;
-
-    ~WebSocketActivityLease() {
-        if (active_ != nullptr) {
-            *active_ = false;
-        }
-    }
-
-private:
-    bool* active_;
-};
+    return lease;
+}
 
 ruvia::Task<void> writeTransferredChunk(void* target,
     ruvia::Task<void> (*write)(void*, std::string_view), std::pmr::string chunk,
-    ResponseStreamOutputGuard guard) {
+    ruvia::detail::operation_lane_lease guard) {
     static_cast<void>(guard);
     co_await write(target, chunk);
 }
@@ -101,7 +64,7 @@ struct OwnedTrailers final {
 
 ruvia::Task<void> endOwned(void* target,
     ruvia::Task<void> (*end)(void*, std::span<const ruvia::HttpHeaderView>), OwnedTrailers trailers,
-    ResponseStreamOutputGuard guard) {
+    ruvia::detail::operation_lane_lease guard) {
     static_cast<void>(guard);
     co_await end(target, trailers.views);
 }
@@ -115,14 +78,14 @@ void requireWebSocketWorker(void* target) noexcept {
 
 ruvia::Task<std::optional<ruvia::WebSocketMessage>> readWebSocket(void* target,
     ruvia::Task<std::optional<ruvia::WebSocketMessage>> (*read)(void*),
-    WebSocketActivityLease activity) {
+    ruvia::detail::operation_lane_lease activity) {
     static_cast<void>(activity);
     co_return co_await read(target);
 }
 
 ruvia::Task<void> writeWebSocketPayload(void* target,
     ruvia::Task<void> (*write)(void*, ruvia::WebSocketOpcode, std::string_view, bool),
-    ruvia::WebSocketOpcode opcode, std::pmr::string payload, WebSocketActivityLease activity, bool compress) {
+    ruvia::WebSocketOpcode opcode, std::pmr::string payload, ruvia::detail::operation_lane_lease activity, bool compress) {
     static_cast<void>(activity);
     co_await write(target, opcode, payload, compress);
 }
@@ -130,8 +93,8 @@ ruvia::Task<void> writeWebSocketPayload(void* target,
 ruvia::Task<void> closeWebSocketWithReason(void* target,
     ruvia::Task<void> (*close)(void*, ruvia::WebSocketCloseOptions),
     ruvia::WebSocketCloseOptions options, std::pmr::string reason,
-    WebSocketActivityLease readActivity, WebSocketActivityLease writeActivity,
-    WebSocketActivityLease closeActivity) {
+    ruvia::detail::operation_lane_lease readActivity, ruvia::detail::operation_lane_lease writeActivity,
+    ruvia::detail::operation_lane_lease closeActivity) {
     static_cast<void>(readActivity);
     static_cast<void>(writeActivity);
     static_cast<void>(closeActivity);
@@ -146,24 +109,24 @@ ruvia::Task<void> closeWebSocketWithReason(void* target,
 namespace ruvia {
 
 SseWriter::SseWriter(const SseWriter& other) noexcept
-    : detail::ScopedCapabilityNode(other),
-      writer_(other.writer_) {}
+    : writer_(other.writer_),
+      registration_(other.registration_, this) {}
 
 SseWriter::SseWriter(SseWriter&& other) noexcept
-    : detail::ScopedCapabilityNode(std::move(other)),
-      writer_(std::exchange(other.writer_, nullptr)) {}
+    : writer_(std::exchange(other.writer_, nullptr)),
+      registration_(std::move(other.registration_), this) {}
 
 SseWriter::SseWriter(ResponseStreamWriter& writer) noexcept
-    : detail::ScopedCapabilityNode(writer.operationScope_, &SseWriter::expireCapability),
-      writer_(writer.operationScope_.active() ? &writer : nullptr) {}
+    : writer_(writer.operationScope_.active() ? &writer : nullptr),
+      registration_(writer.operationScope_, this, &SseWriter::expire_capability) {}
 
 ResponseStreamWriter& SseWriter::writer() const {
-    requireActive();
+    registration_.require_active();
     return *writer_;
 }
 
-void SseWriter::expireCapability(detail::ScopedCapabilityNode& capability) noexcept {
-    static_cast<SseWriter&>(capability).writer_ = nullptr;
+void SseWriter::expire_capability(void* target) noexcept {
+    static_cast<SseWriter*>(target)->writer_ = nullptr;
 }
 
 HttpTunnel& Context::tunnel() const {
@@ -221,17 +184,17 @@ Task<std::optional<View>> readBody(
 }  // namespace
 
 ScopedOperation<std::optional<std::span<const std::byte>>> BodyReader::read() & {
-    if (operationScope_.hasPendingOperations()) {
+    if (operationScope_.has_pending_operations()) {
         throw std::logic_error("request body read is already in progress");
     }
-    return detail::makeScopedOperation(operationScope_, readBody<std::span<const std::byte>>(read_));
+    return ::ruvia::make_scoped_operation(operationScope_, readBody<std::span<const std::byte>>(read_));
 }
 
 ScopedOperation<std::optional<std::string_view>> BodyReader::text() & {
-    if (operationScope_.hasPendingOperations()) {
+    if (operationScope_.has_pending_operations()) {
         throw std::logic_error("request body read is already in progress");
     }
-    return detail::makeScopedOperation(operationScope_, readBody<std::string_view>(read_));
+    return ::ruvia::make_scoped_operation(operationScope_, readBody<std::string_view>(read_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::write(std::span<const std::byte> chunk) & {
@@ -246,9 +209,9 @@ ScopedOperation<void> ResponseStreamWriter::write(std::string_view chunk) & {
 
 ScopedOperation<void> ResponseStreamWriter::write(std::pmr::string&& chunk) & {
     requireActive();
-    ResponseStreamOutputGuard guard(outputActive_);
+    auto guard = claim_output_lane(outputActive_);
     std::pmr::string owned(std::move(chunk), resource_);
-    return detail::makeScopedOperation(operationScope_,
+    return ::ruvia::make_scoped_operation(operationScope_,
         writeTransferredChunk(target_, write_, std::move(owned), std::move(guard)));
 }
 
@@ -262,14 +225,14 @@ ScopedOperation<void> ResponseStreamWriter::writeln(std::string_view chunk) & {
 ScopedOperation<TimerSleepResult> ResponseStreamWriter::sleep(
     std::chrono::milliseconds duration) & {
     requireActive();
-    return detail::makeScopedOperation(operationScope_, sleep_(target_, duration, stopToken_));
+    return ::ruvia::make_scoped_operation(operationScope_, sleep_(target_, duration, stopToken_));
 }
 
 ScopedOperation<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) & {
     requireActive();
     auto ownedTrailers = OwnedTrailers(trailers, resource_);
-    ResponseStreamOutputGuard guard(outputActive_);
-    return detail::makeScopedOperation(
+    auto guard = claim_output_lane(outputActive_);
+    return ::ruvia::make_scoped_operation(
         operationScope_, endOwned(target_, end_, std::move(ownedTrailers), std::move(guard)));
 }
 
@@ -283,8 +246,8 @@ ScopedOperation<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
 
 ScopedOperation<std::optional<WebSocketMessage>> WebSocket::read() & {
     requireActive();
-    WebSocketActivityLease activity(readActive_, "concurrent websocket reads are not supported");
-    return detail::makeScopedOperation(operationScope_,
+    auto activity = claim_websocket_lane(readActive_, "concurrent websocket reads are not supported");
+    return ::ruvia::make_scoped_operation(operationScope_,
         readWebSocket(target_, read_, std::move(activity)), &requireWebSocketWorker,
         const_cast<WorkerHandle*>(worker_));
 }
@@ -324,11 +287,11 @@ ScopedOperation<void> WebSocket::ping(std::pmr::string&& payload) & {
 ScopedOperation<void> WebSocket::close(WebSocketCloseOptions options) & {
     requireActive();
     std::pmr::string owned(options.reason.view(), resource_);
-    WebSocketActivityLease readActivity(readActive_, "websocket close cannot overlap a read");
-    WebSocketActivityLease writeActivity(
+    auto readActivity = claim_websocket_lane(readActive_, "websocket close cannot overlap a read");
+    auto writeActivity = claim_websocket_lane(
         writeActive_, "websocket close cannot overlap an output operation");
-    WebSocketActivityLease closeActivity(closeActive_, "websocket close is already in progress");
-    return detail::makeScopedOperation(operationScope_,
+    auto closeActivity = claim_websocket_lane(closeActive_, "websocket close is already in progress");
+    return ::ruvia::make_scoped_operation(operationScope_,
         closeWebSocketWithReason(target_, close_, options, std::move(owned),
             std::move(readActivity), std::move(writeActivity), std::move(closeActivity)),
         &requireWebSocketWorker, const_cast<WorkerHandle*>(worker_));
@@ -352,10 +315,10 @@ ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::string_view 
 
 ScopedOperation<void> WebSocket::write(WebSocketOpcode opcode, std::pmr::string&& payload, bool compress) {
     requireActive();
-    WebSocketActivityLease activity(
+    auto activity = claim_websocket_lane(
         writeActive_, "concurrent websocket output operations are not supported");
     std::pmr::string owned(std::move(payload), resource_);
-    return detail::makeScopedOperation(operationScope_,
+    return ::ruvia::make_scoped_operation(operationScope_,
         writeWebSocketPayload(target_, write_, opcode, std::move(owned), std::move(activity), compress),
         &requireWebSocketWorker, const_cast<WorkerHandle*>(worker_));
 }

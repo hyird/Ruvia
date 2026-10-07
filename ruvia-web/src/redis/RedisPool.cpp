@@ -6,7 +6,7 @@
 #include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/redis/Redis.h"
+#include "ruvia/web/detail/redis/RedisUtils.h"
 
 namespace ruvia {
 namespace detail {
@@ -131,7 +131,7 @@ void RedisPool::throwIfAborted(const Connection& connection) const {
 }
 
 Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
-    std::span<const RedisPipeline::Command> commands, OperationOptions options,
+    std::span<const redis_owned_command> commands, OperationOptions options,
     std::pmr::memory_resource* resource) {
     return executePipelineImpl(commands, std::move(options), resource);
 }

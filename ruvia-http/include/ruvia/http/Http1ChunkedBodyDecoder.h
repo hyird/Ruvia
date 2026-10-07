@@ -2,14 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
-#include <optional>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/Http1ChunkDecodeError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/detail/parser/http_chunk_framing.h"
 #include "ruvia/http/detail/util/BorrowedView.h"
 
 namespace ruvia {
@@ -137,6 +136,7 @@ struct Http1ChunkedBodyDecoderConfig final {
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
 // borrow the supplied input and remain valid only until it is modified. The
 // body limit counts chunk payload bytes, which may still be transfer-encoded.
+// Framing bytes have a separate cumulative kMaxHttpHeaderBytes budget.
 class Http1ChunkedBodyDecoder final {
 public:
     explicit Http1ChunkedBodyDecoder(Http1ChunkedBodyDecoderConfig config = {});
@@ -154,29 +154,7 @@ public:
     Http1ChunkDecodeResult decode(Input&&, std::size_t) = delete;
 
 private:
-    enum class ProgressState : std::uint8_t {
-        kSizeLine,
-        kBody,
-        kDelimiter,
-        kTrailers,
-        kComplete,
-    };
-    using State = std::expected<ProgressState, Http1ChunkDecodeError>;
-
-    [[nodiscard]] Http1ChunkDecodeResult fail(
-        std::size_t consumedBytes, Http1ChunkDecodeError error) noexcept;
-    [[nodiscard]] std::optional<Http1ChunkDecodeError> accountFraming(std::size_t bytes) noexcept;
-    [[nodiscard]] std::optional<Http1ChunkDecodeError> consumeDelimiter(
-        std::string_view available) noexcept;
-    [[nodiscard]] bool trailersValid(std::string_view trailers) const;
-
-    ProtocolByteLimit bodyLimit_;
-    Http1ChunkTrailerRole trailerRole_;
-    State state_{ProgressState::kSizeLine};
-    std::size_t trailerSearchOffset_{0};
-    std::size_t remaining_{0};
-    std::size_t decodedBytes_{0};
-    std::size_t encodedOverheadBytes_{0};
+    detail::http_chunk_framing framing_;
 };
 
 }  // namespace ruvia

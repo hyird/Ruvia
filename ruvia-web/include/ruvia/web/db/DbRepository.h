@@ -152,7 +152,7 @@ DbExpression entityColumnValue(DbQuery& query, const E& entity) {
 
 template <typename E>
 struct DbMapProjection final {
-    static_assert(requires { requires std::derived_from<E, typename E::SqlEntityType>; } || requires { requires std::derived_from<E, typename E::DbProjectionType>; }, "SQL results require a SQL entity or a DbProjection");
+    static_assert(sql_entity<E> || sql_projection<E>, "SQL results require a SQL entity or a DbProjection");
     explicit DbMapProjection(std::span<const std::pmr::string> selected) {
         for (const auto& name : selected) {
             requireEntityColumn<E>(name);
@@ -247,7 +247,7 @@ public:
     }
     template <typename Joined>
     DbQueryBuilder& join(DbJoinType type, std::string_view alias, DbExpression on = {}) {
-        static_assert(std::derived_from<Joined, typename Joined::SqlEntityType>);
+        static_assert(sql_entity<Joined>, "SQL joins require a SQL entity");
         query_.join(type, Joined::tableName(), (on.empty() ? DbExpression{} : query_.importExpression(on)), alias);
         return *this;
     }
@@ -569,7 +569,7 @@ public:
     }
     template <typename Source>
     DbWriteQueryBuilder& updateFrom(std::string_view alias) {
-        static_assert(std::derived_from<Source, typename Source::SqlEntityType>);
+        static_assert(sql_entity<Source>, "SQL update sources require a SQL entity");
         query_.updateFrom(Source::tableName(), alias);
         return *this;
     }
@@ -698,9 +698,7 @@ private:
 
 template <typename Entity, typename Executor>
 class DbRepository final {
-    static_assert(requires {
-        typename Entity::SqlEntityType;
-        requires std::derived_from<Entity, typename Entity::SqlEntityType>; }, "SQL repositories require a RUVIA_DB_ENTITY declaration");
+    static_assert(sql_entity<Entity>, "SQL repositories require a RUVIA_DB_ENTITY declaration");
 
 public:
     [[nodiscard]] DbQueryBuilder<Entity, Executor> createQueryBuilder(std::string_view alias = {}) const {
@@ -1057,7 +1055,7 @@ private:
 
 template <typename Entity>
 DbRepository<Entity, DbHandle> DbHandle::getRepository() const {
-    requireActive();
+    registration_.require_active();
     return DbRepository<Entity, DbHandle>(*this);
 }
 template <typename Entity>

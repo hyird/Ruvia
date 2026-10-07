@@ -93,8 +93,8 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
         } catch (...) {
             receiveFailure = std::current_exception();
         }
-        upload->stop();
-        if (receiveFailure || !upload->ended) {
+        upload->output.stop();
+        if (receiveFailure || !upload->output.ended) {
             close(connection);
         }
         co_await writers.join();
@@ -146,7 +146,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             response.state_->retainInformational(parsed->head().status(), interimHeaders);
             if (request.upload() != nullptr && parsed->plan().requestContentSignal() == HttpClientRequestContentSignal::kContinue) {
                 request.upload()->contentReleased = true;
-                request.upload()->notifyData();
+                request.upload()->output.notifyData();
             }
             const bool closesExchange = parsed->plan().informational()->persistence() ==
                                         Http1ClosePolicy::kCloseAfterResponse;
@@ -158,8 +158,8 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             }
             continue;
         }
-        if (request.upload() != nullptr && !request.upload()->ended) {
-            request.upload()->stop();
+        if (request.upload() != nullptr && !request.upload()->output.ended) {
+            request.upload()->output.stop();
         }
         response.state_->status = parsed->head().status();
         response.state_->protocolVersion = parsed->head().protocolVersion();
@@ -190,7 +190,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             co_return;
         }
         if (request.tunnel() != nullptr) {
-            request.tunnel()->stop();
+            request.tunnel()->output.stop();
         }
         if (parsed->plan().connectTunnel() != nullptr ||
             parsed->plan().protocolUpgrade() != nullptr) {
@@ -324,7 +324,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
 }
 
 Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClientResponseState& state, const OperationTimeout& timeout) {
-    auto& output = *state.tunnel;
+    auto& output = state.tunnel->output;
     std::optional<TlsTunnelOutput> tls;
     if (config_.scheme == HttpScheme::kHttps) {
         tls.emplace(*connection.stream.native_handle(), connection.stream.next_layer(), worker_, *resource_);
@@ -332,7 +332,7 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
     }
     WorkerTimerRegistration lifetimeTimer;
     if (const auto remaining = timeout.remaining()) {
-        WorkerHandleAccess::scheduleTimer(worker_, lifetimeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
+        (worker_).schedule_timer(lifetimeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
             if (outcome == WorkerTimerOutcome::kExpired) {
                 connection.abortReason = AbortReason::kTimeout;
                 close(connection);
@@ -351,7 +351,7 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
                 WorkerTimerRegistration writeTimer;
                 const auto writeTimeout = timeout.constrainedBy(config_.writeTimeout);
                 if (const auto remaining = writeTimeout.remaining()) {
-                    WorkerHandleAccess::scheduleTimer(worker_, writeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
+                    (worker_).schedule_timer(writeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
                         if (outcome == WorkerTimerOutcome::kExpired) {
                             connection.abortReason = AbortReason::kTimeout;
                             close(connection);
@@ -407,7 +407,7 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
             }
             const auto count = co_await readSome(connection, std::span<char>(input).first(std::min(input.size(), config_.maxResponseBytes - state.pending.size())), timeout, true);
             if (count == 0) {
-                output.receiveEnded = true;
+                state.tunnel->receiveEnded = true;
                 state.dataSignal.notify();
                 break;
             }
@@ -443,7 +443,7 @@ Task<void> HttpClientPool::writeUploadBytes(Connection& connection, std::string_
         if (remaining->count() == 0) {
             throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP upload write timed out");
         }
-        WorkerHandleAccess::scheduleTimer(worker_, timer, workerTimerDeadlineAfter(*remaining), [&connection](WorkerTimerOutcome outcome) noexcept {
+        (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*remaining), [&connection](WorkerTimerOutcome outcome) noexcept {
             if (outcome == WorkerTimerOutcome::kExpired) {
                 connection.abortReason = AbortReason::kTimeout;
                 if (connection.activeHttp1Response != nullptr) {
@@ -473,16 +473,16 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
     auto& upload = *state.upload;
     WorkerTimerRegistration continueTimer;
     if (!upload.contentReleased) {
-        WorkerHandleAccess::scheduleTimer(worker_, continueTimer, workerTimerDeadlineAfter(upload.config.continueTimeout), [&upload](WorkerTimerOutcome outcome) noexcept {
-            if (outcome == WorkerTimerOutcome::kExpired && !upload.stopped) {
+        (worker_).schedule_timer(continueTimer, workerTimerDeadlineAfter(upload.config.continueTimeout), [&upload](WorkerTimerOutcome outcome) noexcept {
+            if (outcome == WorkerTimerOutcome::kExpired && !upload.output.stopped) {
                 upload.contentReleased = true;
-                upload.notifyData();
+                upload.output.notifyData();
             }
         });
     }
     try {
         for (;;) {
-            if (upload.stopped) {
+            if (upload.output.stopped) {
                 writer.abort();
                 co_return;
             }
@@ -490,19 +490,19 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
             if (timeout.expired()) {
                 throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP upload timed out");
             }
-            if (!upload.contentReleased || (!upload.chunkReady && !upload.endRequested)) {
-                co_await upload.data.wait();
+            if (!upload.contentReleased || (!upload.output.chunkReady && !upload.output.endRequested)) {
+                co_await upload.output.data.wait();
                 continue;
             }
             writer.releaseContent();
             continueTimer.cancel();
-            if (upload.chunkReady) {
-                const auto chunk = writer.planChunk(std::span<const char>(upload.chunk.data(), upload.chunk.size()));
+            if (upload.output.chunkReady) {
+                const auto chunk = writer.planChunk(std::span<const char>(upload.output.chunk.data(), upload.output.chunk.size()));
                 if (!chunk) {
                     throw HttpClientError(HttpClientError::Code::kInvalidRequest, "HTTP upload content length mismatch");
                 }
                 co_await writeUploadBytes(connection, std::string_view(chunk->prefix.data(), chunk->prefixSize), timeout);
-                if (upload.stopped) {
+                if (upload.output.stopped) {
                     writer.abort();
                     co_return;
                 }
@@ -511,7 +511,7 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
                 if (!writer.commitChunk(chunk->payload.size())) {
                     std::terminate();
                 }
-                upload.acknowledgeChunk();
+                upload.output.acknowledgeChunk();
                 continue;
             }
             std::pmr::vector<HttpHeaderView> trailers(state.resource);
@@ -527,11 +527,11 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
                 HttpClientUploadState& upload;
                 explicit CompletionGuard(HttpClientUploadState& value)
                     : upload(value) {
-                    upload.completionPending = true;
+                    upload.output.completionPending = true;
                 }
                 ~CompletionGuard() {
-                    upload.completionPending = false;
-                    upload.space.notify();
+                    upload.output.completionPending = false;
+                    upload.output.space.notify();
                 }
             } completion(upload);
             co_await writeUploadBytes(connection, *ending, timeout);
@@ -542,14 +542,14 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
             if (completed == Http1ClientRequestContentCompletionStatus::kExchangeTerminal && !state.headReady) {
                 std::terminate();
             }
-            upload.finish();
+            upload.output.finish();
             co_return;
         }
     } catch (...) {
         if (!state.headReady) {
             failure = std::current_exception();
         }
-        upload.stop();
+        upload.output.stop();
         close(connection);
     }
 }

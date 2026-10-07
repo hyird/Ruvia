@@ -26,7 +26,7 @@ ScopedOperation<void> HttpConnectionAdvertisementOutput::advertiseOrigins(std::s
     if (origins_ == nullptr) {
         throw std::logic_error("this HTTP version does not support ORIGIN frames");
     }
-    if (scope_.hasPendingOperations()) {
+    if (scope_.has_pending_operations()) {
         throw std::logic_error("connection advertisement output is already active");
     }
     if (origins.size() > kMaxHttpHeaderBytes / 2) {
@@ -44,19 +44,19 @@ ScopedOperation<void> HttpConnectionAdvertisementOutput::advertiseOrigins(std::s
     for (const auto origin : origins) {
         owned.emplace_back(origin);
     }
-    return makeScopedOperation(scope_, writeOrigins(std::move(owned)));
+    return ::ruvia::make_scoped_operation(scope_, writeOrigins(std::move(owned)));
 }
 ScopedOperation<void> HttpConnectionAdvertisementOutput::advertiseAlternativeService(std::string_view value) {
     if (service_ == nullptr) {
         throw std::logic_error("ALTSVC frames require HTTP/2");
     }
-    if (scope_.hasPendingOperations()) {
+    if (scope_.has_pending_operations()) {
         throw std::logic_error("connection advertisement output is already active");
     }
     if (value.size() > kMaxHttpHeaderBytes) {
         throw std::length_error("alternative service advertisement exceeds its byte bound");
     }
-    return makeScopedOperation(scope_, writeService(std::pmr::string(value, resource_)));
+    return ::ruvia::make_scoped_operation(scope_, writeService(std::pmr::string(value, resource_)));
 }
 Task<void> HttpConnectionAdvertisementOutput::writeOrigins(std::pmr::vector<std::pmr::string> origins) {
     std::pmr::vector<std::string_view> views(resource_);

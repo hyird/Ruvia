@@ -13,11 +13,11 @@ namespace ruvia {
 
 HttpConditionalHeaders httpConditionalHeaders(const HttpRequest& request) noexcept {
     return HttpConditionalHeaders{
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfUnmodifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfModifiedSince),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kRange),
-        detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange),
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
+        detail::requestKnownHeader(request, detail::RequestHeaderKind::kIfUnmodifiedSince),
+        detail::requestKnownHeader(request, detail::RequestHeaderKind::kIfModifiedSince),
+        detail::requestKnownHeader(request, detail::RequestHeaderKind::kRange),
+        detail::requestKnownHeader(request, detail::RequestHeaderKind::kIfRange),
+        detail::requestHasKnownHeader(request, detail::RequestHeaderKind::kIfRange)};
 }
 
 void HttpEtagFieldCondition::update(
@@ -43,9 +43,9 @@ void HttpEtagFieldCondition::update(
 HttpEtagPreconditions httpEtagPreconditions(
     const HttpRequest& request, std::string_view etag) noexcept {
     HttpEtagPreconditions result;
-    const bool hasIfMatch = detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfMatch);
+    const bool hasIfMatch = detail::requestHasKnownHeader(request, detail::RequestHeaderKind::kIfMatch);
     const bool hasIfNoneMatch =
-        detail::requestHasKnownHeader(request, detail::RequestKnownHeader::kIfNoneMatch);
+        detail::requestHasKnownHeader(request, detail::RequestHeaderKind::kIfNoneMatch);
     if (!hasIfMatch && !hasIfNoneMatch) {
         return result;
     }

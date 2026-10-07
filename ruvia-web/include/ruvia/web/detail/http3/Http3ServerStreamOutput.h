@@ -29,11 +29,11 @@ struct Http3ServerStreamOutputConfig final {
     std::optional<std::chrono::milliseconds> writeTimeout{};
 };
 
-// Server-network-affine response egress for the single consumer that already routed
+// Worker-affine response egress for the wire half that already routed
 // mailbox messages for one QUIC connection. It never drains the shared mailbox.
 // Accepted blocks remain borrowed until all bytes are accepted by SSL or the
 // corresponding stream/connection SSL owner has been retired. The transport and
-// server-network-owned memory resource must outlive this object; destruction with live streams or
+// worker-owned memory resource must outlive this object; destruction with live streams or
 // borrowed blocks is a contract violation, so stop() explicitly before teardown.
 class Http3ServerStreamOutput final {
 public:
@@ -147,8 +147,8 @@ public:
     // identities are detected before any transport operation.
     [[nodiscard]] Result acceptData(Http3StreamMailbox::BorrowedBlock& block);
 
-    // Bind only a server UNI stream actually opened by this network owner.
-    // The binding is immutable and must precede a worker's response publication.
+    // Bind only a server UNI stream actually opened by this wire half.
+    // The binding is immutable and must precede handler response publication.
     [[nodiscard]] Result registerPushStream(StreamId streamId, std::uint64_t pushId);
     [[nodiscard]] Result acceptCriticalData(Http3StreamMailbox::BorrowedBlock& block, StreamId streamId);
     [[nodiscard]] Result acceptControl(const Http3StreamControl& control);

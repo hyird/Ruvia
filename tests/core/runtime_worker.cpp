@@ -27,16 +27,16 @@
 
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
+#include "ruvia/core/RuntimeLifecycle.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/core/detail/RuntimeLifecycle.h"
+#include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/detail/worker/WorkerSelection.h"
-#include "ruvia/core/detail/worker/WorkerSignal.h"
 
 namespace {
 
@@ -457,22 +457,19 @@ bool testMailboxFactoryRollbackAndDetach() {
     const auto worker = ruvia::detail::WorkerHandleAccess::make(dispatcher);
     bool thrown = false;
     try {
-        static_cast<void>(ruvia::detail::WorkerHandleAccess::postFactory(
-            worker, []() -> ruvia::MoveOnlyFunction<void()> {
-                throw std::runtime_error("factory failed");
-            }));
+        static_cast<void>((worker).post_factory([]() -> ruvia::MoveOnlyFunction<void()> {
+            throw std::runtime_error("factory failed");
+        }));
     } catch (const std::runtime_error&) {
         thrown = true;
     }
     bool empty = false;
     try {
-        static_cast<void>(ruvia::detail::WorkerHandleAccess::postFactory(
-            worker, [] { return ruvia::MoveOnlyFunction<void()>(); }));
+        static_cast<void>((worker).post_factory([] { return ruvia::MoveOnlyFunction<void()>(); }));
     } catch (const std::invalid_argument&) {
         empty = true;
     }
-    bool recovered = ruvia::detail::WorkerHandleAccess::postFactory(
-                         worker, [] { return ruvia::MoveOnlyFunction<void()>([] {}); }) ==
+    bool recovered = (worker).post_factory([] { return ruvia::MoveOnlyFunction<void()>([] {}); }) ==
                      ruvia::PostStatus::kAccepted;
     context.run();
 
@@ -506,12 +503,11 @@ bool testMailboxFactoryRollbackAndDetach() {
     };
     const auto detached = std::make_shared<ruvia::detail::WorkerDispatcher>(context, 1);
     const auto detachedWorker = ruvia::detail::WorkerHandleAccess::make(detached);
-    const auto status = ruvia::detail::WorkerHandleAccess::postFactory(
-        detachedWorker, [detached, &abandonedRan, &abandonedDestroyed] {
-            detached->detachContext();
-            return ruvia::MoveOnlyFunction<void()>(
-                Probe{abandonedRan, abandonedDestroyed});
-        });
+    const auto status = (detachedWorker).post_factory([detached, &abandonedRan, &abandonedDestroyed] {
+        detached->detachContext();
+        return ruvia::MoveOnlyFunction<void()>(
+            Probe{abandonedRan, abandonedDestroyed});
+    });
     return thrown && empty && recovered && rawStackRejected &&
            status == ruvia::PostStatus::kAccepted && !abandonedRan && abandonedDestroyed;
 }
@@ -533,7 +529,7 @@ bool testMailboxFactoryCanFinishAfterDetach() {
         }
     };
     std::jthread producer([&] {
-        status = ruvia::detail::WorkerHandleAccess::postFactory(worker, [&] {
+        status = (worker).post_factory([&] {
             auto payload = std::make_unique<Payload>(&destroyed);
             entered.set_value();
             resumed.wait();
@@ -1058,7 +1054,7 @@ bool testPostOutcomeInvariantsAndEmptyCallbacks() {
            emptyStopCallback;
 }
 
-ruvia::Task<void> waitForSignal(ruvia::detail::WorkerSignal& signal, bool& resumed,
+ruvia::Task<void> waitForSignal(ruvia::WorkerSignal& signal, bool& resumed,
     std::size_t& remaining, ruvia::EventLoopAttachment& attachment) {
     {
         auto discardedColdWait = signal.wait();
@@ -1075,7 +1071,7 @@ bool testWorkerSignalIsWorkerAffine() {
     bool invalidWorkerRejected = false;
     ruvia::WorkerHandle invalidWorker;
     try {
-        ruvia::detail::WorkerSignal invalid(invalidWorker);
+        ruvia::WorkerSignal invalid(invalidWorker);
     } catch (const std::invalid_argument&) {
         invalidWorkerRejected = true;
     }
@@ -1083,9 +1079,15 @@ bool testWorkerSignalIsWorkerAffine() {
     asio::io_context ioContext;
     auto attachment = ruvia::attachEventLoop(ioContext);
     const auto workerHandle = attachment.loop().handle();
-    ruvia::detail::WorkerSignal firstSignal(workerHandle);
-    ruvia::detail::WorkerSignal secondSignal(workerHandle);
+    ruvia::WorkerSignal firstSignal(workerHandle);
+    ruvia::WorkerSignal secondSignal(workerHandle);
     const bool workerBorrowed = &firstSignal.worker() == &workerHandle;
+    bool wait_creation_rejected = false;
+    try {
+        static_cast<void>(firstSignal.wait());
+    } catch (const std::logic_error&) {
+        wait_creation_rejected = true;
+    }
     bool firstResumed = false;
     bool secondResumed = false;
     std::size_t remaining = 2;
@@ -1102,7 +1104,47 @@ bool testWorkerSignalIsWorkerAffine() {
         secondSignal.notify();
     });
     ioContext.run();
-    return invalidWorkerRejected && workerBorrowed && firstResumed && secondResumed;
+    return invalidWorkerRejected && workerBorrowed && wait_creation_rejected && firstResumed && secondResumed;
+}
+
+ruvia::Task<void> wait_signal_once(ruvia::WorkerSignal& signal, bool& resumed) {
+    co_await signal.wait();
+    resumed = true;
+}
+
+ruvia::Task<void> exercise_signal_pending_latch(
+    ruvia::WorkerSignal& signal, ruvia::EventLoopAttachment& attachment, bool& success) {
+    signal.notify();
+    signal.notify();
+    {
+        auto cold_wait = signal.wait();
+        static_cast<void>(cold_wait);
+    }
+    co_await signal.wait();
+
+    bool resumed = false;
+    ruvia::TaskScope scope(signal.worker());
+    scope.spawn(wait_signal_once(signal, resumed));
+    const bool second_wait_suspended = !resumed;
+    signal.notify();
+    signal.notify();
+    co_await scope.join();
+    co_await signal.wait();
+    success = second_wait_suspended && resumed;
+    attachment.stop();
+}
+
+bool test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake() {
+    asio::io_context context;
+    auto attachment = ruvia::attachEventLoop(context);
+    const auto worker = attachment.loop().handle();
+    ruvia::WorkerSignal signal(worker);
+    bool success = false;
+    asio::co_spawn(context,
+        ruvia::detail::taskAsAwaitable(exercise_signal_pending_latch(signal, attachment, success)),
+        asio::detached);
+    context.run();
+    return success;
 }
 
 bool testWorkerSignalHasNoArbitraryWaiterLimit() {
@@ -1110,7 +1152,7 @@ bool testWorkerSignalHasNoArbitraryWaiterLimit() {
     asio::io_context ioContext;
     auto attachment = ruvia::attachEventLoop(ioContext);
     const auto workerHandle = attachment.loop().handle();
-    ruvia::detail::WorkerSignal signal(workerHandle);
+    ruvia::WorkerSignal signal(workerHandle);
     std::array<bool, kWaiterCount> resumed{};
     std::size_t remaining = kWaiterCount;
     for (std::size_t index = 0; index < resumed.size(); ++index) {
@@ -1144,7 +1186,7 @@ bool testWorkerSignalRechecksAffinityWhenColdWaitStarts() {
     auto ownerAttachment = ruvia::attachEventLoop(ownerContext);
     auto otherAttachment = ruvia::attachEventLoop(otherContext);
     const auto ownerHandle = ownerAttachment.loop().handle();
-    ruvia::detail::WorkerSignal signal(ownerHandle);
+    ruvia::WorkerSignal signal(ownerHandle);
     std::optional<ruvia::Task<void>> coldWait;
 
     asio::post(ownerContext, [&] {
@@ -2098,7 +2140,7 @@ bool testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive() {
     struct Callback final {
         std::atomic<unsigned>* started;
         std::atomic<unsigned>* finished;
-        ruvia::detail::WorkerSignal* signal;
+        ruvia::WorkerSignal* signal;
         bool notifier;
         int value;
         int* observed;
@@ -2121,7 +2163,7 @@ bool testAsyncStopCallbacksStartTogetherAndKeepCapturesAlive() {
     const auto worker = loop.handle();
     std::atomic<unsigned> started{0};
     std::atomic<unsigned> finished{0};
-    ruvia::detail::WorkerSignal signal(worker);
+    ruvia::WorkerSignal signal(worker);
     int observed = 0;
     auto first = loop.onStop(Callback{&started, &finished, &signal, false, 1, &observed});
     auto second = loop.onStop(Callback{&started, &finished, &signal, true, 2, &observed});
@@ -2235,6 +2277,21 @@ bool testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner() {
     return !validDuringMove && replacementSurvived && !root->valid();
 }
 
+ruvia::Task<const int> immutable_root_result(const ruvia::WorkerHandle& worker) {
+    co_return worker.isCurrent() ? 17 : -1;
+}
+
+bool test_root_task_delivers_const_result() {
+    ruvia::EventLoopPool loops({.loopCount = 1});
+    const auto worker = loops.loop(0).handle();
+    auto root = loops.loop(0).start(immutable_root_result(worker));
+    loops.start();
+    const auto value = root.get();
+    loops.stop();
+    loops.join();
+    return value == 17 && !root.valid();
+}
+
 bool testRootTaskResultOwnsPmrStoragePastPoolRetirement() {
     ruvia::EventLoopPool loops({.loopCount = 1, .mailboxCapacity = 4});
     const auto loop = loops.loop(0);
@@ -2287,7 +2344,7 @@ bool testRootTasksJoinNestedScopesDuringStop() {
 }
 
 bool testLifecycleTransitionsAreMonotonic() {
-    using Lifecycle = ruvia::detail::RuntimeLifecycle;
+    using Lifecycle = ruvia::RuntimeLifecycle;
     Lifecycle lifecycle;
     lifecycle.completeStop();
     if (lifecycle.state() != Lifecycle::State::kReady || !lifecycle.start()) {
@@ -2306,7 +2363,7 @@ bool testLifecycleTransitionsAreMonotonic() {
 }
 
 bool testConcurrentStopHasOneInitiator() {
-    using Lifecycle = ruvia::detail::RuntimeLifecycle;
+    using Lifecycle = ruvia::RuntimeLifecycle;
     constexpr std::size_t kThreadCount = 16;
     Lifecycle lifecycle;
     if (!lifecycle.start()) {
@@ -2389,6 +2446,8 @@ int main() {
                    run("mailbox_factory_can_finish_after_detach",
                        testMailboxFactoryCanFinishAfterDetach) &&
                    run("worker_signal_is_worker_affine", testWorkerSignalIsWorkerAffine) &&
+                   run("worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake",
+                       test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake) &&
                    run("worker_signal_has_no_waiter_limit",
                        testWorkerSignalHasNoArbitraryWaiterLimit) &&
                    run("worker_signal_rechecks_cold_wait_affinity",
@@ -2448,6 +2507,8 @@ int main() {
                        testRootTaskResultMovesOutsideLockAndPreservesReentrantOwner) &&
                    run("root_result_owns_pmr_storage_past_pool_retirement",
                        testRootTaskResultOwnsPmrStoragePastPoolRetirement) &&
+                   run("root_task_delivers_const_result",
+                       test_root_task_delivers_const_result) &&
                    run("lifecycle_transitions_are_monotonic",
                        testLifecycleTransitionsAreMonotonic) &&
                    run("concurrent_stop_has_one_initiator", testConcurrentStopHasOneInitiator)

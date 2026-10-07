@@ -119,15 +119,15 @@ ScopedOperation<void> WebSocketClientState::write(
     validateOperationOptions(options);
     requireCurrent();
     std::pmr::string owned(payload, memory_.resource());
-    return makeScopedOperation(operationScope_,
+    return ::ruvia::make_scoped_operation(operationScope_,
         writeOwned(shared_from_this(), opcode, std::move(owned), std::move(options), sendOptions,
-            ActivityLease(writeActive_, "concurrent WebSocket client writes are not supported")),
+            claim_activity(writeActive_, "concurrent WebSocket client writes are not supported")),
         &WebSocketClientState::checkOperationAffinity, &worker_);
 }
 
 Task<void> WebSocketClientState::writeOwned(std::shared_ptr<WebSocketClientState> state,
     WebSocketOpcode opcode, std::pmr::string payload, OperationOptions options, WebSocketSendOptions sendOptions,
-    ActivityLease activity) {
+    operation_lane_lease activity) {
     static_cast<void>(activity);
     state->requireOpen();
     OperationGuard operation(*state, options);
