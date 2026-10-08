@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/ClientTransport.h"
+#include "client/ClientTransport.h"
 
 #include <algorithm>
 #include <array>

@@ -2,8 +2,7 @@
 #include <limits>
 #include <string_view>
 
-#include "ruvia/core/detail/number/DecimalNumber.h"
-
+#include "DecimalNumber.h"
 #include "test_harness.h"
 
 using ruvia::detail::DecimalParseError;

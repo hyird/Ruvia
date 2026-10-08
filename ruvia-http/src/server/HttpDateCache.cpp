@@ -1,10 +1,10 @@
-#include "ruvia/http/detail/server/HttpDateCache.h"
+#include "server/HttpDateCache.h"
 
 #include <array>
 #include <cstring>
 #include <ctime>
 
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
+#include "field/HttpImfFixdate.h"
 
 namespace ruvia::detail {
 

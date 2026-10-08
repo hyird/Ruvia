@@ -44,8 +44,8 @@
 #include "ruvia/core/WorkerNotification.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
-#include "ruvia/core/detail/worker/WorkerNotification.h"
 
+#include "WorkerNotification.h"
 #include "test_harness.h"
 
 namespace {

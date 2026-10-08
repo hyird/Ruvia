@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "parser/HttpUriGrammar.h"
 
 #include <algorithm>
 #include <array>

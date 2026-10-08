@@ -12,12 +12,12 @@
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
-#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 
+#include "http2/Http2Hpack.h"
+#include "http2/Http2ResponseHeaders.h"
+#include "http2/Http2StreamState.h"
+#include "response/HttpResponseHeadersAccess.h"
 #include "test_harness.h"
 
 namespace {

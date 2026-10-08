@@ -12,15 +12,16 @@
 
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
-#include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
-#include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+
+#include "coding/HttpContentLength.h"
+#include "field/HttpInterimResponseValidation.h"
+#include "http3/Http3FieldSectionEncoder.h"
+#include "server/HttpDateCache.h"
 
 namespace ruvia {
 namespace {

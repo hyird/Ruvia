@@ -49,13 +49,13 @@
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientResponse.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/http3/Http3ClientBodyBudget.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseState.h"
+#include "client/HttpClientResultBudget.h"
+#include "http/StreamingAccess.h"
+#include "http3/Http3ClientBodyBudget.h"
+#include "integration/WorkerCapabilities.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
@@ -1794,7 +1794,7 @@ RUVIA_TEST(worker_capabilities_keep_result_budgets_independent) {
         const ruvia::detail::WorkerCapabilityDefinitions firstDefinitions{
             .httpClients = firstDefinition};
         const ruvia::detail::WorkerCapabilityOptions options{
-            .httpClientResultBudget = {.maxRetainedBytes = 3}};
+            .http_client_result_budget = {.maxRetainedBytes = 3}};
         ruvia::detail::WorkerCapabilities firstCapabilities(
             firstIo, firstWorker.handle, firstResource, firstDefinitions, options);
         ruvia::operation_scope scope;
@@ -1829,7 +1829,7 @@ RUVIA_TEST(worker_capabilities_keep_result_budgets_independent) {
         const ruvia::detail::WorkerCapabilityDefinitions definitions{
             .httpClients = definition};
         const ruvia::detail::WorkerCapabilityOptions options{
-            .httpClientResultBudget = {.maxRetainedBytes = 3}};
+            .http_client_result_budget = {.maxRetainedBytes = 3}};
         ruvia::detail::WorkerCapabilities capabilities(
             secondIo, secondWorker.handle, secondResource, definitions, options);
         ruvia::operation_scope scope;

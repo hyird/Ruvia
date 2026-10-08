@@ -12,8 +12,8 @@
 #include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/App.h"
-#include "ruvia/web/detail/http/HttpCors.h"
 
+#include "http/HttpCors.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

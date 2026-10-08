@@ -13,8 +13,8 @@
 #include "ruvia/http/HttpResponseFile.h"
 #include "ruvia/http/detail/response/HttpResponseBody.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseFileAccess.h"
 
+#include "response/HttpResponseFileAccess.h"
 #include "test_harness.h"
 
 namespace {

@@ -6,8 +6,7 @@
 #include <exception>
 #include <utility>
 
-#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
-
+#include "PoolWaiterQueue.h"
 #include "test_harness.h"
 
 namespace {

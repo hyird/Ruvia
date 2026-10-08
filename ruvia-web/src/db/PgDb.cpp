@@ -3,10 +3,11 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/db/DbPostgreSql.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbPostgreSql.h"
+#include "db/DbRegistry.h"
 
 namespace ruvia::detail {
 namespace {

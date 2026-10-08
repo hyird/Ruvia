@@ -4,8 +4,7 @@
 #include <asio/ip/address_v6.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-
+#include "http3/Http3QuicSocketAddress.h"
 #include "test_harness.h"
 
 namespace {

@@ -1,15 +1,16 @@
-#include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"
+#include "client/Http1ClientRequestHeaders.h"
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/field/HttpOriginFields.h"
-#include "ruvia/http/detail/field/HttpTeFields.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+
+#include "coding/HttpContentCoding.h"
+#include "field/HttpCorsFields.h"
+#include "field/HttpMediaType.h"
+#include "field/HttpOriginFields.h"
+#include "field/HttpTeFields.h"
 namespace ruvia {
 
 bool addHeadBytes(std::size_t& total, std::size_t bytes) noexcept {

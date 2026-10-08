@@ -5,8 +5,9 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/web/ConnInfo.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
+
+#include "context/ContextAccess.h"
 
 namespace ruvia {
 namespace {

@@ -6,8 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
-
+#include "http2/Http2RequestHeaders.h"
 #include "test_harness.h"
 
 namespace {

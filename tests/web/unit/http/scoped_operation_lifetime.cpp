@@ -6,8 +6,8 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/MultipartReader.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
 #include "streaming_fixture.h"
 

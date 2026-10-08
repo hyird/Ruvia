@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/HttpCors.h"
+#include "http/HttpCors.h"
 
 #include <array>
 #include <charconv>

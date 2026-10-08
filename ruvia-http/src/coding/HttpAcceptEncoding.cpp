@@ -2,7 +2,8 @@
 
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpQualityValue.h"
+
+#include "field/HttpQualityValue.h"
 
 namespace ruvia {
 

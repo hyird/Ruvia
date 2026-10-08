@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
+#include "client/HttpClientResultBudget.h"
 
 namespace ruvia {
 

@@ -24,12 +24,12 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
-#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
+#include "body/HttpRequestBodyFacade.h"
+#include "http/StreamingAccess.h"
+#include "server/HttpResponseStreamState.h"
 #include "test_harness.h"
+#include "websocket/WebSocketAccess.h"
 
 namespace streaming_test {
 

@@ -14,9 +14,9 @@
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/web/detail/http3/http3_datagram_channel.h"
-#include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
 
+#include "http3/http3_datagram_channel.h"
+#include "http3/http3_datagram_endpoint.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

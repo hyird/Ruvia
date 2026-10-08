@@ -1,6 +1,6 @@
 #include "ruvia/http/HttpMediaType.h"
 
-#include "ruvia/http/detail/field/HttpMediaType.h"
+#include "field/HttpMediaType.h"
 
 namespace ruvia {
 

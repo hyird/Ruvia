@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "redis/RedisHandleHelpers.h"
 
 #include <stdexcept>
 #include <string>

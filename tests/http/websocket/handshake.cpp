@@ -12,9 +12,9 @@
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/WebSocketSubprotocolSet.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
 
 #include "test_harness.h"
+#include "websocket/HttpWebSocketHandshakeFields.h"
 
 namespace {
 

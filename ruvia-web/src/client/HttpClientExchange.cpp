@@ -6,10 +6,11 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientOutputOperation.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
+
+#include "client/HttpClientOutputOperation.h"
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseMemory.h"
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 struct http_client_upload_end_input final {

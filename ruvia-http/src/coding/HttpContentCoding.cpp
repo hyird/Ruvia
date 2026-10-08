@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+#include "coding/HttpContentCoding.h"
 
 #include <memory_resource>
 #include <string_view>
@@ -6,9 +6,10 @@
 
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "coding/HttpContentCodec.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,

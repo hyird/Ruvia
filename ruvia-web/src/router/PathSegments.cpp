@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/router/PathSegments.h"
+#include "router/PathSegments.h"
 
 namespace ruvia::detail {
 

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+#include "http3/http3_datagram_channel.h"
 
 #include <exception>
 #include <limits>

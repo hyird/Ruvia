@@ -14,7 +14,7 @@ namespace ruvia {
 //
 //     RUVIA_POST("/avatar", upload, ruvia::BodyLimit<256 * 1024>);
 //
-// ServerConfig::maxBufferedBodyBytes has to be sized for the largest body any
+// server_config::max_buffered_body_bytes has to be sized for the largest body any
 // route accepts,
 // which leaves every other route accepting that much too. This is the same
 // policy at a narrower scope: an endpoint expecting a small JSON document stops

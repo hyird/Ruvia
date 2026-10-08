@@ -4,7 +4,8 @@
 #include <utility>
 
 #include "ruvia/core/Bytes.h"
-#include "ruvia/web/detail/util/operation_lane_lease.h"
+
+#include "util/operation_lane_lease.h"
 
 namespace ruvia {
 namespace {

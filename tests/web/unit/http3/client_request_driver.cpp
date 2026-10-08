@@ -10,10 +10,10 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
-#include "ruvia/web/detail/client/HttpClientUploadState.h"
-#include "ruvia/web/detail/http3/Http3ClientRequestDriver.h"
-#include "ruvia/web/detail/http3/Http3ClientSansIoSessionEngine.h"
 
+#include "client/HttpClientUploadState.h"
+#include "http3/Http3ClientRequestDriver.h"
+#include "http3/Http3ClientSansIoSessionEngine.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

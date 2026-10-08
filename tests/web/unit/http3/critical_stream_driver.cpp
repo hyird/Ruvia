@@ -6,8 +6,8 @@
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
-#include "ruvia/web/detail/http3/Http3CriticalStreamDriver.h"
 
+#include "http3/Http3CriticalStreamDriver.h"
 #include "test_harness.h"
 
 namespace {

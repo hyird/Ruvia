@@ -1,6 +1,6 @@
 #include <exception>
 
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

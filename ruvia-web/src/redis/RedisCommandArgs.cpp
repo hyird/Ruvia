@@ -1,10 +1,11 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisOwnedCommand.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
+
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisTypesAccess.h"
 
 namespace ruvia::detail {
 

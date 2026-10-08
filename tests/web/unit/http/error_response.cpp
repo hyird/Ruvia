@@ -8,8 +8,8 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
 
+#include "http/HttpErrorResponse.h"
 #include "test_harness.h"
 
 namespace {

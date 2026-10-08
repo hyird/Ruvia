@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3QuicClientEndpointResolver.h"
+#include "http3/Http3QuicClientEndpointResolver.h"
 
 #include <algorithm>
 #include <coroutine>
@@ -8,8 +8,8 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
+#include "client/ClientTransport.h"
+#include "http3/Http3QuicSocketAddress.h"
 
 namespace ruvia::detail {
 namespace {

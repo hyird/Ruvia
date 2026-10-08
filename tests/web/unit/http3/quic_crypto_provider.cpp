@@ -6,8 +6,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/http3/openssl_quic_crypto_provider.h"
-
+#include "http3/openssl_quic_crypto_provider.h"
 #include "test_harness.h"
 
 namespace {

@@ -3,9 +3,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/PmrString.h"
-
 #include "test_harness.h"
+#include "util/PmrString.h"
 
 namespace {
 

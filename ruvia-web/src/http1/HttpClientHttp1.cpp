@@ -19,14 +19,15 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/HttpResponseBodyDecoding.h"
-#include "ruvia/web/detail/body/HttpBodyBuffer.h"
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/http/HttpSocketTunnelTransport.h"
-#include "ruvia/web/detail/http/TlsTunnelOutput.h"
+
+#include "body/HttpBodyBuffer.h"
+#include "client/ClientTransport.h"
+#include "client/HttpClientConfigValidation.h"
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseDecoding.h"
+#include "client/HttpClientResponseState.h"
+#include "http/HttpSocketTunnelTransport.h"
+#include "http/TlsTunnelOutput.h"
 
 namespace ruvia::detail {
 Task<void> HttpClientPool::executeHttp1(Connection& connection,
@@ -37,7 +38,7 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestStorageAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
-    appendAutomaticHeaders(request, headers, cookieHeader);
+    policy_.append_headers(request, headers, cookieHeader);
     source.headers = std::span<const HttpHeaderView>(headers);
 
     connection.writeBuffer.resize(kMaxHttpHeaderBytes + 1024);
@@ -72,9 +73,9 @@ Task<void> HttpClientPool::executeHttp1(Connection& connection,
                                      : "HTTP request head is too large");
     }
     Http1ClientResponseParser parser(prepared->exchangeState(), {.resource = responseResource});
-    co_await write(connection, prepared->head(), timeout);
+    co_await connection.transport.write(prepared->head(), timeout);
     if (const auto* content = prepared->contentPlan().immediate()) {
-        co_await write(connection, content->bytes(), timeout);
+        co_await connection.transport.write(content->bytes(), timeout);
         if (!content->bytes().empty() &&
             parser.completeRequestContent() !=
                 Http1ClientRequestContentCompletionStatus::kCompleted) {
@@ -125,7 +126,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
                 throw HttpClientError(
                     HttpClientError::Code::kProtocolError, "HTTP response head is too large");
             }
-            const auto bytes = co_await readSome(connection, input, timeout);
+            const auto bytes = co_await connection.transport.read_some(input, timeout);
             if (bytes == 0) {
                 throw HttpClientError(HttpClientError::Code::kIoError,
                     "upstream closed before the HTTP response head");
@@ -231,19 +232,19 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
         const auto waitForBufferSpace = [&]() -> Task<void> {
             while (!response.state_->collectAll &&
                    response.state_->pending.size() >= config_.maxResponseBytes) {
-                throwAbort(connection);
-                if (!armDeadline(connection, timeout, DeadlineKind::kResponseBuffer)) {
+                connection.transport.throw_if_aborted();
+                if (!connection.transport.arm_deadline(timeout, client_deadline_kind::response_buffer)) {
                     throw HttpClientError(
                         HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
                 }
                 try {
                     co_await response.state_->spaceSignal.wait();
                 } catch (...) {
-                    (void)clearDeadline(connection);
+                    (void)connection.transport.clear_deadline();
                     throw;
                 }
-                const bool timedOut = clearDeadline(connection) || timeout.expired();
-                throwAbort(connection);
+                const bool timedOut = connection.transport.clear_deadline() || timeout.expired();
+                connection.transport.throw_if_aborted();
                 if (timedOut) {
                     throw HttpClientError(
                         HttpClientError::Code::kTimeout, "HTTP/1 response body decoding timed out");
@@ -263,7 +264,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             // not just to the next transport read. One step cannot overfill the
             // producer queue; readAll retains its separate total byte policy.
             co_await waitForBufferSpace();
-            throwAbort(connection);
+            connection.transport.throw_if_aborted();
             const auto capacity = response.state_->collectAll
                                       ? output.size()
                                       : std::min(output.size(),
@@ -297,7 +298,7 @@ Task<void> HttpClientPool::executeHttp1Response(Connection& connection,
             if (eof) {
                 throw std::logic_error("HTTP body decoder requested input after EOF");
             }
-            const auto bytes = co_await readSome(connection, input, timeout, true);
+            const auto bytes = co_await connection.transport.read_some(input, timeout, true);
             if (bytes == 0) {
                 eof = true;
             } else {
@@ -327,14 +328,14 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
     auto& output = state.tunnel->output;
     std::optional<TlsTunnelOutput> tls;
     if (config_.scheme == HttpScheme::kHttps) {
-        tls.emplace(*connection.stream.native_handle(), connection.stream.next_layer(), worker_, *resource_);
+        tls.emplace(*connection.transport.stream().native_handle(), connection.transport.stream().next_layer(), worker_, *resource_);
         tls->start();
     }
     WorkerTimerRegistration lifetimeTimer;
     if (const auto remaining = timeout.remaining()) {
         (worker_).schedule_timer(lifetimeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
             if (outcome == WorkerTimerOutcome::kExpired) {
-                connection.abortReason = AbortReason::kTimeout;
+                connection.transport.abort_output(client_abort_reason::timeout);
                 close(connection);
             }
         });
@@ -349,11 +350,11 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
                     continue;
                 }
                 WorkerTimerRegistration writeTimer;
-                const auto writeTimeout = timeout.constrainedBy(config_.writeTimeout);
-                if (const auto remaining = writeTimeout.remaining()) {
+                const auto write_timeout = timeout.constrainedBy(config_.write_timeout);
+                if (const auto remaining = write_timeout.remaining()) {
                     (worker_).schedule_timer(writeTimer, workerTimerDeadlineAfter(*remaining), [this, &connection](WorkerTimerOutcome outcome) noexcept {
                         if (outcome == WorkerTimerOutcome::kExpired) {
-                            connection.abortReason = AbortReason::kTimeout;
+                            connection.transport.abort_output(client_abort_reason::timeout);
                             close(connection);
                         }
                     });
@@ -362,18 +363,18 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
                 const auto bytes = output.chunkReady ? std::string_view(output.chunk) : std::string_view{};
                 std::error_code error;
                 if (tls) {
-                    HttpSocketTunnelTransport transport(connection.stream, &*tls);
+                    HttpSocketTunnelTransport transport(connection.transport.stream(), &*tls);
                     error = co_await transport.writeBytes(bytes, ending);
                 } else {
-                    HttpSocketTunnelTransport transport(connection.stream.next_layer());
+                    HttpSocketTunnelTransport transport(connection.transport.stream().next_layer());
                     error = co_await transport.writeBytes(bytes, ending);
                 }
                 writeTimer.cancel();
-                throwAbort(connection);
+                connection.transport.throw_if_aborted();
                 if (error) {
-                    throw HttpClientError(transportErrorCode(error), error.message());
+                    throw HttpClientError(connection.transport.error_code(error), error.message());
                 }
-                bytesSent_ += bytes.size();
+                wire_counters_.sent += bytes.size();
                 if (ending == HttpStreamEnd::kEnd) {
                     output.finish();
                 } else {
@@ -393,7 +394,7 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
         for (;;) {
             while (state.pending.size() >= config_.maxResponseBytes && !state.abandoned) {
                 co_await state.spaceSignal.wait();
-                throwAbort(connection);
+                connection.transport.throw_if_aborted();
             }
             if (state.abandoned) {
                 throw HttpClientError(HttpClientError::Code::kCancelled, "CONNECT tunnel abandoned");
@@ -405,7 +406,7 @@ Task<void> HttpClientPool::executeHttp1Tunnel(Connection& connection, HttpClient
                 state.dataSignal.notify();
                 continue;
             }
-            const auto count = co_await readSome(connection, std::span<char>(input).first(std::min(input.size(), config_.maxResponseBytes - state.pending.size())), timeout, true);
+            const auto count = co_await connection.transport.read_some(std::span<char>(input).first(std::min(input.size(), config_.maxResponseBytes - state.pending.size())), timeout, true);
             if (count == 0) {
                 state.tunnel->receiveEnded = true;
                 state.dataSignal.notify();
@@ -437,34 +438,34 @@ Task<void> HttpClientPool::writeUploadBytes(Connection& connection, std::string_
     if (bytes.empty()) {
         co_return;
     }
-    const auto writeTimeout = timeout.constrainedBy(config_.writeTimeout);
+    const auto write_timeout = timeout.constrainedBy(config_.write_timeout);
     WorkerTimerRegistration timer;
-    if (const auto remaining = writeTimeout.remaining()) {
+    if (const auto remaining = write_timeout.remaining()) {
         if (remaining->count() == 0) {
             throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP upload write timed out");
         }
         (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*remaining), [&connection](WorkerTimerOutcome outcome) noexcept {
             if (outcome == WorkerTimerOutcome::kExpired) {
-                connection.abortReason = AbortReason::kTimeout;
-                if (connection.activeHttp1Response != nullptr) {
-                    if (auto* output = connection.activeHttp1Response->output()) {
+                connection.transport.abort_output(client_abort_reason::timeout);
+                if (connection.transport.response() != nullptr) {
+                    if (auto* output = connection.transport.response()->output()) {
                         output->stop();
                     }
                 }
                 std::error_code ignored;
-                connection.stream.lowest_layer().cancel(ignored);
+                connection.transport.stream().lowest_layer().cancel(ignored);
             }
         });
     }
     const auto completion = config_.scheme == HttpScheme::kHttps
-                                ? co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) { asio::async_write(connection.stream, asio::buffer(bytes), std::move(handler)); })
-                                : co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) { asio::async_write(connection.stream.next_layer(), asio::buffer(bytes), std::move(handler)); });
+                                ? co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) { asio::async_write(connection.transport.stream(), asio::buffer(bytes), std::move(handler)); })
+                                : co_await asyncAsio<std::size_t>([&connection, bytes](auto handler) { asio::async_write(connection.transport.stream().next_layer(), asio::buffer(bytes), std::move(handler)); });
     timer.cancel();
-    throwAbort(connection);
+    connection.transport.throw_if_aborted();
     if (completion.errorCode()) {
-        throw HttpClientError(transportErrorCode(completion.errorCode()), completion.errorCode().message());
+        throw HttpClientError(connection.transport.error_code(completion.errorCode()), completion.errorCode().message());
     }
-    bytesSent_ += completion.result();
+    wire_counters_.sent += completion.result();
 }
 
 Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientResponseState& state,
@@ -486,7 +487,7 @@ Task<void> HttpClientPool::writeHttp1Upload(Connection& connection, HttpClientRe
                 writer.abort();
                 co_return;
             }
-            throwAbort(connection);
+            connection.transport.throw_if_aborted();
             if (timeout.expired()) {
                 throw HttpClientError(HttpClientError::Code::kTimeout, "HTTP upload timed out");
             }

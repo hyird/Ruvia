@@ -10,10 +10,10 @@ struct ConnectionScannerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Inactivity timeouts measured from the connection's last successful I/O.
     // Absence disables the corresponding phase timeout.
-    std::optional<std::chrono::milliseconds> idleTimeout{};
+    std::optional<std::chrono::milliseconds> idle_timeout{};
     std::optional<std::chrono::milliseconds> initialReadTimeout{};
     std::optional<std::chrono::milliseconds> payloadReadTimeout{};
-    std::optional<std::chrono::milliseconds> writeTimeout{};
+    std::optional<std::chrono::milliseconds> write_timeout{};
     // Absolute phase deadlines, independent of successful I/O progress.
     std::optional<std::chrono::milliseconds> initial_read_completion_timeout{};
     std::optional<std::chrono::milliseconds> payload_read_completion_timeout{};

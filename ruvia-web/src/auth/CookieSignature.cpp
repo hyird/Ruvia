@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/auth/CookieSignature.h"
+#include "auth/CookieSignature.h"
 
 #include <array>
 #include <cstdint>

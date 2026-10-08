@@ -10,10 +10,10 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/server/http1/Http1InterimResponseSink.h"
 
+#include "context/ContextAccess.h"
 #include "memory_resource_fixture.h"
+#include "server/Http1InterimResponseSink.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

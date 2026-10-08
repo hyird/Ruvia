@@ -1,10 +1,10 @@
-#include "ruvia/web/detail/http/static/StaticFileTypes.h"
+#include "http/StaticFileTypes.h"
 
 #include <algorithm>
 #include <iterator>
 #include <string_view>
 
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
+#include "http/StaticFileMetadata.h"
 
 namespace ruvia {
 

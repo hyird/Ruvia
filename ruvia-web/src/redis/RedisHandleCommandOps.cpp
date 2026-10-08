@@ -1,8 +1,9 @@
-#include "ruvia/web/detail/redis/RedisHandleCommandOps.h"
+#include "redis/RedisHandleCommandOps.h"
 
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
+
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisTypesAccess.h"
 
 namespace ruvia::detail {
 

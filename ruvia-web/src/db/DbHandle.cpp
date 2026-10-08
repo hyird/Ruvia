@@ -2,12 +2,13 @@
 
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbQuery.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
-#include "ruvia/web/detail/db/DbPreparedStatement.h"
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbConfigValidation.h"
+#include "db/DbPreparedStatement.h"
+#include "db/DbQueryCacheState.h"
+#include "db/DbRegistry.h"
 
 // The per-request database handle: it borrows a registry entry for the
 // operation's lifetime and hands each call to the pool.

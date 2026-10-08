@@ -2,8 +2,7 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-
+#include "HttpHeaderAccess.h"
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 

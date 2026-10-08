@@ -4,7 +4,7 @@
 #include <chrono>
 #include <stdexcept>
 
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
+#include "auth/JwtPrimitives.h"
 
 namespace ruvia {
 namespace {

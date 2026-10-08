@@ -1,3 +1,5 @@
+include(cmake/NgTcp2Core.cmake)
+
 ruvia_find_ngtcp2_core()
 
 find_package(ZLIB REQUIRED)
@@ -55,7 +57,7 @@ endif()
 ruvia_configure_library(ruvia-http)
 
 target_link_libraries(ruvia-http
-    PUBLIC
+    PRIVATE
         # Content/transfer coding only (gzip/deflate/brotli/zstd). NO OpenSSL: the pure
         # protocol library does no TLS -- client transports are supplied externally and
         # the server driver lives in web -- while WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
@@ -65,7 +67,6 @@ target_link_libraries(ruvia-http
         unofficial::brotli::brotlidec
         unofficial::brotli::brotlicommon
         ${RUVIA_ZSTD_TARGET}
-    PRIVATE
         ruvia_http_ngtcp2_core
 )
 

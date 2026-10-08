@@ -4,7 +4,8 @@
 
 #include "ruvia/web/HttpClientTunnel.h"
 #include "ruvia/web/HttpTunnel.h"
-#include "ruvia/web/detail/http/HttpCapsuleStreamState.h"
+
+#include "http/HttpCapsuleStreamState.h"
 namespace ruvia {
 HttpDatagramStream::HttpDatagramStream(HttpCapsuleStream stream, HttpDatagramSendPolicy policy)
     : stream_(std::move(stream)) {

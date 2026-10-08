@@ -1,11 +1,12 @@
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/detail/client/HttpClientResponseHead.h"
-#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
-#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+
+#include "HttpHeaderAccess.h"
+#include "client/HttpClientAccess.h"
+#include "client/HttpClientResponseHead.h"
+#include "client/HttpClientResponseLimits.h"
+#include "parser/HttpHeaderBlockParser.h"
 
 namespace ruvia::detail {
 

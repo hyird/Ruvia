@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
+#include "parser/HttpSerializedOrigin.h"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <optional>
 #include <system_error>
 
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "parser/HttpUriGrammar.h"
 
 namespace ruvia::detail {
 

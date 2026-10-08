@@ -3,9 +3,9 @@
 #include <string>
 
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/detail/client/HttpClientAdvertisementQueue.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
 
+#include "client/HttpClientAdvertisementQueue.h"
+#include "client/HttpClientConfigValidation.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

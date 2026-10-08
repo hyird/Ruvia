@@ -8,9 +8,9 @@
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
+#include "context/ContextServices.h"
+#include "integration/WorkerCapabilities.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

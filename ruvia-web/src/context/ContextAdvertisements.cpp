@@ -4,20 +4,22 @@
 
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/HttpConnectionAdvertisementOutput.h"
+
+#include "context/ContextServices.h"
+#include "context/HttpConnectionAdvertisementOutput.h"
 
 namespace ruvia {
 ScopedOperation<void> Context::advertiseOrigins(std::span<const std::string_view> origins) {
-    if (connectionAdvertisements_ == nullptr || connInfo_.tls() == nullptr) {
+    if (services().connectionAdvertisements() == nullptr || connInfo_.tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
     }
-    return connectionAdvertisements_->advertiseOrigins(origins);
+    return services().connectionAdvertisements()->advertiseOrigins(origins);
 }
 ScopedOperation<void> Context::advertiseAlternativeService(std::string_view value) {
-    if (connectionAdvertisements_ == nullptr) {
+    if (services().connectionAdvertisements() == nullptr) {
         throw std::logic_error("this dispatch has no connection advertisement output");
     }
-    return connectionAdvertisements_->advertiseAlternativeService(value);
+    return services().connectionAdvertisements()->advertiseAlternativeService(value);
 }
 }  // namespace ruvia
 

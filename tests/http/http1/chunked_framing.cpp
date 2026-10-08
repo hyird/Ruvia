@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "ruvia/http/Http1ChunkedFraming.h"
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 
+#include "http1/Http1ChunkedFraming.h"
 #include "test_harness.h"
 
 RUVIA_TEST(http1_chunk_header_encodes_lowercase_hex_and_crlf) {

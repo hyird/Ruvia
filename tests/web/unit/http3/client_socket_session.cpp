@@ -20,11 +20,11 @@
 #include <openssl/x509.h>
 
 #include "ruvia/core/AsioTask.h"
-#include "ruvia/web/detail/http3/Http3QuicClientSocketSession.h"
-#include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
 
+#include "http3/Http3QuicClientSocketSession.h"
+#include "http3/Http3QuicClientTlsContext.h"
 #include "http3_quic_udp_pair.h"
+#include "server/HttpServerOptions.h"
 #include "test_harness.h"
 
 namespace ruvia::detail {

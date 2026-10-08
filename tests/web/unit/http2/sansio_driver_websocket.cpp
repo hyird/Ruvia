@@ -6,13 +6,13 @@
 
 #include "ruvia/core/ConnectionScanner.h"
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "context/ContextServices.h"
+#include "http2/Http2SansIoSession.h"
 #include "http2_sansio_session_fixture.h"
+#include "router/RouteTable.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "sansio_driver_fixture.h"
 
 // Sans-I/O HTTP/2 driver: WebSocket tunnels over HTTP/2 (RFC 8441).
@@ -83,10 +83,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.requestBodyTimeout = std::chrono::milliseconds(100);
+            fixture.options.request_body_timeout = std::chrono::milliseconds(100);
             ruvia::ConnectionScanner scanner(workerHandle,
                 {.scanInterval = std::chrono::milliseconds(5),
-                    .payloadReadTimeout = fixture.options.requestBodyTimeout});
+                    .payloadReadTimeout = fixture.options.request_body_timeout});
             ruvia::ConnectionScanner::Guard scannerGuard(
                 &scanner, fixture.scannerEntry, sock);
             scanner.start();
@@ -179,7 +179,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             }
 
             // An upgraded WebSocket is long-lived, not an HTTP request body.
-            // Its idle period exceeds requestBodyTimeout and must not kill the tunnel.
+            // Its idle period exceeds request_body_timeout and must not kill the tunnel.
             asio::steady_timer idleDelay(io);
             idleDelay.expires_after(std::chrono::milliseconds(180));
             co_await idleDelay.async_wait(asio::use_awaitable);

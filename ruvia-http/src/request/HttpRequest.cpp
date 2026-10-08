@@ -6,7 +6,8 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+
+#include "request/HttpRequestAccess.h"
 
 namespace ruvia {
 std::optional<std::string_view> HttpRequest::header(std::string_view name) const noexcept {

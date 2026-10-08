@@ -464,8 +464,8 @@ int main() {
         .listen({.address = "0.0.0.0",
             .http = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
         .server({
-            .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
+            .worker_count = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+            .process_signal_handlers = ruvia::process_signal_handler_policy::install,
         })
         .run();
 }

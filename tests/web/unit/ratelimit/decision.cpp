@@ -12,13 +12,13 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/RateLimitRule.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
-#include "ruvia/web/detail/ratelimit/RateLimitKey.h"
-#include "ruvia/web/detail/server/http1/Http1ClosingRejection.h"
 
+#include "context/ContextAccess.h"
+#include "context/ContextServices.h"
 #include "context_services_fixture.h"
+#include "ratelimit/RateLimitDecision.h"
+#include "ratelimit/RateLimitKey.h"
+#include "server/Http1ClosingRejection.h"
 #include "test_harness.h"
 
 namespace {

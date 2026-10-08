@@ -4,14 +4,15 @@
 #include <expected>
 #include <system_error>
 
-#include "ruvia/http/detail/client/HttpClientResponseHead.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
+#include "client/HttpClientResponseHead.h"
+#include "coding/HttpContentCoding.h"
+#include "field/HttpInterimResponseValidation.h"
+#include "field/HttpMediaType.h"
 
 namespace ruvia::detail {
 

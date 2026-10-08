@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3ResponseStreamSink.h"
+#include "http3/Http3ResponseStreamSink.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -8,7 +8,8 @@
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/web/detail/http3/Http3BufferedRequestDispatch.h"
+
+#include "http3/Http3BufferedRequestDispatch.h"
 
 namespace ruvia::detail {
 Http3ResponseStreamSink::Http3ResponseStreamSink(Http3BufferedRequestDispatch& publisher,

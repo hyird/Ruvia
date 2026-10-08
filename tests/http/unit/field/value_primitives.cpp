@@ -1,7 +1,6 @@
 #include <string_view>
 
-#include "ruvia/http/detail/field/HttpEntityTag.h"
-
+#include "field/HttpEntityTag.h"
 #include "test_harness.h"
 
 // Small field-value primitives: the weak-etag prefix.

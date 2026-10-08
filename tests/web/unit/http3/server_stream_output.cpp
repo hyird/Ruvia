@@ -31,15 +31,15 @@
 #include "ruvia/http/Http3ClientResponse.h"
 #include "ruvia/http/http3_buffered_response_cursor.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http3/Http3ServerConnection.h"
-#include "ruvia/web/detail/http3/Http3ServerStreamOutput.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
 
+#include "http3/Http3ServerConnection.h"
+#include "http3/Http3ServerStreamOutput.h"
 #include "http3_quic_udp_pair.h"
 #include "memory_resource_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "routing_fixture.h"
+#include "server/HttpServerOptions.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -605,7 +605,7 @@ RUVIA_TEST(http3ServerStreamOutputIdlePumpDoesNotRequestContinuation) {
     pair.connect();
     ruvia::WorkerMemory worker;
     Output output(pair.server(), worker, kEpoch, kGeneration,
-        {.maxTrackedStreams = 8, .maxDriveWorkItems = 2, .writeTimeout = std::chrono::milliseconds(5)});
+        {.maxTrackedStreams = 8, .maxDriveWorkItems = 2, .write_timeout = std::chrono::milliseconds(5)});
     for (unsigned turn = 0; turn < 100; ++turn) {
         const auto result = output.drive();
         RUVIA_CHECK_EQ(result.operations, std::size_t{0});
@@ -625,7 +625,7 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
     const auto streamId = pair.openRequestStream();
     ruvia::WorkerMemory worker;
     Output output(pair.server(), worker, kEpoch, kGeneration,
-        {.writeTimeout = std::chrono::milliseconds(5)});
+        {.write_timeout = std::chrono::milliseconds(5)});
     RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
                                          .id = messageId(streamId),
                                          .value = 0})
@@ -666,7 +666,7 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutADeferredFinWithoutPendingBytes)
     const auto streamId = pair.openRequestStream(false);
     ruvia::WorkerMemory worker;
     Output output(pair.server(), worker, kEpoch, kGeneration,
-        {.writeTimeout = std::chrono::milliseconds(5)});
+        {.write_timeout = std::chrono::milliseconds(5)});
     RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
                                          .id = messageId(streamId),
                                          .value = 1})
@@ -1088,12 +1088,12 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
         ruvia::WorkerMemory worker(upstream);
         buffer buffer(4, 4, 4);
         {
-            constexpr auto writeTimeout = std::chrono::milliseconds(100);
+            constexpr auto write_timeout = std::chrono::milliseconds(100);
             Output output(pair.server(), worker, kEpoch, kGeneration,
                 {.maxTrackedStreams = 4,
                     .maxQueuedBlocks = 1,
                     .maxDriveWorkItems = 16,
-                    .writeTimeout = writeTimeout});
+                    .write_timeout = write_timeout});
             constexpr std::uint64_t maxBytes = 64U * 1024U * 1024U;
             constexpr std::size_t maxSteps = 8192;
             const auto blockedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -1142,7 +1142,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
             RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
-            std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(write_timeout + std::chrono::milliseconds(10));
             std::size_t timedOut{};
             for (std::size_t attempt = 0; attempt < 32 && timedOut == 0; ++attempt) {
                 timedOut += output.drive().timedOutStreams;
@@ -1225,7 +1225,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
             const auto freshId = pair.openRequestStream();
-            std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(write_timeout + std::chrono::milliseconds(10));
             const auto idleFresh = output.drive();
             RUVIA_CHECK_EQ(idleFresh.timedOutStreams, std::size_t{0});
             // Opening a QUIC stream does not register it with the response writer.

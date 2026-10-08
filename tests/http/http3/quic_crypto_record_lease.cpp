@@ -11,8 +11,7 @@
 #include <unistd.h>
 #endif
 
-#include "ruvia/http/detail/http3/quic_connection_state.h"
-
+#include "http3/quic_connection_state.h"
 #include "test_harness.h"
 
 namespace {

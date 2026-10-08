@@ -2,27 +2,29 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
-#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
+#include "client/HttpClientConfigStorage.h"
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
+#include "integration/WorkerCapabilities.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "websocket/WebSocketAccess.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbTypes.h"
-#include "ruvia/web/detail/db/DbConfigStorage.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
+
+#include "db/DbConfigStorage.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/Redis.h"
 #include "ruvia/web/redis/RedisTypes.h"
+
+#include "redis/RedisConfigStorage.h"
+#include "redis/RedisTypesAccess.h"
 #endif
 
 #include <array>

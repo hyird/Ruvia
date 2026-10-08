@@ -23,9 +23,9 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/MultipartReader.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include "body/HttpRequestBodyFacade.h"
+#include "context/ContextAccess.h"
 #include "context_request_fixture.h"
 #include "context_services_fixture.h"
 #include "memory_resource_fixture.h"

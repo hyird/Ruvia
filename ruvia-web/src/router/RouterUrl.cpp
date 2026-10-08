@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/web/detail/router/RouteTable.h"
+#include "router/RouteTable.h"
 
 // Building a URL from a registered route pattern: substitute the parameters in
 // order and percent-encode whatever a path segment may not carry verbatim. This

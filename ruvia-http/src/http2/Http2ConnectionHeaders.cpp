@@ -2,13 +2,14 @@
 #include <string_view>
 
 #include "ruvia/http/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
-#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
+
+#include "http2/Http2Connection.h"
+#include "http2/Http2HeaderBlock.h"
+#include "http2/Http2HeaderRules.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
+#include "http2/Http2RequestHeaders.h"
+#include "http2/Http2ResponseHeaders.h"
+#include "http2/Http2WindowUpdate.h"
 
 namespace ruvia::detail {
 

@@ -58,7 +58,7 @@ struct HttpClientConfig final {
     std::size_t maxCookies{256};
     std::size_t maxCookieBytes{std::size_t{32} * 1024};
     std::chrono::milliseconds connectTimeout{5000};
-    std::optional<std::chrono::milliseconds> writeTimeout{30000};
+    std::optional<std::chrono::milliseconds> write_timeout{30000};
     std::optional<std::chrono::milliseconds> requestTimeout{30000};
     std::optional<std::chrono::milliseconds> acquireTimeout{5000};
     std::size_t maxResponseBytes{kDefaultMaxBufferedBodyBytes};

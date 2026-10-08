@@ -1,8 +1,8 @@
 #include <new>
 
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/http2/frame/Http2OutputBuffer.h"
 
+#include "http2/Http2OutputBuffer.h"
 #include "http2_connection_fixture.h"
 
 namespace {

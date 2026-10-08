@@ -14,10 +14,10 @@
 
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
 
+#include "response/HttpResponseHeaderAccess.h"
 #include "test_harness.h"
 
 namespace {

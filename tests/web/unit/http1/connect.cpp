@@ -10,10 +10,10 @@
 #include "ruvia/core/Async.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Socket.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
-#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
+#include "router/RouterImpl.h"
+#include "server/NativeAcceptedSocketTicket.h"
+#include "server/WebWorkerRuntime.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

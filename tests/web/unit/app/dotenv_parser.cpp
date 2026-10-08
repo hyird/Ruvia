@@ -8,8 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/app/EnvState.h"
-
+#include "app/EnvState.h"
 #include "test_harness.h"
 
 namespace {

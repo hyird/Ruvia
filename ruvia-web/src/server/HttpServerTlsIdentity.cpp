@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/tls/HttpServerTlsIdentity.h"
+#include "server/HttpServerTlsIdentity.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -9,7 +9,7 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
+#include "server/HttpServerTlsVerify.h"
 
 namespace ruvia::detail {
 namespace {

@@ -3,9 +3,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
+
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

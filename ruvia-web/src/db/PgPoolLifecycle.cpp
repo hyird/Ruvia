@@ -4,9 +4,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbRegistry.h"
+#include "db/DbSlotSocket.h"
 
 namespace ruvia::detail {
 namespace {

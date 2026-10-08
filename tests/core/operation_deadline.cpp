@@ -1,7 +1,10 @@
+#include "ruvia/core/operation_deadline.h"
+
 #include <chrono>
 #include <cstdint>
 
-#include "ruvia/core/detail/io/OperationDeadline.h"
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/WorkerTimer.h"
 
 namespace {
 
@@ -9,9 +12,9 @@ enum class DeadlineKind : std::uint8_t { kRead,
     kWrite };
 
 bool operationDeadlineTransitionsAreExclusive() {
-    using Deadline = ruvia::detail::OperationDeadline<DeadlineKind>;
+    using Deadline = ruvia::operation_deadline<DeadlineKind>;
     Deadline deadline;
-    const auto now = Deadline::Clock::time_point{};
+    const auto now = Deadline::clock::time_point{};
     if (deadline.kind() != nullptr || deadline.expired() || deadline.clear()) {
         return false;
     }
@@ -59,7 +62,7 @@ bool operationTimeoutUsesOneAbsoluteDeadline() {
 }
 
 bool positiveTimeoutRemainderDoesNotBecomeImmediate() {
-    using Clock = ruvia::detail::OperationTimeout::Clock;
+    using Clock = ruvia::OperationTimeout::Clock;
     const auto exact = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(3));
     const auto fractional = exact +
                             std::chrono::duration_cast<Clock::duration>(std::chrono::microseconds(1));

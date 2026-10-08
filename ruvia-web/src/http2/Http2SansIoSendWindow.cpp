@@ -1,6 +1,6 @@
-#include "ruvia/web/detail/http2/Http2SansIoSendWindow.h"
+#include "http2/Http2SansIoSendWindow.h"
 
-#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
+#include "http2/Http2SansIoStreamRuntime.h"
 
 namespace ruvia::detail {
 

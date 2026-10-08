@@ -6,9 +6,9 @@
 #include <utility>
 
 #include "ruvia/http/HttpRequestTarget.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
 
+#include "parser/HttpRequestTarget.h"
+#include "parser/HttpUriGrammar.h"
 #include "test_harness.h"
 
 RUVIA_TEST(http_authority_host_public_parse_preserves_ip_literal_brackets) {

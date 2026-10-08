@@ -1,7 +1,6 @@
 #include <string_view>
 
-#include "ruvia/http/detail/field/HttpCorsFields.h"
-
+#include "field/HttpCorsFields.h"
 #include "test_harness.h"
 
 RUVIA_TEST(http_cors_request_headers_requires_nonempty_field_name_list) {

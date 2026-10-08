@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "ruvia/web/detail/db/DbSqlFormat.h"
+#include "db/DbSqlFormat.h"
 
 namespace ruvia {
 namespace {

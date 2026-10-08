@@ -2,8 +2,8 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
-#include "ruvia/web/detail/http3/Http3ClientConnection.h"
+#include "client/HttpClientResponseDecoding.h"
+#include "http3/Http3ClientConnection.h"
 
 namespace ruvia::detail {
 Http3ClientConnection::PushList::iterator Http3ClientConnection::findPush(RequestId id) noexcept {

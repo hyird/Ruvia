@@ -5,9 +5,8 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
-
 #include "test_harness.h"
+#include "websocket/HttpWebSocketLiveness.h"
 
 namespace {
 

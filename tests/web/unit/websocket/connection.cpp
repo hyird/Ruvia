@@ -22,12 +22,12 @@
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketConnection.h"
 #include "ruvia/http/WebSocketServerProtocol.h"
-#include "ruvia/web/detail/server/inbound_buffer_resource.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 
+#include "server/inbound_buffer_resource.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "websocket/HttpWebSocketSession.h"
+#include "websocket/HttpWebSocketSocketTransport.h"
 
 namespace {
 

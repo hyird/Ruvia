@@ -11,10 +11,10 @@
 #include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "websocket/HttpWebSocketHandshake.h"
 
 namespace {
 

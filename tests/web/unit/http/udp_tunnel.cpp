@@ -12,10 +12,10 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpUdpTunnel.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
-#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
+#include "router/RouterImpl.h"
+#include "server/NativeAcceptedSocketTicket.h"
+#include "server/WebWorkerRuntime.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

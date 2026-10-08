@@ -11,8 +11,8 @@
 #include <asio/use_future.hpp>
 
 #include "ruvia/core/AsioTask.h"
-#include "ruvia/web/detail/http3/Http3QuicClientEndpointResolver.h"
 
+#include "http3/Http3QuicClientEndpointResolver.h"
 #include "test_harness.h"
 
 namespace {

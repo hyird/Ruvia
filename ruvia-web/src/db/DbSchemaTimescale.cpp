@@ -2,7 +2,8 @@
 #include <type_traits>
 
 #include "ruvia/web/db/DbSchema.h"
-#include "ruvia/web/detail/db/DbSqlFormat.h"
+
+#include "db/DbSqlFormat.h"
 
 namespace ruvia {
 

@@ -3,9 +3,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseMemory.h"
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia {
 HttpClientPush::HttpClientPush(HttpClientResponse response) noexcept

@@ -6,12 +6,13 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/parser/MultipartDelimiter.h"
-#include "ruvia/http/detail/parser/MultipartPartAccess.h"
-#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
-#include "ruvia/http/detail/parser/MultipartStreamPartAccess.h"
 #include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/util/PmrString.h"
+
+#include "parser/MultipartDelimiter.h"
+#include "parser/MultipartPartAccess.h"
+#include "parser/MultipartPartHeaders.h"
+#include "parser/MultipartStreamPartAccess.h"
+#include "util/PmrString.h"
 
 // The multipart state machine: find the next delimiter, read one part's header
 // block, then hand out that part's body in chunks -- driven entirely by what is

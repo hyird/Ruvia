@@ -5,10 +5,11 @@
 #include <utility>
 
 #include "ruvia/core/OperationTimeout.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
-#include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbRegistry.h"
+#include "db/DbSql.h"
 
 namespace ruvia {
 

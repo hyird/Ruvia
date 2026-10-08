@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbHostResolution.h"
+#include "db/DbHostResolution.h"
 
 #include <algorithm>
 #include <stdexcept>

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
+#include "client/HttpClientResponseDecoding.h"
 
 #include <algorithm>
 #include <limits>
@@ -10,7 +10,8 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpContentCoding.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
+
+#include "client/HttpClientResponseState.h"
 
 namespace ruvia::detail {
 

@@ -1,9 +1,8 @@
 #include <string>
 
-#include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
-#include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-
+#include "http3/Http3QuicClientTlsContext.h"
+#include "http3/Http3QuicClientTransport.h"
+#include "http3/Http3QuicSocketAddress.h"
 #include "test_harness.h"
 
 namespace {

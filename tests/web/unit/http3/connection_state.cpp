@@ -10,11 +10,11 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http3/http3_connection_state.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "http3/http3_connection_state.h"
 #include "memory_resource_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

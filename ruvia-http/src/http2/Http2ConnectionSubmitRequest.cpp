@@ -3,19 +3,20 @@
 #include <utility>
 
 #include "ruvia/http/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/field/HttpCorsFields.h"
 #include "ruvia/http/detail/field/HttpExpectations.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/field/HttpOriginFields.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+
+#include "coding/HttpContentCoding.h"
+#include "field/HttpCorsFields.h"
+#include "field/HttpMediaType.h"
+#include "field/HttpOriginFields.h"
+#include "http2/Http2Connection.h"
+#include "http2/Http2HeaderRules.h"
+#include "http2/Http2RequestHeaders.h"
+#include "http2/Http2WebSocketHandshake.h"
+#include "parser/HttpRequestTarget.h"
+#include "websocket/HttpWebSocketHandshakeFields.h"
 
 // Submitting a request head as the client: what an outbound :method / :path /
 // :authority and its header section must satisfy before the connection will

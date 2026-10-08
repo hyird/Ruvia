@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
+#include "client/HttpClientResultBudget.h"
 
 #include <exception>
 #include <stdexcept>

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/openssl_quic_tls_session.h"
+#include "http3/openssl_quic_tls_session.h"
 
 #include <array>
 #include <stdexcept>
@@ -8,7 +8,7 @@
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/web/detail/client/ClientTransport.h"
+#include "client/ClientTransport.h"
 
 namespace ruvia::detail {
 namespace {

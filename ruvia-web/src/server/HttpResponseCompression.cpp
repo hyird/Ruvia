@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
+#include "server/HttpResponseCompression.h"
 
 #include <cstddef>
 #include <cstdint>

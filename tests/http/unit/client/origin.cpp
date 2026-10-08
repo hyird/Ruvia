@@ -5,8 +5,8 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpOrigin.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
+#include "parser/HttpRequestTarget.h"
 #include "test_harness.h"
 
 namespace {

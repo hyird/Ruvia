@@ -3,8 +3,8 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+#include "parser/HttpRequestTarget.h"
+#include "request/HttpRequestAccess.h"
 
 namespace ruvia {
 namespace {

@@ -13,10 +13,10 @@
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/app/AppState.h"
-#include "ruvia/web/detail/http/CorsOptions.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
+#include "app/AppState.h"
+#include "http/CorsOptions.h"
+#include "server/HttpServerOptionsValidation.h"
 #include "test_harness.h"
 
 namespace {
@@ -85,7 +85,7 @@ ruvia::TlsConfig tlsConfig(std::filesystem::path certificateChainFile,
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
-    RUVIA_CHECK(!HttpServerOptions{}.maxStreamBodyBytes.has_value());
+    RUVIA_CHECK(!HttpServerOptions{}.max_stream_body_bytes.has_value());
     RUVIA_CHECK(!HttpServerOptions{}.compression.has_value());
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.minBytes, std::size_t{1024});
     RUVIA_CHECK_EQ(ruvia::CompressionConfig{}.syncBytes, std::size_t{64} * 1024);
@@ -97,6 +97,53 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     RUVIA_CHECK(defaultMaxConnections.has_value());
     RUVIA_CHECK_EQ(defaultMaxConnections.value_or(0), std::size_t{1024});
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
+}
+
+RUVIA_TEST(server_configuration_owns_listener_inputs_until_retirement) {
+    ReleasableMemoryResource caller_resource;
+    std::optional<ValidatedHttpServerConfiguration> configuration;
+    const std::string certificate(128, 'c');
+    const std::string key(128, 'k');
+    {
+        HttpServerListenerDefinition::Tls tls(&caller_resource);
+        tls.identity.certificateChainFile = certificate;
+        tls.identity.privateKeyFile = key;
+        tls.http3_early_data = true;
+        auto& sni = tls.sniIdentities.emplace_back(&caller_resource);
+        sni.host = "api.example.test";
+        sni.identity.certificateChainFile = certificate;
+        sni.identity.privateKeyFile = key;
+        const std::array listeners{makeListener(std::move(tls))};
+        configuration.emplace(validateHttpServerConfiguration(listeners, HttpServerOptions{}));
+    }
+    caller_resource.release();
+    const auto& listener = configuration->listeners().front();
+    const auto& tls = std::get<HttpServerListenerDefinition::Tls>(listener.transport);
+    RUVIA_CHECK_EQ(tls.identity.certificateChainFile, std::string_view(certificate));
+    RUVIA_CHECK_EQ(tls.identity.privateKeyFile, std::string_view(key));
+    RUVIA_CHECK(tls.http3_early_data);
+    RUVIA_CHECK_EQ(tls.sniIdentities.front().host, std::string_view("api.example.test"));
+    {
+        ruvia::detail::HttpServerSessionConfig session(listener, std::pmr::get_default_resource());
+        RUVIA_CHECK(session.tls()->http3_early_data);
+    }
+    configuration.reset();
+    RUVIA_CHECK(!caller_resource.deallocatedAfterRelease());
+}
+
+RUVIA_TEST(server_limits_reject_zero_client_result_budgets_at_each_entry) {
+    for (const bool retained : {false, true}) {
+        ruvia::server_config config;
+        auto& limit = retained ? config.http_client_result_budget.maxRetainedBytes
+                               : config.http_client_result_budget.max_in_flight_bytes;
+        limit = 0;
+        RUVIA_CHECK(throwsInvalid([&] {
+            (void)ruvia::detail::normalize_server_options(config, HttpServerOptions{});
+        }));
+        HttpServerOptions options;
+        options.http_client_result_budget = config.http_client_result_budget;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
 }
 
 RUVIA_TEST(app_enables_a_bounded_blocking_pool_by_default) {
@@ -169,47 +216,47 @@ RUVIA_TEST(validate_server_options_owns_document_root_runtime_policy) {
 RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
     // Every connection timeout feeds the same positive optional fold. Each one bounds
     // how long a slow client can hold a connection (a slowloris defense), so a
-    // nonpositive value in ANY of them must be rejected -- checking only idleTimeout
+    // nonpositive value in ANY of them must be rejected -- checking only idle_timeout
     // would miss a field dropped from the fold call.
     using std::chrono::milliseconds;
     {
         HttpServerOptions options;
-        options.idleTimeout = milliseconds(0);
+        options.idle_timeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.requestHeaderTimeout = milliseconds(0);
+        options.request_header_timeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.requestBodyTimeout = milliseconds(0);
+        options.request_body_timeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.writeTimeout = milliseconds(0);
+        options.write_timeout = milliseconds(0);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.idleTimeout = milliseconds(-1);
+        options.idle_timeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.requestHeaderTimeout = milliseconds(-1);
+        options.request_header_timeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.requestBodyTimeout = milliseconds(-1);
+        options.request_body_timeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.writeTimeout = milliseconds(-1);
+        options.write_timeout = milliseconds(-1);
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
 }
@@ -242,22 +289,22 @@ RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     }
     {
         HttpServerOptions options;
-        options.maxRequestsPerConnection = 0;
+        options.max_requests_per_connection = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.maxStreamBodyBytes = 0;
+        options.max_stream_body_bytes = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.maxBufferedBodyBytes = 0;
+        options.max_buffered_body_bytes = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
         HttpServerOptions options;
-        options.maxWebSocketMessageBytes = 0;
+        options.max_web_socket_message_bytes = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {
@@ -368,14 +415,14 @@ RUVIA_TEST(validated_server_configuration_requires_complete_validation) {
     };
 
     HttpServerOptions invalidOptions;
-    invalidOptions.maxBufferedBodyBytes = 0;
+    invalidOptions.max_buffered_body_bytes = 0;
     RUVIA_CHECK(throwsInvalid([&listeners, &invalidOptions] {
         (void)validateHttpServerConfiguration(listeners, std::move(invalidOptions));
     }));
 
     const auto configuration = validateHttpServerConfiguration(listeners, HttpServerOptions{});
     RUVIA_CHECK_EQ(configuration.listeners().size(), std::size_t{1});
-    RUVIA_CHECK(configuration.options().maxBufferedBodyBytes > 0);
+    RUVIA_CHECK(configuration.options().max_buffered_body_bytes > 0);
 }
 
 RUVIA_TEST(web_internal_config_defaults_use_the_process_resource) {
@@ -449,7 +496,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     }));
     RUVIA_CHECK(throwsInvalid([] {
         ruvia::app().server(
-            {.processSignalHandlers = static_cast<ruvia::ProcessSignalHandlerPolicy>(0xFF)});
+            {.process_signal_handlers = static_cast<ruvia::process_signal_handler_policy>(0xFF)});
     }));
 }
 

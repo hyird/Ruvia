@@ -4,14 +4,16 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/HttpPushOutput.h"
+
+#include "context/ContextServices.h"
+#include "context/HttpPushOutput.h"
 
 namespace ruvia {
 ScopedOperation<bool> Context::push(HttpPushRequestView request) {
-    if (pushOutput_ == nullptr) {
+    if (services().pushOutput() == nullptr) {
         throw std::logic_error("server push requires an HTTP/2 or HTTP/3 request");
     }
-    return pushOutput_->push(request);
+    return services().pushOutput()->push(request);
 }
 }  // namespace ruvia
 

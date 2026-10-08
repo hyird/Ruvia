@@ -10,12 +10,13 @@
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
+
+#include "request/HttpRequestAccess.h"
+#include "websocket/HttpWebSocketClosePayload.h"
+#include "websocket/HttpWebSocketFrameCodec.h"
+#include "websocket/HttpWebSocketHandshakeFields.h"
+#include "websocket/HttpWebSocketPayloadValidation.h"
 
 namespace ruvia::detail {
 namespace {

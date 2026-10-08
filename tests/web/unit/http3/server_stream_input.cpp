@@ -15,13 +15,13 @@
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3VarInt.h"
-#include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
-#include "ruvia/web/detail/http3/Http3ServerStreamInput.h"
-#include "ruvia/web/detail/http3/http3_stream_buffer.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "http3/Http3SansIoSessionEngine.h"
+#include "http3/Http3ServerStreamInput.h"
+#include "http3/http3_stream_buffer.h"
 #include "memory_resource_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "routing_fixture.h"
 #include "test_harness.h"
 

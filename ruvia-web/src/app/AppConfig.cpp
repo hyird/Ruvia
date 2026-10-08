@@ -4,86 +4,25 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/app/AppListenerOptions.h"
-#include "ruvia/web/detail/app/EnvState.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+#include "app/AppConfigMutation.h"
+#include "app/AppListenerOptions.h"
+#include "app/EnvState.h"
+#include "server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
 
 namespace detail {
-void applyServerConfig(AppState& state, const ServerConfig& config) {
-    ruvia::ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
-    if (config.processSignalHandlers != ProcessSignalHandlerPolicy::kExternalOwner &&
-        config.processSignalHandlers != ProcessSignalHandlerPolicy::kInstall) {
-        throw std::invalid_argument("process signal handler policy is invalid");
-    }
-    validate_worker_queue_capacity(config.worker_queue_capacity);
-    ruvia::ensurePositiveOptionalDuration(
-        config.idleTimeout, "configured idle timeout must be greater than zero");
-    ruvia::ensurePositiveDuration(
-        config.connectionScanInterval, "connection scan interval must be greater than zero");
-    ruvia::ensurePositiveOptionalDuration(
-        config.requestHeaderTimeout, "configured request header timeout must be greater than zero");
-    ruvia::ensurePositiveOptionalDuration(
-        config.requestBodyTimeout, "configured request body timeout must be greater than zero");
-    ruvia::ensurePositiveOptionalDuration(
-        config.writeTimeout, "configured write timeout must be greater than zero");
-    if (config.maxConnectionsPerWorker) {
-        ruvia::ensurePositiveSize(*config.maxConnectionsPerWorker,
-            "configured connection limit must be greater than zero");
-    }
-    if (config.maxRequestsPerConnection) {
-        ruvia::ensurePositiveSize(*config.maxRequestsPerConnection,
-            "configured requests-per-connection limit must be greater than zero");
-    }
-    ruvia::ensurePositiveSize(
-        config.maxBufferedBodyBytes, "buffered body limit must be greater than zero");
-    if (config.maxStreamBodyBytes) {
-        ruvia::ensurePositiveSize(
-            *config.maxStreamBodyBytes, "configured stream body limit must be greater than zero");
-    }
-    ruvia::ensurePositiveSize(
-        config.maxWebSocketMessageBytes, "websocket message limit must be greater than zero");
-    ruvia::ensurePositiveSize(config.httpClientResultBudget.maxRetainedBytes,
-        "HTTP client retained result byte budget must be greater than zero");
-    ruvia::ensurePositiveSize(config.httpClientResultBudget.max_in_flight_bytes,
-        "HTTP client in-flight response budget must be greater than zero");
-    ruvia::ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
-        "memory pool config values must be greater than zero");
+void applyServerConfig(AppState& state, const server_config& config) {
+    auto options = normalize_server_options(config, state.options);
     for (const auto& listener : state.listeners) {
         if (listener.http3) {
-            validateHttp3ServerLimits(config.maxConnectionsPerWorker,
-                *listener.http3, config.maxRequestsPerConnection, config.workerCount);
+            validateHttp3ServerLimits(config.max_connections_per_worker,
+                *listener.http3, config.max_requests_per_connection, config.worker_count);
         }
     }
-
-    ruvia::ensurePositiveSize(config.max_inbound_buffer_bytes_per_worker,
-        "worker inbound buffer budget must be greater than zero");
-    ruvia::ensurePositiveSize(config.max_inbound_buffer_bytes_per_connection,
-        "connection inbound buffer budget must be greater than zero");
-    ruvia::ensurePositiveOptionalDurations("completion deadlines must be greater than zero",
-        config.header_completion_timeout, config.body_completion_timeout);
-
-    state.workerCount = config.workerCount;
-    state.processSignalHandlers = config.processSignalHandlers;
-    state.options.worker_queue_capacity = config.worker_queue_capacity;
-    state.options.idleTimeout = config.idleTimeout;
-    state.options.scanInterval = config.connectionScanInterval;
-    state.options.requestHeaderTimeout = config.requestHeaderTimeout;
-    state.options.requestBodyTimeout = config.requestBodyTimeout;
-    state.options.writeTimeout = config.writeTimeout;
-    state.options.maxConnections = config.maxConnectionsPerWorker;
-    state.options.maxRequestsPerConnection = config.maxRequestsPerConnection;
-    state.options.maxBufferedBodyBytes = config.maxBufferedBodyBytes;
-    state.options.max_inbound_buffer_bytes_per_worker = config.max_inbound_buffer_bytes_per_worker;
-    state.options.max_inbound_buffer_bytes_per_connection = config.max_inbound_buffer_bytes_per_connection;
-    state.options.header_completion_timeout = config.header_completion_timeout;
-    state.options.body_completion_timeout = config.body_completion_timeout;
-    state.options.maxStreamBodyBytes = config.maxStreamBodyBytes;
-    state.options.maxWebSocketMessageBytes = config.maxWebSocketMessageBytes;
-    state.options.memoryConfig = config.memoryPool;
-    state.options.httpClientResultBudget = config.httpClientResultBudget;
+    state.worker_count = config.worker_count;
+    state.process_signal_handlers = config.process_signal_handlers;
+    state.options = std::move(options);
 }
 
 }  // namespace detail
@@ -144,8 +83,8 @@ App& App::listen(ListenConfig config) {
             if (effectiveHttp3.has_value()) {
                 detail::validate_http3_listen_config(*effectiveHttp3);
                 detail::validateHttp3ServerLimits(state.options.maxConnections,
-                    *effectiveHttp3, state.options.maxRequestsPerConnection,
-                    state.workerCount);
+                    *effectiveHttp3, state.options.max_requests_per_connection,
+                    state.worker_count);
             }
 
             auto* const resource = detail::appResource();
@@ -171,7 +110,7 @@ App& App::listen(ListenConfig config) {
         });
 }
 
-App& App::server(ServerConfig config) {
+App& App::server(server_config config) {
     return detail::mutateStoppedApp(*this, *state_,
         "cannot change server config while app is running",
         [config](detail::AppState& state) { detail::applyServerConfig(state, config); });

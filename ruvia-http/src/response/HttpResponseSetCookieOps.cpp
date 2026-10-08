@@ -5,11 +5,12 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/http/HttpSetCookiePlan.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
-#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+
+#include "response/HttpResponseHeaderAccess.h"
+#include "response/HttpResponseHeadersAccess.h"
+#include "response/ResponseHeaderIndexCache.h"
 
 // Set-Cookie is the one response field that neither replaces nor appends by
 // field name: a second cookie for the same storage key (name, domain, path)

@@ -9,13 +9,14 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
-#include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
-#include "ruvia/web/detail/router/RouteDispatchServices.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/inbound_buffer_resource.h"
+
+#include "context/ContextAccess.h"
+#include "http/HttpErrorResponse.h"
+#include "http/UnsupportedRequestContentCoding.h"
+#include "router/RouteDispatchServices.h"
+#include "router/RouteTable.h"
+#include "server/inbound_buffer_resource.h"
 
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /

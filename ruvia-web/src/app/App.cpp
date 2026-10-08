@@ -5,15 +5,16 @@
 
 #include "ruvia/core/FailureReport.h"
 #include "ruvia/core/WorkerSelection.h"
-#include "ruvia/web/detail/app/AppRunCoordinator.h"
-#include "ruvia/web/detail/app/AppRuntimeGraph.h"
-#include "ruvia/web/detail/app/AppState.h"
+
+#include "app/AppRunCoordinator.h"
+#include "app/AppRuntimeGraph.h"
+#include "app/AppState.h"
 
 namespace ruvia::detail {
 
 AppState::AppState()
     : runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{appResource()}) {
-    applyServerConfig(*this, ServerConfig{});
+    applyServerConfig(*this, server_config{});
 }
 
 AppState::~AppState() = default;

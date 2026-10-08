@@ -20,7 +20,8 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/http3/http3_trailer_collector.h"
+
+#include "http3/http3_trailer_collector.h"
 
 namespace ruvia {
 namespace {

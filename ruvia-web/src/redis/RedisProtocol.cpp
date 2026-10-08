@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/redis/RedisProtocol.h"
+#include "redis/RedisProtocol.h"
 
 #include <hiredis/hiredis.h>
 
@@ -7,8 +7,9 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
+
+#include "redis/RedisTypesAccess.h"
 
 namespace ruvia::detail {
 namespace {

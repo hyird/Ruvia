@@ -45,8 +45,9 @@
 
 #include "ruvia/core/EventLoop.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/core/detail/worker/WorkerNotification.h"
 #include "ruvia/core/memory/ProcessResource.h"
+
+#include "WorkerNotification.h"
 
 namespace ruvia::detail {
 

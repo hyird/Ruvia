@@ -44,7 +44,6 @@
 #include "ruvia/web/Task.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/model/Traits.h"
 
@@ -321,9 +320,7 @@ public:
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context and arena.
     [[nodiscard]] ScopedOperation<DispatchResponse> dispatch(DispatchOptions options);
-    [[nodiscard]] bool isSubrequest() const noexcept {
-        return dispatchDepth_ != 0;
-    }
+    [[nodiscard]] bool isSubrequest() const noexcept;
 
     // Builds a request path from a registered route pattern; the pattern is
     // the route's identity: c.urlFor("/users/:id", {"42"}) -> "/users/42".
@@ -475,6 +472,8 @@ private:
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] detail::ContextRequestStorage& requestStorage() const;
+    [[nodiscard]] detail::ContextServices& services() noexcept;
+    [[nodiscard]] const detail::ContextServices& services() const noexcept;
     [[nodiscard]] HttpResponse& responseStorage();
     void storeResponse(HttpResponse&& response);
     void storeAssignedResponse(HttpResponse&& response);
@@ -486,32 +485,16 @@ private:
 
     RequestMemory& memory_;
     const HttpRequest& request_;
-    const HttpRequestTrailers* requestTrailers_{};
-    const std::optional<HttpPriority>* requestPriorityUpdate_{};
     http3_early_data_info early_data_info_{};
-    detail::HttpInterimResponseOutput* interimOutput_{};
-    detail::HttpConnectionAdvertisementOutput* connectionAdvertisements_{};
-    detail::HttpPushOutput* pushOutput_{};
     ConnInfo connInfo_;
     // Context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.
     detail::worker_context_capabilities capabilities_;
-    const detail::RequestDeadline* requestDeadline_{nullptr};
     std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
-    detail::WorkerClientRegistryView clientRegistries_;
-    detail::RateLimiter* rateLimiter_{nullptr};
-    const Env* env_{nullptr};
-    detail::HttpErrorHandlerRef errorHandler_{nullptr};
-    detail::HttpNotFoundHandlerRef notFoundHandler_{nullptr};
-    const detail::RouteTable* routes_{nullptr};
-    bool precompressedStaticFiles_{false};
     std::uintptr_t routeRateLimitScope_{0};
-    std::size_t maxDecodedBodyBytes_{0};
-    std::pmr::memory_resource* inbound_buffer_pool_{};
-    std::size_t dispatchDepth_{0};
     using RequestStorageOwner = std::unique_ptr<detail::ContextRequestStorage,
         detail::PmrObjectDeleter<detail::ContextRequestStorage>>;
     // One typed arena allocation owns request caches, response/session state,

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbSlotSocket.h"
+#include "db/DbSlotSocket.h"
 
 #include <system_error>
 #include <utility>

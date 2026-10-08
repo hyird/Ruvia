@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/client/HttpOriginView.h"
+#include "client/HttpOriginView.h"
 
 #include <array>
 #include <charconv>
@@ -6,8 +6,9 @@
 #include <system_error>
 
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "parser/HttpRequestTarget.h"
 
 namespace ruvia {
 namespace {

@@ -27,7 +27,7 @@ enum class Http3ServerRequestAdmissionError : std::uint8_t {
 };
 
 struct Http3ServerRequestAdmissionConfig final {
-    std::uint64_t maxRequestsPerConnection{0};
+    std::uint64_t max_requests_per_connection{0};
 };
 
 struct Http3ServerRequestAdmissionDecision final {
@@ -41,7 +41,7 @@ struct Http3ServerRequestAdmissionDecision final {
 };
 
 // Plans server-side request admission using the fixed RFC 9114 GOAWAY boundary
-// 4 * maxRequestsPerConnection. Call admit() once per newly opened peer request
+// 4 * max_requests_per_connection. Call admit() once per newly opened peer request
 // stream; QUIC guarantees stream IDs are unique for the connection.
 class Http3ServerRequestAdmissionPlanner final {
 public:
@@ -57,7 +57,7 @@ public:
     [[nodiscard]] Http3ServerRequestAdmissionDecision admit(std::uint64_t streamId) noexcept;
     [[nodiscard]] Http3ServerRequestAdmissionDecision announceGoaway() noexcept;
 
-    [[nodiscard]] std::uint64_t maxRequestsPerConnection() const noexcept {
+    [[nodiscard]] std::uint64_t max_requests_per_connection() const noexcept {
         return maxRequestsPerConnection_;
     }
     [[nodiscard]] std::uint64_t goawayId() const noexcept {
@@ -68,9 +68,9 @@ public:
     }
 
 private:
-    explicit Http3ServerRequestAdmissionPlanner(std::uint64_t maxRequestsPerConnection) noexcept
-        : maxRequestsPerConnection_(maxRequestsPerConnection),
-          goawayId_(maxRequestsPerConnection * 4) {}
+    explicit Http3ServerRequestAdmissionPlanner(std::uint64_t max_requests_per_connection) noexcept
+        : maxRequestsPerConnection_(max_requests_per_connection),
+          goawayId_(max_requests_per_connection * 4) {}
 
     std::uint64_t maxRequestsPerConnection_;
     std::uint64_t goawayId_;

@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
+#include "http2/Http2ConnectionOwnerEndpoint.h"
 
 #include <exception>
 

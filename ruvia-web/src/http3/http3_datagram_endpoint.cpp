@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
+#include "http3/http3_datagram_endpoint.h"
 
 #include <exception>
 #include <stdexcept>

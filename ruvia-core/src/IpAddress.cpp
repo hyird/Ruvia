@@ -5,7 +5,7 @@
 #include <memory_resource>
 #include <string>
 
-#include "ruvia/core/detail/io/IpAddress.h"
+#include "IpAddress.h"
 
 namespace ruvia::detail {
 

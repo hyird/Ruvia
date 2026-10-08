@@ -4,9 +4,9 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 #include "test_harness.h"
+#include "websocket/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 

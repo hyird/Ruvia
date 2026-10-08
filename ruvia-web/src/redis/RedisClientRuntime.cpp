@@ -1,8 +1,8 @@
-#include "ruvia/web/detail/redis/RedisClientRuntime.h"
+#include "redis/RedisClientRuntime.h"
 
 #include <utility>
 
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

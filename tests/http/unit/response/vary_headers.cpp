@@ -3,8 +3,8 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 
+#include "response/ResponseHeaderUtils.h"
 #include "test_harness.h"
 
 namespace {

@@ -22,12 +22,12 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/TrustedProxies.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
+#include "http/SecureToken.h"
+#include "router/RouteTable.h"
+#include "server/TrustedProxies.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

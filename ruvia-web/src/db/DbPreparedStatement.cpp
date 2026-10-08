@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbPreparedStatement.h"
+#include "db/DbPreparedStatement.h"
 
 #include <stdexcept>
 

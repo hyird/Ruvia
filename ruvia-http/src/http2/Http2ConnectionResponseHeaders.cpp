@@ -5,19 +5,20 @@
 #include <vector>
 
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
-#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
+
+#include "HttpHeaderAccess.h"
+#include "client/HttpClientAccess.h"
+#include "coding/HttpContentLength.h"
+#include "field/HttpInterimResponseValidation.h"
+#include "http2/Http2Connection.h"
+#include "http2/Http2HeaderBlock.h"
+#include "http2/Http2HeaderRules.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
+#include "http2/Http2RequestHeaders.h"
+#include "http2/Http2ResponseHeaders.h"
 
 // Decoding a response head as the client: ':status' first and once, the interim
 // (1xx) budget, and which regular headers a decoded head may carry into the

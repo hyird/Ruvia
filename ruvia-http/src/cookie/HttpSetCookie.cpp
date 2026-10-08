@@ -4,9 +4,10 @@
 #include <charconv>
 #include <limits>
 
-#include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+
+#include "cookie/CookieValidation.h"
+#include "field/HttpDate.h"
 
 namespace ruvia {
 namespace {

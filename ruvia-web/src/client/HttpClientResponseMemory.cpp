@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
+#include "client/HttpClientResponseMemory.h"
 
 #include <exception>
 #include <limits>
@@ -9,9 +9,10 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
+
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseState.h"
+#include "client/HttpClientResultBudget.h"
 
 namespace ruvia::detail {
 

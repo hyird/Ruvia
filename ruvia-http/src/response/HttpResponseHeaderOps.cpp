@@ -7,16 +7,17 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/response/HttpResponseKnownHeaders.h"
-#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
+
+#include "coding/HttpContentCoding.h"
+#include "field/HttpMediaType.h"
+#include "response/HttpResponseHeaderAccess.h"
+#include "response/HttpResponseHeadersAccess.h"
+#include "response/ResponseHeaderIndexCache.h"
+#include "util/HttpNumberFormat.h"
 
 namespace ruvia {
 namespace {

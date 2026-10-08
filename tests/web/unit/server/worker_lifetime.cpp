@@ -8,11 +8,11 @@
 #include <asio/ip/address.hpp>
 
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
+#include "client/HttpClientConfigStorage.h"
+#include "router/RouteTable.h"
+#include "server/HttpServerOptionsValidation.h"
+#include "server/WebWorkerRuntime.h"
 #include "test_harness.h"
 
 namespace {

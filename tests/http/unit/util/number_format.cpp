@@ -3,9 +3,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
-
 #include "test_harness.h"
+#include "util/HttpNumberFormat.h"
 
 // Writing numbers into HTTP field values, including the finite check a
 // formatted double must pass.

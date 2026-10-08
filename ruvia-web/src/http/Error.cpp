@@ -8,8 +8,9 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/web/Validation.h"
-#include "ruvia/web/detail/http/error/HttpErrorNormalize.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
+
+#include "http/HttpErrorNormalize.h"
+#include "http/HttpErrorResponse.h"
 
 namespace ruvia {
 namespace {

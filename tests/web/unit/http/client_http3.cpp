@@ -41,11 +41,11 @@
 #include "ruvia/http/Http3VarInt.h"
 #include "ruvia/web/HttpClient.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
-#include "ruvia/web/detail/http3/Http3QuicServerTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-#include "ruvia/web/detail/http3/Http3QuicTlsContext.h"
 
+#include "http3/Http3QuicDatagramBridge.h"
+#include "http3/Http3QuicServerTransport.h"
+#include "http3/Http3QuicSocketAddress.h"
+#include "http3/Http3QuicTlsContext.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

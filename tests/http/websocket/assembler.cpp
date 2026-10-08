@@ -10,11 +10,11 @@
 
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/WebSocketProtocol.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameView.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketInboundAssembler.h"
 
 #include "test_harness.h"
+#include "websocket/HttpWebSocketFrameCodec.h"
+#include "websocket/HttpWebSocketFrameView.h"
+#include "websocket/HttpWebSocketInboundAssembler.h"
 
 namespace {
 

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbQueryCache.h"
+#include "db/DbQueryCache.h"
 
 #include <array>
 #include <bit>
@@ -8,12 +8,13 @@
 
 #include <openssl/sha.h>
 
-#include "ruvia/web/detail/db/DbConfigStorage.h"
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
+
+#include "db/DbConfigStorage.h"
+#include "db/DbQueryCacheState.h"
+#include "db/DbRegistry.h"
 
 namespace ruvia::detail {
 namespace {

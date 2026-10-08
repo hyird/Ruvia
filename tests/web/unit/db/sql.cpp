@@ -15,12 +15,12 @@
 #include <vector>
 
 #include "ruvia/web/db/DbTypes.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
-#include "ruvia/web/detail/db/DbMigrationChecksum.h"
-#include "ruvia/web/detail/db/DbMigrationValidation.h"
-#include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
 
+#include "db/DbConfigValidation.h"
+#include "db/DbMigrationChecksum.h"
+#include "db/DbMigrationValidation.h"
+#include "db/DbSql.h"
 #include "test_harness.h"
 
 namespace {
@@ -257,7 +257,7 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     RUVIA_CHECK(defaults.queryTimeout == std::chrono::seconds(30));
     RUVIA_CHECK(defaults.acquireTimeout == std::chrono::seconds(5));
     RUVIA_CHECK(!defaults.readTimeout.has_value());
-    RUVIA_CHECK(!defaults.writeTimeout.has_value());
+    RUVIA_CHECK(!defaults.write_timeout.has_value());
     RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{.driver = DbDriver::kMariaDb}); }));
 
     // Explicit absence is the only way to request an unbounded operation.
@@ -295,7 +295,7 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     }));
     RUVIA_CHECK(throwsOn([] {
         auto c = DbConfig{.driver = DbDriver::kMariaDb};
-        c.writeTimeout = milliseconds(0);
+        c.write_timeout = milliseconds(0);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
@@ -320,7 +320,7 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     }));
     RUVIA_CHECK(throwsOn([] {
         auto c = DbConfig{.driver = DbDriver::kMariaDb};
-        c.writeTimeout = milliseconds(-1);
+        c.write_timeout = milliseconds(-1);
         validateDbConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {

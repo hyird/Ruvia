@@ -13,8 +13,8 @@
 #include <utility>
 
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
 
+#include "http3/Http3BufferedResponseOutput.h"
 #include "test_harness.h"
 
 namespace {

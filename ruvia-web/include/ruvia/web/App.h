@@ -16,9 +16,9 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/RateLimitRule.h"
-#include "ruvia/web/ServerConfig.h"
 #include "ruvia/web/WebWorker.h"
 #include "ruvia/web/detail/app/app_configuration.h"
+#include "ruvia/web/server_config.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -93,13 +93,13 @@ public:
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
-    App& server(ServerConfig config);
+    App& server(server_config config);
     App& listen(ListenConfig config);
     // The deployment's handler deadline. Absent by
     // default: an app that declares no deadline anywhere arms nothing per
     // request. A route may tighten the handler
     // deadline with ruvia::Deadline<N> but never extend it -- the same rule
-    // ServerConfig::maxBufferedBodyBytes follows.
+    // server_config::max_buffered_body_bytes follows.
     App& deadline(DeadlineConfig config);
     App& deadline(std::nullptr_t);
     // Disabled by default. A config enables response coding and precompressed
@@ -147,7 +147,7 @@ public:
     // The rate limit every request passes. A route may add its own with
     // ruvia::RateLimit<max, windowMs>; both then apply, so the stricter is what
     // a caller actually meets -- the same "narrower scope may only tighten"
-    // rule ServerConfig::maxBufferedBodyBytes follows.
+    // rule server_config::max_buffered_body_bytes follows.
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.

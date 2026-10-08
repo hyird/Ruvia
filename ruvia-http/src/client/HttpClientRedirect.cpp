@@ -3,10 +3,11 @@
 #include <utility>
 
 #include "ruvia/http/HttpRequestTarget.h"
-#include "ruvia/http/detail/client/HttpOriginView.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "client/HttpOriginView.h"
+#include "parser/HttpRequestTarget.h"
 
 namespace ruvia {
 namespace {

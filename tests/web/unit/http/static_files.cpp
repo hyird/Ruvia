@@ -4,8 +4,8 @@
 #include <utility>
 
 #include "ruvia/web/StaticFiles.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
 
+#include "http/StaticRootIndex.h"
 #include "test_harness.h"
 
 namespace {

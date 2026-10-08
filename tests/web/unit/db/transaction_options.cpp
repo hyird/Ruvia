@@ -10,9 +10,9 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/DbTypes.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbTransactionStart.h"
 
+#include "db/DbRegistry.h"
+#include "db/DbTransactionStart.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

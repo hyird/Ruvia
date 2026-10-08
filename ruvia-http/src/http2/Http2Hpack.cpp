@@ -1,10 +1,11 @@
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
+#include "http2/Http2Hpack.h"
 
 #include <algorithm>
 #include <exception>
 
 #include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/util/PmrString.h"
+
+#include "util/PmrString.h"
 
 namespace ruvia::detail {
 

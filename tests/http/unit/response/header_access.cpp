@@ -2,9 +2,9 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 
+#include "response/HttpResponseHeaderAccess.h"
 #include "test_harness.h"
 
 namespace {

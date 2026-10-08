@@ -97,10 +97,10 @@ int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8082})
         .server({
-            .workerCount = 2,
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
-            .maxBufferedBodyBytes = 16 * 1024 * 1024,
-            .maxStreamBodyBytes = std::nullopt,
+            .worker_count = 2,
+            .process_signal_handlers = ruvia::process_signal_handler_policy::install,
+            .max_buffered_body_bytes = 16 * 1024 * 1024,
+            .max_stream_body_bytes = std::nullopt,
         })
         .run();
 }

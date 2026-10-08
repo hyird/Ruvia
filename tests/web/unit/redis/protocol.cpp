@@ -13,13 +13,13 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/web/detail/redis/RedisConfigValidation.h"
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
+#include "redis/RedisConfigStorage.h"
+#include "redis/RedisConfigValidation.h"
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisProtocol.h"
+#include "redis/RedisTypesAccess.h"
 #include "test_harness.h"
 
 namespace {

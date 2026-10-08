@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3QuicTlsContext.h"
+#include "http3/Http3QuicTlsContext.h"
 
 #include <stdexcept>
 #include <utility>
@@ -6,7 +6,8 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/web/detail/server/tls/HttpServerTlsIdentity.h"
+
+#include "server/HttpServerTlsIdentity.h"
 
 namespace ruvia::detail {
 namespace {

@@ -3,8 +3,9 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpRequestTarget.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
+
+#include "router/RouterImpl.h"
 
 namespace ruvia {
 

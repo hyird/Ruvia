@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_worker_runtime.h"
+#include "http3/http3_worker_runtime.h"
 
 #include <algorithm>
 #include <array>
@@ -14,10 +14,11 @@
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3PeerStreams.h"
 #include "ruvia/http/Http3StreamFrames.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-#include "ruvia/web/detail/http3/http3_worker_server.h"
-#include "ruvia/web/detail/server/HttpServerListener.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "http3/Http3QuicSocketAddress.h"
+#include "http3/http3_worker_server.h"
+#include "server/HttpServerListener.h"
+#include "server/HttpServerOptionsValidation.h"
 
 namespace ruvia::detail {
 namespace {

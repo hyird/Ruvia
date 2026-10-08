@@ -9,8 +9,8 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/HttpCapsuleStream.h"
 #include "ruvia/web/HttpUdpTunnel.h"
-#include "ruvia/web/detail/http/HttpTunnelSession.h"
 
+#include "http/HttpTunnelSession.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

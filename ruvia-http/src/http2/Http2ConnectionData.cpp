@@ -3,11 +3,11 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
+#include "http2/Http2Connection.h"
+#include "http2/Http2FlowControl.h"
+#include "http2/Http2FrameCodec.h"
+#include "http2/Http2FramePayload.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
 
 // Inbound DATA: framing and padding validation, the receive-window accounting a
 // payload consumes, and delivering the bytes to the stream that owns them.

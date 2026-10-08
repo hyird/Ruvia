@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
+#include "ratelimit/RateLimitDecision.h"
 
 #include <charconv>
 #include <cstdint>
@@ -7,8 +7,9 @@
 #include <utility>
 
 #include "ruvia/web/RateLimit.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/ratelimit/RateLimitKey.h"
+
+#include "context/ContextAccess.h"
+#include "ratelimit/RateLimitKey.h"
 
 namespace ruvia::detail {
 

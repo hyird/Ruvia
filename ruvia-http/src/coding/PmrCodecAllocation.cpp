@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
+#include "coding/PmrCodecAllocation.h"
 
 #include <limits>
 #include <memory>

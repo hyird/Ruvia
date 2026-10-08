@@ -14,9 +14,9 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/Http2Framing.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/HttpConnectionAdvertisementOutput.h"
 
+#include "context/ContextAccess.h"
+#include "context/HttpConnectionAdvertisementOutput.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

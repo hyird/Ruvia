@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3ClientConnection.h"
+#include "http3/Http3ClientConnection.h"
 
 #include <algorithm>
 #include <array>
@@ -13,8 +13,9 @@
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
-#include "ruvia/web/detail/client/HttpClientUploadState.h"
+
+#include "client/HttpClientResponseDecoding.h"
+#include "client/HttpClientUploadState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -125,18 +126,18 @@ Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerH
     TaskScope& poolTasks, http3_quic_client_tls_context& tls, HttpOriginView origin,
     std::chrono::milliseconds connectTimeout, std::pmr::memory_resource* resource,
     std::size_t maxRequests, std::size_t maxResponseBytes,
-    std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
-    std::optional<std::chrono::milliseconds> writeTimeout)
+    std::chrono::milliseconds idle_timeout, Http3ClientBodyBudget* receiveBodyBudget,
+    std::optional<std::chrono::milliseconds> write_timeout)
     : Http3ClientConnection(io, worker, poolTasks, tls, origin, connectTimeout, resource,
-          maxRequests, maxResponseBytes, idleTimeout, receiveBodyBudget, writeTimeout, {}, {},
+          maxRequests, maxResponseBytes, idle_timeout, receiveBodyBudget, write_timeout, {}, {},
           {}, {}, ruvia::quic_version::v1, false) {}
 
 Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerHandle& worker,
     TaskScope& poolTasks, http3_quic_client_tls_context& tls, HttpOriginView origin,
     std::chrono::milliseconds connectTimeout,
     std::pmr::memory_resource* resource, std::size_t maxRequests, std::size_t maxResponseBytes,
-    std::chrono::milliseconds idleTimeout, Http3ClientBodyBudget* receiveBodyBudget,
-    std::optional<std::chrono::milliseconds> writeTimeout,
+    std::chrono::milliseconds idle_timeout, Http3ClientBodyBudget* receiveBodyBudget,
+    std::optional<std::chrono::milliseconds> write_timeout,
     LifecycleNotification lifecycleNotification, Http3QpackConfig qpack,
     Http3ClientOriginObserver originObserver, Http3ClientPushObserver pushObserver,
     ruvia::quic_version initial_version, bool enable_early_data)
@@ -152,8 +153,8 @@ Http3ClientConnection::Http3ClientConnection(asio::io_context& io, const WorkerH
       initial_version_(initial_version),
       enable_early_data_(enable_early_data),
       connectTimeout_(checkedTimeout(connectTimeout)),
-      idleTimeout_(checkedTimeout(idleTimeout)),
-      writeTimeout_(checkedTimeout(writeTimeout)),
+      idleTimeout_(checkedTimeout(idle_timeout)),
+      writeTimeout_(checkedTimeout(write_timeout)),
       maxRequests_(maxRequests),
       maxResponseBytes_(maxResponseBytes),
       resolver_(io_, resource_),

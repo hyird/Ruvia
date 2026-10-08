@@ -12,8 +12,8 @@
 
 #include "ruvia/http/Http3FieldSection.h"
 #include "ruvia/http/Http3VarInt.h"
-#include "ruvia/web/detail/http3/Http3ClientSansIoSessionEngine.h"
 
+#include "http3/Http3ClientSansIoSessionEngine.h"
 #include "test_harness.h"
 
 namespace {

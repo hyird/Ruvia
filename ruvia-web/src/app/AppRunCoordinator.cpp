@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/app/AppRunCoordinator.h"
+#include "app/AppRunCoordinator.h"
 
 #include <algorithm>
 #include <csignal>
@@ -18,13 +18,14 @@
 #include "ruvia/core/FailureReport.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/App.h"
-#include "ruvia/web/detail/app/AppConfigGuards.h"
-#include "ruvia/web/detail/app/AppRuntimeGraph.h"
-#include "ruvia/web/detail/app/AppState.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "app/AppConfigGuards.h"
+#include "app/AppRuntimeGraph.h"
+#include "app/AppState.h"
+#include "http/StaticRootIndex.h"
+#include "router/RouterImpl.h"
+#include "server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
 namespace {
@@ -125,7 +126,7 @@ public:
         stopWorkers();
         stopSignalHandling();
         invokeStopHooks(state_);
-        const auto workerFailure = joinWorkers();
+        const auto failure = joinWorkers();
         const auto signal_failure = signal_runtime_.failure();
         retireRuntime();
 
@@ -135,8 +136,8 @@ public:
         if (signal_failure != nullptr) {
             std::rethrow_exception(signal_failure);
         }
-        if (workerFailure != nullptr) {
-            std::rethrow_exception(workerFailure);
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
         }
     }
 
@@ -159,7 +160,7 @@ private:
             detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource_, runtimeResource_);
         auto preparedOptions = state_.options;
         preparedOptions.env = &state_.env;
-        preparedOptions.workerFailure = detail::WorkerFailureSink{
+        preparedOptions.failure = detail::WorkerFailureSink{
             .target = &owner_,
             .invoke =
                 [](void* target, const std::exception_ptr&) noexcept {
@@ -192,8 +193,8 @@ private:
         const auto validatedConfiguration =
             detail::validateHttpServerConfiguration(state_.listeners, std::move(preparedOptions));
 
-        runtime->workers.reserve(state_.workerCount);
-        for (std::size_t i = 0; i < state_.workerCount; ++i) {
+        runtime->workers.reserve(state_.worker_count);
+        for (std::size_t i = 0; i < state_.worker_count; ++i) {
             detail::ControllerStore controllers;
             auto router = buildWorkerRouter(state_, runtimeResource_, controllers,
                 controllerRegistrars, runtime->routePlan.get());
@@ -258,7 +259,7 @@ private:
     }
 
     void startSignalHandling() {
-        if (state_.processSignalHandlers != ProcessSignalHandlerPolicy::kInstall) {
+        if (state_.process_signal_handlers != process_signal_handler_policy::install) {
             return;
         }
         addShutdownSignals(signals_);

@@ -1,5 +1,4 @@
-#include "ruvia/web/detail/router/RouterImpl.h"
-
+#include "router/RouterImpl.h"
 #include "routing_fixture.h"
 
 namespace {

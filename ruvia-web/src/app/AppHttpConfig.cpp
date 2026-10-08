@@ -4,10 +4,11 @@
 
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/core/NativePath.h"
-#include "ruvia/web/ServerConfig.h"
-#include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/http/static/StaticFileTypes.h"
-#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
+#include "ruvia/web/server_config.h"
+
+#include "app/AppConfigMutation.h"
+#include "http/StaticFileTypes.h"
+#include "http/StaticRootOptionsValidation.h"
 
 namespace ruvia {
 

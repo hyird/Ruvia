@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia {
 namespace detail {

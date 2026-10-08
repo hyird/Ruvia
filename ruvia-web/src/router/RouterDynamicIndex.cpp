@@ -1,7 +1,7 @@
 #include <algorithm>
 
-#include "ruvia/web/detail/router/PathSegments.h"
-#include "ruvia/web/detail/router/RouteTable.h"
+#include "router/PathSegments.h"
+#include "router/RouteTable.h"
 
 namespace ruvia {
 

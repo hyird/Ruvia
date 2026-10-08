@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_connection_driver.h"
+#include "http3/http3_connection_driver.h"
 
 #include <algorithm>
 #include <array>
@@ -8,8 +8,10 @@
 
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/Http3PeerStreams.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "http3/Http3QuicSocketAddress.h"
+#include "server/HttpServerOptionsValidation.h"
+
 namespace ruvia::detail {
 namespace {
 constexpr auto server_shutdown_code = Http3ConnectionErrorCode::kNoError;
@@ -382,7 +384,7 @@ bool http3_connection_driver::prepare_protocol() noexcept {
     try {
         const auto prefixes = Http3LocalCriticalStreams::create(config_.local_settings);
         auto* transport = wire_->transport();
-        auto planner = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = static_cast<std::uint64_t>(config_.max_requests_per_connection)});
+        auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = static_cast<std::uint64_t>(config_.max_requests_per_connection)});
         if (!prefixes || !planner || !transport || !transport_id_) {
             close_connection(protocol_failure_code);
             return true;
@@ -395,7 +397,7 @@ bool http3_connection_driver::prepare_protocol() noexcept {
                 .maxTrackedStreams = config_.max_requests_per_connection,
                 .maxQueuedBlocks = config_.buffer_capacity,
                 .maxDriveWorkItems = 16,
-                .writeTimeout = config_.write_timeout});
+                .write_timeout = config_.write_timeout});
         admission_planner_.emplace(std::move(*planner));
         critical_ = std::move(critical);
         output_ = std::move(output);

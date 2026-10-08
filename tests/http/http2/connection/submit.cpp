@@ -2,9 +2,9 @@
 #include <new>
 
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
 
+#include "http2/Http2WebSocketHandshake.h"
 #include "http2_connection_fixture.h"
 
 // Http2Connection: submitting request and response heads.

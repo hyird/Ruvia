@@ -17,14 +17,15 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
-#include "ruvia/http/detail/http2/flow/Http2WindowUpdate.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
 
+#include "http2/Http2Connection.h"
+#include "http2/Http2FrameCodec.h"
+#include "http2/Http2HeaderBlock.h"
+#include "http2/Http2Hpack.h"
+#include "http2/Http2HpackHuffmanTables.h"
+#include "http2/Http2ReceiveWindowCredit.h"
+#include "http2/Http2WindowUpdate.h"
+#include "http2_wire_fixture.h"
 #include "test_harness.h"
 
 namespace http2_connection_test {
@@ -151,34 +152,6 @@ inline bool observeRequestContentLength(
         observation.path.assign(value.data(), value.size());
     }
     return true;
-}
-
-// Encode a minimal valid request header block (HPACK literals) into `block`.
-inline void encodeRequest(std::pmr::string& block, std::string_view method,
-    std::string_view scheme = "https", std::string_view path = "/",
-    std::optional<std::string_view> authority = "example.com") {
-    HpackEncoder::encodeHeader(block, ":method", method);
-    HpackEncoder::encodeHeader(block, ":scheme", scheme);
-    HpackEncoder::encodeHeader(block, ":path", path);
-    if (authority.has_value()) {
-        HpackEncoder::encodeHeader(block, ":authority", *authority);
-    }
-}
-
-inline void encodeGetRequest(std::pmr::string& block) {
-    encodeRequest(block, "GET");
-}
-
-// Frame a HEADERS block on `streamId` with the given flags into a fed-ready buffer.
-inline std::pmr::string headersFrame(std::pmr::memory_resource* resource, std::uint32_t streamId,
-    std::uint8_t flags, std::string_view block) {
-    std::pmr::string frame(resource);
-    char hdr[9];
-    ruvia::detail::http2EncodeFrameHeader(
-        hdr, static_cast<std::uint32_t>(block.size()), Http2FrameType::kHeaders, flags, streamId);
-    frame.append(hdr, 9);
-    frame.append(block.data(), block.size());
-    return frame;
 }
 
 inline std::pmr::string continuationFrame(std::pmr::memory_resource* resource,
@@ -446,16 +419,6 @@ inline std::pmr::string postHeadFrame(
 }
 
 // Frame a DATA payload on `streamId` with the given flags.
-inline std::pmr::string dataFrame(std::pmr::memory_resource* resource, std::uint32_t streamId,
-    std::uint8_t flags, std::string_view body) {
-    std::pmr::string frame(resource);
-    char hdr[9];
-    ruvia::detail::http2EncodeFrameHeader(
-        hdr, static_cast<std::uint32_t>(body.size()), Http2FrameType::kData, flags, streamId);
-    frame.append(hdr, 9);
-    frame.append(body.data(), body.size());
-    return frame;
-}
 
 }  // namespace http2_connection_test
 

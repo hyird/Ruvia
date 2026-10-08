@@ -11,14 +11,14 @@
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http2Types.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "context/ContextServices.h"
+#include "http2/Http2SansIoSession.h"
+#include "http2/Http2SansIoSessionLifecycle.h"
 #include "http2_sansio_session_fixture.h"
+#include "router/RouteTable.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "sansio_driver_fixture.h"
 #include "test_io_context.h"
 
@@ -700,7 +700,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
             ruvia::test::Http2SansIoSessionFixture fixture;
             auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
-            fixture.options.maxRequestsPerConnection = 1;
+            fixture.options.max_requests_per_connection = 1;
             co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,
                 impl.routeTable(), worker,
                 fixture.context(fixture.services(workerHandle).withPlainTransport("127.0.0.1"))));

@@ -8,11 +8,11 @@
 #include <utility>
 
 #include "ruvia/http/MultipartParser.h"
-#include "ruvia/http/detail/parser/MultipartDelimiter.h"
-#include "ruvia/http/detail/parser/MultipartPartAccess.h"
-#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
-#include "ruvia/http/detail/parser/MultipartStreamPartAccess.h"
 
+#include "parser/MultipartDelimiter.h"
+#include "parser/MultipartPartAccess.h"
+#include "parser/MultipartPartHeaders.h"
+#include "parser/MultipartStreamPartAccess.h"
 #include "test_harness.h"
 
 RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {

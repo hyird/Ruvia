@@ -2,9 +2,9 @@
 #include <string_view>
 
 #include "ruvia/http/HttpAcceptMatch.h"
-#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/field/HttpQualityValue.h"
 
+#include "field/HttpAcceptMediaType.h"
+#include "field/HttpQualityValue.h"
 #include "test_harness.h"
 
 namespace {

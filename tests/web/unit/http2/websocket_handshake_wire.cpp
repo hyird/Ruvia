@@ -5,12 +5,12 @@
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/Http2Types.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "context/ContextServices.h"
+#include "http2/Http2SansIoSession.h"
 #include "http2_sansio_session_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "sansio_driver_fixture.h"
 #include "test_io_context.h"
 

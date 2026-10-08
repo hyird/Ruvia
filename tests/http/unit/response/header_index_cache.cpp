@@ -5,8 +5,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
-#include "ruvia/http/detail/response/ResponseHeaderIndexCache.h"
 
+#include "response/ResponseHeaderIndexCache.h"
 #include "test_harness.h"
 
 namespace {

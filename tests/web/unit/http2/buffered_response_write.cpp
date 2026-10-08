@@ -4,8 +4,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http2/Http2BufferedResponseWrite.h"
-
+#include "http2/Http2BufferedResponseWrite.h"
 #include "test_harness.h"
 
 RUVIA_TEST(http2_buffered_response_write_result_preserves_terminal_cause) {

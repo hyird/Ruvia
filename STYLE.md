@@ -43,6 +43,11 @@ API; keep those includes in the `.cpp` or in a `detail` access header.
 `.inl` implementation fragments must include the headers they use. Do not rely
 on sibling `.inl` include order to make a helper visible.
 
+Shared test fixture headers define free helpers as `inline`, with attributes
+before the declaration specifiers (`[[nodiscard]] inline`). Coroutine fixture
+types belong in a named test namespace so GCC-generated coroutine frames do not
+refer to anonymous-namespace types with translation-unit-local linkage.
+
 ## Errors
 
 Use exceptions by default when a new operation cannot complete its assigned

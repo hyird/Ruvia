@@ -3,8 +3,8 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/web/detail/db/DbQueryCache.h"
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
+#include "db/DbQueryCache.h"
+#include "db/DbQueryCacheState.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/RedisHandle.h"
 #endif

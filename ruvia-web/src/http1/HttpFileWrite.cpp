@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/file/HttpFileWrite.h"
+#include "server/HttpFileWrite.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -7,7 +7,8 @@
 #include <utility>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+
+#include "server/HttpNativeFile.h"
 
 #if defined(__linux__)
 #include <sys/sendfile.h>

@@ -8,9 +8,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
-
+#include "http/StaticFileMetadata.h"
+#include "server/HttpNativeFile.h"
 #include "test_harness.h"
 
 namespace {

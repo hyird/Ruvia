@@ -16,13 +16,15 @@
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientRequestStorage.h"
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
-#include "ruvia/web/detail/http3/Http3ClientConnection.h"
+
+#include "client/HttpClientConfigValidation.h"
+#include "client/HttpClientPool.h"
+#include "client/HttpClientRequestStorage.h"
+#include "client/HttpClientResponseDecoding.h"
+#include "client/HttpClientResponseState.h"
+#include "client/HttpClientResultBudget.h"
+#include "context/ContextServices.h"
+#include "http3/Http3ClientConnection.h"
 
 namespace ruvia {
 namespace {
@@ -587,11 +589,11 @@ HttpScheme HttpClientHandle::scheme() const {
 }
 
 HttpClientHandle Context::httpClient() const {
-    return clientRegistries_.httpClient(operationScope_, capabilities_.stop_token());
+    return services().clientRegistries().httpClient(operationScope_, capabilities_.stop_token());
 }
 
 HttpClientHandle Context::httpClient(std::string_view alias) const {
-    return clientRegistries_.httpClient(alias, operationScope_, capabilities_.stop_token());
+    return services().clientRegistries().httpClient(alias, operationScope_, capabilities_.stop_token());
 }
 
 }  // namespace ruvia

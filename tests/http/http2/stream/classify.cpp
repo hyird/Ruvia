@@ -2,10 +2,9 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/hpack/Http2HeaderContinuation.h"
-#include "ruvia/http/detail/http2/hpack/Http2HeaderDecode.h"
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-
+#include "http2/Http2HeaderContinuation.h"
+#include "http2/Http2HeaderDecode.h"
+#include "http2/Http2Hpack.h"
 #include "test_harness.h"
 
 namespace {

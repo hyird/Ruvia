@@ -6,8 +6,9 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/field/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
+
+#include "field/HttpInterimResponseValidation.h"
 
 namespace ruvia::detail {
 

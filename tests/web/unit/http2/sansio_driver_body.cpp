@@ -1,11 +1,11 @@
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "context/ContextServices.h"
+#include "http2/Http2SansIoSession.h"
 #include "http2_sansio_session_fixture.h"
+#include "router/RouteTable.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "sansio_driver_fixture.h"
 
 // Sans-I/O HTTP/2 driver: request and response bodies: pacing, streaming and trailers.

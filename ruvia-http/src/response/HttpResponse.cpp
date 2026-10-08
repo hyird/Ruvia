@@ -13,16 +13,17 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/response/HttpResponseStaticHeaders.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "field/HttpEntityTag.h"
+#include "response/HttpResponseHeaderAccess.h"
+#include "response/HttpResponseStaticHeaders.h"
+#include "response/ResponseHeaderUtils.h"
 
 namespace ruvia {
 

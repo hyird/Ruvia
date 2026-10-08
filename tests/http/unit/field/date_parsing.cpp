@@ -7,10 +7,10 @@
 #include <utility>
 
 #include "ruvia/http/HttpDate.h"
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
-#include "ruvia/http/detail/server/HttpDateCache.h"
 
+#include "field/HttpDate.h"
+#include "field/HttpImfFixdate.h"
+#include "server/HttpDateCache.h"
 #include "test_harness.h"
 
 namespace {

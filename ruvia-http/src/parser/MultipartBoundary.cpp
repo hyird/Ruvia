@@ -6,7 +6,8 @@
 
 #include "ruvia/http/MultipartParser.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/parser/MimeFieldGrammar.h"
+
+#include "parser/MimeFieldGrammar.h"
 
 namespace ruvia {
 namespace {

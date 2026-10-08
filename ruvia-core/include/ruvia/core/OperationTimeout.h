@@ -55,7 +55,3 @@ private:
 };
 
 }  // namespace ruvia
-
-// Keep the generic deadline lifecycle available to runtime integrations that
-// include this core capability header; OperationTimeout itself is public-owned.
-#include "ruvia/core/detail/io/OperationDeadline.h"

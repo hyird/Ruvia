@@ -4,8 +4,9 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Next.h"
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
+
+#include "context/ContextAccess.h"
+#include "http/SessionAccess.h"
 
 namespace ruvia {
 
@@ -67,9 +68,10 @@ Task<void> detail::SessionAccess::commit(Context& context) {
 #include <memory_resource>
 
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
 #include "ruvia/web/redis/RedisHandle.h"
+
+#include "http/SecureToken.h"
 
 namespace ruvia {
 

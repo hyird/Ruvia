@@ -5,7 +5,8 @@
 
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3PeerStreams.h"
-#include "ruvia/http/detail/field/HttpStructuredFields.h"
+
+#include "field/HttpStructuredFields.h"
 
 namespace ruvia {
 std::expected<bool, Http3CodecError> parseHttpCapsuleProtocol(std::string_view value) noexcept {

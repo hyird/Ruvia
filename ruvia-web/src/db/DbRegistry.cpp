@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbRegistry.h"
+#include "db/DbRegistry.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,9 +10,10 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+
+#include "db/DbQueryCacheState.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia {
 namespace {

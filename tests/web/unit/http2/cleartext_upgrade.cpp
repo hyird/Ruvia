@@ -1,8 +1,8 @@
 #include <string_view>
 
 #include "ruvia/http/Http2Framing.h"
-#include "ruvia/web/detail/http2/CleartextUpgrade.h"
 
+#include "http2/CleartextUpgrade.h"
 #include "test_harness.h"
 
 namespace {
