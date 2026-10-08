@@ -99,7 +99,7 @@ namespace {
 // keep exactly one owner as MoveOnlyFunction relocates the lambda. If the
 // lambda runs it release()s the reservation and complete() owns the decrement; if
 // the lambda is destroyed unrun (rejected post, or shutdown abandoning queued
-// mailbox work), the deleter reconciles the count.
+// queue work), the deleter reconciles the count.
 struct AbandonReservationDeleter {
     void operator()(WebWorkerDispatch* dispatch) const noexcept {
         dispatch->abandon();
@@ -149,7 +149,7 @@ WebWorkerPostResult WebWorkerDispatch::post(Task task) {
         return WebWorkerPostResult::reject(PostStatus::kWorkerStopping, std::move(task));
     }
 
-    // Reserve before entering the core mailbox. The core factory may be delayed
+    // Reserve before entering the core queue. The core factory may be delayed
     // past detach; its only obligation is then to return an abandonment guard.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
     AbandonReservation reservation(this);
@@ -212,7 +212,7 @@ WebWorkerStats WebWorkerDispatch::stats() const noexcept {
 
 void WebWorkerDispatch::start(Task task) {
     // Closing abandons factories that have not started. Runtime retirement now
-    // drains reserved mailbox publication before detach; it must not turn that
+    // drains reserved queue publication before detach; it must not turn that
     // quiescence drain into new application work against retired capabilities.
     if (stopSource_.stopRequested() || !worker_.accepting()) {
         abandon();

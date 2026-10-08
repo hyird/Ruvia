@@ -69,7 +69,7 @@ if(RUVIA_BUILD_CORE)
         core/scoped_operation.cpp
         core/spsc_ring_queue.cpp
         core/stop_token.cpp
-        core/worker_mailbox.cpp
+        core/worker_queue.cpp
         core/worker_runtime.cpp
         support/test_main.cpp)
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)

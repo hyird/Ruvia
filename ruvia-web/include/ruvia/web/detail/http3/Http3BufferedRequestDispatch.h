@@ -291,8 +291,8 @@ private:
     bool peer_field_section_rejected_{};
     bool streamOutputActive_{};
     bool tunnelDataPending_{};
-    bool tunnelEstablishedPending_{};
-    bool tunnelEstablishedPublished_{};
+    bool tunnel_established_control_pending_{};
+    bool tunnel_established_control_published_{};
     bool tunnelFinPending_{};
     bool streamOutputEnded_{};
     std::chrono::milliseconds peerTransportFinTimeout_{};

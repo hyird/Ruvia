@@ -4,7 +4,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpKnownMethod.h"
@@ -668,34 +668,28 @@ Task<void> HttpClientPool::waitForHttp2SessionStop(
         });
     }
     std::uint64_t cancellationId = 0;
-    StopRegistration stopRegistration;
     if (stopToken.stoppable()) {
         if (runtime.stateCancellationWaiters++ == 0) {
-            runtime.stateCancellationId = cancellationMailbox_->nextOperationId();
+            runtime.stateCancellationId = cancellation_target_->next_operation_id();
         }
         cancellationId = runtime.stateCancellationId;
-        stopToken.registerCallback(
-            stopRegistration, WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                                  cancellationMailbox_, cancellationId));
     }
-    struct CancellationRegistrationGuard final {
+    struct shared_cancellation_wait final {
         Http2Runtime& runtime;
-        std::uint64_t cancellationId;
-        StopRegistration& registration;
-
-        ~CancellationRegistrationGuard() {
-            if (cancellationId != 0) {
-                if (runtime.stateCancellationWaiters == 0 ||
-                    runtime.stateCancellationId != cancellationId) {
+        std::uint64_t id;
+        ~shared_cancellation_wait() {
+            if (id != 0) {
+                if (runtime.stateCancellationWaiters == 0 || runtime.stateCancellationId != id) {
                     std::terminate();
                 }
                 if (--runtime.stateCancellationWaiters == 0) {
                     runtime.stateCancellationId = 0;
                 }
             }
-            registration.reset();
         }
-    } cancellationRegistrationGuard{runtime, cancellationId, stopRegistration};
+    } shared_wait{runtime, cancellationId};
+    auto cancellation = worker_cancellation_registration<http_client_cancellation_target>::observe(cancellation_target_, cancellationId);
+    cancellation.arm(stopToken);
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         if (stopToken.stopRequested()) {
             throw HttpClientError(
@@ -761,31 +755,9 @@ Task<void> HttpClientPool::executeHttp2(Connection& connection,
                 }
             });
         }
-        std::uint64_t cancellationId = 0;
-        StopRegistration stopRegistration;
-        if (stopToken.stoppable()) {
-            cancellationId = cancellationMailbox_->nextOperationId();
-            pending.cancellationId = cancellationId;
-            response.state_->cancellationId = cancellationId;
-            stopToken.registerCallback(
-                stopRegistration, WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                                      cancellationMailbox_, cancellationId));
-        }
-        struct StreamCancellationRegistrationGuard final {
-            Http2PendingStream& pending;
-            std::uint64_t cancellationId;
-            StopRegistration& registration;
-
-            ~StreamCancellationRegistrationGuard() {
-                if (pending.cancellationId == cancellationId) {
-                    pending.cancellationId = 0;
-                }
-                registration.reset();
-            }
-        } cancellationRegistrationGuard{pending, cancellationId, stopRegistration};
-        if (stopToken.stopRequested()) {
-            cancelOperationById(cancellationId);
-        }
+        worker_cancellation_registration cancellation(cancellation_target_, pending.cancellationId);
+        response.state_->cancellationId = cancellation.id();
+        cancellation.arm(stopToken);
 
         for (;;) {
             if (pending.failed()) {

@@ -24,7 +24,7 @@
 namespace {
 
 class packet_worker final {
-    ruvia::worker_runtime owner_{{.mailbox_capacity = 8}};
+    ruvia::worker_runtime owner_{{.queue_capacity = 8}};
 
 public:
     packet_worker()

@@ -23,7 +23,6 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/quic_server.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/http3/http3_worker_server.h"
 #include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
@@ -43,7 +42,7 @@ class RouteTable;
 class ValidatedHttpServerConfiguration;
 class WebWorkerDispatch;
 class http3_datagram_channel;
-class http3_worker_runtime;
+class http3_worker;
 class acceptor;
 
 class WebWorkerRuntime final {
@@ -85,7 +84,7 @@ public:
     // Lock-free admission snapshot for the acceptor. A true
     // result is advisory; the worker rechecks capacity when the socket is delivered.
     [[nodiscard]] bool availableForNetworkDispatch() const noexcept;
-    // Called on the worker after bounded acceptor mailbox delivery. Rechecks worker state
+    // Called on the worker after bounded acceptor queue delivery. Rechecks worker state
     // and capacity, assigns before any I/O, and consumes the ticket on every path.
     void acceptTransferredConnection(NativeAcceptedSocketTicket&& ticket) noexcept;
     // Safe from any thread, at any point in the lifecycle.
@@ -122,7 +121,6 @@ private:
     void stopAdmissionOnContext() noexcept;
     void stopOnContext() noexcept;
     void failWorker(const std::exception_ptr& failure) noexcept;
-    void start_http3();
     void stop_http3() noexcept;
     Task<void> runWorker();
     Task<void> staticRootRefreshLoop();
@@ -152,13 +150,7 @@ private:
     HttpServerOptions options_;
     ruvia::ConnectionScanner connectionScanner_;
     WorkerCapabilities capabilities_;
-    std::unique_ptr<http3_worker_server, PmrObjectDeleter<http3_worker_server>> http3Server_;
-    std::unique_ptr<http3_worker_runtime, PmrObjectDeleter<http3_worker_runtime>> http3_transport_;
-    std::optional<Http3ListenConfig> http3_config_;
-    std::size_t http3_listener_index_{};
-    asio::ip::udp::endpoint quic_endpoint_;
-    ruvia::quic_cid_partition cid_partition_;
-    std::atomic<http3_datagram_channel*> quic_channel_{};
+    std::unique_ptr<http3_worker, PmrObjectDeleter<http3_worker>> http3_;
     std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     ConnectionWorkSetPool workSetPool_;
     // Atomic because stats() reads them from the caller's thread while this

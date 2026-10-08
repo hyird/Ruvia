@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/client/ClientTransport.h"
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <exception>
@@ -125,27 +126,52 @@ void validateClientTransportConfig(ClientTransportConfigView config) {
     }
 }
 
-void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfigView config) {
-    context.set_options(asio::ssl::context::no_tlsv1 | asio::ssl::context::no_tlsv1_1);
-    if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
-        context.set_verify_mode(asio::ssl::verify_peer);
-        if (config.caFile.empty()) {
-            context.set_default_verify_paths();
-        } else {
-            context.load_verify_file(std::string(config.caFile));
+void configure_client_tls_context(SSL_CTX& context, ClientTransportConfigView config,
+    client_tls_protocol protocol) {
+    validateClientTransportConfig(config);
+    if (protocol != client_tls_protocol::stream && protocol != client_tls_protocol::quic) {
+        throw std::invalid_argument("invalid client TLS protocol");
+    }
+    const bool quic = protocol == client_tls_protocol::quic;
+    if (SSL_CTX_set_min_proto_version(&context, quic ? TLS1_3_VERSION : TLS1_2_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(&context, quic ? TLS1_3_VERSION : 0) != 1) {
+        throw std::runtime_error("failed to configure client TLS versions");
+    }
+    const bool verify = config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify;
+    SSL_CTX_set_verify(&context, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
+    if (verify) {
+        const int loaded = config.caFile.empty()
+                               ? SSL_CTX_set_default_verify_paths(&context)
+                               : SSL_CTX_load_verify_file(&context, std::pmr::string(config.caFile, processResource()).c_str());
+        if (loaded != 1) {
+            throw std::runtime_error("failed to load client TLS trust store");
         }
-    } else {
-        context.set_verify_mode(asio::ssl::verify_none);
     }
-    if (!config.privateKeyPassword.empty()) {
-        auto password = std::string(config.privateKeyPassword);
-        context.set_password_callback(
-            [password = std::move(password)](
-                std::size_t, asio::ssl::context_base::password_purpose) { return password; });
+    if (config.certificateChainFile.empty()) {
+        return;
     }
-    if (!config.certificateChainFile.empty()) {
-        context.use_certificate_chain_file(std::string(config.certificateChainFile));
-        context.use_private_key_file(std::string(config.privateKeyFile), asio::ssl::context::pem);
+    if (SSL_CTX_use_certificate_chain_file(&context, std::pmr::string(config.certificateChainFile, processResource()).c_str()) != 1) {
+        throw std::runtime_error("failed to load client TLS certificate chain");
+    }
+    SSL_CTX_set_default_passwd_cb(&context, [](char* buffer, int size, int, void* argument) noexcept {
+        const auto password = static_cast<const ClientTransportConfigView*>(argument)->privateKeyPassword;
+        if (size <= 0 || password.size() > static_cast<std::size_t>(size)) {
+            return 0;
+        }
+        std::copy(password.begin(), password.end(), buffer);
+        return static_cast<int>(password.size());
+    });
+    SSL_CTX_set_default_passwd_cb_userdata(&context, &config);
+    struct password_binding final {
+        SSL_CTX& context;
+        ~password_binding() {
+            SSL_CTX_set_default_passwd_cb(&context, nullptr);
+            SSL_CTX_set_default_passwd_cb_userdata(&context, nullptr);
+        }
+    } binding{context};
+    if (SSL_CTX_use_PrivateKey_file(&context, std::pmr::string(config.privateKeyFile, processResource()).c_str(), SSL_FILETYPE_PEM) != 1 ||
+        SSL_CTX_check_private_key(&context) != 1) {
+        throw std::runtime_error("failed to load or match client TLS private key");
     }
 }
 

@@ -96,7 +96,7 @@ private:
 class TestWorker final {
 public:
     explicit TestWorker(asio::io_context& io)
-        : attachment(ruvia::attachEventLoop(io, {.mailboxCapacity = 8})),
+        : attachment(ruvia::attachEventLoop(io, {.queue_capacity = 8})),
           handle(attachment.loop().handle()) {}
 
     ruvia::EventLoopAttachment attachment;

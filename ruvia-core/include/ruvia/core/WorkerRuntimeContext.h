@@ -16,7 +16,7 @@ namespace ruvia {
 // The io_context remains owned by the runtime that supplied it.
 class WorkerRuntimeContext final {
 public:
-    WorkerRuntimeContext(asio::io_context& ioContext, std::size_t mailboxCapacity);
+    WorkerRuntimeContext(asio::io_context& ioContext, std::size_t queue_capacity);
     ~WorkerRuntimeContext();
 
     WorkerRuntimeContext(const WorkerRuntimeContext&) = delete;

@@ -258,7 +258,7 @@ public:
     }
 
 private:
-    ruvia::worker_runtime owner_{{.mailbox_capacity = 8}};
+    ruvia::worker_runtime owner_{{.queue_capacity = 8}};
 };
 
 struct TestIdentityFiles final {
@@ -640,7 +640,7 @@ struct runtime_burst_fixture final {
           server(worker.handle(), memory, finalize_routes(), capabilities, scanner,
               worker.ioContext().get_executor(), options, stop_token, 1, 8, active, refused),
           protocol(worker, local, tls, ruvia::Http3ListenConfig{},
-              {.server = &server, .max_connections = 1, .mailbox_capacity = 8, .max_requests_per_connection = 8},
+              {.server = &server, .max_connections = 1, .buffer_capacity = 8, .max_requests_per_connection = 8},
               input, {}, {this, [](void* context, std::exception_ptr error) noexcept {
                               static_cast<runtime_burst_fixture*>(context)->failure =
                                   std::move(error);

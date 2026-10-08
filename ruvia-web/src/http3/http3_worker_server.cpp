@@ -476,7 +476,8 @@ bool http3_worker_server::construct_connection(slot& target,
                                    if (!output.state || output.retirement_started || output.state->transport_retired()) {
                                        throw std::runtime_error("HTTP Datagram connection is closed");
                                    }
-                                   (void)output.state->publish_response_datagram(output.identity, stream_id, bytes);
+                                   (void)output.state->publish_response_datagram(
+                                       output.identity, stream_id, bytes);
                                }},
         };
         target.connection = makePmrObject<Http3ServerConnection>(memory_.resource(), routes_,

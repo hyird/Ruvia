@@ -29,7 +29,7 @@ bool recoverable_accept_error(const asio::error_code& error) noexcept {
 
 acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
     std::span<const worker_target> targets, void* failure_target, failure_callback failure)
-    : runtime_({.mailbox_capacity = 128, .io_policy = worker_io_policy::single_owner}),
+    : runtime_({.queue_capacity = 128, .io_policy = worker_io_policy::single_owner}),
       io_context_(runtime_.context().ioContext()),
       listeners_(processResource()),
       targets_(targets.begin(), targets.end(), processResource()),
@@ -61,7 +61,7 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
     quic_channels_.reserve(quic_count != 0 ? targets.size() : 0);
     for (const auto& configured : listeners) {
         listeners_.push_back(makePmrObject<listener>(processResource(), io_context_,
-            configured.endpoint, configured.http3.has_value()));
+            configured.endpoint, configured.http3 ? std::optional(normalize_http3_capacity(*configured.http3, targets.size())) : std::nullopt));
     }
     runtime_.configure({
         .startup = [this] {
@@ -90,18 +90,14 @@ acceptor::~acceptor() {
 
 void acceptor::prepare_quic() {
     const auto configured = std::ranges::find_if(listeners_,
-        [](const auto& bound) { return bound->quic; });
+        [](const auto& bound) { return bound->quic.has_value(); });
     if (configured == listeners_.end()) {
         return;
     }
     const auto& tcp = (*configured)->endpoint;
-    constexpr auto worker_blocks = http3_datagram_channel::default_input_capacity +
-                                   http3_datagram_channel::default_output_window;
-    if (targets_.size() > (std::numeric_limits<std::size_t>::max() - 1) / worker_blocks) {
-        throw std::invalid_argument("QUIC datagram pool budget is not representable");
-    }
-    quic_pool_.emplace(1 + targets_.size() * worker_blocks,
-        http3_datagram_channel::packet_capacity, processResource());
+    const auto capacity = *(*configured)->quic;
+    quic_pool_.emplace(capacity.packet_slots,
+        http3_capacity::packet_bytes, processResource());
     udp_ = makePmrObject<http3_acceptor_datagram_endpoint>(processResource(), io_context_,
         asio::ip::udp::endpoint(tcp.address(), tcp.port()),
         http3_acceptor_datagram_endpoint::notification{this, &datagram_ready}, *quic_pool_);
@@ -130,7 +126,8 @@ void acceptor::prepare_quic() {
     }
     for (std::size_t worker = 0; worker < targets_.size(); ++worker) {
         auto channel = makePmrObject<http3_datagram_channel>(processResource(),
-            *quic_pool_, quic_notification_, processResource());
+            *quic_pool_, quic_notification_, processResource(),
+            capacity.input_slots, capacity.output_credits);
         // A staging failure must not leave an unowned channel waiting for an ACK.
         try {
             targets_[worker].stage_quic(targets_[worker].object, *channel, endpoint,

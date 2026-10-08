@@ -39,7 +39,7 @@ Task<void> runBareHttp2SansIoSessionWith(Stream& stream, const detail::RouteTabl
     WorkerMemory& worker, BindTransport bindTransport, std::string_view initialBytes) {
     Http2SansIoSessionFixture fixture;
     auto attachment = attachEventLoop(
-        static_cast<asio::io_context&>(stream.get_executor().context()), {.mailboxCapacity = 64});
+        static_cast<asio::io_context&>(stream.get_executor().context()), {.queue_capacity = 64});
     const auto workerHandle = attachment.loop().handle();
     auto services = bindTransport(fixture.services(workerHandle));
     co_await detail::runHttp2SansIoSession(

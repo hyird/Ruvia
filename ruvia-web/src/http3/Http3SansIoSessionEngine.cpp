@@ -154,11 +154,10 @@ std::expected<std::pmr::vector<char>, Http3ConnectionErrorCode> Http3SansIoSessi
     stream->request.emplace(*head, stream->memory.resource(), &inbound_buffers_);
     stream->request->finishBody();
     const auto& request = stream->request->request();
-    const bool webSocketConnect = request.knownMethod() == HttpKnownMethod::kConnect &&
-                                  httpAsciiEqualsIgnoreCase(stream->request->extendedConnectProtocol(), "websocket");
-    stream->resolution = request.knownMethod() == HttpKnownMethod::kUnknown
-                             ? routes_.resolveExtensionMethod(request.method(), request.path())
-                             : routes_.resolve(webSocketConnect ? HttpKnownMethod::kGet : request.knownMethod(), request.path());
+    // Push admission and completed receive state remain separate from ordinary
+    // request admission. Promise targets are already normalized by HTTP.
+    stream->resolution = routes_.resolve(route_request_view{request.knownMethod(),
+        request.method(), request.path(), request.path(), stream->request->extendedConnectProtocol()});
     stream->state = StreamState::kReady;
     stream->receiveEnded = true;
     auto [inserted, fresh] = streams_.emplace(streamId, std::move(stream));
@@ -328,16 +327,8 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
             &inbound_buffers_);
         const auto& request = stream->request->request();
         stream->connectRequest = request.knownMethod() == HttpKnownMethod::kConnect;
-        const bool webSocketConnect = stream->connectRequest &&
-                                      httpAsciiEqualsIgnoreCase(stream->request->extendedConnectProtocol(), "websocket");
-        if (stream->connectRequest && !webSocketConnect) {
-            stream->resolution = routes_.resolveConnect(stream->request->extendedConnectProtocol(),
-                stream->request->extendedConnectProtocol().empty() ? request.authority() : request.path());
-        } else if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-            stream->resolution = routes_.resolveExtensionMethod(request.method(), request.path());
-        } else {
-            stream->resolution = routes_.resolve(webSocketConnect ? HttpKnownMethod::kGet : request.knownMethod(), request.path());
-        }
+        stream->resolution = routes_.resolve(route_request_view{request.knownMethod(),
+            request.method(), request.path(), request.authority(), stream->request->extendedConnectProtocol()});
         stream->bodyLimit = requestBodyByteLimit(RequestBodyMode::kBuffered,
             std::nullopt, limits_.maxBufferedBodyBytes)
                                 .readCeiling();

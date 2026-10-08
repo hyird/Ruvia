@@ -131,7 +131,7 @@ connection_type::EventResult feed_request(connection_type& owner, stream_buffer&
     if (!accepted(inbound.try_send(id, bytes)) ||
         !accepted(inbound.try_send_control(
             {stream_control::kind::stream_fin, id, static_cast<std::uint64_t>(wire.size())}))) {
-        throw std::runtime_error("HTTP/3 scheduler input mailbox unexpectedly full");
+        throw std::runtime_error("HTTP/3 scheduler input buffer unexpectedly full");
     }
     stream_buffer::borrowed_block block;
     if (!inbound.try_receive(block)) {
@@ -162,7 +162,7 @@ connection_type::EventResult feed_malformed_headers(connection_type& owner, stre
     const auto bytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(wire.data()), wire.size());
     if (!accepted(inbound.try_send(id, bytes))) {
-        throw std::runtime_error("HTTP/3 malformed scheduler request mailbox full");
+        throw std::runtime_error("HTTP/3 malformed scheduler request buffer full");
     }
     stream_buffer::borrowed_block block;
     if (!inbound.try_receive(block)) {
@@ -212,14 +212,14 @@ ruvia::Task<void> wait_for_no_tasks(std::span<connection_type* const> connection
 ruvia::Task<void> stop_and_retire(scheduler_type& scheduler, scheduler_type::connection_token token,
     connection_type& connection, ruvia::testing::TestContext& ruvia_ctx);
 
-void drain_buffer(stream_buffer& mailbox, unsigned& data_blocks, unsigned& controls) {
+void drain_buffer(stream_buffer& buffer, unsigned& data_blocks, unsigned& controls) {
     stream_buffer::borrowed_block block;
-    while (mailbox.try_receive(block)) {
+    while (buffer.try_receive(block)) {
         ++data_blocks;
         block.release();
     }
     stream_control control;
-    while (mailbox.try_receive_control(control)) {
+    while (buffer.try_receive_control(control)) {
         ++controls;
     }
 }
@@ -800,7 +800,7 @@ ruvia::Task<void> exercise_local_capacity_recovery(fixture& fixture,
 }  // namespace
 RUVIA_TEST(http3_ready_scheduler_waits_for_intent_ack_before_retirement) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {
@@ -814,7 +814,7 @@ RUVIA_TEST(http3_ready_scheduler_waits_for_intent_ack_before_retirement) {
 
 RUVIA_TEST(http3_ready_scheduler_rotates_connections_and_publication_lanes) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {
@@ -827,7 +827,7 @@ RUVIA_TEST(http3_ready_scheduler_rotates_connections_and_publication_lanes) {
 }
 RUVIA_TEST(http3_ready_scheduler_control_burst_one_preserves_intent_turn) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {
@@ -841,7 +841,7 @@ RUVIA_TEST(http3_ready_scheduler_control_burst_one_preserves_intent_turn) {
 
 RUVIA_TEST(http3_ready_scheduler_keeps_local_deadline_activation_without_capacity_notification) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {
@@ -855,7 +855,7 @@ RUVIA_TEST(http3_ready_scheduler_keeps_local_deadline_activation_without_capacit
 
 RUVIA_TEST(http3_ready_scheduler_rejects_stale_activation_after_joined_slot_reuse) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {
@@ -869,7 +869,7 @@ RUVIA_TEST(http3_ready_scheduler_rejects_stale_activation_after_joined_slot_reus
 
 RUVIA_TEST(http3_ready_scheduler_recovers_blocked_publications_from_local_capacity) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     {

@@ -405,7 +405,7 @@ ruvia::Task<void> exercise_on_worker(const ruvia::WorkerHandle& worker,
 
 void run(exercise operation, ruvia::testing::TestContext& ruvia_ctx) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     const auto worker = attachment.loop().handle();
     ruvia::test::CountingMemoryResource upstream;
     auto root = attachment.loop().start(stop_after(attachment,

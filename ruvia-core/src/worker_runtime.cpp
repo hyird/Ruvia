@@ -22,7 +22,7 @@ public:
                           ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                           : ASIO_CONCURRENCY_HINT_DEFAULT),
           work_(asio::make_work_guard(io_context_)),
-          context_(io_context_, options.mailbox_capacity) {}
+          context_(io_context_, options.queue_capacity) {}
 
     void record_failure(std::exception_ptr failure, bool observed = false) noexcept {
         const std::lock_guard lock(mutex_);

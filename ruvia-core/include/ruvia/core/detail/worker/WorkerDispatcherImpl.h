@@ -18,9 +18,10 @@
 
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/core/mpsc_ring_queue.h"
 
 // The dispatcher's state, declared here because two translation units own parts
-// of it: WorkerDispatcher.cpp runs the mailbox and the worker's lifecycle, while
+// of it: WorkerDispatcher.cpp runs the queue and the worker's lifecycle, while
 // WorkerTimers.cpp runs the timer heap that shares its mutex.
 
 namespace ruvia::detail {
@@ -63,19 +64,21 @@ struct TimerEntryLater final {
 [[nodiscard]] WorkerId nextWorkerDispatcherId() noexcept;
 
 struct WorkerDispatcher::Impl {
+    static std::size_t checked_queue_capacity(std::size_t capacity) {
+        if (capacity == 0 || capacity == std::numeric_limits<std::size_t>::max()) {
+            throw std::invalid_argument("worker queue capacity is out of range");
+        }
+        return capacity;
+    }
     explicit Impl(asio::io_context& context, std::size_t requestedCapacity)
         : ioContext(context),
           timer(std::make_unique<asio::steady_timer>(context)),
           nodes(detail::processResource()),
+          ready_queue(checked_queue_capacity(requestedCapacity), detail::processResource()),
+          mutex(ready_queue.synchronization_mutex()),
           workerId(nextWorkerDispatcherId()),
           timers(detail::processResource()),
           timerSlots(detail::processResource()) {
-        if (requestedCapacity == 0) {
-            throw std::invalid_argument("worker mailbox capacity must be greater than zero");
-        }
-        if (requestedCapacity == std::numeric_limits<std::size_t>::max()) {
-            throw std::invalid_argument("worker mailbox capacity is too large");
-        }
         nodes.resize(requestedCapacity + 1);
         for (std::size_t index = 0; index + 1 < nodes.size(); ++index) {
             nodes[index].next = index + 1;
@@ -98,11 +101,10 @@ struct WorkerDispatcher::Impl {
         NodeState state{NodeState::kFree};
     };
     std::pmr::vector<Node> nodes;
-    std::mutex mutex;
+    mpsc_ring_queue<std::size_t> ready_queue;
+    std::mutex& mutex;
     std::condition_variable pendingChanged;
     std::size_t freeHead{kNoTimerSlot};
-    std::size_t readyHead{kNoTimerSlot};
-    std::size_t readyTail{kNoTimerSlot};
     std::size_t pendingCount{0};
     std::size_t activeCount{0};
     IdleCallbacks idleWaiters{detail::processResource()};

@@ -106,12 +106,19 @@ void Http2SansIoSessionEngine::writerWriteFailed(std::error_code error) noexcept
     terminate(error);
 }
 
+void Http2SansIoSessionEngine::writer_submitting() noexcept {
+    lifecycle_.mark_writer_submitted();
+}
+
+void Http2SansIoSessionEngine::writer_launch_failed() noexcept {
+    lifecycle_.mark_writer_launch_failed();
+}
+
 void Http2SansIoSessionEngine::writerCompleted(std::exception_ptr exception) noexcept {
     if (exception != nullptr) {
         lifecycle_.recordWriterFailure(std::move(exception));
         terminate(std::make_error_code(std::errc::operation_canceled));
     }
-    writerTaskDone_ = true;
     lifecycle_.markWriterDone();
     writerFinished_.notify();
 }
@@ -560,24 +567,20 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
 
     } while (false);
 
+    buffered_response_recovery recovery;
     auto preparation = co_await prepareBufferedHttpResponseAsync(
         request, responseCodingPolicy, response, options, baseServices.worker());
-    if (const auto error = httpBufferedResponsePreparationError(
-            responseCodingPolicy, request, response, preparation.compressionResult())) {
-        response = co_await routes_.handleError(request, requestMemory, *error, requestServices);
+    for (;;) {
+        const auto step = recovery.advance(
+            responseCodingPolicy, request, response, preparation.compressionResult());
+        if (step.action == buffered_response_recovery_action::ready) {
+            break;
+        }
+        if (step.action == buffered_response_recovery_action::handle_error) {
+            response = co_await routes_.handleError(request, requestMemory, *step.error, requestServices);
+        }
         preparation = co_await prepareBufferedHttpResponseAsync(
             request, responseCodingPolicy, response, options, baseServices.worker());
-        if (httpBufferedResponsePreparationError(
-                responseCodingPolicy, request, response, preparation.compressionResult())
-                .has_value()) {
-            // The negotiated coding could not be installed even on the
-            // generated terminal error. This is an explicit terminal error
-            // representation, not a silent identity fallback of the original
-            // application response.
-            responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-            preparation = co_await prepareBufferedHttpResponseAsync(
-                request, responseCodingPolicy, response, options, baseServices.worker());
-        }
     }
     const auto writePlan = preparation.writePlan();
     const auto result = co_await bufferedResponseWriter_.write(streamId, response, writePlan);
@@ -854,7 +857,7 @@ Task<void> Http2SansIoSessionEngine::finish() {
         co_await handlerFinished_.wait();
     }
     wakeWriter();
-    while (!writerTaskDone_) {
+    while (lifecycle_.writer_join_pending()) {
         co_await writerFinished_.wait();
     }
     lifecycle_.rethrowWriterFailure();

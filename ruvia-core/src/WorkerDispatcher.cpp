@@ -122,7 +122,7 @@ PostStatus WorkerDispatcher::postFactory(MoveOnlyFunction<MoveOnlyFunction<void(
 void WorkerDispatcher::publish(std::size_t index) {
     bool abandon = false;
     {
-        std::lock_guard lock(impl_->mutex);
+        auto queue = impl_->ready_queue.lock();
         if (impl_->abandonDrain || !impl_->contextAttached) {
             impl_->nodes[index].state = Impl::NodeState::kReleasing;
             abandon = true;
@@ -132,13 +132,9 @@ void WorkerDispatcher::publish(std::size_t index) {
                 impl_->drainScheduled = true;
             }
             impl_->nodes[index].state = Impl::NodeState::kReady;
-            impl_->nodes[index].next = kNoTimerSlot;
-            if (impl_->readyTail == kNoTimerSlot) {
-                impl_->readyHead = index;
-            } else {
-                impl_->nodes[impl_->readyTail].next = index;
+            if (!queue.try_push(index)) {
+                std::terminate();
             }
-            impl_->readyTail = index;
         }
     }
     if (abandon) {
@@ -442,14 +438,9 @@ void WorkerDispatcher::abandonQueued() noexcept {
     for (;;) {
         std::size_t index = kNoTimerSlot;
         {
-            std::lock_guard lock(impl_->mutex);
-            if (impl_->readyHead == kNoTimerSlot) {
+            auto queue = impl_->ready_queue.lock();
+            if (!queue.try_pop(index)) {
                 return;
-            }
-            index = impl_->readyHead;
-            impl_->readyHead = impl_->nodes[index].next;
-            if (impl_->readyHead == kNoTimerSlot) {
-                impl_->readyTail = kNoTimerSlot;
             }
             impl_->nodes[index].state = Impl::NodeState::kReleasing;
         }
@@ -478,19 +469,14 @@ void WorkerDispatcher::drain() {
         MoveOnlyFunction<void()> task;
         std::size_t index = kNoTimerSlot;
         {
-            std::lock_guard lock(impl_->mutex);
+            auto queue = impl_->ready_queue.lock();
             if (impl_->abandonDrain) {
                 impl_->drainScheduled = false;
                 break;
             }
-            if (impl_->readyHead == kNoTimerSlot) {
+            if (!queue.try_pop(index)) {
                 impl_->drainScheduled = false;
                 return;
-            }
-            index = impl_->readyHead;
-            impl_->readyHead = impl_->nodes[index].next;
-            if (impl_->readyHead == kNoTimerSlot) {
-                impl_->readyTail = kNoTimerSlot;
             }
             impl_->nodes[index].state = Impl::NodeState::kActive;
             --impl_->pendingCount;

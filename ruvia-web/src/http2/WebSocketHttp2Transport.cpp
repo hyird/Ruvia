@@ -149,6 +149,15 @@ void WebSocketHttp2Transport::drainEvents() {
             }
         } else if (auto* reset = event->streamClosed()) {
             if (reset->streamId() == streamId_) {
+                if (reset->source() == Http2StreamCloseSource::kPeer &&
+                    reset->error() == Http2ErrorCode::kNoError) {
+                    // NO_ERROR can retire a half-open Extended CONNECT after
+                    // the peer's DATA. Deliver those bytes before EOF: only the
+                    // WebSocket parser can prove that they contain peer Close.
+                    clean_reset_ = true;
+                    eof_ = true;
+                    continue;
+                }
                 throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,
                     "upstream reset HTTP/2 WebSocket stream");
             }
@@ -279,6 +288,11 @@ Task<void> WebSocketHttp2Transport::write(std::string_view bytes) {
 
 Task<void> WebSocketHttp2Transport::finish() {
     checkFailure();
+    if (clean_reset_) {
+        // The peer already retired both HTTP/2 halves. The WebSocket caller
+        // reaches finish only after parsing its protocol's transport-end plan.
+        co_return;
+    }
     const auto submitted = connection_.submitData(streamId_, {}, Http2EndStream::kEndStream);
     if (submitted != Http2DataSubmitStatus::kAccepted && submitted != Http2DataSubmitStatus::kQueued) {
         throw WebSocketClientError(WebSocketClientError::Code::kProtocolError,

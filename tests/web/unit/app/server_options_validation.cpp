@@ -217,7 +217,7 @@ RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
 RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
     {
         HttpServerOptions options;
-        options.workerMailboxCapacity = 0;
+        options.worker_queue_capacity = 0;
         RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
     }
     {

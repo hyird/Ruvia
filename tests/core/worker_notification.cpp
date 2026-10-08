@@ -55,8 +55,8 @@ constexpr auto kDeadline = 5s;
 
 class WorkerLoop final {
 public:
-    explicit WorkerLoop(std::size_t mailboxCapacity = 128)
-        : attachment_(ruvia::attachEventLoop(context_, {.mailboxCapacity = mailboxCapacity})),
+    explicit WorkerLoop(std::size_t queue_capacity = 128)
+        : attachment_(ruvia::attachEventLoop(context_, {.queue_capacity = queue_capacity})),
           loop_(attachment_.loop()),
           exitFuture_(exitPromise_.get_future()) {}
 

@@ -94,7 +94,12 @@ void validateClientOriginHost(
     std::uint16_t port, ClientPortTextBuffer& buffer) noexcept;
 [[nodiscard]] std::string_view selectedClientAlpn(SSL* ssl) noexcept;
 void validateClientTransportConfig(ClientTransportConfigView config);
-void configureClientTlsContext(asio::ssl::context& context, ClientTransportConfigView config);
+enum class client_tls_protocol : std::uint8_t { stream,
+    quic };
+// Startup-only. Trust and client identity loading have one implementation;
+// protocol-specific ALPN and QUIC callbacks are installed by the transport.
+void configure_client_tls_context(SSL_CTX& context, ClientTransportConfigView config,
+    client_tls_protocol protocol = client_tls_protocol::stream);
 [[nodiscard]] ClientTlsSetupError prepareClientTlsStream(
     asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host,
     ClientTransportConfigView config, ClientAlpnMode alpnMode);

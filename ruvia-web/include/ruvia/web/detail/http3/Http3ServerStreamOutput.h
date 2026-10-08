@@ -23,7 +23,7 @@ struct Http3ServerStreamOutputConfig final {
     std::size_t maxTrackedStreams{32};
     // Bound retained borrowed_block nodes; size to the local buffer's block capacity.
     std::size_t maxQueuedBlocks{32};
-    // Bounds service operations per scheduler turn; each scan visits at most one table.
+    // Bounds service operations per turn; a scan visits at most the occupied slots.
     std::size_t maxDriveWorkItems{16};
     // Per-response-stream write inactivity timeout; nullopt disables it.
     std::optional<std::chrono::milliseconds> writeTimeout{};
@@ -201,6 +201,8 @@ private:
         std::optional<std::chrono::steady_clock::time_point> lastWriteActivity{};
         std::uint32_t head{kNoNode};
         std::uint32_t tail{kNoNode};
+        // Stable occupied-slot ring, including tombstones; no second allocation.
+        std::size_t next_tracked_slot_{};
         bool occupied{};
     };
 
@@ -248,6 +250,8 @@ private:
     std::uint32_t freeNode_{kNoNode};
     std::size_t trackedStreamCount_{};
     std::size_t queuedBlockCount_{};
+    std::size_t first_tracked_slot_{};
+    std::size_t last_tracked_slot_{};
     std::size_t roundRobinSlot_{};
     std::size_t roundRemainingSlots_{};
     bool roundMadeProgress_{};

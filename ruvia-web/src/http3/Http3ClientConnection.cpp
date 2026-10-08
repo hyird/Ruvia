@@ -1317,7 +1317,8 @@ HttpDatagramSessionConfig Http3ClientConnection::datagramConfig(RequestId id) co
     }
     const auto& peer = responseEngine_.peerSettings();
     const auto limit = session_->transport().max_datagram_payload_size();
-    return {.http3StreamId = request->writer.streamId(),
+    return {
+        .http3StreamId = request->writer.streamId(),
         .localH3Datagram = responseEngine_.localSettings().h3Datagram,
         .peerH3Datagram = peer && peer->h3Datagram,
         .quicDatagram = limit != 0,

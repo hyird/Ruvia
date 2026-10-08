@@ -150,7 +150,7 @@ public:
     }
     [[nodiscard]] bool consumeControlOutput(std::size_t bytes) noexcept;
     // Worker-PMR bounded tunnel queue. Output is copied synchronously; no
-    // borrowed mailbox or parser view escapes the feed callback.
+    // borrowed buffer or parser view escapes the feed callback.
     [[nodiscard]] TunnelReadResult readTunnelData(
         std::uint64_t streamId, std::span<char> output) noexcept;
     [[nodiscard]] Http3DatagramReceiveStatus receiveDatagram(Http3DatagramView datagram);

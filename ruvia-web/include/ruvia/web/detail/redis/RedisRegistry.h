@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/web/detail/integration/NamedCapability.h"
 #include "ruvia/web/detail/redis/RedisConfigStorage.h"
 #include "ruvia/web/detail/redis/RedisOwnedCommand.h"
@@ -84,7 +84,7 @@ struct RedisReaderBudgetDeleter final {
 };
 
 class RedisPool;
-using RedisOperationCancellationMailbox = WorkerCancellationMailbox<RedisPool>;
+using redis_cancellation_target = worker_cancellation_target<RedisPool>;
 
 struct RedisCommandArgsView final {
     std::span<const std::pmr::string> args;
@@ -126,7 +126,7 @@ public:
 
 private:
     friend class ::ruvia::RedisHandle;
-    friend class WorkerCancellationMailbox<RedisPool>;
+    friend class worker_cancellation_target<RedisPool>;
 
     struct Connection final {
         explicit Connection(asio::io_context& ioContext, std::pmr::memory_resource* resource);
@@ -175,8 +175,7 @@ private:
     private:
         RedisPool& pool_;
         std::size_t index_{0};
-        std::uint64_t cancellationId_{0};
-        StopRegistration stopRegistration_;
+        worker_cancellation_registration<redis_cancellation_target> cancellation_;
         bool discard_{false};
     };
 
@@ -211,7 +210,7 @@ private:
     std::optional<asio::ssl::context> tls_context_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
-    std::shared_ptr<RedisOperationCancellationMailbox> cancellationMailbox_;
+    std::shared_ptr<redis_cancellation_target> cancellation_target_;
 };
 
 struct RedisCommandExecutor final {

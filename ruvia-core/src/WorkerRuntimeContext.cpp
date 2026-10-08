@@ -9,9 +9,9 @@ namespace ruvia {
 
 class WorkerRuntimeContext::Impl final {
 public:
-    Impl(asio::io_context& ioContext, std::size_t mailboxCapacity)
+    Impl(asio::io_context& ioContext, std::size_t queue_capacity)
         : ioContext_(&ioContext),
-          dispatcher_(std::make_shared<detail::WorkerDispatcher>(ioContext, mailboxCapacity)),
+          dispatcher_(std::make_shared<detail::WorkerDispatcher>(ioContext, queue_capacity)),
           handle_(detail::WorkerHandleAccess::make(dispatcher_)) {}
 
     ~Impl() {
@@ -28,8 +28,8 @@ public:
 };
 
 WorkerRuntimeContext::WorkerRuntimeContext(
-    asio::io_context& ioContext, std::size_t mailboxCapacity)
-    : impl_(std::make_unique<Impl>(ioContext, mailboxCapacity)) {}
+    asio::io_context& ioContext, std::size_t queue_capacity)
+    : impl_(std::make_unique<Impl>(ioContext, queue_capacity)) {}
 
 WorkerRuntimeContext::~WorkerRuntimeContext() = default;
 

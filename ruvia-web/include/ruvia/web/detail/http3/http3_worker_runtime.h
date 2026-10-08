@@ -52,7 +52,7 @@ public:
     struct worker_target final {
         http3_worker_server* server{};
         std::size_t max_connections{};
-        std::uint32_t mailbox_capacity{};
+        std::uint32_t buffer_capacity{};
         std::size_t max_requests_per_connection{};
         std::optional<std::chrono::milliseconds> idle_timeout{};
         std::optional<std::chrono::milliseconds> request_header_timeout{};

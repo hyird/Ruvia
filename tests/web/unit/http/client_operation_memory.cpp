@@ -25,7 +25,7 @@ namespace {
 class TestWorker final {
 public:
     explicit TestWorker(asio::io_context& ioContext)
-        : attachment_(ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 8})),
+        : attachment_(ruvia::attachEventLoop(ioContext, {.queue_capacity = 8})),
           handle_(attachment_.loop().handle()) {}
 
     [[nodiscard]] const ruvia::WorkerHandle& handle() const noexcept {

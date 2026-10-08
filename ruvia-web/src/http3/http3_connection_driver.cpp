@@ -10,7 +10,6 @@
 #include "ruvia/http/Http3PeerStreams.h"
 #include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-
 namespace ruvia::detail {
 namespace {
 constexpr auto server_shutdown_code = Http3ConnectionErrorCode::kNoError;
@@ -179,6 +178,12 @@ void http3_connection_driver::observe_transport(std::chrono::steady_clock::time_
 
 ruvia::quic_packet_result http3_connection_driver::write_packet(std::span<std::byte> bytes,
     std::chrono::steady_clock::time_point now) {
+    // The bounded acceptance scan must finish before any queued HEAD can become
+    // peer-visible, even when the response was accepted late in this turn.
+    if (pending_tunnel_handshakes_ != 0 && tunnel_handshake_scan_remaining_ != 0 &&
+        !close_started_ && !graceful_close_started_) {
+        return {.status = ruvia::quic_operation_status::would_block};
+    }
     return wire_->transport()->server().connection(*transport_id_).write_packet(bytes, now);
 }
 
@@ -218,7 +223,8 @@ bool http3_connection_driver::accept_response_control(const http3_stream_control
     }
     if (control.kind == http3_stream_control::kind::tunnel_established) {
         const auto info = output_->streamInfo(control.id.stream_id);
-        if (accept_tunnel_established(control, info ? info->acceptedWireBytes : 0) == tunnel_established_result::protocol_failure) {
+        if (accept_tunnel_established(control, info ? info->acceptedWireBytes : 0) ==
+            tunnel_established_result::protocol_failure) {
             close_connection(protocol_failure_code);
         }
         return true;
@@ -767,20 +773,19 @@ void http3_connection_driver::terminate_request_stream(std::uint64_t stream_id, 
     }
 }
 
-http3_connection_driver::tunnel_established_result http3_connection_driver::accept_tunnel_established(const http3_stream_control& control, std::uint64_t accepted_wire_bytes) noexcept {
+http3_connection_driver::tunnel_established_result http3_connection_driver::accept_tunnel_established(
+    const http3_stream_control& control, std::uint64_t accepted_wire_bytes) noexcept {
     const auto found = std::ranges::find_if(streams_,
         [&control](const stream_state& stream) { return stream.id == control.id.stream_id; });
     if (found == streams_.end()) {
         return tunnel_established_result::protocol_failure;
     }
-    const auto result =
-        found->accept_tunnel_established(control, identity_, accepted_wire_bytes);
+    const auto result = found->accept_tunnel_established(control, identity_, accepted_wire_bytes);
     if (result != tunnel_established_result::accepted) {
         return result;
     }
     if (found->tunnel_established_barrier) {
-        if (pending_tunnel_handshakes_ ==
-            std::numeric_limits<std::size_t>::max()) {
+        if (pending_tunnel_handshakes_ == std::numeric_limits<std::size_t>::max()) {
             std::terminate();
         }
         ++pending_tunnel_handshakes_;
@@ -795,11 +800,13 @@ http3_connection_driver::tunnel_established_result http3_connection_driver::acce
     return tunnel_established_result::accepted;
 }
 
-bool http3_connection_driver::confirm_tunnel_established(std::uint64_t stream_id, std::uint64_t accepted_wire_bytes) noexcept {
+bool http3_connection_driver::confirm_tunnel_established(std::uint64_t stream_id,
+    std::uint64_t accepted_wire_bytes) noexcept {
     const auto found = std::ranges::find_if(streams_,
         [stream_id](const stream_state& stream) { return stream.id == stream_id; });
-    if (found == streams_.end() ||
-        !found->confirm_tunnel_established(accepted_wire_bytes)) {
+    const bool confirmed = found != streams_.end() &&
+                           found->confirm_tunnel_established(accepted_wire_bytes);
+    if (!confirmed) {
         return false;
     }
     if (pending_tunnel_handshakes_ == 0) {
@@ -933,6 +940,16 @@ bool http3_connection_driver::reject_request_stream(std::uint64_t stream_id) {
     return true;
 }
 
+Http3DatagramReceiveStatus http3_connection_driver::plan_datagram_receive(
+    const Http3DatagramView& datagram) const noexcept {
+    const auto stream = std::ranges::find(streams_, datagram.streamId, &stream_state::id);
+    return planHttp3DatagramReceive(datagram,
+        {.localH3Datagram = config_.local_settings.h3Datagram,
+            .streamExists = stream != streams_.end(),
+            .receiveOpen = stream != streams_.end() && !stream->input_terminal && !stream->input_reset,
+            .supportsDatagrams = stream != streams_.end() && stream->tunnel_established});
+}
+
 bool http3_connection_driver::pump_datagrams() {
     auto& quic = wire_->transport()->server().connection(*transport_id_);
     auto& channel = *state_;
@@ -954,12 +971,7 @@ bool http3_connection_driver::pump_datagrams() {
             close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
             break;
         }
-        const auto stream = std::ranges::find(streams_, decoded->streamId, &stream_state::id);
-        const auto planned = planHttp3DatagramReceive(*decoded,
-            {.localH3Datagram = config_.local_settings.h3Datagram,
-                .streamExists = stream != streams_.end(),
-                .receiveOpen = stream != streams_.end() && !stream->input_terminal && !stream->input_reset,
-                .supportsDatagrams = stream != streams_.end() && stream->tunnel_established});
+        const auto planned = plan_datagram_receive(*decoded);
         if (planned == Http3DatagramReceiveStatus::kConnectionError) {
             close_connection(static_cast<Http3ConnectionErrorCode>(kHttp3DatagramErrorCode));
             break;

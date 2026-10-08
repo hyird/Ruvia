@@ -28,7 +28,7 @@
 namespace {
 
 using Input = ruvia::detail::Http3ServerStreamInput;
-using Mailbox = ruvia::detail::http3_stream_buffer;
+using stream_buffer = ruvia::detail::http3_stream_buffer;
 using MessageId = ruvia::detail::http3_stream_id;
 using Control = ruvia::detail::http3_stream_control;
 using Engine = ruvia::detail::Http3SansIoSessionEngine;
@@ -50,14 +50,14 @@ struct Fixture final {
     Routes routes;
     ruvia::WorkerMemory worker;
     Engine session;
-    Mailbox mailbox;
+    stream_buffer buffer;
     Input input;
 
     explicit Fixture(std::size_t capacity = 16, ruvia::Http3ConnectionConfig connection = {.enableConnectProtocol = true})
         : routes(),
           worker(),
           session(routes.implementation.routeTable(), worker, {.connection = connection}),
-          mailbox(16, 16, 8),
+          buffer(16, 16, 8),
           input(session, worker, kEpoch, kGeneration, capacity) {}
 };
 
@@ -96,18 +96,18 @@ std::string requestWire(ruvia::WorkerMemory& worker, std::string_view body) {
 bool queueData(Fixture& fixture, MessageId id, std::string_view bytes) {
     const auto input = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(bytes.data()), bytes.size());
-    const auto result = fixture.mailbox.try_send(id, input);
-    return result == Mailbox::send_result::sent;
+    const auto result = fixture.buffer.try_send(id, input);
+    return result == stream_buffer::send_result::sent;
 }
 
 bool queueControl(Fixture& fixture, const Control& control) {
-    const auto result = fixture.mailbox.try_send_control(control);
-    return result == Mailbox::control_result::sent;
+    const auto result = fixture.buffer.try_send_control(control);
+    return result == stream_buffer::control_result::sent;
 }
 
 std::optional<Input::Result> receiveData(Fixture& fixture) {
-    Mailbox::borrowed_block block;
-    if (!fixture.mailbox.try_receive(block)) {
+    stream_buffer::borrowed_block block;
+    if (!fixture.buffer.try_receive(block)) {
         return std::nullopt;
     }
     auto result = fixture.input.acceptData(block);
@@ -117,7 +117,7 @@ std::optional<Input::Result> receiveData(Fixture& fixture) {
 
 std::optional<Input::Result> receiveControl(Fixture& fixture) {
     Control control;
-    if (!fixture.mailbox.try_receive_control(control)) {
+    if (!fixture.buffer.try_receive_control(control)) {
         return std::nullopt;
     }
     return fixture.input.acceptControl(control);
@@ -158,7 +158,7 @@ RUVIA_TEST(http3ServerStreamInputCountsRequestStreamsButNotPeerUnidirectionalStr
     RUVIA_CHECK_EQ(fixture.input.activeRequestStreamCount(), std::size_t{0});
 }
 
-RUVIA_TEST(http3ServerStreamInputDefersFinAcrossIndependentMailboxLanesAndInterleavedStreams) {
+RUVIA_TEST(http3_server_stream_input_defers_fin_across_independent_buffer_lanes_and_interleaved_streams) {
     Fixture fixture;
     const auto first = requestWire(fixture.worker, "alpha");
     const auto second = requestWire(fixture.worker, "bravo");
@@ -376,7 +376,7 @@ RUVIA_TEST(http3ServerStreamInputLocalCancellationTombstonesDeferredAndCompleted
     }
 }
 
-RUVIA_TEST(http3ServerStreamInputRejectsForeignAndStaleMailboxIdentityWithoutMutation) {
+RUVIA_TEST(http3_server_stream_input_rejects_foreign_and_stale_buffer_identity_without_mutation) {
     Fixture fixture;
     const auto headers = requestHeaders(fixture.worker, "POST", "/items");
     const Control foreignReset{.kind = Control::kind::stream_reset,
@@ -407,7 +407,7 @@ RUVIA_TEST(http3ServerStreamInputRejectsForeignAndStaleMailboxIdentityWithoutMut
 
 RUVIA_TEST(http3ServerStreamInputRejectsInvalidBorrowAndStreamIdWithoutAdmission) {
     Fixture fixture;
-    Mailbox::borrowed_block empty;
+    stream_buffer::borrowed_block empty;
     RUVIA_CHECK(fixture.input.acceptData(empty).status == Input::Status::kInvalidInput);
     RUVIA_CHECK(fixture.input.acceptControl(reset(ruvia::kHttp3VarIntMax + 1, 0)).status ==
                 Input::Status::kInvalidInput);
@@ -419,30 +419,30 @@ RUVIA_TEST(http3ServerStreamInputRejectsInvalidBorrowAndStreamIdWithoutAdmission
     RUVIA_CHECK(!fixture.input.stopped());
 }
 
-RUVIA_TEST(http3ServerStreamInputRoutesSharedMailboxWithoutConsumingForeignBlocks) {
+RUVIA_TEST(http3_server_stream_input_routes_shared_buffer_without_consuming_foreign_blocks) {
     Routes routes;
     ruvia::WorkerMemory worker;
     Engine firstSession(routes.implementation.routeTable(), worker);
     Engine secondSession(routes.implementation.routeTable(), worker);
-    Mailbox mailbox(4, 4, 2);
+    stream_buffer buffer(4, 4, 2);
     Input firstInput(firstSession, worker, kEpoch, kGeneration, 4);
     Input secondInput(secondSession, worker, kEpoch, kGeneration + 1, 4);
     const auto headers = requestHeaders(worker, "POST", "/items");
     const auto bytes = std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(headers.data()), headers.size());
-    const auto firstSent = mailbox.try_send({kEpoch, kGeneration, 0}, bytes);
-    const auto secondSent = mailbox.try_send({kEpoch, kGeneration + 1, 4}, bytes);
-    RUVIA_CHECK(firstSent == Mailbox::send_result::sent);
-    RUVIA_CHECK(secondSent == Mailbox::send_result::sent);
+    const auto firstSent = buffer.try_send({kEpoch, kGeneration, 0}, bytes);
+    const auto secondSent = buffer.try_send({kEpoch, kGeneration + 1, 4}, bytes);
+    RUVIA_CHECK(firstSent == stream_buffer::send_result::sent);
+    RUVIA_CHECK(secondSent == stream_buffer::send_result::sent);
 
-    Mailbox::borrowed_block block;
-    RUVIA_CHECK(mailbox.try_receive(block));
+    stream_buffer::borrowed_block block;
+    RUVIA_CHECK(buffer.try_receive(block));
     RUVIA_CHECK(secondInput.acceptData(block).status == Input::Status::kStaleConnection);
     RUVIA_CHECK(secondInput.trackedStreamCount() == 0);
     RUVIA_CHECK(firstInput.acceptData(block).status == Input::Status::kFed);
     block.release();
 
-    RUVIA_CHECK(mailbox.try_receive(block));
+    RUVIA_CHECK(buffer.try_receive(block));
     RUVIA_CHECK(firstInput.acceptData(block).status == Input::Status::kStaleConnection);
     RUVIA_CHECK(firstInput.trackedStreamCount() == 1);
     RUVIA_CHECK(firstSession.request(4) == nullptr);
@@ -589,22 +589,22 @@ RUVIA_TEST(http3_server_stream_input_consumes_bounded_local_buffer_with_immediat
         ruvia::WorkerMemory worker(upstream);
         Engine session(routes.implementation.routeTable(), worker);
         Input input(session, worker, kEpoch, kGeneration, 8);
-        Mailbox buffer(1, 1, 1);
+        stream_buffer buffer(1, 1, 1);
         // Independent CONTROL may arrive first; the final byte count remains
         // a barrier until the bounded DATA lane delivers every preceding byte.
-        RUVIA_CHECK(buffer.try_send_control(fin(0, wire.size())) == Mailbox::control_result::sent);
+        RUVIA_CHECK(buffer.try_send_control(fin(0, wire.size())) == stream_buffer::control_result::sent);
         Control control;
         RUVIA_CHECK(buffer.try_receive_control(control));
         RUVIA_CHECK(input.acceptControl(control).status == Input::Status::kDeferredFin);
         std::size_t offset = 0;
         while (offset < wire.size()) {
-            const auto count = std::min(Mailbox::max_block_bytes, wire.size() - offset);
+            const auto count = std::min(stream_buffer::max_block_bytes, wire.size() - offset);
             const auto bytes = std::as_bytes(std::span(wire.data() + offset, count));
-            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == Mailbox::send_result::sent);
-            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == Mailbox::send_result::full);
-            Mailbox::borrowed_block block;
+            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == stream_buffer::send_result::sent);
+            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == stream_buffer::send_result::full);
+            stream_buffer::borrowed_block block;
             RUVIA_CHECK(buffer.try_receive(block));
-            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == Mailbox::send_result::no_block);
+            RUVIA_CHECK(buffer.try_send({kEpoch, kGeneration, 0}, bytes) == stream_buffer::send_result::no_block);
             const auto result = input.acceptData(block);
             block.release();
             offset += count;
@@ -662,8 +662,8 @@ RUVIA_TEST(http3ServerStreamInputRetainsQpackBlockedSuffixAndFinUntilEncoderAdva
     }
     auto wire = frame(1, std::string_view(head->fieldSection.data(), head->fieldSection.size())) + frame(0, "payload");
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
-    Mailbox::borrowed_block block;
-    RUVIA_CHECK(fixture.mailbox.try_receive(block));
+    stream_buffer::borrowed_block block;
+    RUVIA_CHECK(fixture.buffer.try_receive(block));
     const auto accepted = fixture.input.acceptData(block);
     block.release();
     RUVIA_CHECK(accepted.status == Input::Status::kDeferredQpack);
@@ -674,7 +674,7 @@ RUVIA_TEST(http3ServerStreamInputRetainsQpackBlockedSuffixAndFinUntilEncoderAdva
     const auto pending = encoder.pendingEncoderOutput();
     instructions.append(pending.data(), pending.size());
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 6}, instructions));
-    RUVIA_CHECK(fixture.mailbox.try_receive(block));
+    RUVIA_CHECK(fixture.buffer.try_receive(block));
     RUVIA_CHECK(fixture.input.acceptData(block).status == Input::Status::kFed);
     block.release();
     const auto resumed = fixture.input.resumeQpack();
@@ -703,8 +703,8 @@ RUVIA_TEST(http3ServerStreamInputResetAfterBlockedFinReleasesSuffixAndCancelsDec
     }
     const auto wire = frame(1, {head->fieldSection.data(), head->fieldSection.size()}) + frame(0, "payload");
     RUVIA_CHECK(queueData(fixture, {kEpoch, kGeneration, 0}, wire));
-    Mailbox::borrowed_block block;
-    RUVIA_CHECK(fixture.mailbox.try_receive(block));
+    stream_buffer::borrowed_block block;
+    RUVIA_CHECK(fixture.buffer.try_receive(block));
     RUVIA_CHECK(fixture.input.acceptData(block).status == Input::Status::kDeferredQpack);
     block.release();
     RUVIA_CHECK(fixture.input.acceptControl({Control::kind::stream_fin, {kEpoch, kGeneration, 0}, wire.size()}).status == Input::Status::kDeferredQpack);

@@ -51,7 +51,7 @@ struct ServerConfig final {
     // Business workers; one server network thread is additional.
     std::size_t workerCount{(std::max)(1U, std::thread::hardware_concurrency())};
     ProcessSignalHandlerPolicy processSignalHandlers{ProcessSignalHandlerPolicy::kExternalOwner};
-    std::size_t workerMailboxCapacity{1024};
+    std::size_t worker_queue_capacity{1024};
     // HTTP connection inactivity; upgraded WebSockets use their route lifecycle
     // heartbeat and close-handshake deadlines instead, even when heartbeat is disabled.
     std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
@@ -138,6 +138,11 @@ enum class Http3Mode : std::uint8_t {
 struct Http3ListenConfig final {
     Http3Mode mode{Http3Mode::kAutomatic};
     Http3QpackConfig qpack{};
+    // Per-worker stream DATA, CONTROL and release slots, independent of task admission.
+    std::size_t stream_buffer_capacity{1024};
+    // Acceptor-to-worker input slots and worker-to-Acceptor output credits.
+    std::size_t datagram_input_capacity{64};
+    std::size_t datagram_output_capacity{16};
     // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
     std::chrono::milliseconds handshakeTimeout{std::chrono::seconds(10)};
     // Maximum time to drain admitted request streams and close the connection.

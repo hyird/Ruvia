@@ -161,6 +161,62 @@ private:
     return std::nullopt;
 }
 
+enum class buffered_response_recovery_mode { negotiated_then_disabled,
+    immediately_disabled };
+enum class buffered_response_recovery_action { ready,
+    handle_error,
+    prepare_terminal };
+
+struct buffered_response_recovery_step final {
+    buffered_response_recovery_action action{buffered_response_recovery_action::ready};
+    std::optional<HttpErrorInfo> error;
+};
+
+// Web policy only: the protocol's existing coroutine owns preparation, handler
+// suspension, cancellation and commit. A secondary failure preserves the error
+// handler's representation and disables coding instead of invoking it again.
+class buffered_response_recovery final {
+public:
+    explicit buffered_response_recovery(
+        buffered_response_recovery_mode mode = buffered_response_recovery_mode::negotiated_then_disabled) noexcept
+        : mode_(mode) {}
+
+    [[nodiscard]] bool recovered() const noexcept {
+        return stage_ != stage::application;
+    }
+
+    [[nodiscard]] buffered_response_recovery_step advance(HttpResponseCodingPolicy& policy,
+        const HttpRequest& request, const HttpResponse& response,
+        const HttpResponseCompressionResult& compression_result) noexcept {
+        if (stage_ == stage::terminal) {
+            return {};
+        }
+        auto error = httpBufferedResponsePreparationError(policy, request, response, compression_result);
+        if (!error.has_value()) {
+            return {};
+        }
+        if (stage_ == stage::application) {
+            if (mode_ == buffered_response_recovery_mode::immediately_disabled) {
+                policy = HttpResponseCodingPolicy::disabled();
+                stage_ = stage::terminal;
+            } else {
+                stage_ = stage::negotiated_error;
+            }
+            return {buffered_response_recovery_action::handle_error, std::move(error)};
+        }
+        policy = HttpResponseCodingPolicy::disabled();
+        stage_ = stage::terminal;
+        return {buffered_response_recovery_action::prepare_terminal, std::nullopt};
+    }
+
+private:
+    enum class stage { application,
+        negotiated_error,
+        terminal };
+    buffered_response_recovery_mode mode_;
+    stage stage_{stage::application};
+};
+
 // This returns the one HTTP-owned snapshot both protocol drivers must consume;
 // neither driver may re-plan after Web compression/CORS has finalized the
 // response representation. A disabled policy is reserved for a terminal

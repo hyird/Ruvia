@@ -14,16 +14,31 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 }  // namespace
 
 detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) const noexcept {
-    // An unclassified method can only be served by an extension route, and a
-    // classified one can only be served by the enum-indexed structures, so the
-    // two lookups never both run.
+    // HTTP/1 Upgrade detection remains in its adapter; only normalized routing
+    // facts enter the shared classification policy.
     if (isHttpConnectUdpUpgradeRequest(request)) {
-        return resolveConnect("connect-udp", request.path());
+        return resolve(route_request_view{HttpKnownMethod::kConnect, request.method(),
+            request.path(), request.path(), "connect-udp"});
     }
-    if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-        return resolveExtensionMethod(request.method(), request.path());
+    return resolve(route_request_view{request.knownMethod(), request.method(),
+        request.path(), request.path(), {}});
+}
+
+detail::RouteResolution detail::RouteTable::resolve(route_request_view request) const noexcept {
+    if (request.known_method == HttpKnownMethod::kConnect) {
+        if (request.extended_protocol == "websocket") {
+            return request.path.empty() ? RouteResolution{} : resolve(HttpKnownMethod::kGet, request.path);
+        }
+        return resolveConnect(request.extended_protocol,
+            request.extended_protocol.empty() ? request.authority : request.path);
     }
-    return resolve(request.knownMethod(), request.path());
+    if (request.path.empty()) {
+        return {};
+    }
+    if (request.known_method == HttpKnownMethod::kUnknown) {
+        return resolveExtensionMethod(request.method_token, request.path);
+    }
+    return resolve(request.known_method, request.path);
 }
 
 detail::RouteResolution detail::RouteTable::resolveConnect(std::string_view protocol, std::string_view target) const noexcept {

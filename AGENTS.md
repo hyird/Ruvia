@@ -77,7 +77,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 - EventLoopPool 与 Web 组合复用同一承载。Web 不另建线程、事件循环或通用启停主链。
 - Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确生命周期扩展点接入 core。
 - worker 资源由统一 owner 管理。实例保持 worker-local。
-- 跨线程交互走有界 mailbox。禁止直接操作连接状态。
+- 跨线程交互走有界队列。禁止直接操作连接状态。
 - 调度入口与事件循环同属一个 owner。入口先于上下文退役。
 - 请求期只借用稳定 worker 句柄。显式卸载可复制一次。
 - 协程保持 lazy 和 structured ownership。

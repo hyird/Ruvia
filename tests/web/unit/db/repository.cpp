@@ -57,7 +57,7 @@ RUVIA_DB_ENTITY(Child, "children", DbColumn<"id", std::int64_t, DbColumnOptions{
 
 struct RepositoryRuntime final {
     asio::io_context& context = test::newTestIoContext();
-    EventLoopAttachment attachment = attachEventLoop(context, {.mailboxCapacity = 8});
+    EventLoopAttachment attachment = attachEventLoop(context, {.queue_capacity = 8});
     WorkerHandle worker = attachment.loop().handle();
 };
 DbConfig databaseConfig() {
@@ -69,7 +69,7 @@ DbConfig databaseConfig() {
 }
 void runVoid(Task<void> task) {
     auto& context = test::newTestIoContext();
-    auto attachment = attachEventLoop(context, {.mailboxCapacity = 8});
+    auto attachment = attachEventLoop(context, {.queue_capacity = 8});
     std::exception_ptr failure;
     asio::co_spawn(context, asAwaitable(std::move(task)), [&](std::exception_ptr error) {
         failure = std::move(error);

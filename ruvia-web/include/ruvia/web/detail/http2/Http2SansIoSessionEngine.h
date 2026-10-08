@@ -52,6 +52,8 @@ public:
     [[nodiscard]] Task<void> waitForWrite();
     void writerWriteFailed(std::error_code error) noexcept;
     void outputWriteCompleted() noexcept;
+    void writer_submitting() noexcept;
+    void writer_launch_failed() noexcept;
     void writerCompleted(std::exception_ptr exception) noexcept;
 
     [[nodiscard]] bool connectionFailed() const noexcept;
@@ -93,7 +95,6 @@ private:
     Http2BufferedResponseWriter bufferedResponseWriter_;
     std::size_t activeHandlerTasks_{0};
     std::size_t acceptedRequestHeads_{0};
-    bool writerTaskDone_{false};
 };
 
 }  // namespace ruvia::detail

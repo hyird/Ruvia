@@ -67,6 +67,16 @@ struct HttpPrefixNotFoundHandler final {
     HttpNotFoundHandlerRef handler{nullptr};
 };
 
+// Normalized borrowed facts, valid only for this lookup. Protocol adapters
+// retain ownership and decide admission/body lifetime independently of routing.
+struct route_request_view final {
+    HttpKnownMethod known_method{HttpKnownMethod::kUnknown};
+    std::string_view method_token;
+    std::string_view path;
+    std::string_view authority;
+    std::string_view extended_protocol;
+};
+
 class RouteTable final {
 public:
     explicit RouteTable(std::pmr::memory_resource* resource);
@@ -93,20 +103,13 @@ public:
     [[nodiscard]] std::pmr::string urlFor(std::string_view pattern,
         std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
+    [[nodiscard]] RouteResolution resolve(route_request_view request) const noexcept;
     [[nodiscard]] RouteResolution resolve(
         HttpKnownMethod method, std::string_view path) const noexcept;
 
-    [[nodiscard]] RouteResolution resolveConnect(std::string_view protocol, std::string_view target) const noexcept;
     Task<std::optional<HttpResponse>> dispatchTunnel(const HttpRequest& request,
         const ResolvedRoute& resolved, RequestMemory& memory, const RouteStreamHandler& handler,
         ContextServices services) const;
-
-    // Extension-method routing, kept off every enum-indexed structure. The
-    // request's exact token is compared against a small cold list, which costs
-    // a known-method request nothing: both protocol drivers only reach it when
-    // classifyHttpMethod() returned kUnknown.
-    [[nodiscard]] RouteResolution resolveExtensionMethod(
-        std::string_view methodToken, std::string_view path) const noexcept;
 
     // Tokens of the extension routes registered on `path`, for the Allow header
     // of a 405. Written into caller storage so no allocation outlives the call.
@@ -156,6 +159,13 @@ public:
 
 private:
     friend class RouterImpl;
+    [[nodiscard]] RouteResolution resolveConnect(std::string_view protocol, std::string_view target) const noexcept;
+    // Extension-method routing, kept off every enum-indexed structure. The
+    // request's exact token is compared against a small cold list, which costs
+    // a known-method request nothing: both protocol drivers only reach it when
+    // classifyHttpMethod() returned kUnknown.
+    [[nodiscard]] RouteResolution resolveExtensionMethod(
+        std::string_view methodToken, std::string_view path) const noexcept;
 
     // How dispatchRequest treats a failure escaping the routing machinery
     // itself. Handler exceptions are already converted inside the route path.

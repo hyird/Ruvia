@@ -202,7 +202,7 @@ template <typename Result>
 
 RUVIA_TEST(buffered_response_compression_uses_sync_and_bounded_offload_thresholds) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 2});
     const auto coding = gzipResponseCoding();
@@ -246,7 +246,7 @@ RUVIA_TEST(buffered_response_compression_uses_sync_and_bounded_offload_threshold
 RUVIA_TEST(
     buffered_response_compression_falls_back_to_identity_when_pool_rejects_or_body_is_too_large) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::BlockingPool pool(ruvia::BlockingPoolOptions{.threadCount = 1, .queueCapacity = 1});
     pool.stop();
@@ -836,6 +836,57 @@ RUVIA_TEST(buffered_response_defers_empty_coding_set_until_status_is_known) {
     RUVIA_CHECK(bodyfulError.has_value());
     if (bodyfulError.has_value()) {
         RUVIA_CHECK_EQ(bodyfulError->status(), ruvia::http_status::kNotAcceptable);
+    }
+}
+
+RUVIA_TEST(buffered_recovery_preserves_terminal_representation_and_websocket_boundary) {
+    ruvia::Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET /recovery HTTP/1.1\r\nHost: x\r\nAccept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
+    RUVIA_CHECK(parsed.messageReady() != nullptr);
+    ruvia::detail::HttpServerOptions options;
+    using action = ruvia::detail::buffered_response_recovery_action;
+    using mode = ruvia::detail::buffered_response_recovery_mode;
+    for (const auto recovery_mode : {mode::negotiated_then_disabled, mode::immediately_disabled}) {
+        auto policy = ruvia::detail::HttpResponseCodingPolicy::noAcceptableCoding();
+        ruvia::detail::buffered_response_recovery recovery(recovery_mode);
+        auto response = responseWithBody("application representation");
+        auto preparation = ruvia::detail::prepareBufferedHttpResponse(parsed.request, policy, response, options);
+        const auto first = recovery.advance(policy, parsed.request, response, preparation.compressionResult());
+        RUVIA_CHECK(first.action == action::handle_error);
+        RUVIA_CHECK(first.error.has_value());
+        RUVIA_CHECK_EQ(first.error->status(), ruvia::http_status::kNotAcceptable);
+        RUVIA_CHECK(recovery.recovered());
+        RUVIA_CHECK((policy.selection() == nullptr) == (recovery_mode == mode::immediately_disabled));
+
+        response = responseWithBody("custom error representation");
+        response.status(ruvia::http_status::kBadRequest);
+        response.header("x-custom-error", "preserved");
+        preparation = ruvia::detail::prepareBufferedHttpResponse(parsed.request, policy, response, options);
+        const auto second = recovery.advance(policy, parsed.request, response, preparation.compressionResult());
+        if (recovery_mode == mode::negotiated_then_disabled) {
+            RUVIA_CHECK(second.action == action::prepare_terminal);
+            RUVIA_CHECK(!second.error.has_value());
+            RUVIA_CHECK(policy.selection() == nullptr);
+            preparation = ruvia::detail::prepareBufferedHttpResponse(parsed.request, policy, response, options);
+        } else {
+            RUVIA_CHECK(second.action == action::ready);
+        }
+        RUVIA_CHECK(recovery.advance(policy, parsed.request, response, preparation.compressionResult()).action == action::ready);
+        RUVIA_CHECK_EQ(response.status(), ruvia::http_status::kBadRequest);
+        RUVIA_CHECK_EQ(response.header("x-custom-error"), std::optional<std::string_view>("preserved"));
+        RUVIA_CHECK_EQ(preparation.writePlan().contentLength(), std::size_t{27});
+    }
+
+    for (const auto status : {ruvia::http_status::kNoContent, ruvia::http_status::kResetContent, ruvia::http_status::kNotModified}) {
+        auto policy = ruvia::detail::HttpResponseCodingPolicy::noAcceptableCoding();
+        ruvia::detail::buffered_response_recovery recovery;
+        auto response = responseWithBody("suppressed representation");
+        response.status(status);
+        const auto preparation = ruvia::detail::prepareBufferedHttpResponse(parsed.request, policy, response, options);
+        RUVIA_CHECK(recovery.advance(policy, parsed.request, response, preparation.compressionResult()).action == action::ready);
+        RUVIA_CHECK(!recovery.recovered());
+        RUVIA_CHECK(!preparation.writePlan().sendBody());
     }
 }
 

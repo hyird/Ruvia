@@ -18,7 +18,6 @@
 #include "ruvia/web/detail/http3/Http3CriticalStreamDriver.h"
 #include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
 #include "ruvia/web/detail/http3/Http3QuicDatagramBridge.h"
-
 namespace ruvia::detail {
 
 // Worker-affine UDP socket and QUIC client adapter; the caller owns all waits.

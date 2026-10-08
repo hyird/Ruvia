@@ -311,13 +311,11 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
             request.bodyBytes().empty() && resolved != nullptr &&
             resolved->route().endpoint().buffered() != nullptr &&
             resolved->route().endpoint().buffered()->replay_safe());
-    enum class fallback_coding_policy : std::uint8_t { negotiated_then_disabled,
-        immediately_disabled };
     const bool web_socket_response = earlyRequestSafe && resolved != nullptr &&
                                      resolved->route().endpoint().webSocket() != nullptr;
-    const auto fallback_policy = web_socket_response
-                                     ? fallback_coding_policy::immediately_disabled
-                                     : fallback_coding_policy::negotiated_then_disabled;
+    const auto recovery_mode = web_socket_response
+                                   ? buffered_response_recovery_mode::immediately_disabled
+                                   : buffered_response_recovery_mode::negotiated_then_disabled;
     std::optional<HttpResponse> selectedResponse;
     if (!earlyRequestSafe) {
         selectedResponse.emplace(HttpResponse::Options{.resource = worker_.resource()});
@@ -395,40 +393,34 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
     }
     response_.emplace(std::move(response));
 
+    buffered_response_recovery recovery(recovery_mode);
     auto preparation = co_await prepareBufferedHttpResponseAsync(
         request, codingPolicy, *response_, options_, services_.worker());
     if (cancellationRequested()) {
         co_return RunStatus::kCancelled;
     }
-    if (const auto error = httpBufferedResponsePreparationError(
-            codingPolicy, request, *response_, preparation.compressionResult())) {
-        response_.reset();
-        auto errorResponse = co_await routes_.handleError(
-            request, *requestMemory_, *error, *requestServices_);
-        if (cancellationRequested()) {
-            co_return RunStatus::kCancelled;
+    for (;;) {
+        const auto step = recovery.advance(
+            codingPolicy, request, *response_, preparation.compressionResult());
+        if (step.action == buffered_response_recovery_action::ready) {
+            break;
         }
-        response_.emplace(std::move(errorResponse));
-        if (fallback_policy == fallback_coding_policy::immediately_disabled) {
-            codingPolicy = HttpResponseCodingPolicy::disabled();
-        }
-        preparation = co_await prepareBufferedHttpResponseAsync(
-            request, codingPolicy, *response_, options_, services_.worker());
-        // Ordinary recovery checks every preparation suspension. WebSocket
-        // recovery retains its immediate-disabled terminal preparation boundary.
-        if (fallback_policy == fallback_coding_policy::negotiated_then_disabled && cancellationRequested()) {
-            co_return RunStatus::kCancelled;
-        }
-        if (fallback_policy == fallback_coding_policy::negotiated_then_disabled &&
-            httpBufferedResponsePreparationError(
-                codingPolicy, request, *response_, preparation.compressionResult())
-                .has_value()) {
-            codingPolicy = HttpResponseCodingPolicy::disabled();
-            preparation = co_await prepareBufferedHttpResponseAsync(
-                request, codingPolicy, *response_, options_, services_.worker());
+        if (step.action == buffered_response_recovery_action::handle_error) {
+            response_.reset();
+            auto error_response = co_await routes_.handleError(
+                request, *requestMemory_, *step.error, *requestServices_);
             if (cancellationRequested()) {
                 co_return RunStatus::kCancelled;
             }
+            response_.emplace(std::move(error_response));
+        }
+        preparation = co_await prepareBufferedHttpResponseAsync(
+            request, codingPolicy, *response_, options_, services_.worker());
+        // The WebSocket immediate-disabled terminal preparation retains its
+        // existing publication boundary; ordinary recovery checks each suspension.
+        if (recovery_mode == buffered_response_recovery_mode::negotiated_then_disabled &&
+            cancellationRequested()) {
+            co_return RunStatus::kCancelled;
         }
     }
 
@@ -809,10 +801,13 @@ Http3BufferedRequestDispatch::publicationDemand() const noexcept {
         if (outbound_.stopped()) {
             return PublicationDemand::local_buffer_stopped;
         }
+        if (tunnel_established_control_pending_) {
+            return PublicationDemand::kControl;
+        }
         if (streamFrameOffset_ < streamFrame_.size() || tunnelDataPending_) {
             return PublicationDemand::kData;
         }
-        if (tunnelEstablishedPending_ || tunnelFinPending_) {
+        if (tunnelFinPending_) {
             return PublicationDemand::kControl;
         }
         return PublicationDemand::kNotReady;
@@ -969,11 +964,9 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         }
         streamPublishedWireBytes_ += bytes.size();
         publishedWireBytes_ += bytes.size();
-        if (streamFrameOffset_ < streamFrame_.size()) {
-            streamFrameOffset_ += bytes.size();
-            if (streamFrameOffset_ == streamFrame_.size()) {
-                tunnelOutputAvailable_.notify();
-            }
+        streamFrameOffset_ += bytes.size();
+        if (streamFrameOffset_ == streamFrame_.size()) {
+            tunnelOutputAvailable_.notify();
         } else {
             tunnelDataPending_ = false;
             tunnelDataFrame_.clear();
@@ -982,12 +975,18 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         return {PublishStatus::kBytesPublished, bytes.size()};
     }
 
-    const bool establishingTunnel = tunnelEstablishedPending_;
+    const bool establishingTunnel = tunnel_established_control_pending_;
+    const auto remaining_head_bytes = establishingTunnel
+                                          ? streamFrame_.size() - streamFrameOffset_
+                                          : std::size_t{0};
+    if (remaining_head_bytes > kHttp3VarIntMax - streamPublishedWireBytes_) {
+        return {PublishStatus::kFailed};
+    }
     http3_stream_control event{
         .kind = establishingTunnel ? http3_stream_control::kind::tunnel_established
                                    : http3_stream_control::kind::stream_fin,
         .id = messageId_,
-        .value = streamPublishedWireBytes_};
+        .value = streamPublishedWireBytes_ + remaining_head_bytes};
     const auto result = outbound_.try_send_control(event);
     if (result == http3_stream_buffer::control_result::full) {
         return {PublishStatus::kBackpressured, 0, PublishBlockReason::kControl};
@@ -996,14 +995,15 @@ Http3BufferedRequestDispatch::publishStreamStep(PublicationDemand demand) noexce
         return {PublishStatus::kFailed};
     }
     if (establishingTunnel) {
-        tunnelEstablishedPending_ = false;
-        tunnelEstablishedPublished_ = true;
+        tunnel_established_control_pending_ = false;
+        tunnel_established_control_published_ = true;
         tunnelOutputAvailable_.notify();
+        notifyTunnelOutput();
         return {PublishStatus::kControlPublished};
     }
     tunnelFinPending_ = false;
     streamOutputEnded_ = true;
-    if (tunnelEstablishedPublished_) {
+    if (tunnel_established_control_published_) {
         armPeerTransportFinTimeout();
     }
     tunnelOutputAvailable_.notify();
@@ -1064,6 +1064,9 @@ Task<std::error_code> Http3BufferedRequestDispatch::publishTunnelHandshake(
         streamFrameOffset_ < streamFrame_.size() || tunnelCallbacks_.outputReady == nullptr) {
         co_return std::make_error_code(std::errc::invalid_argument);
     }
+    if (headersFrame.size() > kHttp3VarIntMax - streamPublishedWireBytes_) {
+        co_return std::make_error_code(std::errc::value_too_large);
+    }
     try {
         streamFrame_.assign(headersFrame.data(), headersFrame.size());
     } catch (...) {
@@ -1072,8 +1075,12 @@ Task<std::error_code> Http3BufferedRequestDispatch::publishTunnelHandshake(
     commitFinalResponse();
     streamOutputActive_ = true;
     streamFrameOffset_ = 0;
+    // Admit the future HEAD byte barrier before any successful CONNECT bytes.
+    // A peer can send its first native datagram immediately upon seeing 2xx.
+    tunnel_established_control_pending_ = true;
     notifyTunnelOutput();
-    while (streamFrameOffset_ < streamFrame_.size()) {
+    while (!tunnel_established_control_published_ ||
+           streamFrameOffset_ < streamFrame_.size()) {
         if (cancellationRequested() || tunnelAborted_) {
             co_return std::make_error_code(std::errc::operation_canceled);
         }
@@ -1081,14 +1088,6 @@ Task<std::error_code> Http3BufferedRequestDispatch::publishTunnelHandshake(
     }
     if (cancellationRequested() || tunnelAborted_) {
         co_return std::make_error_code(std::errc::operation_canceled);
-    }
-    tunnelEstablishedPending_ = true;
-    notifyTunnelOutput();
-    while (!tunnelEstablishedPublished_) {
-        if (cancellationRequested() || tunnelAborted_) {
-            co_return std::make_error_code(std::errc::operation_canceled);
-        }
-        co_await tunnelOutputAvailable_.wait();
     }
     co_return std::error_code{};
 }

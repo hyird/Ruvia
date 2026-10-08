@@ -80,7 +80,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             ruvia::test::Http2SansIoSessionFixture fixture;
             fixture.options.requestBodyTimeout = std::chrono::milliseconds(100);

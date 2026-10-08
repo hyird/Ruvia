@@ -3,7 +3,7 @@
 #include <utility>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/core/WorkerCancellationPost.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
@@ -19,7 +19,7 @@ namespace {
 
 }  // namespace
 
-static_assert(workerCancellationPostIsInline<RedisOperationCancellationMailbox>);
+static_assert(worker_cancellation_post_is_inline<redis_cancellation_target>);
 
 Task<RedisValue> RedisPool::executeOwned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, OperationOptions options) {

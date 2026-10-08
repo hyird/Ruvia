@@ -27,7 +27,7 @@ constexpr std::size_t kResponseBufferPumpBudget = 64;
 
 std::size_t connection_capacity(const http3_worker_runtime::worker_target& worker) {
     if (worker.server == nullptr || worker.max_connections == 0 ||
-        worker.mailbox_capacity == 0 || worker.max_requests_per_connection == 0) {
+        worker.buffer_capacity == 0 || worker.max_requests_per_connection == 0) {
         throw std::invalid_argument("invalid HTTP/3 worker target");
     }
     return worker.max_connections;
@@ -99,7 +99,7 @@ http3_worker_datagram_endpoint::pump_result send_http3_version_negotiation(
 http3_worker_runtime::worker_link::worker_link(std::pmr::memory_resource* resource,
     http3_worker_runtime& runtime, worker_target configured)
     : target(std::move(configured)),
-      request_buffer(target.mailbox_capacity, target.mailbox_capacity, target.mailbox_capacity,
+      request_buffer(target.buffer_capacity, target.buffer_capacity, target.buffer_capacity,
           resource, {.ready = {target.server, [](void* context, std::uint8_t) noexcept {
                                    static_cast<http3_worker_server*>(context)->wake();
                                }},
@@ -124,7 +124,7 @@ http3_worker_runtime::worker_link::worker_link(std::pmr::memory_resource* resour
         connections.emplace_back(resource, *states.back(), request_buffer, runtime.wire_,
             http3_connection_driver_config{
                 .max_requests_per_connection = target.max_requests_per_connection,
-                .buffer_capacity = target.mailbox_capacity,
+                .buffer_capacity = target.buffer_capacity,
                 .request_header_timeout = target.request_header_timeout,
                 .request_body_timeout = target.request_body_timeout,
                 .write_timeout = target.write_timeout,
@@ -559,6 +559,10 @@ bool http3_worker_runtime::pump_protocol(http3_quic_server_transport* transport,
         }
         for (std::size_t pass = 0; pass < pumpBudget_; ++pass) {
             const bool progress = pump_worker(*worker_);
+            // One observed edge wakes every connection in the first pass only.
+            // Reusing it during local retries restarts blocked output scans
+            // without new ACK/credit, delaying the packet flush below.
+            transportActivityForPump_ = false;
             if (!progress) {
                 exhaustedBudget = false;
                 break;
@@ -628,7 +632,7 @@ bool http3_worker_runtime::pump_protocol(http3_quic_server_transport* transport,
             }
         } else if (exhaustedBudget) {
             // The QUIC wire owner bounds each turn. Queue a coalesced follow-up
-            // so a long run of ready mailbox work cannot strand the connection
+            // so a long run of ready buffer work cannot strand the connection
             // after the last UDP/timer completion.
             wake();
         }
@@ -663,6 +667,9 @@ bool http3_worker_runtime::pump_worker(worker_link& worker) noexcept {
 bool http3_worker_runtime::pump_responses(worker_link& worker) noexcept {
     bool progress = false;
     worker.response_buffer_drained = false;
+    // Dispatch and this driver run on the same worker. Capacity notifications
+    // defer continuations; the synchronous control-pop/data-acquire sequence
+    // cannot run a producer between its two SPSC lane reads.
     std::size_t processed = 0;
     for (;;) {
         if (worker.pending_response_control) {

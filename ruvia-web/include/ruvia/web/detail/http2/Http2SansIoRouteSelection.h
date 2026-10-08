@@ -19,28 +19,20 @@ namespace ruvia::detail {
     const auto method = classifyHttpMethod(request.method);
     const auto query = request.path.find('?');
     const auto path = request.path.substr(0, query);
-    const bool webSocketConnect = method == HttpKnownMethod::kConnect &&
-                                  httpAsciiEqualsIgnoreCase(request.protocol, "websocket");
+    // Preserve HTTP/2's accepted token normalization without widening HTTP/3's
+    // exact-token boundary or materializing a request.
+    const auto extended_protocol = httpAsciiEqualsIgnoreCase(request.protocol, "websocket")
+                                       ? std::string_view("websocket")
+                                       : request.protocol;
     auto& runtime = streamRuntimes.ensureAccepted(streamId);
-    RouteResolution resolution;
+    auto resolution = routes.resolve(route_request_view{
+        method, request.method, path, request.authority, extended_protocol});
     auto bodyMode = RequestBodyMode::kBuffered;
-    if (method == HttpKnownMethod::kConnect && !webSocketConnect) {
-        resolution = routes.resolveConnect(request.protocol, request.protocol.empty() ? request.authority : path);
-    } else if (!path.empty()) {
-        // An unclassified method can only be served by an extension route, and
-        // it is matched on the exact wire token -- the same split HTTP/1 makes
-        // in RouteTable::resolve(const HttpRequest&). Without this branch,
-        // extension routes would work over HTTP/1 and silently not over
-        // HTTP/2.
-        resolution = method == HttpKnownMethod::kUnknown
-                         ? routes.resolveExtensionMethod(request.method, path)
-                         : routes.resolve(webSocketConnect ? HttpKnownMethod::kGet : method, path);
-    }
     const auto* resolved = resolution.resolved();
     if (resolved != nullptr) {
         bodyMode = resolved->route().endpoint().requestBodyMode();
     }
-    if (resolved != nullptr && ((webSocketConnect && resolved->route().endpoint().webSocket() != nullptr) ||
+    if (resolved != nullptr && ((method == HttpKnownMethod::kConnect && resolved->route().endpoint().webSocket() != nullptr) ||
                                    resolved->route().endpoint().tunnel() != nullptr)) {
         bodyMode = RequestBodyMode::kStream;
     }

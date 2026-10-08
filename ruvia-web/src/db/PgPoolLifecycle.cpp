@@ -52,7 +52,7 @@ PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& 
       worker_(requirePostgreSqlWorker(worker)),
       slots_(resource_),
       scheduler_(1, worker_, resource_),
-      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
+      cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
     if (config_.driver != DbDriver::kPostgreSql) {
         throw std::invalid_argument("PostgreSQL pool requires the PostgreSQL driver");
     }
@@ -61,7 +61,7 @@ PostgreSqlPool::PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& 
 }
 
 PostgreSqlPool::~PostgreSqlPool() {
-    cancellationMailbox_->detach(*this);
+    cancellation_target_->detach(*this);
     closeNow();
 }
 

@@ -46,7 +46,7 @@ public:
     }
 
 private:
-    ruvia::worker_runtime owner_{{.mailbox_capacity = 8}};
+    ruvia::worker_runtime owner_{{.queue_capacity = 8}};
 };
 
 struct endpoint_fixture final {

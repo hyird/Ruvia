@@ -20,7 +20,7 @@ protocol library do not require the full Web framework.
 - **Coroutine-first Web framework** — controllers, typed JSON
   models, validation, middleware, streaming, SSE, and WebSocket routes, all
   finalized at startup with no per-request rebuilding.
-- **Bounded, application-owned runtime** — explicit workers, bounded mailboxes,
+- **Bounded, application-owned runtime** — explicit workers, bounded queues,
   backpressure at every producer, and deterministic shutdown cancellation and
   completion draining.
 - **TLS out of the box** — server TLS with optional or required client-certificate
@@ -175,11 +175,20 @@ At N, admission is sealed and already-admitted requests drain. Output bytes and
 retained response blocks must be accepted or invalidated by transport, and the
 local handler tasks must finish before the connection generation is retired.
 
-The Acceptor-to-worker `http3_datagram_channel` remains the bounded cross-thread
+The worker-local `http3_worker` owns the HTTP/3 server, protocol transport and
+their task scope. It stages the Acceptor channel, rolls back failed startup,
+stops both halves, joins their tasks and destroys transport state on the owner
+worker. Web uses this one component lifecycle.
+
+The Acceptor-to-worker `http3_datagram_channel` is the bounded cross-thread
 datagram boundary. It composes core SPSC queues, linear buffer leases, channel
-lifecycle and native cross-thread notification. The removed components are the
-worker-local `Http3StreamMailbox` and mailbox-server handoff, not the Acceptor
-datagram channels or core's general-purpose mailbox facilities.
+lifecycle and native cross-thread notification.
+
+`Http3ListenConfig::stream_buffer_capacity` sets worker-local stream buffer
+slots (default 1024); `datagram_input_capacity` sets routed input slots (64) and
+`datagram_output_capacity` sets output credits (16). These limits are independent
+of `ServerConfig::worker_queue_capacity` (1024). App and standalone workers share
+the same validation, including aggregate packet-pool overflow checks.
 
 The two final endpoint roles are explicit: `http3_acceptor_datagram_endpoint` owns
 the UDP socket and borrows the Acceptor's packet pool;
@@ -211,6 +220,17 @@ ready lists and receives explicit local capacity changes. Its
 after actual transport execution; it is not a thread-handoff acknowledgment.
 Aborting an unpublished local reservation returns its storage without creating a
 capacity wake; consuming a block and returning its borrow activate blocked work.
+
+Response output keeps hash-based stream lookup but drives an occupied-slot ring
+inside that same preallocated table. Sparse connections therefore scan their
+tracked streams rather than the configured hash-table capacity; live/pending
+observers use the same occupied slots. Stream identity and terminal tombstones
+remain retained. A newly occupied slot joins subsequent rounds, while bounded
+service turns, idle parking and explicit data/transport-credit wakes preserve
+fair progress without an additional queue or allocation.
+One observed transport-activity edge wakes every connection in the first local
+pass only; subsequent passes consume existing work without replaying that edge,
+so blocked output scans can park and packet flushing can release QUIC budget.
 
 `http3_connection_state` is the worker-local authority for reservation, binding,
 handler attachment, admission sealing, transport retirement, worker finalization
@@ -310,6 +330,20 @@ same application capabilities. `Http3ListenConfig::qpack` configures receive
 limits; setting `maxTableCapacity` to zero disables dynamic entries and setting
 `maxBlockedStreams` to zero forbids blocked field sections.
 
+Web routing has one borrowed-facts classification policy. HTTP adapters retain
+their own parsing and token normalization, then pass method, path, authority and
+Extended CONNECT protocol views to the Web router; HTTP/2 does not construct an
+`HttpRequest` just to select a route. Query parsing, exact extension-method and
+custom CONNECT protocol tokens, `OPTIONS *`, tunnel body storage, and push
+admission remain separate protocol boundaries. HTTP owns framing, not Web
+routes, CORS or `onError`.
+
+The HTTP/2 session lifecycle also owns the writer's structured-join obligation:
+submission is recorded before `co_spawn` can complete inline, completion remains
+recorded if it precedes reader shutdown, and an unsuccessful launch leaves no
+writer task to join. Writer completion, handler completion and stream retirement
+are distinct facts.
+
 CONNECT-UDP (RFC 9298) uses `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler)`.
 The framework negotiates GET Upgrade/101 over HTTP/1.1 and Extended CONNECT/2xx
 over HTTP/2 or HTTP/3, including `Capsule-Protocol: ?1`. The handler can use
@@ -319,7 +353,18 @@ send policy uses QUIC only when it was negotiated and the packet fits, otherwise
 it sends a reliable capsule. Native sends are best-effort: a full bounded send
 queue may drop a packet, with no delivery or retry guarantee. The application
 middleware controls authorization and target policy, and opens and drives its
-UDP socket. WebTransport is not exposed. HTTP/3 TLS 0-RTT is available but
+UDP socket.
+
+An HTTP/3 successful CONNECT response is published only after its tunnel receive
+admission marker is queued. Native datagrams are admissible as soon as the peer
+can decode the complete 2xx HEADERS; the protocol owner confirms the complete
+encoded HEAD byte barrier before making it visible on the wire, not after a UDP
+send acknowledgement. The tunnel handler also waits for the entire handshake
+response to be published. Cancelling before that point joins the producer and
+retires the pending admission without opening a tunnel. This ordering does not
+make native datagrams reliable or change their bounded-queue drop policy.
+
+WebTransport is not exposed. HTTP/3 TLS 0-RTT is available but
 opt-in on both ends. Servers enable it with `ListenConfig::tls.http3_early_data`
 (default `false`); it is unavailable when TLS client-certificate authentication
 is configured and remains subject to OpenSSL's built-in anti-replay protection.
@@ -654,6 +699,17 @@ Every response has one linear body reader. `read()` consumes one borrowed
 `std::span<const std::byte>` chunk, `readAll()` collects the remaining bytes into
 a move-only `ruvia::HttpClientResponseBytes` with a per-response byte bound, and
 `pipeTo()` forwards them to a controller response stream with backpressure.
+
+A borrowed chunk remains valid until the next body operation or destruction of
+its response owner; requesting cancellation does not itself revoke that borrow.
+Cancel or discard a partial HTTP/1 response to retire that request and its I/O,
+not to make its incomplete framing reusable. After retirement, the same client
+can issue another request: a closed HTTPS connection gets a fresh socket/TLS
+engine and repeats certificate and host verification. Fully consumed,
+persistent responses with healthy framing still reuse their existing connection.
+When a request scope supplies borrowed capabilities, await its
+`close_and_join()` before releasing the scope's backing storage.
+
 `HttpClientResponseBytes` owns address-stable PMR storage backed by the
 thread-safe `std::pmr::new_delete_resource`; it survives response, client, and
 worker teardown and may be destroyed on another thread. Use its left-value
@@ -774,6 +830,23 @@ and messages can be consumed. `abort()` only requests immediate transport
 termination; use `co_await client.shutdown()` on the bound event loop when the
 connect attempt, heartbeat task, and all client operations must be joined.
 
+An awaited typed `close()` succeeds only after an actual peer WebSocket Close
+frame completes the RFC 6455 exchange. For HTTP/2, buffered Close DATA is
+consumed before a subsequent clean `NO_ERROR` stream retirement becomes EOF;
+that retirement does not require writing another END_STREAM to an already
+closed stream. EOF or `NO_ERROR` without peer Close is still a protocol failure.
+`CANCEL` and other error resets remain failures, including when Close DATA and
+the reset arrive in the same input batch. Close timeout or cancellation also
+fails the handshake; `shutdown()` remains the operation that joins termination,
+rather than a substitute for exchanging Close frames.
+
+Construction normalizes scalar defaults, owns source strings in the client's PMR
+storage, and validates borrowed views of that storage. The source configuration,
+header strings and subprotocol strings may leave scope before `connect()`.
+Startup validation does not construct a temporary owning negotiation; each real
+connection still owns its own handshake/negotiation state and selected protocol
+and compression settings.
+
 `WebSocketMessage::payload()` borrows the client read buffer and remains valid
 only until the next `read()` on that connection. Copy it first when it must live
 longer. A WebSocket connection stays on its bound loop for its complete lifetime;
@@ -789,7 +862,7 @@ integrations. Its bounded `post()` remains the cross-thread queue-in-loop API:
 ```cpp
 #include <ruvia/core/EventLoopPool.h>
 
-ruvia::EventLoopPool loops({.loopCount = 4, .mailboxCapacity = 1024});
+ruvia::EventLoopPool loops({.loopCount = 4, .queue_capacity = 1024});
 loops.start();
 
 auto loop = loops.loopFor("device-42");
@@ -1066,7 +1139,7 @@ auto result = worker.post(
 Web job contract:
 
 - **Backpressure** — configure the bounded queue before startup with
-  `ServerConfig::workerMailboxCapacity` and handle `kQueueFull` at every producer.
+  `ServerConfig::worker_queue_capacity` and handle `kQueueFull` at every producer.
 - **Metrics** — `WebWorkerHandle::stats()` exposes accepted, rejected,
   completed, failed, and outstanding counts.
 - **Shutdown completion** — a job accepted before shutdown remains owned until
@@ -1128,11 +1201,17 @@ and completion handlers drain before terminal cleanup and escaped-handle
 detachment. `join()` establishes the thread barrier, including draining accepted
 work when stopped before launch. Run failures are inspected after owners join;
 joining a raw `worker_runtime` does not rethrow them.
-Mailbox abandonment and publication rollback use one node-recycling path:
+Queue abandonment and publication rollback use one node-recycling path:
 release the reservation, destroy user closures outside the dispatcher mutex,
 then notify queued idle waiters. Destructors may reenter the dispatcher.
 
 ### Bounded storage and endpoint retirement
+
+`<ruvia/core/mpsc_ring_queue.h>` provides bounded multi-producer storage
+composed from the local ring and a mutex. Core task dispatch and `Channel<T>`
+use it; their admission, close and waiter state share the queue's existing lock.
+This is a serialized MPSC queue. Its lock-free SPSC counterpart is used only
+where each endpoint has one producer or consumer.
 
 `<ruvia/core/spsc_ring_queue.h>` provides `spsc_ring_queue<T>` and
 `local_ring_queue<T>` through one `basic_ring_queue` storage/index implementation.
@@ -1326,6 +1405,17 @@ For buffered handlers, a request with no acceptable response coding is checked
 after the handler status is known: representation-free `204`, `205`, and `304` responses
 remain valid, while a bodyful response is `406 Not Acceptable`; streaming and
 upgrade routes reject before committing their response head.
+
+HTTP/1, HTTP/2 and HTTP/3 buffered responses share the Web recovery policy. A
+preparation/coding failure invokes `onError` once; its response is prepared under
+the ordinary negotiated coding policy again. If that preparation also fails,
+the same application error representation is prepared with coding disabled,
+without invoking `onError` again or replacing the response; preparation may
+still rebuild coding/framing metadata. A rejected WebSocket handshake instead
+disables coding immediately for its error response. Protocols
+retain their own cancellation, output-credit, field-limit and publication rules;
+an already committed file or streaming response is not reopened for buffered
+recovery.
 
 ## Requirements
 
@@ -3028,6 +3118,27 @@ Pong and Close responses. The context must outlive the connection. Generator
 failure throws; abort the connection. `WebSocketClientNegotiation` owns offered
 headers, subprotocols, and compression parameters, and prepares HTTP/2/3 requests.
 Use the negotiated `WebSocketCompression` value when constructing the connection.
+
+`WebSocketClientNegotiation::validate_configuration(config_view)` checks borrowed
+headers, subprotocols, deflate parameters and the generated field budget without
+owning configuration strings. Its synchronous views need only survive the call:
+
+```cpp
+const std::array<std::string_view, 2> offered{"events.v1", "events.v2"};
+ruvia::WebSocketClientNegotiationConfigView config_view{
+    .subprotocols = offered,
+    .deflate = {.enabled = true},
+};
+ruvia::WebSocketClientNegotiation::validate_configuration(config_view);
+ruvia::WebSocketClientNegotiation negotiation(config_view, resource);
+```
+
+The owning constructor uses the same authoritative checks while materializing
+its fields once; `resource` must outlive the negotiation and its prepared views.
+HTTP/1 handshake-specific field constraints still apply separately. Server
+`WebSocketServerHandshake::forEachResponsePart()` emits views owned by the
+handshake, including fixed encoded extension bytes, so retained scatter/gather
+buffers remain valid through asynchronous publication while that owner lives.
 
 The Web runtime uses these protocol primitives with its own enabled capabilities;
 protocol-library extension support does not enable an App transport feature by

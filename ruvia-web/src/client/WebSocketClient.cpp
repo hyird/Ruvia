@@ -32,7 +32,7 @@ WebSocketClientState::WebSocketClientState(EventLoop loop, const WebSocketClient
       tlsContext_([&] {
           asio::ssl::context context(asio::ssl::context::tls_client);
           if (config_.scheme == WebSocketScheme::kWss) {
-              configureClientTlsContext(context, config_.transport.view());
+              configure_client_tls_context(*context.native_handle(), config_.transport.view());
           }
           return context;
       }()),

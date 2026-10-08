@@ -115,42 +115,44 @@ std::expected<WebSocketClientNegotiationResultView, Error> validate(const Fields
     return result;
 }
 }  // namespace
-WebSocketClientNegotiation::WebSocketClientNegotiation(WebSocketClientNegotiationConfigView config, std::pmr::memory_resource* resource)
-    : resource_(resource ? resource : std::pmr::get_default_resource()),
-      deflate_(config.deflate),
-      protocols_(resource_),
-      fields_(resource_) {
-    auto validWindow = [](std::optional<int> v) { return !v || (*v >= 8 && *v <= 15); };
-    if (!validWindow(deflate_.serverMaxWindowBits) || !validWindow(deflate_.clientMaxWindowBits) || (deflate_.clientMaxWindowBits && !deflate_.offerClientMaxWindowBits)) {
+namespace {
+template <class Protocol, class Field>
+void validate_and_visit_config(const WebSocketClientNegotiationConfigView& config,
+    Protocol&& protocol, Field&& field) {
+    auto valid_window = [](std::optional<int> window_bits) {
+        return !window_bits || (*window_bits >= 8 && *window_bits <= 15);
+    };
+    if (!valid_window(config.deflate.serverMaxWindowBits) || !valid_window(config.deflate.clientMaxWindowBits) ||
+        (config.deflate.clientMaxWindowBits && !config.deflate.offerClientMaxWindowBits)) {
         throw std::invalid_argument("invalid WebSocket client deflate offer");
     }
     detail::WebSocketSubprotocolSet seen;
-    std::pmr::string joined(resource_);
-    std::size_t headerBytes = 0;
-    for (auto p : config.subprotocols) {
-        if (!seen.append(p)) {
+    std::size_t joined_bytes = 0;
+    for (const auto protocol_view : config.subprotocols) {
+        if (!seen.append(protocol_view)) {
             throw std::invalid_argument("invalid WebSocket subprotocol");
         }
-        protocols_.emplace_back(p);
-        if (!joined.empty()) {
-            joined.append(", ");
+        if (joined_bytes != 0) {
+            if (joined_bytes > kMaxHttpHeaderBytes - 2) {
+                throw std::invalid_argument("WebSocket subprotocol field too large");
+            }
+            joined_bytes += 2;
         }
-        if (joined.size() > kMaxHttpHeaderBytes || p.size() > kMaxHttpHeaderBytes - joined.size()) {
+        if (protocol_view.size() > kMaxHttpHeaderBytes - joined_bytes) {
             throw std::invalid_argument("WebSocket subprotocol field too large");
         }
-        joined.append(p);
+        joined_bytes += protocol_view.size();
+        protocol(protocol_view);
     }
-    auto append = [&](std::string_view name, std::string_view value) {
-        if (headerBytes > kMaxHttpHeaderBytes || kMaxHttpHeaderBytes - headerBytes < 4 ||
-            name.size() > kMaxHttpHeaderBytes - headerBytes - 4 || value.size() > kMaxHttpHeaderBytes - headerBytes - 4 - name.size()) {
+    std::size_t header_bytes = 0;
+    auto append = [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
+        if (header_bytes > kMaxHttpHeaderBytes || kMaxHttpHeaderBytes - header_bytes < 4 ||
+            name.size() > kMaxHttpHeaderBytes - header_bytes - 4 ||
+            value_bytes > kMaxHttpHeaderBytes - header_bytes - 4 - name.size()) {
             throw std::invalid_argument("WebSocket client fields too large");
         }
-        headerBytes += name.size() + value.size() + 4;
-        std::pmr::string normalizedName(name, resource_);
-        for (char& character : normalizedName) {
-            character = static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(character)));
-        }
-        fields_.push_back(detail::HttpHeaderAccess::make(std::move(normalizedName), std::pmr::string(value, resource_)));
+        header_bytes += name.size() + value_bytes + 4;
+        field(name, value, value_bytes);
     };
     if (config.headers.size() > kMaxHttpHeaderFields - 3) {
         throw std::invalid_argument("too many WebSocket client headers");
@@ -159,21 +161,55 @@ WebSocketClientNegotiation::WebSocketClientNegotiation(WebSocketClientNegotiatio
         if (reserved(header.name()) || !isValidHttpHeaderName(header.name()) || !isValidHttpHeaderValue(header.value())) {
             throw std::invalid_argument("invalid WebSocket client header");
         }
-        append(header.name(), header.value());
+        append(header.name(), header.value(), header.value().size());
     }
-    append("Sec-WebSocket-Version", "13");
-    if (!joined.empty()) {
-        append("Sec-WebSocket-Protocol", joined);
+    append("Sec-WebSocket-Version", "13", 2);
+    if (!config.subprotocols.empty()) {
+        append("Sec-WebSocket-Protocol", {}, joined_bytes);
     }
-    if (deflate_.enabled) {
-        WebSocketCompression parameters{.enabled = true, .serverNoContextTakeover = deflate_.serverNoContextTakeover, .clientNoContextTakeover = deflate_.clientNoContextTakeover, .serverMaxWindowBits = deflate_.serverMaxWindowBits, .clientMaxWindowBits = deflate_.clientMaxWindowBits};
-        auto encoded = detail::webSocketCompressionExtension(parameters);
-        std::pmr::string offer(encoded.view(), resource_);
-        if (deflate_.offerClientMaxWindowBits && !deflate_.clientMaxWindowBits) {
-            offer.append("; client_max_window_bits");
-        }
-        append("Sec-WebSocket-Extensions", offer);
+    if (config.deflate.enabled) {
+        WebSocketCompression parameters{.enabled = true,
+            .serverNoContextTakeover = config.deflate.serverNoContextTakeover,
+            .clientNoContextTakeover = config.deflate.clientNoContextTakeover,
+            .serverMaxWindowBits = config.deflate.serverMaxWindowBits,
+            .clientMaxWindowBits = config.deflate.clientMaxWindowBits};
+        const auto encoded = detail::webSocketCompressionExtension(parameters);
+        constexpr std::size_t k_client_window_bits_suffix_bytes = sizeof("; client_max_window_bits") - 1;
+        const std::size_t offer_bytes = encoded.view().size() +
+                                        ((config.deflate.offerClientMaxWindowBits && !config.deflate.clientMaxWindowBits)
+                                                ? k_client_window_bits_suffix_bytes
+                                                : 0);
+        append("Sec-WebSocket-Extensions", encoded.view(), offer_bytes);
     }
+}
+}  // namespace
+void WebSocketClientNegotiation::validate_configuration(WebSocketClientNegotiationConfigView config) {
+    validate_and_visit_config(config, [](std::string_view) {}, [](std::string_view, std::string_view, std::size_t) {});
+}
+WebSocketClientNegotiation::WebSocketClientNegotiation(WebSocketClientNegotiationConfigView config, std::pmr::memory_resource* resource)
+    : resource_(resource ? resource : std::pmr::get_default_resource()),
+      deflate_(config.deflate),
+      protocols_(resource_),
+      fields_(resource_) {
+    std::pmr::string joined(resource_);
+    validate_and_visit_config(config, [&](std::string_view protocol_view) {
+            protocols_.emplace_back(protocol_view);
+            if (!joined.empty()) {
+                joined.append(", ");
+            }
+            joined.append(protocol_view); }, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
+            std::pmr::string materialized(value, resource_);
+            if (name == "Sec-WebSocket-Protocol") {
+                materialized = std::move(joined);
+            } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
+                materialized.append("; client_max_window_bits");
+            }
+            std::pmr::string normalized_name(name, resource_);
+            for (char& character : normalized_name) {
+                character = static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(character)));
+            }
+            fields_.push_back(detail::HttpHeaderAccess::make(
+                std::move(normalized_name), std::move(materialized))); });
 }
 std::expected<WebSocketClientNegotiationResultView, Error> WebSocketClientNegotiation::validateFields(std::span<const HttpHeader> fields) const {
     return validate(fields, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);

@@ -153,6 +153,14 @@ Http3ServerStreamOutput::findOrCreateStream(StreamId streamId) {
             slot.head = kNoNode;
             slot.tail = kNoNode;
             slot.occupied = true;
+            if (trackedStreamCount_ == 0) {
+                first_tracked_slot_ = index;
+                roundRobinSlot_ = index;
+            } else {
+                streams_[last_tracked_slot_].next_tracked_slot_ = index;
+            }
+            slot.next_tracked_slot_ = first_tracked_slot_;
+            last_tracked_slot_ = index;
             ++trackedStreamCount_;
             return &slot;
         }
@@ -437,18 +445,18 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
         if (!writeTimeout_ || liveStreamCount() == 0) {
             return result;
         }
-        roundRemainingSlots_ = streams_.size();
+        roundRemainingSlots_ = trackedStreamCount_;
         roundMadeProgress_ = false;
         scanAgain_ = false;
     }
 
     while (roundRemainingSlots_ != 0 && result.operations < maxDriveWorkItems_) {
         const auto index = roundRobinSlot_;
-        roundRobinSlot_ = (roundRobinSlot_ + 1) % streams_.size();
+        roundRobinSlot_ = streams_[index].next_tracked_slot_;
         --roundRemainingSlots_;
         ++result.scannedSlots;
         auto& slot = streams_[index];
-        if (!slot.occupied || isTerminal(slot.info.state)) {
+        if (isTerminal(slot.info.state)) {
             continue;
         }
 
@@ -598,7 +606,7 @@ Http3ServerStreamOutput::DriveResult Http3ServerStreamOutput::drive() {
     if (roundRemainingSlots_ != 0) {
         result.needsReschedule = true;
     } else if (roundMadeProgress_ || scanAgain_) {
-        roundRemainingSlots_ = streams_.size();
+        roundRemainingSlots_ = trackedStreamCount_;
         roundMadeProgress_ = false;
         scanAgain_ = false;
         result.needsReschedule = true;
@@ -671,8 +679,11 @@ std::size_t Http3ServerStreamOutput::trackedStreamCount() const {
 std::size_t Http3ServerStreamOutput::liveStreamCount() const {
     requireOwnerThread();
     std::size_t count{};
-    for (const auto& slot : streams_) {
-        if (slot.occupied && slot.lastWriteActivity && !slot.info.sendFinAccepted &&
+    auto index = first_tracked_slot_;
+    for (std::size_t remaining = trackedStreamCount_; remaining != 0; --remaining) {
+        const auto& slot = streams_[index];
+        index = slot.next_tracked_slot_;
+        if (slot.lastWriteActivity && !slot.info.sendFinAccepted &&
             !isTerminal(slot.info.state)) {
             ++count;
         }
@@ -683,8 +694,11 @@ std::size_t Http3ServerStreamOutput::liveStreamCount() const {
 std::size_t Http3ServerStreamOutput::pendingStreamCount() const {
     requireOwnerThread();
     std::size_t count{};
-    for (const auto& slot : streams_) {
-        if (!slot.occupied || !slot.lastWriteActivity || slot.info.sendFinAccepted ||
+    auto index = first_tracked_slot_;
+    for (std::size_t remaining = trackedStreamCount_; remaining != 0; --remaining) {
+        const auto& slot = streams_[index];
+        index = slot.next_tracked_slot_;
+        if (!slot.lastWriteActivity || slot.info.sendFinAccepted ||
             isTerminal(slot.info.state)) {
             continue;
         }
@@ -937,7 +951,7 @@ void Http3ServerStreamOutput::requestScan() noexcept {
         return;
     }
     if (roundRemainingSlots_ == 0) {
-        roundRemainingSlots_ = streams_.size();
+        roundRemainingSlots_ = trackedStreamCount_;
         roundMadeProgress_ = false;
         scanAgain_ = false;
     } else {

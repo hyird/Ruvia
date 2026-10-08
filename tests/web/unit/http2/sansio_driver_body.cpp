@@ -36,7 +36,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
@@ -182,7 +182,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
             impl.finalize();
 
             ruvia::test::Http2SansIoSessionFixture fixture;
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
@@ -288,7 +288,7 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(
@@ -361,7 +361,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             fixture.options.accessLog.callback =
                 ruvia::detail::CallbackAccess::bind<void(const ruvia::AccessLogRecord&) noexcept>(

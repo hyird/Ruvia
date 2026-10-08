@@ -11,12 +11,10 @@ enum class Http2SansIoSessionPhase : std::uint8_t {
     kWriteFailed,
     kStopping,
     kStoppingAfterWriteFailure,
-    kWriterDone,
-    kWriterDoneAfterWriteFailure,
 };
 
-// Same-executor session state. Reader completion, write failure, and writer
-// join are ordered transitions rather than independently mutable flags.
+// Same-executor session state. Writer submission is recorded before co_spawn
+// can invoke completion inline; completion remains true before reader stopping.
 class Http2SansIoSessionLifecycle final {
 public:
     [[nodiscard]] Http2SansIoSessionPhase phase() const noexcept {
@@ -25,20 +23,33 @@ public:
 
     [[nodiscard]] bool writeFailed() const noexcept {
         return phase_ == Http2SansIoSessionPhase::kWriteFailed ||
-               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure;
     }
 
     [[nodiscard]] bool stopping() const noexcept {
         return phase_ == Http2SansIoSessionPhase::kStopping ||
-               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure ||
-               phase_ == Http2SansIoSessionPhase::kWriterDone ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+               phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure;
     }
 
     [[nodiscard]] bool writerDone() const noexcept {
-        return phase_ == Http2SansIoSessionPhase::kWriterDone ||
-               phase_ == Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+        return writer_ == writer_state::completed;
+    }
+
+    [[nodiscard]] bool writer_join_pending() const noexcept {
+        return writer_ == writer_state::submitted;
+    }
+
+    void mark_writer_submitted() noexcept {
+        if (writer_ != writer_state::not_submitted) {
+            std::terminate();
+        }
+        writer_ = writer_state::submitted;
+    }
+
+    void mark_writer_launch_failed() noexcept {
+        if (writer_ == writer_state::submitted) {
+            writer_ = writer_state::not_submitted;
+        }
     }
 
     void markWriteFailed() noexcept {
@@ -58,11 +69,10 @@ public:
     }
 
     void markWriterDone() noexcept {
-        if (phase_ == Http2SansIoSessionPhase::kStopping) {
-            phase_ = Http2SansIoSessionPhase::kWriterDone;
-        } else if (phase_ == Http2SansIoSessionPhase::kStoppingAfterWriteFailure) {
-            phase_ = Http2SansIoSessionPhase::kWriterDoneAfterWriteFailure;
+        if (writer_ != writer_state::submitted) {
+            std::terminate();
         }
+        writer_ = writer_state::completed;
     }
 
     void recordWriterFailure(std::exception_ptr failure) noexcept {
@@ -78,6 +88,10 @@ public:
     }
 
 private:
+    enum class writer_state : std::uint8_t { not_submitted,
+        submitted,
+        completed };
+    writer_state writer_{writer_state::not_submitted};
     Http2SansIoSessionPhase phase_{Http2SansIoSessionPhase::kRunning};
     std::exception_ptr writerFailure_;
 };
