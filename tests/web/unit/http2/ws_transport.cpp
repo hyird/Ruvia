@@ -73,7 +73,7 @@ RUVIA_TEST(http2_websocket_transport_abort_wakes_budget_waiter) {
     (void)connection.consumeOutput(connection.pendingOutput().size());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2DataOutputBudget budget(worker);

@@ -351,8 +351,13 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         ruvia::makeWebSocketServerHandshake(request, {.supportedSubprotocols = supportedViews});
     supported.front() = 'X';
 
+    std::vector<std::string_view> response_parts;
+    handshake.forEachResponsePart(
+        [&response_parts](std::string_view part) { response_parts.push_back(part); });
     std::string response;
-    handshake.forEachResponsePart([&response](std::string_view part) { response.append(part); });
+    for (const auto part : response_parts) {
+        response.append(part);
+    }
     RUVIA_CHECK_EQ(response, std::string("HTTP/1.1 101 Switching Protocols\r\n"
                                          "Upgrade: websocket\r\n"
                                          "Connection: Upgrade\r\n"

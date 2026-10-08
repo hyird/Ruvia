@@ -83,7 +83,7 @@ public:
         : owner_(owner),
           state_(state),
           runtimeResource_(detail::appResource()),
-          signal_runtime_({.mailbox_capacity = 128}),
+          signal_runtime_({.queue_capacity = 128}),
           signals_(signal_runtime_.context().ioContext()) {
         signal_runtime_.configure({
             .stop_admission = [this] {

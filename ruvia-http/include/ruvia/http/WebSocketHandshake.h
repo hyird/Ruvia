@@ -143,10 +143,9 @@ public:
             visitor(std::string_view(subprotocol_));
             visitor(kCrlf);
         }
-        const auto extension = detail::webSocketCompressionExtension(compression_);
-        if (!extension.empty()) {
+        if (!compression_extension_.empty()) {
             visitor(kExtensionsHeaderPrefix);
-            visitor(extension.view());
+            visitor(compression_extension_.view());
             visitor(kCrlf);
         }
         for (const auto& header : responseHeaders_) {
@@ -198,11 +197,13 @@ private:
         : accept_(accept),
           subprotocol_(std::move(subprotocol)),
           compression_(compression),
+          compression_extension_(compression),
           responseHeaders_(std::move(responseHeaders)) {}
 
     std::array<char, 28> accept_;
     std::pmr::string subprotocol_;
     WebSocketCompression compression_;
+    detail::WebSocketCompressionExtension compression_extension_;
     std::pmr::vector<HttpHeader> responseHeaders_;
 };
 

@@ -11,7 +11,7 @@ namespace ruvia {
 
 struct EventLoopPoolOptions final {
     std::size_t loopCount{0};
-    std::size_t mailboxCapacity{1024};
+    std::size_t queue_capacity{1024};
 };
 
 class EventLoopPool final {

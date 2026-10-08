@@ -137,7 +137,7 @@ public:
     template <typename Pool>
     friend class DbSlotCancellationGuard;
     friend class db_pool_lifecycle<MariaDbPool>;
-    friend class WorkerCancellationMailbox<MariaDbPool>;
+    friend class worker_cancellation_target<MariaDbPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -228,7 +228,7 @@ private:
     const WorkerHandle& worker_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
-    std::shared_ptr<DbOperationCancellationMailbox<MariaDbPool>> cancellationMailbox_;
+    std::shared_ptr<db_cancellation_target<MariaDbPool>> cancellation_target_;
     db_pool_lifecycle<MariaDbPool> lifecycle_{*this};
 };
 
@@ -297,7 +297,7 @@ private:
     template <typename Pool>
     friend class DbSlotCancellationGuard;
     friend class db_pool_lifecycle<PostgreSqlPool>;
-    friend class WorkerCancellationMailbox<PostgreSqlPool>;
+    friend class worker_cancellation_target<PostgreSqlPool>;
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
@@ -382,7 +382,7 @@ private:
     const WorkerHandle& worker_;
     std::pmr::vector<ConnectionSlot> slots_;
     PoolLeaseScheduler scheduler_;
-    std::shared_ptr<DbOperationCancellationMailbox<PostgreSqlPool>> cancellationMailbox_;
+    std::shared_ptr<db_cancellation_target<PostgreSqlPool>> cancellation_target_;
     db_pool_lifecycle<PostgreSqlPool> lifecycle_{*this};
 };
 

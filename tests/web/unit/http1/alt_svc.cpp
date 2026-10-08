@@ -249,7 +249,7 @@ ruvia::Task<void> emitStreamingRoute(tcp::socket& socket, const ruvia::detail::R
 ruvia::Task<void> emitWebSocketRoute(tcp::socket& socket,
     const ruvia::detail::RouteTable& routes, std::string_view version) {
     auto attachment = ruvia::attachEventLoop(
-        static_cast<asio::io_context&>(socket.get_executor().context()), {.mailboxCapacity = 64});
+        static_cast<asio::io_context&>(socket.get_executor().context()), {.queue_capacity = 64});
     const auto workerHandle = attachment.loop().handle();
     ruvia::StopToken stopToken;
     const auto services = ruvia::detail::ContextServices(workerHandle, stopToken)

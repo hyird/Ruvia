@@ -1,0 +1,134 @@
+#include "ruvia/web/detail/http3/http3_worker.h"
+
+#include <stdexcept>
+#include <utility>
+
+#include "ruvia/web/detail/http3/http3_capacity.h"
+
+namespace ruvia::detail {
+
+http3_worker::http3_worker(WorkerRuntimeContext& runtime, WorkerMemory& memory,
+    const RouteTable& routes, WorkerCapabilities& capabilities,
+    ConnectionScanner& scanner, const HttpServerOptions& options,
+    const StopToken& stop_token, const HttpServerListenerDefinition::Tls& tls,
+    Http3ListenConfig config, std::atomic<std::size_t>& active_connections,
+    std::atomic<std::size_t>& refused_connections,
+    http3_worker_runtime::failure_notification failure)
+    : runtime_(runtime),
+      memory_(memory),
+      options_(options),
+      stop_token_(stop_token),
+      tls_(tls),
+      config_(config),
+      failure_(failure),
+      server_(runtime.handle(), memory, routes, capabilities, scanner,
+          runtime.ioContext().get_executor(), options, stop_token,
+          options.maxConnections.value(), normalize_http3_capacity(config, 1).stream_slots,
+          active_connections, refused_connections),
+      transport_(nullptr, PmrObjectDeleter<http3_worker_runtime>{memory.resource()}),
+      tasks_(runtime.handle(), {.resource = memory.resource()}) {}
+
+http3_worker::~http3_worker() {
+    if (transport_ || staged_channel_.load(std::memory_order_acquire)) {
+        std::terminate();
+    }
+}
+
+void http3_worker::stage(http3_datagram_channel& channel,
+    asio::ip::udp::endpoint endpoint, quic_cid_partition partition) {
+    if (staged_channel_.load(std::memory_order_acquire) != nullptr) {
+        throw std::logic_error("HTTP/3 worker already has a staged channel");
+    }
+    channel.stage_worker(runtime_);
+    endpoint_ = std::move(endpoint);
+    partition_ = partition;
+    staged_channel_.store(&channel, std::memory_order_release);
+    // The second check closes the stop-before-publication race.
+    if (abandoned_.load(std::memory_order_acquire)) {
+        abandon_before_launch();
+    }
+}
+
+void http3_worker::abandon_before_launch() noexcept {
+    abandoned_.store(true, std::memory_order_release);
+    if (auto* channel = staged_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
+        channel->abandon_worker();
+    }
+}
+
+void http3_worker::start() {
+    if (!runtime_.handle().isCurrent() || started_) {
+        throw std::logic_error("HTTP/3 component must start once on its owner");
+    }
+    started_ = true;
+    struct cold_channel_owner final {
+        http3_datagram_channel* channel;
+        ~cold_channel_owner() {
+            if (channel) {
+                channel->abandon_worker();
+            }
+        }
+    } cold{staged_channel_.exchange(nullptr, std::memory_order_acq_rel)};
+    try {
+        if (!cold.channel) {
+            throw std::logic_error("HTTP/3 worker has no staged acceptor channel");
+        }
+        transport_ = makePmrObject<http3_worker_runtime>(memory_.resource(), runtime_,
+            endpoint_, tls_, config_, http3_worker_runtime::worker_target{.server = &server_, .max_connections = options_.maxConnections.value(), .buffer_capacity = normalize_http3_capacity(config_, 1).stream_slots, .max_requests_per_connection = options_.maxRequestsPerConnection.value(), .idle_timeout = options_.idleTimeout, .request_header_timeout = options_.requestHeaderTimeout, .request_body_timeout = options_.requestBodyTimeout, .write_timeout = options_.writeTimeout},
+            *cold.channel, partition_, failure_);
+        cold.channel = nullptr;
+        transport_->stage();
+        if (!server_.install()) {
+            throw std::runtime_error("failed to install HTTP/3 worker bridge");
+        }
+        tasks_.spawn(server_.run());
+        if (!stop_token_.stopRequested()) {
+            transport_->start();
+        } else {
+            transport_->stop();
+        }
+        tasks_.spawn(transport_->run_datagrams());
+    } catch (...) {
+        stop();
+        throw;
+    }
+}
+
+void http3_worker::stop() noexcept {
+    if (!runtime_.handle().isCurrent()) {
+        std::terminate();
+    }
+    if (server_.run_started()) {
+        server_.request_stop();
+    } else {
+        server_.abandon_before_launch();
+    }
+    if (transport_) {
+        if (transport_->runner_started()) {
+            transport_->stop();
+        } else {
+            transport_->abandon_before_launch();
+        }
+    } else {
+        abandon_before_launch();
+    }
+}
+
+Task<void> http3_worker::join() {
+    std::exception_ptr failure;
+    try {
+        co_await tasks_.join();
+    } catch (...) {
+        failure = std::current_exception();
+        stop();
+    }
+    if (transport_) {
+        co_await transport_->join();
+        transport_.reset();
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+}  // namespace ruvia::detail

@@ -222,7 +222,7 @@ RUVIA_TEST(http2_send_window_wait_rejects_missing_stream_or_signal) {
 
 RUVIA_TEST(http2_stream_sleep_reports_elapsed_result) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     Http2SansIoTermination termination;
     std::optional<ruvia::TimerSleepResult> observed;
@@ -246,7 +246,7 @@ RUVIA_TEST(http2_stream_sleep_reports_elapsed_result) {
 
 RUVIA_TEST(http2_worker_shutdown_reports_typed_sleep_result) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     Http2SansIoTermination termination;
     std::optional<ruvia::TimerSleepResult> observed;
@@ -271,7 +271,7 @@ RUVIA_TEST(http2_worker_shutdown_reports_typed_sleep_result) {
 
 RUVIA_TEST(http2_stream_sleep_observes_request_stop_token) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     Http2SansIoTermination termination;
     ruvia::StopSource source;
@@ -298,7 +298,7 @@ RUVIA_TEST(http2_stream_sleep_observes_request_stop_token) {
 
 RUVIA_TEST(http2_stream_sleep_transfers_off_worker_stop_to_timer) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     Http2SansIoTermination termination;
     ruvia::StopSource source;
@@ -327,7 +327,7 @@ RUVIA_TEST(http2_stream_sleep_transfers_off_worker_stop_to_timer) {
 
 RUVIA_TEST(http2_session_termination_cancels_stream_sleep_with_exact_error) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     Http2SansIoTermination termination;
     std::error_code observed;
@@ -362,7 +362,7 @@ RUVIA_TEST(http2_stream_head_failure_aborts_precommit_state) {
     [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2SansIoTermination termination;
@@ -428,7 +428,7 @@ RUVIA_TEST(http2_response_stream_empty_end_is_idempotent_after_late_termination)
     [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2SansIoTermination termination;
@@ -577,7 +577,7 @@ RUVIA_TEST(http2_web_body_queue_holds_data_credit_until_consumption_and_releases
         RUVIA_CHECK(connection.feed(std::string_view(frame.data(), frame.size())) ==
                     ruvia::Http2FeedResult::kAccepted);
         asio::io_context& io = ruvia::test::newTestIoContext();
-        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+        auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
         const auto worker = attachment.loop().handle();
         bool exceptionPathRan = false;
         {
@@ -806,7 +806,7 @@ RUVIA_TEST(http2_websocket_transport_empty_end_completes_with_zero_send_window) 
     RUVIA_CHECK(!connection.hasQueuedData(1));
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2SansIoTermination termination;
@@ -875,7 +875,7 @@ RUVIA_TEST(http2_websocket_transport_abort_remains_noexcept_when_reset_output_al
     (void)connection.consumeOutput(connection.pendingOutput().size());
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2SansIoTermination termination;
@@ -938,7 +938,7 @@ RUVIA_TEST(http2_buffered_response_writer_reports_failure_when_reset_output_allo
     [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
 
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerSignal writeSignal(worker);
     ruvia::detail::Http2SansIoTermination termination;
@@ -1003,7 +1003,7 @@ RUVIA_TEST(http2BufferedResponseWriterSendsMultipartFileSlicesAndEndsStream) {
         [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
 
         asio::io_context& io = ruvia::test::newTestIoContext();
-        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+        auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
         const auto workerHandle = attachment.loop().handle();
         ruvia::WorkerSignal writeSignal(workerHandle);
         Http2SansIoTermination termination;
@@ -1095,7 +1095,7 @@ RUVIA_TEST(http2BufferedResponseWriterFailsClosedOnMultipartFileIdentityMismatch
         handshake(connection);
         [[maybe_unused]] auto requestLease = driveGetRequest(connection, &resource);
         asio::io_context& io = ruvia::test::newTestIoContext();
-        auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+        auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
         const auto workerHandle = attachment.loop().handle();
         ruvia::WorkerSignal writeSignal(workerHandle);
         Http2SansIoTermination termination;
@@ -1273,7 +1273,7 @@ RUVIA_TEST(http2_data_output_batch_observes_only_successfully_taken_data_frames)
 
 RUVIA_TEST(http2_data_output_budget_caps_slots_and_waits_for_core_drain) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::Http2Connection connection = ruvia::Http2Connection::server();
     Http2SansIoTermination termination;
@@ -1414,7 +1414,7 @@ RUVIA_TEST(http2_data_output_budget_caps_slots_and_waits_for_core_drain) {
 
 RUVIA_TEST(http2_data_output_budget_reconciles_discarded_queued_data_without_socket_output) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     auto connection = ruvia::Http2Connection::client();
     (void)connection.consumeOutput(connection.pendingOutput().size());
@@ -1484,7 +1484,7 @@ RUVIA_TEST(http2_data_output_budget_reconciles_discarded_queued_data_without_soc
 
 RUVIA_TEST(http2_data_output_budget_recovers_after_peer_reset_without_reusing_pending_output) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     auto connection = ruvia::Http2Connection::client();
     (void)connection.consumeOutput(connection.pendingOutput().size());
@@ -1633,7 +1633,7 @@ RUVIA_TEST(http2_websocket_tunnel_count_follows_stream_runtime_lifetime) {
 
 RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoTermination termination;
@@ -1684,7 +1684,7 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
 
 RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoTermination termination;
@@ -1722,7 +1722,7 @@ RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel)
 
 RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     asio::io_context& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoTermination termination;

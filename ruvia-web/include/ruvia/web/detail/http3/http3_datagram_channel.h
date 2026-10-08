@@ -15,6 +15,7 @@
 #include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/channel_lifecycle.h"
 #include "ruvia/core/spsc_ring_queue.h"
+#include "ruvia/web/detail/http3/http3_capacity.h"
 
 namespace ruvia::detail {
 
@@ -33,9 +34,9 @@ namespace ruvia::detail {
 class http3_datagram_channel final {
 public:
     using udp = asio::ip::udp;
-    static constexpr std::size_t packet_capacity = 65536;
-    static constexpr std::size_t default_input_capacity = 64;
-    static constexpr std::size_t default_output_window = 16;
+    static constexpr std::size_t packet_capacity = http3_capacity::packet_bytes;
+    static constexpr std::size_t default_input_capacity = Http3ListenConfig{}.datagram_input_capacity;
+    static constexpr std::size_t default_output_window = Http3ListenConfig{}.datagram_output_capacity;
 
     struct datagram_view final {
         std::span<const std::byte> bytes;

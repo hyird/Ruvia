@@ -139,7 +139,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     }
     auto state = std::make_shared<startup_state>();
     auto& app = ruvia::app();
-    app.server({.workerCount = 2, .workerMailboxCapacity = 16, .maxConnectionsPerWorker = 4})
+    app.server({.workerCount = 2, .worker_queue_capacity = 16, .maxConnectionsPerWorker = 4})
         .blockingPool(nullptr)
         .useWorkerState<worker_state>([state] { return state; });
     app.onStart([state, &app] {
@@ -215,7 +215,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto tls_endpoint = tls_reservation.local_endpoint();
         reservation.close();
         tls_reservation.close();
-        app.listen({.address = "127.0.0.1", .http = endpoint.port(), .https = tls_endpoint.port(), .tls = {.certificateChainFile = identity.ca_file, .privateKeyFile = private_key}, .http3 = {.mode = ruvia::Http3Mode::kEnabled}});
+        app.listen({.address = "127.0.0.1", .http = endpoint.port(), .https = tls_endpoint.port(), .tls = {.certificateChainFile = identity.ca_file, .privateKeyFile = private_key}, .http3 = {.mode = ruvia::Http3Mode::kEnabled, .stream_buffer_capacity = 3, .datagram_input_capacity = 5, .datagram_output_capacity = 2}});
         app_run run(app, *state);
         const auto owner_thread = run.id();
         const bool entered = state->hook_entered.try_acquire_for(3s);

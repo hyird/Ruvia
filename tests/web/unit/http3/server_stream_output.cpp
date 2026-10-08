@@ -48,7 +48,7 @@ namespace {
 
 using namespace ruvia::detail;
 using Output = Http3ServerStreamOutput;
-using Mailbox = http3_stream_buffer;
+using buffer = http3_stream_buffer;
 using BorrowedBlock = http3_stream_buffer::borrowed_block;
 
 inline constexpr std::uint64_t kEpoch = 17;
@@ -315,30 +315,30 @@ private:
     return {.epoch = epoch, .connection_generation = generation, .stream_id = streamId};
 }
 
-[[nodiscard]] BorrowedBlock enqueueBlock(Mailbox& mailbox, http3_stream_id id,
+[[nodiscard]] BorrowedBlock enqueueBlock(buffer& buffer, http3_stream_id id,
     std::span<const char> bytes) {
     const auto input = std::as_bytes(bytes);
-    const auto sent = mailbox.try_send(id, input);
-    if (sent != Mailbox::send_result::sent) {
+    const auto sent = buffer.try_send(id, input);
+    if (sent != buffer::send_result::sent) {
         throw std::runtime_error("failed to enqueue HTTP/3 test block");
     }
     BorrowedBlock block;
-    if (!mailbox.try_receive(block)) {
+    if (!buffer.try_receive(block)) {
         throw std::runtime_error("failed to receive HTTP/3 test block");
     }
     return block;
 }
 
-[[nodiscard]] std::size_t available_blocks(Mailbox& buffer) {
+[[nodiscard]] std::size_t available_blocks(buffer& buffer) {
     std::vector<BorrowedBlock> retained;
     retained.reserve(buffer.block_capacity());
     const std::array<std::byte, 1> bytes{std::byte{0}};
     while (true) {
         const auto result = buffer.try_send(messageId(0), bytes);
-        if (result == Mailbox::send_result::no_block) {
+        if (result == buffer::send_result::no_block) {
             return retained.size();
         }
-        if (result != Mailbox::send_result::sent) {
+        if (result != buffer::send_result::sent) {
             throw std::runtime_error("buffer credit probe could not publish");
         }
         BorrowedBlock block;
@@ -460,7 +460,7 @@ struct PatternSupply final {
     std::size_t lastSize{};
 };
 
-[[nodiscard]] bool offerPatternBlock(Output& output, Mailbox& mailbox, std::uint64_t streamId,
+[[nodiscard]] bool offerPatternBlock(Output& output, buffer& buffer, std::uint64_t streamId,
     PatternSupply& supply, std::uint64_t limit) {
     if (supply.bytes >= limit || output.queuedBlockCount() >= 2) {
         return false;
@@ -469,11 +469,11 @@ struct PatternSupply final {
     if (info && info->queuedBlocks != 0) {
         return false;
     }
-    std::array<char, Mailbox::max_block_bytes> bytes{};
+    std::array<char, buffer::max_block_bytes> bytes{};
     const auto size = static_cast<std::size_t>(
         std::min<std::uint64_t>(bytes.size(), limit - supply.bytes));
     fillPattern(std::span<char>(bytes.data(), size), supply.bytes);
-    auto block = enqueueBlock(mailbox, messageId(streamId), std::span<const char>(bytes.data(), size));
+    auto block = enqueueBlock(buffer, messageId(streamId), std::span<const char>(bytes.data(), size));
     supply.lastAddress = reinterpret_cast<const char*>(block.bytes().data());
     supply.lastSize = block.bytes().size();
     const auto accepted = output.acceptData(block);
@@ -499,19 +499,19 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
     const auto secondWire = encodeResponse("second response", std::pmr::get_default_resource());
 
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(8, 8, 8);
+    buffer buffer(8, 8, 8);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 8, .maxQueuedBlocks = 8, .maxDriveWorkItems = 1});
 
-    auto foreign = enqueueBlock(mailbox, messageId(firstId, kEpoch + 1), firstWire);
+    auto foreign = enqueueBlock(buffer, messageId(firstId, kEpoch + 1), firstWire);
     RUVIA_CHECK(output.acceptData(foreign).status == Output::Status::kForeignEpoch);
     RUVIA_CHECK(foreign);
     foreign.release();
     RUVIA_CHECK_EQ(output.trackedStreamCount(), std::size_t{0});
     RUVIA_CHECK(pair.server().info().state != ruvia::quic_connection_state::retired);
 
-    auto firstBlock = enqueueBlock(mailbox, messageId(firstId), firstWire);
-    auto secondBlock = enqueueBlock(mailbox, messageId(secondId), secondWire);
+    auto firstBlock = enqueueBlock(buffer, messageId(firstId), firstWire);
+    auto secondBlock = enqueueBlock(buffer, messageId(secondId), secondWire);
     const http3_stream_control firstFin{.kind = http3_stream_control::kind::stream_fin,
         .id = messageId(firstId),
         .value = firstWire.size()};
@@ -566,7 +566,7 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
         (void)output.drive();
     }
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     const auto firstInfo = output.streamInfo(firstId);
     const auto secondInfo = output.streamInfo(secondId);
     RUVIA_CHECK(firstInfo && firstInfo->state == Output::StreamState::kFinished);
@@ -593,7 +593,7 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
     RUVIA_CHECK(conflict.status == Output::Status::kFinalSizeError);
     RUVIA_CHECK(output.connectionRetired());
     RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -688,10 +688,10 @@ RUVIA_TEST(http3ServerStreamOutputKeepsReceiveHalfOpenAfterResponseFin) {
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(4, 4, 4);
+    buffer buffer(4, 4, 4);
     Output output(pair.server(), worker, kEpoch, kGeneration);
     const auto responseWire = encodeResponse("response before request end", worker.resource());
-    auto block = enqueueBlock(mailbox, messageId(streamId), responseWire);
+    auto block = enqueueBlock(buffer, messageId(streamId), responseWire);
     RUVIA_CHECK(output.acceptData(block).status == Output::Status::kAccepted);
     RUVIA_CHECK(!block);
     RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
@@ -741,7 +741,7 @@ RUVIA_TEST(http3ServerStreamOutputKeepsReceiveHalfOpenAfterResponseFin) {
     const auto repeated = output.drive();
     RUVIA_CHECK_EQ(repeated.finishedStreams, std::size_t{0});
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -969,7 +969,7 @@ RUVIA_TEST(http3_peer_response_cancel_releases_only_its_blocks_and_preserves_sib
         }
         RUVIA_CHECK(request_finished);
     }
-    Mailbox buffer(4, 2, 2);
+    buffer buffer(4, 2, 2);
     ruvia::WorkerMemory worker;
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 4, .maxQueuedBlocks = 2});
@@ -1036,15 +1036,15 @@ RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(4, 4, 4);
+        buffer buffer(4, 4, 4);
         {
             Output output(pair.server(), worker, kEpoch, kGeneration,
                 {.maxTrackedStreams = 4, .maxQueuedBlocks = 1, .maxDriveWorkItems = 2});
             constexpr std::array<char, 4> bytes{'d', 'a', 't', 'a'};
-            auto queued = enqueueBlock(mailbox, messageId(firstId), bytes);
+            auto queued = enqueueBlock(buffer, messageId(firstId), bytes);
             RUVIA_CHECK(output.acceptData(queued).status == Output::Status::kAccepted);
             RUVIA_CHECK(!queued);
-            auto backpressured = enqueueBlock(mailbox, messageId(firstId), bytes);
+            auto backpressured = enqueueBlock(buffer, messageId(firstId), bytes);
             RUVIA_CHECK(output.acceptData(backpressured).status == Output::Status::kBackpressured);
             RUVIA_CHECK(backpressured);
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
@@ -1056,20 +1056,20 @@ RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
             RUVIA_CHECK(!output.streamInfo(firstId)->queuedBlocks);
             RUVIA_CHECK(backpressured);
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount() - 1);
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount() - 1);
             backpressured.release();
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
-            auto stopBlock = enqueueBlock(mailbox, messageId(secondId), bytes);
+            auto stopBlock = enqueueBlock(buffer, messageId(secondId), bytes);
             RUVIA_CHECK(output.acceptData(stopBlock).status == Output::Status::kAccepted);
             RUVIA_CHECK(!stopBlock);
             RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
             RUVIA_CHECK(output.stopped());
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
             RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
         }
-        RUVIA_CHECK(mailbox.stop());
+        RUVIA_CHECK(buffer.stop());
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.deallocations);
 #endif
@@ -1086,7 +1086,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(4, 4, 4);
+        buffer buffer(4, 4, 4);
         {
             constexpr auto writeTimeout = std::chrono::milliseconds(100);
             Output output(pair.server(), worker, kEpoch, kGeneration,
@@ -1104,7 +1104,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
                                        supply.bytes < maxBytes;
                 ++step) {
                 if (output.queuedBlockCount() == 0) {
-                    (void)offerPatternBlock(output, mailbox, blockedId, supply, maxBytes);
+                    (void)offerPatternBlock(output, buffer, blockedId, supply, maxBytes);
                 }
                 const auto turn = output.drive();
                 wouldBlock = turn.wouldBlockWrites != 0 && turn.lastStreamId == blockedId;
@@ -1118,7 +1118,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK_EQ(output.liveStreamCount(), std::size_t{1});
             RUVIA_CHECK_EQ(output.pendingStreamCount(), std::size_t{1});
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
             // The WANT retry still borrows the exact queued block; no replacement or
             // return is allowed before stream cancellation retires its SSL wrapper.
@@ -1140,7 +1140,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK(afterRetry.has_value());
             RUVIA_CHECK(afterRetry && afterRetry->acceptedWireBytes == acceptedBeforeRetry);
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
             std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
             std::size_t timedOut{};
@@ -1151,7 +1151,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             const auto timedOutInfo = output.streamInfo(blockedId);
             RUVIA_CHECK(timedOutInfo && timedOutInfo->state == Output::StreamState::kCancelled);
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
             RUVIA_CHECK(!output.connectionRetired());
             RUVIA_CHECK(pair.server().info().state != ruvia::quic_connection_state::retired);
 
@@ -1171,7 +1171,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
 
             const auto siblingWire = encodeResponse("sibling survives timeout", worker.resource());
             auto siblingBlock = enqueueBlock(
-                mailbox, messageId(siblingId), siblingWire);
+                buffer, messageId(siblingId), siblingWire);
             RUVIA_CHECK(output.acceptData(siblingBlock).status == Output::Status::kAccepted);
             RUVIA_CHECK(!siblingBlock);
             RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
@@ -1180,14 +1180,14 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
                             .status == Output::Status::kFinDeferred);
 
             const auto lateDataBytes = std::as_bytes(std::span<const char>("late", 4));
-            const auto lateSent = mailbox.try_send(messageId(blockedId), lateDataBytes);
-            RUVIA_CHECK(lateSent == Mailbox::send_result::sent);
+            const auto lateSent = buffer.try_send(messageId(blockedId), lateDataBytes);
+            RUVIA_CHECK(lateSent == buffer::send_result::sent);
             BorrowedBlock lateBlock;
-            RUVIA_CHECK(mailbox.try_receive(lateBlock));
+            RUVIA_CHECK(buffer.try_receive(lateBlock));
             RUVIA_CHECK(output.acceptData(lateBlock).status == Output::Status::kClosedStream);
             RUVIA_CHECK(lateBlock);
             lateBlock.release();
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
             RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
                                                  .id = messageId(blockedId),
                                                  .value = supply.bytes})
@@ -1222,7 +1222,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK_EQ(output.liveStreamCount(), std::size_t{0});
             RUVIA_CHECK_EQ(output.pendingStreamCount(), std::size_t{0});
             RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-            RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+            RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
 
             const auto freshId = pair.openRequestStream();
             std::this_thread::sleep_for(writeTimeout + std::chrono::milliseconds(10));
@@ -1232,7 +1232,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             // An idle, unregistered stream must not inherit the old stream's deadline.
             RUVIA_CHECK(!output.streamInfo(freshId));
             const auto freshWire = encodeResponse("fresh write gets a fresh deadline", worker.resource());
-            auto freshBlock = enqueueBlock(mailbox, messageId(freshId), freshWire);
+            auto freshBlock = enqueueBlock(buffer, messageId(freshId), freshWire);
             RUVIA_CHECK(output.acceptData(freshBlock).status == Output::Status::kAccepted);
             RUVIA_CHECK(!freshBlock);
             RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kOpen);
@@ -1260,7 +1260,7 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
             RUVIA_CHECK(output.streamInfo(freshId)->state == Output::StreamState::kFinished);
             RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
         }
-        RUVIA_CHECK(mailbox.stop());
+        RUVIA_CHECK(buffer.stop());
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.deallocations);
 #endif
@@ -1275,12 +1275,12 @@ RUVIA_TEST(http3ServerStreamOutputKeepsSiblingAliveAfterExternalStreamClose) {
     const auto closedId = pair.openRequestStream();
     const auto siblingId = pair.openRequestStream();
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(4, 4, 4);
+    buffer buffer(4, 4, 4);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 4, .maxQueuedBlocks = 2, .maxDriveWorkItems = 1});
     constexpr std::array<char, 4> bytes{'d', 'a', 't', 'a'};
 
-    auto closedBlock = enqueueBlock(mailbox, messageId(closedId), bytes);
+    auto closedBlock = enqueueBlock(buffer, messageId(closedId), bytes);
     RUVIA_CHECK(output.acceptData(closedBlock).status == Output::Status::kAccepted);
     RUVIA_CHECK(!closedBlock);
     RUVIA_CHECK(pair.server().close_stream(closedId) ==
@@ -1289,10 +1289,10 @@ RUVIA_TEST(http3ServerStreamOutputKeepsSiblingAliveAfterExternalStreamClose) {
     RUVIA_CHECK(cancelled.status == Output::Status::kCancelled);
     RUVIA_CHECK(cancelled.termination.close == ruvia::quic_operation_status::retired);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(pair.server().info().state != ruvia::quic_connection_state::retired);
 
-    auto siblingBlock = enqueueBlock(mailbox, messageId(siblingId), bytes);
+    auto siblingBlock = enqueueBlock(buffer, messageId(siblingId), bytes);
     RUVIA_CHECK(output.acceptData(siblingBlock).status == Output::Status::kAccepted);
     RUVIA_CHECK(!siblingBlock);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -1308,9 +1308,9 @@ RUVIA_TEST(http3ServerStreamOutputKeepsSiblingAliveAfterExternalStreamClose) {
     RUVIA_CHECK(!output.connectionRetired());
     RUVIA_CHECK(output.cancelStream(siblingId).status == Output::Status::kCancelled);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -1323,7 +1323,7 @@ RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafe
     const auto firstId = pair.openRequestStream();
     const auto secondId = pair.openRequestStream();
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(2, 2, 4);
+    buffer buffer(2, 2, 4);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 4, .maxQueuedBlocks = 2, .maxDriveWorkItems = 1});
     constexpr std::uint64_t kMaxSuppliedBytes = 64U * 1024U * 1024U;
@@ -1338,7 +1338,7 @@ RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafe
     while (steps < kMaxSteps && std::chrono::steady_clock::now() < deadline &&
            !firstWouldBlock && firstSupply.bytes < kMaxSuppliedBytes) {
         if (output.queuedBlockCount() == 0) {
-            (void)offerPatternBlock(output, mailbox, firstId, firstSupply, kMaxSuppliedBytes);
+            (void)offerPatternBlock(output, buffer, firstId, firstSupply, kMaxSuppliedBytes);
         }
         const auto turn = output.drive();
         firstWouldBlock = turn.wouldBlockWrites != 0 && turn.lastStreamId == firstId;
@@ -1353,7 +1353,7 @@ RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafe
            firstWouldBlock && !secondWouldBlock &&
            firstSupply.bytes + secondSupply.bytes < kMaxSuppliedBytes) {
         if (output.queuedBlockCount() < 2) {
-            (void)offerPatternBlock(output, mailbox, secondId, secondSupply,
+            (void)offerPatternBlock(output, buffer, secondId, secondSupply,
                 kMaxSuppliedBytes - firstSupply.bytes);
         }
         const auto turn = output.drive();
@@ -1440,20 +1440,20 @@ RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafe
     RUVIA_CHECK_EQ(idle.operations, std::size_t{0});
     RUVIA_CHECK(!idle.needsReschedule);
 
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.cancelStream(firstId).status == Output::Status::kCancelled);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.cancelStream(secondId).status == Output::Status::kCancelled);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(!output.connectionRetired());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
-RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
+RUVIA_TEST(http3_server_stream_output_sparse_capacity_resumes_pressure_and_fresh_responses) {
 #if OPENSSL_VERSION_NUMBER < 0x30600000L
     RUVIA_CHECK(true);
 #else
@@ -1461,9 +1461,9 @@ RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
     pair.connect();
     const auto streamId = pair.openRequestStream();
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(2, 2, 4);
+    buffer buffer(2, 2, 4);
     Output output(pair.server(), worker, kEpoch, kGeneration,
-        {.maxTrackedStreams = 2, .maxQueuedBlocks = 1, .maxDriveWorkItems = 1});
+        {.maxTrackedStreams = 1024, .maxQueuedBlocks = 2, .maxDriveWorkItems = 1});
     constexpr std::uint64_t kMaxSuppliedBytes = 64U * 1024U * 1024U;
     constexpr std::size_t kMaxSteps = 8192;
     const auto blockedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -1477,7 +1477,7 @@ RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
                                supply.bytes < kMaxSuppliedBytes;
         ++step) {
         if (output.queuedBlockCount() == 0) {
-            (void)offerPatternBlock(output, mailbox, streamId, supply, kMaxSuppliedBytes);
+            (void)offerPatternBlock(output, buffer, streamId, supply, kMaxSuppliedBytes);
         }
         const auto turn = output.drive();
         sawWouldBlock = turn.wouldBlockWrites != 0 && turn.lastStreamId == streamId;
@@ -1489,7 +1489,7 @@ RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
     RUVIA_CHECK(sawWouldBlock);
     RUVIA_CHECK(supply.lastAddress != nullptr && supply.lastSize != 0);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{1});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     const auto blockedInfo = output.streamInfo(streamId);
     RUVIA_CHECK(blockedInfo && blockedInfo->lastWriteStatus == ruvia::quic_operation_status::would_block);
 
@@ -1497,6 +1497,21 @@ RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
         .id = messageId(streamId),
         .value = supply.bytes});
     RUVIA_CHECK(fin.status == Output::Status::kFinDeferred);
+    // Replay neither the same transport edge nor blocked writes while draining
+    // local continuations. A fresh packet/credit edge below resumes output.
+    output.notifyTransportActivity();
+    auto parked_turn = output.drive();
+    for (std::size_t turn = 0; parked_turn.needsReschedule && turn != 8; ++turn) {
+        parked_turn = output.drive();
+    }
+    RUVIA_CHECK(!parked_turn.madeProgress);
+    RUVIA_CHECK(!parked_turn.needsReschedule);
+    const auto parked_info = output.streamInfo(streamId);
+    RUVIA_CHECK(parked_info && blockedInfo &&
+                parked_info->acceptedWireBytes == blockedInfo->acceptedWireBytes);
+    const auto idle_turn = output.drive();
+    RUVIA_CHECK_EQ(idle_turn.writeCalls, std::size_t{0});
+    RUVIA_CHECK(!idle_turn.needsReschedule);
 
     ReceivedWire received;
     const auto recoveryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -1516,8 +1531,70 @@ RUVIA_TEST(http3ServerStreamOutputResumesWouldBlockAndDeliversExactBytes) {
     RUVIA_CHECK_EQ(received.bytes.size(), static_cast<std::size_t>(supply.bytes));
     RUVIA_CHECK(matchesPattern(received.bytes, 0));
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
+
+    auto idle = output.drive();
+    for (unsigned turn = 0; idle.needsReschedule && turn != 8; ++turn) {
+        idle = output.drive();
+    }
+    RUVIA_CHECK(!idle.needsReschedule);
+    RUVIA_CHECK_EQ(output.drive().operations, std::size_t{0});
+
+    const auto first_fresh = pair.openRequestStream();
+    const auto second_fresh = pair.openRequestStream();
+    const std::array<std::uint64_t, 2> fresh_ids{first_fresh, second_fresh};
+    const std::array<std::string_view, 2> fresh_bodies{"fresh after pressure", "fair sibling"};
+    const auto first_wire = encodeResponse(fresh_bodies[0], worker.resource());
+    const auto second_wire = encodeResponse(fresh_bodies[1], worker.resource());
+    const std::array<std::span<const char>, 2> fresh_wire{first_wire, second_wire};
+    output.notifyTransportActivity();
+    auto first_block = enqueueBlock(buffer, messageId(first_fresh), fresh_wire[0]);
+    RUVIA_CHECK(output.acceptData(first_block).status == Output::Status::kAccepted);
+    RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
+                                         .id = messageId(first_fresh),
+                                         .value = fresh_wire[0].size()})
+                    .status == Output::Status::kFinDeferred);
+    // Add the sibling between bounded turns, before the first fresh FIN retires.
+    auto first_turn = output.drive();
+    for (unsigned turn = 0; first_turn.writeCalls == 0 && turn != 4; ++turn) {
+        first_turn = output.drive();
+    }
+    RUVIA_CHECK_EQ(first_turn.writeCalls, std::size_t{1});
+    auto second_block = enqueueBlock(buffer, messageId(second_fresh), fresh_wire[1]);
+    RUVIA_CHECK(output.acceptData(second_block).status == Output::Status::kAccepted);
+    RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
+                                         .id = messageId(second_fresh),
+                                         .value = fresh_wire[1].size()})
+                    .status == Output::Status::kFinDeferred);
+    bool sibling_serviced{};
+    for (unsigned turn = 0; turn != 8 && !sibling_serviced; ++turn) {
+        const auto result = output.drive();
+        RUVIA_CHECK(result.operations <= 1);
+        sibling_serviced = result.writeCalls != 0 && result.lastStreamId == second_fresh;
+    }
+    RUVIA_CHECK(sibling_serviced);
+
+    std::array<ReceivedWire, 2> fresh_received;
+    const auto fresh_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while ((!fresh_received[0].fin || !fresh_received[1].fin) &&
+           std::chrono::steady_clock::now() < fresh_deadline) {
+        pair.pump();
+        output.notifyTransportActivity();
+        (void)output.drive();
+        for (std::size_t index = 0; index != fresh_ids.size(); ++index) {
+            readAvailable(pair, fresh_ids[index], fresh_received[index]);
+        }
+    }
+    for (std::size_t index = 0; index != fresh_ids.size(); ++index) {
+        RUVIA_CHECK(fresh_received[index].fin);
+        const auto decoded = decodeResponse(fresh_ids[index], fresh_received[index], worker.resource());
+        RUVIA_CHECK_EQ(decoded.status, std::uint16_t{200});
+        RUVIA_CHECK_EQ(decoded.body, fresh_bodies[index]);
+        RUVIA_CHECK_EQ(decoded.messageEnds, std::size_t{1});
+    }
+    RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -1530,16 +1607,16 @@ RUVIA_TEST(http3ServerStreamOutputClosesOnTrackingExhaustionAndRejectsInvalidIds
         pair.connect();
         const auto streamId = pair.openRequestStream();
         ruvia::WorkerMemory worker;
-        Mailbox mailbox(4, 4, 4);
+        buffer buffer(4, 4, 4);
         Output output(pair.server(), worker, kEpoch, kGeneration,
             {.maxTrackedStreams = 1, .maxQueuedBlocks = 2, .maxDriveWorkItems = 2});
         constexpr std::array<char, 2> bytes{'o', 'k'};
-        auto stale = enqueueBlock(mailbox, messageId(streamId, kEpoch, kGeneration + 1), bytes);
+        auto stale = enqueueBlock(buffer, messageId(streamId, kEpoch, kGeneration + 1), bytes);
         RUVIA_CHECK(output.acceptData(stale).status == Output::Status::kStaleConnection);
         RUVIA_CHECK(stale);
         stale.release();
 
-        auto accepted = enqueueBlock(mailbox, messageId(streamId), bytes);
+        auto accepted = enqueueBlock(buffer, messageId(streamId), bytes);
         RUVIA_CHECK(output.acceptData(accepted).status == Output::Status::kAccepted);
         RUVIA_CHECK(!accepted);
         const auto exhausted = output.acceptControl({.kind = http3_stream_control::kind::writable,
@@ -1547,9 +1624,9 @@ RUVIA_TEST(http3ServerStreamOutputClosesOnTrackingExhaustionAndRejectsInvalidIds
         RUVIA_CHECK(exhausted.status == Output::Status::kCapacityExhausted);
         RUVIA_CHECK(output.connectionRetired());
         RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-        RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+        RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
         RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
-        RUVIA_CHECK(mailbox.stop());
+        RUVIA_CHECK(buffer.stop());
     }
 
     {
@@ -1576,14 +1653,14 @@ RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndRetur
     const auto opened = pair.server().open_stream(true);
     RUVIA_CHECK(opened.status == ruvia::quic_operation_status::accepted);
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(1, 1, 1);
+    buffer buffer(1, 1, 1);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 3, .maxQueuedBlocks = 1, .maxDriveWorkItems = 2});
     constexpr std::array<char, 3> instructions{3, '\x80', 1};
-    const auto sent = mailbox.try_send_critical({kEpoch, kGeneration, ruvia::http3_critical_stream_output::stream_kind::qpack_decoder}, std::as_bytes(std::span(instructions)));
-    RUVIA_CHECK(sent == Mailbox::send_result::sent);
+    const auto sent = buffer.try_send_critical({kEpoch, kGeneration, ruvia::http3_critical_stream_output::stream_kind::qpack_decoder}, std::as_bytes(std::span(instructions)));
+    RUVIA_CHECK(sent == buffer::send_result::sent);
     BorrowedBlock block;
-    RUVIA_CHECK(mailbox.try_receive(block));
+    RUVIA_CHECK(buffer.try_receive(block));
     RUVIA_CHECK(block.critical() != nullptr);
     RUVIA_CHECK(output.acceptData(block).status == Output::Status::kInvalidInput);
     RUVIA_CHECK(block);
@@ -1607,9 +1684,9 @@ RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndRetur
     RUVIA_CHECK_EQ(wire.bytes, std::string(instructions.data(), instructions.size()));
     RUVIA_CHECK(!wire.fin);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -1625,7 +1702,7 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     RUVIA_CHECK(first.status == ruvia::quic_operation_status::accepted);
     RUVIA_CHECK(second.status == ruvia::quic_operation_status::accepted);
     ruvia::WorkerMemory worker;
-    Mailbox mailbox(3, 3, 3);
+    buffer buffer(3, 3, 3);
     Output output(pair.server(), worker, kEpoch, kGeneration,
         {.maxTrackedStreams = 3, .maxQueuedBlocks = 3, .maxDriveWorkItems = 4});
     RUVIA_CHECK(output.registerPushStream(parent, 0).status == Output::Status::kInvalidInput);
@@ -1637,8 +1714,8 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     auto secondId = messageId(second.stream_id);
     secondId.push_id = 1;
     constexpr std::array<char, 4> pushWire{1, 0, 'o', 'k'};
-    auto firstBlock = enqueueBlock(mailbox, firstId, pushWire);
-    auto cancelledBlock = enqueueBlock(mailbox, secondId, pushWire);
+    auto firstBlock = enqueueBlock(buffer, firstId, pushWire);
+    auto cancelledBlock = enqueueBlock(buffer, secondId, pushWire);
     RUVIA_CHECK(output.acceptData(firstBlock).status == Output::Status::kAccepted);
     RUVIA_CHECK(output.acceptData(cancelledBlock).status == Output::Status::kAccepted);
     RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
@@ -1648,7 +1725,7 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     RUVIA_CHECK(output.cancelStream(second.stream_id).status == Output::Status::kCancelled);
     RUVIA_CHECK(!output.connectionRetired());
     auto parentWire = encodeResponse("parent", worker.resource());
-    auto parentBlock = enqueueBlock(mailbox, messageId(parent), parentWire);
+    auto parentBlock = enqueueBlock(buffer, messageId(parent), parentWire);
     RUVIA_CHECK(output.acceptData(parentBlock).status == Output::Status::kAccepted);
     RUVIA_CHECK(output.acceptControl({.kind = http3_stream_control::kind::stream_fin,
                                          .id = messageId(parent),
@@ -1684,9 +1761,9 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     RUVIA_CHECK(output.streamInfo(first.stream_id)->state == Output::StreamState::kFinished);
     RUVIA_CHECK(output.streamInfo(second.stream_id)->state == Output::StreamState::kCancelled);
     RUVIA_CHECK_EQ(output.queuedBlockCount(), std::size_t{0});
-    RUVIA_CHECK_EQ(available_blocks(mailbox), mailbox.block_capacity() - output.queuedBlockCount());
+    RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-    RUVIA_CHECK(mailbox.stop());
+    RUVIA_CHECK(buffer.stop());
 #endif
 }
 
@@ -1782,8 +1859,8 @@ ruvia::Task<void> exerciseQuicPushRoutes(ruvia::EventLoopAttachment& attachment,
     ruvia::detail::HttpServerOptions options;
     options.blockingPool = &blockingPool;
     ruvia::ConnectionScanner scanner(workerHandle, {.scanInterval = std::chrono::seconds(1)});
-    Mailbox inbound(2, 2, 2, worker.resource());
-    Mailbox outbound(2, 2, 2, worker.resource());
+    buffer inbound(2, 2, 2, worker.resource());
+    buffer outbound(2, 2, 2, worker.resource());
     unsigned activations{};
     Owner owner(implementation.routeTable(), worker, services, options, outbound,
         {.context = &activations, .activate = [](void* raw, std::uint64_t, std::uint64_t, std::uint64_t, const Owner::WorkerActivation&) noexcept { ++*static_cast<unsigned*>(raw); }, .slotGeneration = 1},
@@ -1828,7 +1905,7 @@ ruvia::Task<void> exerciseQuicPushRoutes(ruvia::EventLoopAttachment& attachment,
                 const auto accepted = output.acceptControl(control);
                 RUVIA_CHECK(accepted.status == Output::Status::kAccepted || accepted.status == Output::Status::kFinDeferred);
             }
-            Mailbox::borrowed_block block;
+            buffer::borrowed_block block;
             while (outbound.try_receive(block)) {
                 RUVIA_CHECK(output.acceptData(block).status == Output::Status::kAccepted);
             }
@@ -1942,7 +2019,7 @@ RUVIA_TEST(http3ServerPushBufferedStreamingAndFileRoutesUseRealQuicUnidirectiona
         file << state.body;
     }
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 32});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 32});
     ruvia::test::CountingMemoryResource upstream;
     ruvia::BlockingPool pool({.threadCount = 1, .queueCapacity = 8});
     auto root = attachment.loop().start(exerciseQuicPushRoutes(attachment, pair, parentId, request, settingsAndMax, state, pool, upstream, ruvia_ctx));

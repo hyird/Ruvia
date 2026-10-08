@@ -100,7 +100,7 @@ public:
         }
         auto completion = std::make_shared<detail::RootTaskState<T>>(handle(), failureSink());
         const auto boundExecutor = executor();
-        // drain() destroys remaining mailbox closures without invoking them when
+        // drain() destroys remaining queue closures without invoking them when
         // a posted task throws. Own that destructor path so wait()/get() cannot
         // hang and an unobserved failure still reaches the loop sink.
         struct LaunchGuard final {

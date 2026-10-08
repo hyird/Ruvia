@@ -12,6 +12,8 @@
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/http/Http3Connection.h"
 #include "ruvia/http/HttpAscii.h"
+#include "ruvia/web/detail/http3/Http3QpackConfigValidation.h"
+#include "ruvia/web/detail/http3/http3_capacity.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/tls/TlsHost.h"
@@ -49,13 +51,19 @@ inline void validateDocumentRootRuntimeConfig(const HttpServerOptions& options) 
     }
 }
 
+inline void validate_worker_queue_capacity(std::size_t capacity) {
+    ruvia::ensurePositiveSize(capacity, "worker queue capacity must be greater than zero");
+    if (capacity == std::numeric_limits<std::size_t>::max()) {
+        throw std::invalid_argument("worker queue capacity must leave a reserved execution slot");
+    }
+}
+
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ruvia::ensurePositiveOptionalDurations("configured server timeouts must be greater than zero",
         options.idleTimeout, options.requestHeaderTimeout, options.requestBodyTimeout,
         options.writeTimeout);
     ruvia::ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
-    ruvia::ensurePositiveSize(
-        options.workerMailboxCapacity, "worker mailbox capacity must be greater than 0");
+    validate_worker_queue_capacity(options.worker_queue_capacity);
     if (!std::has_single_bit(options.rateLimitCapacityPerWorker)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
@@ -144,7 +152,7 @@ inline constexpr std::size_t kHttp3ServerPushAllowance = Http3ConnectionConfig{}
 }
 
 inline void validateHttp3ServerLimits(
-    std::optional<std::size_t> maxConnections, std::size_t workerMailboxCapacity,
+    std::optional<std::size_t> maxConnections, const Http3ListenConfig& config,
     std::optional<std::size_t> maxRequestsPerConnection, std::size_t workerCount) {
     if (workerCount == 0) {
         throw std::invalid_argument("HTTP/3 worker count must be greater than zero");
@@ -164,12 +172,7 @@ inline void validateHttp3ServerLimits(
             "HTTP/3 aggregate connection capacity is not representable");
     }
 
-    // The stream output uses UINT32_MAX as its free-list sentinel, so a mailbox
-    // capacity equal to that value is not a valid preallocated node count.
-    if (workerMailboxCapacity >= std::numeric_limits<std::uint32_t>::max()) {
-        throw std::invalid_argument(
-            "HTTP/3 worker mailbox capacity must be below the 32-bit node limit");
-    }
+    (void)normalize_http3_capacity(config, workerCount);
 
     if (!maxRequestsPerConnection.has_value()) {
         throw std::invalid_argument(
@@ -205,21 +208,27 @@ inline void validateHttp3ServerLimits(
     }
 }
 
+inline void validate_http3_listen_config(const Http3ListenConfig& config) {
+    (void)normalize_http3_capacity(config, 1);
+    validateHttp3QpackConfig(config.qpack);
+    ruvia::ensurePositiveDuration(config.handshakeTimeout,
+        "HTTP/3 handshake timeout must be greater than zero");
+    ruvia::ensurePositiveDuration(config.drainTimeout,
+        "HTTP/3 drain timeout must be greater than zero");
+    if (std::chrono::duration<long double>(config.drainTimeout) >
+        std::chrono::duration<long double>(std::chrono::steady_clock::duration::max())) {
+        throw std::invalid_argument("HTTP/3 drain timeout is not representable");
+    }
+}
+
 inline void validateHttpServerListener(const HttpServerListenerDefinition& listener) {
     if (const auto* tls = std::get_if<HttpServerListenerDefinition::Tls>(&listener.transport)) {
         validateHttpServerTlsOptions(*tls);
     } else if (listener.http3.has_value()) {
         throw std::invalid_argument("HTTP/3 listener requires TLS");
     }
-    if (listener.http3.has_value()) {
-        ruvia::ensurePositiveDuration(listener.http3->handshakeTimeout,
-            "HTTP/3 handshake timeout must be greater than zero");
-        ruvia::ensurePositiveDuration(listener.http3->drainTimeout,
-            "HTTP/3 drain timeout must be greater than zero");
-        if (std::chrono::duration<long double>(listener.http3->drainTimeout) >
-            std::chrono::duration<long double>(std::chrono::steady_clock::duration::max())) {
-            throw std::invalid_argument("HTTP/3 drain timeout is not representable");
-        }
+    if (listener.http3) {
+        validate_http3_listen_config(*listener.http3);
     }
     if (const auto* redirect =
             std::get_if<HttpServerListenerDefinition::RedirectHttpToHttps>(&listener.transport)) {
@@ -256,21 +265,21 @@ private:
     if (listeners.empty()) {
         throw std::invalid_argument("HTTP server worker requires at least one listener");
     }
-    bool hasHttp3 = false;
+    const Http3ListenConfig* http3 = nullptr;
     for (const auto& listener : listeners) {
         validateHttpServerListener(listener);
         if (listener.http3.has_value()) {
-            if (hasHttp3) {
+            if (http3) {
                 throw std::invalid_argument(
                     "only one HTTP/3 listener is supported by the App runtime");
             }
-            hasHttp3 = true;
+            http3 = &*listener.http3;
         }
     }
     validateHttpServerOptions(options);
-    if (hasHttp3) {
+    if (http3) {
         validateHttp3ServerLimits(
-            options.maxConnections, options.workerMailboxCapacity,
+            options.maxConnections, *http3,
             options.maxRequestsPerConnection, 1);
     }
     return ValidatedHttpServerConfiguration(listeners, std::move(options));

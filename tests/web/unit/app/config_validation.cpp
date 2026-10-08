@@ -309,7 +309,7 @@ RUVIA_TEST(http3_server_limits_bound_every_downstream_capacity) {
     RUVIA_CHECK(rejects(std::move(options)));
 
     options = HttpServerOptions{};
-    options.workerMailboxCapacity = std::numeric_limits<std::uint32_t>::max();
+    options.worker_queue_capacity = std::numeric_limits<std::size_t>::max();
     RUVIA_CHECK(rejects(std::move(options)));
 
     options = HttpServerOptions{};
@@ -336,8 +336,46 @@ RUVIA_TEST(http3_server_limits_bound_every_downstream_capacity) {
         static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
     RUVIA_CHECK(throwsInvalid([maxConnectionCapacity] {
         ruvia::detail::validateHttp3ServerLimits(
-            2, 1024, 1000, maxConnectionCapacity / 2 + 1);
+            2, ruvia::Http3ListenConfig{}, 1000, maxConnectionCapacity / 2 + 1);
     }));
+}
+
+RUVIA_TEST(http3_capacity_settings_are_independent_and_validate_aggregate_storage) {
+    auto listener = http3TlsListener(8443);
+    listener.http3->stream_buffer_capacity = 3;
+    listener.http3->datagram_input_capacity = 5;
+    listener.http3->datagram_output_capacity = 2;
+    auto options = HttpServerOptions{};
+    options.worker_queue_capacity = 1;
+    const std::array listeners{listener};
+    (void)validateHttpServerConfiguration(listeners, std::move(options));
+    const auto capacity = ruvia::detail::normalize_http3_capacity(*listener.http3, 4);
+    RUVIA_CHECK_EQ(capacity.stream_slots, 3u);
+    RUVIA_CHECK_EQ(capacity.input_slots, std::size_t{5});
+    RUVIA_CHECK_EQ(capacity.output_credits, std::size_t{2});
+    RUVIA_CHECK_EQ(capacity.packet_slots, std::size_t{29});
+
+    for (auto member : {&ruvia::Http3ListenConfig::stream_buffer_capacity,
+             &ruvia::Http3ListenConfig::datagram_input_capacity,
+             &ruvia::Http3ListenConfig::datagram_output_capacity}) {
+        auto invalid = *listener.http3;
+        invalid.*member = 0;
+        RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::normalize_http3_capacity(invalid, 1); }));
+        invalid.*member = std::numeric_limits<std::size_t>::max();
+        RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::normalize_http3_capacity(invalid, 1); }));
+    }
+    auto invalid = *listener.http3;
+    invalid.stream_buffer_capacity = std::numeric_limits<std::uint32_t>::max();
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::normalize_http3_capacity(invalid, 1); }));
+    invalid = *listener.http3;
+    invalid.datagram_input_capacity = static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) /
+                                      ruvia::detail::http3_capacity::packet_bytes / 2;
+    RUVIA_CHECK(throwsInvalid([&] { (void)ruvia::detail::normalize_http3_capacity(invalid, 3); }));
+    if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+        options = HttpServerOptions{};
+        options.worker_queue_capacity = std::numeric_limits<std::uint32_t>::max();
+        (void)validateHttpServerConfiguration(listeners, std::move(options));
+    }
 }
 
 RUVIA_TEST(client_ip_classification_uses_complete_literal_views) {
@@ -510,12 +548,11 @@ RUVIA_TEST(client_tls_stream_inherits_verification_and_protocol_policy) {
     for (const auto policy : {ruvia::TlsPeerVerificationPolicy::kVerify,
              ruvia::TlsPeerVerificationPolicy::kSkipVerification}) {
         asio::ssl::context tls(asio::ssl::context::tls_client);
-        ruvia::detail::configureClientTlsContext(tls, {.tlsPeerVerification = policy});
+        ruvia::detail::configure_client_tls_context(*tls.native_handle(), {.tlsPeerVerification = policy});
         asio::ssl::stream<asio::ip::tcp::socket> stream(loop, tls);
         RUVIA_CHECK_EQ(SSL_get_verify_mode(stream.native_handle()),
             policy == ruvia::TlsPeerVerificationPolicy::kVerify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE);
-        const auto disabled = SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1;
-        RUVIA_CHECK_EQ(SSL_get_options(stream.native_handle()) & disabled, disabled);
+        RUVIA_CHECK_EQ(SSL_get_min_proto_version(stream.native_handle()), TLS1_2_VERSION);
     }
 }
 
@@ -705,7 +742,7 @@ RUVIA_TEST(http3_client_config_requires_https_and_bounded_response_storage) {
         [&] { (void)ruvia::detail::HttpClientConfigStorage(config, &resource); }));
 }
 
-RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
+RUVIA_TEST(websocket_client_config_rejects_invalid_startup_config) {
     ruvia::WebSocketClientConfig config;
     config.host = "example.com";
     config.caFile = std::string(128, 'c');
@@ -714,41 +751,34 @@ RUVIA_TEST(websocket_client_config_is_validated_before_pmr_normalization) {
 
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.connectTimeout = std::chrono::milliseconds{5000};
     config.target = "/events#fragment";
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.target = "/";
     config.subprotocols = {"chat", "chat"};
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.subprotocols = {"bad token"};
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.subprotocols = {""};
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.subprotocols.clear();
     config.heartbeat.pongTimeout = std::chrono::milliseconds{1000};
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 
     config.heartbeat = {.pingInterval = std::chrono::milliseconds{1000},
         .pongTimeout = std::chrono::milliseconds::zero()};
     RUVIA_CHECK(throwsInvalid(
         [&] { (void)ruvia::detail::WebSocketClientConfigStorage(config, &resource); }));
-    RUVIA_CHECK_EQ(resource.allocationCount(), std::size_t{0});
 }
 
 RUVIA_TEST(websocket_client_config_storage_owns_normalized_strings) {

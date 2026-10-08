@@ -7,33 +7,18 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/web/detail/app/AppListenerOptions.h"
 #include "ruvia/web/detail/app/EnvState.h"
-#include "ruvia/web/detail/http3/Http3QpackConfigValidation.h"
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 
 namespace ruvia {
 
 namespace detail {
-namespace {
-
-[[nodiscard]] bool hasHttp3Listener(const AppState& state) noexcept {
-    for (const auto& listener : state.listeners) {
-        if (listener.http3.has_value()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
-
 void applyServerConfig(AppState& state, const ServerConfig& config) {
     ruvia::ensurePositiveSize(config.workerCount, "worker count must be greater than zero");
     if (config.processSignalHandlers != ProcessSignalHandlerPolicy::kExternalOwner &&
         config.processSignalHandlers != ProcessSignalHandlerPolicy::kInstall) {
         throw std::invalid_argument("process signal handler policy is invalid");
     }
-    ruvia::ensurePositiveSize(
-        config.workerMailboxCapacity, "worker mailbox capacity must be greater than zero");
+    validate_worker_queue_capacity(config.worker_queue_capacity);
     ruvia::ensurePositiveOptionalDuration(
         config.idleTimeout, "configured idle timeout must be greater than zero");
     ruvia::ensurePositiveDuration(
@@ -66,9 +51,11 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
         "HTTP client in-flight response budget must be greater than zero");
     ruvia::ensurePositiveSize(config.memoryPool.requestInitialBufferBytes,
         "memory pool config values must be greater than zero");
-    if (hasHttp3Listener(state)) {
-        validateHttp3ServerLimits(config.maxConnectionsPerWorker,
-            config.workerMailboxCapacity, config.maxRequestsPerConnection, config.workerCount);
+    for (const auto& listener : state.listeners) {
+        if (listener.http3) {
+            validateHttp3ServerLimits(config.maxConnectionsPerWorker,
+                *listener.http3, config.maxRequestsPerConnection, config.workerCount);
+        }
     }
 
     ruvia::ensurePositiveSize(config.max_inbound_buffer_bytes_per_worker,
@@ -80,7 +67,7 @@ void applyServerConfig(AppState& state, const ServerConfig& config) {
 
     state.workerCount = config.workerCount;
     state.processSignalHandlers = config.processSignalHandlers;
-    state.options.workerMailboxCapacity = config.workerMailboxCapacity;
+    state.options.worker_queue_capacity = config.worker_queue_capacity;
     state.options.idleTimeout = config.idleTimeout;
     state.options.scanInterval = config.connectionScanInterval;
     state.options.requestHeaderTimeout = config.requestHeaderTimeout;
@@ -155,18 +142,9 @@ App& App::listen(ListenConfig config) {
                 throw std::invalid_argument("TLS config requires an HTTPS listen port");
             }
             if (effectiveHttp3.has_value()) {
-                detail::validateHttp3QpackConfig(effectiveHttp3->qpack);
-                ruvia::ensurePositiveDuration(effectiveHttp3->handshakeTimeout,
-                    "HTTP/3 handshake timeout must be greater than zero");
-                ruvia::ensurePositiveDuration(effectiveHttp3->drainTimeout,
-                    "HTTP/3 drain timeout must be greater than zero");
-                if (std::chrono::duration<long double>(effectiveHttp3->drainTimeout) >
-                    std::chrono::duration<long double>(
-                        std::chrono::steady_clock::duration::max())) {
-                    throw std::invalid_argument("HTTP/3 drain timeout is not representable");
-                }
+                detail::validate_http3_listen_config(*effectiveHttp3);
                 detail::validateHttp3ServerLimits(state.options.maxConnections,
-                    state.options.workerMailboxCapacity, state.options.maxRequestsPerConnection,
+                    *effectiveHttp3, state.options.maxRequestsPerConnection,
                     state.workerCount);
             }
 

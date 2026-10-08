@@ -49,6 +49,7 @@ struct WebSocketClientNegotiationResultView final {
 // views produced below expire with this owner; response views expire with the head.
 class WebSocketClientNegotiation final {
 public:
+    static void validate_configuration(WebSocketClientNegotiationConfigView config);
     WebSocketClientNegotiation(WebSocketClientNegotiationConfigView config,
         std::pmr::memory_resource* resource = std::pmr::get_default_resource());
     WebSocketClientNegotiation(WebSocketClientNegotiation&&) noexcept = default;

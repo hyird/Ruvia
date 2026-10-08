@@ -26,6 +26,7 @@
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
 #include <asio/redirect_error.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/streambuf.hpp>
 #include <asio/use_awaitable.hpp>
@@ -58,12 +59,13 @@
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_identity.h"
 
 namespace {
 class TestWorker final {
 public:
     explicit TestWorker(asio::io_context& io)
-        : attachment(ruvia::attachEventLoop(io, {.mailboxCapacity = 8})),
+        : attachment(ruvia::attachEventLoop(io, {.queue_capacity = 8})),
           handle(attachment.loop().handle()) {}
 
     ruvia::EventLoopAttachment attachment;
@@ -2450,4 +2452,106 @@ RUVIA_TEST(http_client_http2_upload_exchange_flow_control_trailers_and_early_fin
         };
         runOperation(worker, io, operation);
     }
+}
+
+namespace {
+void exercise_tls_response_retirement(ruvia::testing::TestContext& ruvia_ctx, bool join_before_reuse) {
+    auto& io = ruvia::test::newTestIoContext();
+    TestWorker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    const std::string large(262163, 'b');
+    const std::array<std::string_view, 2> expected{"fresh connection body", "healthy reused body"};
+    unsigned connections = 0;
+    unsigned requests = 0;
+    bool cancelled_socket_closed = false;
+    std::exception_ptr peer_failure;
+    ruvia::WorkerSignal peer_done(worker.handle);
+    const auto serve = [&]() -> asio::awaitable<void> {
+        {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(co_await acceptor.async_accept(asio::use_awaitable), identity.context);
+            ++connections;
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            asio::streambuf request;
+            co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+            ++requests;
+            const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(large.size()) + "\r\n\r\n" + large;
+            std::error_code error;
+            co_await asio::async_write(stream, asio::buffer(response), asio::redirect_error(asio::use_awaitable, error));
+            std::array<char, 1024> bytes{};
+            while (co_await stream.async_read_some(asio::buffer(bytes), asio::redirect_error(asio::use_awaitable, error))) {
+            }
+            cancelled_socket_closed = error == asio::error::eof || error == asio::error::connection_reset || error == asio::ssl::error::stream_truncated;
+        }
+        asio::ssl::stream<asio::ip::tcp::socket> stream(co_await acceptor.async_accept(asio::use_awaitable), identity.context);
+        ++connections;
+        co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+        for (const auto body : expected) {
+            asio::streambuf request;
+            co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+            ++requests;
+            const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string(body);
+            co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_done.notify();
+    });
+    auto config = localHttpClientConfig(acceptor.local_endpoint().port());
+    config.scheme = ruvia::HttpScheme::kHttps;
+    config.host = "localhost";
+    const auto ca = identity.ca_file.string();
+    config.caFile = ca;
+    config.maxResponseBytes = 8192;
+    config.protocol = join_before_reuse ? ruvia::HttpClientProtocol::kHttp1Only : ruvia::HttpClientProtocol::kNegotiate;
+    ruvia::HttpClient client(worker.attachment.loop(), config);
+    auto operation = [&]() -> ruvia::Task<void> {
+        ruvia::StopSource cancellation;
+        {
+            auto response = co_await client.withOptions({.stopToken = cancellation.token()}).send({.target = "/partial"});
+            const auto first = co_await response.body().text();
+            RUVIA_CHECK(first.has_value());
+            RUVIA_CHECK(!first->empty());
+            RUVIA_CHECK(first->size() < large.size());
+            RUVIA_CHECK(std::ranges::all_of(*first, [](char value) { return value == 'b'; }));
+            cancellation.requestStop();
+            // Cancellation itself must not invalidate a previously returned borrow.
+            RUVIA_CHECK(std::ranges::all_of(*first, [](char value) { return value == 'b'; }));
+        }
+        if (join_before_reuse) {
+            while (client.stats().inFlightRequests != 0) {
+                (void)co_await ruvia::asyncAsio([&io](auto handler) {
+                    asio::post(io, [handler = std::move(handler)]() mutable { handler(std::error_code{}); });
+                });
+            }
+            RUVIA_CHECK_EQ(client.stats().failedRequests, std::size_t{1});
+        }
+        for (const auto body : expected) {
+            auto response = co_await client.send({.target = "/next?exact=body"});
+            RUVIA_CHECK(response.protocolVersion() == ruvia::HttpProtocolVersion::kHttp11);
+            const auto bytes = co_await response.body().readAll();
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), body);
+            RUVIA_CHECK(!(co_await response.body().read()));
+        }
+        co_await peer_done.wait();
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        RUVIA_CHECK_EQ(client.stats().failedRequests, std::size_t{1});
+        co_await client.shutdown();
+    };
+    runOperation(worker, io, operation);
+    RUVIA_CHECK(cancelled_socket_closed);
+    RUVIA_CHECK_EQ(connections, 2U);
+    RUVIA_CHECK_EQ(requests, 3U);
+}
+}  // namespace
+
+RUVIA_TEST(http1_tls_partial_response_cancellation_retires_transport_and_preserves_healthy_reuse) {
+    exercise_tls_response_retirement(ruvia_ctx, true);
+}
+
+RUVIA_TEST(http1_tls_queued_reconnect_joins_cancelled_producer_before_replacing_transport) {
+    exercise_tls_response_retirement(ruvia_ctx, false);
 }

@@ -19,10 +19,10 @@
 #include "ruvia/core/PoolLeaseScheduler.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/TaskScope.h"
-#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/web/HttpClientHandle.h"
 #include "ruvia/web/detail/client/HttpClientAdvertisementQueue.h"
@@ -44,7 +44,7 @@ class Http3ClientConnection;
 class http3_quic_client_tls_context;
 
 class HttpClientPool;
-using HttpClientOperationCancellationMailbox = WorkerCancellationMailbox<HttpClientPool>;
+using http_client_cancellation_target = worker_cancellation_target<HttpClientPool>;
 
 class HttpClientPool final {
 public:
@@ -88,7 +88,7 @@ public:
     }
 
 private:
-    friend class WorkerCancellationMailbox<HttpClientPool>;
+    friend class worker_cancellation_target<HttpClientPool>;
     friend class ::ruvia::HttpClientResponse;
     friend class ::ruvia::HttpClientTunnel;
     friend class ::ruvia::HttpClientExchange;
@@ -182,6 +182,9 @@ private:
         // terminal cancellation wake a producer blocked on response backpressure.
         HttpClientResponseState* activeHttp1Response{nullptr};
         bool connected{false};
+        // A used TLS engine may retain encrypted input after socket close.
+        // Only its retired transport can be replaced before reconnecting.
+        bool transport_started{false};
     };
 
     class Http2PendingRegistration final {
@@ -355,7 +358,7 @@ private:
     asio::ssl::context tlsContext_;
     std::pmr::vector<Connection> connections_;
     PoolLeaseScheduler scheduler_;
-    std::shared_ptr<HttpClientOperationCancellationMailbox> cancellationMailbox_;
+    std::shared_ptr<http_client_cancellation_target> cancellation_target_;
     TaskScope backgroundTasks_;
     std::unique_ptr<http3_quic_client_tls_context, PmrObjectDeleter<http3_quic_client_tls_context>>
         http3Tls_;

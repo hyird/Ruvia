@@ -63,7 +63,7 @@ struct TemporaryDirectory final {
 };
 
 struct IdentityFiles final {
-    explicit IdentityFiles(const std::filesystem::path& directory) {
+    explicit IdentityFiles(const std::filesystem::path& directory, std::string_view password = {}) {
         std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> keyContext(
             EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
         EVP_PKEY* rawKey = nullptr;
@@ -104,7 +104,8 @@ struct IdentityFiles final {
             BIO_free);
         std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(BIO_new_file(keyFile.string().c_str(), "wb"), BIO_free);
         if (!certificateBio || !keyBio || PEM_write_bio_X509(certificateBio.get(), certificate.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), password.empty() ? nullptr : EVP_aes_256_cbc(),
+                reinterpret_cast<const unsigned char*>(password.data()), static_cast<int>(password.size()), nullptr, nullptr) != 1) {
             throw std::runtime_error("could not write test credentials");
         }
     }
@@ -170,4 +171,36 @@ RUVIA_TEST(http3QuicClientTlsContextConfiguresPeerAndCleansUp) {
     config.caFile = certificatePath;
     config.privateKeyFile = certificatePath;
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { http3_quic_client_tls_context context(config); }));
+}
+
+RUVIA_TEST(client_tls_context_shares_identity_loading_and_clears_password_borrows) {
+    using namespace ruvia::detail;
+    TemporaryDirectory directory;
+    const IdentityFiles files(directory.path, "test-password");
+    const auto certificate = files.certificateFile.string();
+    const auto key = files.keyFile.string();
+    for (const auto protocol : {client_tls_protocol::stream, client_tls_protocol::quic}) {
+        std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> context(SSL_CTX_new(TLS_method()), SSL_CTX_free);
+        RUVIA_CHECK(context != nullptr);
+        ClientTransportConfigView config;
+        config.caFile = certificate;
+        config.certificateChainFile = certificate;
+        config.privateKeyFile = key;
+        config.privateKeyPassword = "test-password";
+        configure_client_tls_context(*context, config, protocol);
+        RUVIA_CHECK(SSL_CTX_check_private_key(context.get()) == 1);
+        RUVIA_CHECK(SSL_CTX_get_verify_mode(context.get()) == SSL_VERIFY_PEER);
+        RUVIA_CHECK(SSL_CTX_get_min_proto_version(context.get()) ==
+                    (protocol == client_tls_protocol::quic ? TLS1_3_VERSION : TLS1_2_VERSION));
+        RUVIA_CHECK(SSL_CTX_get_max_proto_version(context.get()) ==
+                    (protocol == client_tls_protocol::quic ? TLS1_3_VERSION : 0));
+        RUVIA_CHECK(SSL_CTX_get_default_passwd_cb(context.get()) == nullptr);
+        RUVIA_CHECK(SSL_CTX_get_default_passwd_cb_userdata(context.get()) == nullptr);
+        config.privateKeyPassword = "incorrect";
+        RUVIA_CHECK(ruvia::testing::throwsOn([&] {
+            configure_client_tls_context(*context, config, protocol);
+        }));
+        RUVIA_CHECK(SSL_CTX_get_default_passwd_cb(context.get()) == nullptr);
+        RUVIA_CHECK(SSL_CTX_get_default_passwd_cb_userdata(context.get()) == nullptr);
+    }
 }

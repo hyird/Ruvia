@@ -24,7 +24,7 @@ namespace {
 struct WorkerDispatchFixture final {
     asio::io_context& ioContext = ruvia::test::newTestIoContext();
     ruvia::EventLoopAttachment attachment =
-        ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 1});
+        ruvia::attachEventLoop(ioContext, {.queue_capacity = 1});
     ruvia::WorkerHandle worker = attachment.loop().handle();
     ruvia::WorkerMemory memory;
     ruvia::detail::WorkerCapabilities capabilities{
@@ -41,7 +41,7 @@ struct WorkerDispatchFixture final {
     void retire() {
         attachment.stop();
         // External attachments detach on their io_context; drain that terminal
-        // cleanup before checking reservations held by abandoned mailbox posts.
+        // cleanup before checking reservations held by abandoned queue posts.
         ioContext.poll();
         dispatch->retire();
         capabilities.closeNow();
@@ -107,7 +107,7 @@ RUVIA_TEST(web_worker_dispatch_reconciles_rejected_and_abandoned_posts) {
     WorkerDispatchFixture fixture;
     bool ran = false;
 
-    // Run the terminal stop on the worker before its queued mailbox drain.
+    // Run the terminal stop on the worker before its queued queue drain.
     // Stopping from outside poll() defers detach behind that drain instead.
     asio::post(fixture.ioContext, [&fixture] { fixture.attachment.stop(); });
     const auto accepted = fixture.dispatch->handle().post([&ran](ruvia::WebWorkerContext& context) {

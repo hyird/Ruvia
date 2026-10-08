@@ -10,7 +10,7 @@
 namespace ruvia {
 
 struct EventLoopAttachmentOptions final {
-    std::size_t mailboxCapacity{1024};
+    std::size_t queue_capacity{1024};
 };
 
 // Binds a worker to an io_context the caller owns. The caller may drive that

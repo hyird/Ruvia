@@ -7,6 +7,7 @@
 
 #include <openssl/ssl.h>
 
+#include "ruvia/web/detail/client/ClientTransport.h"
 #include "ruvia/web/detail/redis/RedisRegistry.h"
 
 namespace ruvia::detail {
@@ -49,26 +50,13 @@ RedisPool::RedisPool(asio::io_context& ioContext, const RedisConfigStorage& conf
       resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
       scheduler_(poolSize, worker_, resource_),
-      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
+      cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
     if (config_.tls.mode == client_tls_mode::verify_identity) {
         tls_context_.emplace(asio::ssl::context::tls_client);
-        tls_context_->set_verify_mode(asio::ssl::verify_peer);
-        if (SSL_CTX_set_min_proto_version(tls_context_->native_handle(), TLS1_2_VERSION) != 1) {
-            throw std::runtime_error("configuring Redis minimum TLS version failed");
-        }
-        if (config_.tls.ca_file.empty()) {
-            tls_context_->set_default_verify_paths();
-        } else {
-            tls_context_->load_verify_file(std::string(config_.tls.ca_file));
-        }
-        if (!config_.tls.certificate_file.empty()) {
-            tls_context_->use_certificate_chain_file(std::string(config_.tls.certificate_file));
-            tls_context_->set_password_callback([](std::size_t, asio::ssl::context::password_purpose) { return std::string{}; });
-            tls_context_->use_private_key_file(std::string(config_.tls.private_key_file), asio::ssl::context::pem);
-            if (SSL_CTX_check_private_key(tls_context_->native_handle()) != 1) {
-                throw std::invalid_argument("Redis TLS certificate does not match its private key");
-            }
-        }
+        configure_client_tls_context(*tls_context_->native_handle(),
+            {.caFile = config_.tls.ca_file,
+                .certificateChainFile = config_.tls.certificate_file,
+                .privateKeyFile = config_.tls.private_key_file});
     }
     connections_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {
@@ -90,7 +78,7 @@ Task<void> RedisPool::connect() {
 }
 
 void RedisPool::closeNow() noexcept {
-    cancellationMailbox_->detach(*this);
+    cancellation_target_->detach(*this);
     if (!scheduler_.close()) {
         return;
     }

@@ -507,24 +507,23 @@ Task<void> WebWorkerRuntime::handleStreamSession(HttpServerSessionConfig& listen
         auto connectionPlan = requestCompletion->connectionPlan();
         if (requestCompletion->bufferedResponse() != nullptr) {
             scannerEntry.setPhase(ruvia::ConnectionScanner::Phase::kWriting);
+            buffered_response_recovery recovery;
             auto preparation = co_await prepareBufferedHttpResponseAsync(
                 parsed.request, responseCodingPolicy, response, options_, workerRuntime_.handle());
-            if (const auto error = httpBufferedResponsePreparationError(responseCodingPolicy,
-                    parsed.request, response, preparation.compressionResult())) {
-                response = co_await routes.handleError(
-                    parsed.request, requestMemory, *error, requestServices);
+            for (;;) {
+                const auto step = recovery.advance(responseCodingPolicy, parsed.request,
+                    response, preparation.compressionResult());
+                if (step.action == buffered_response_recovery_action::ready) {
+                    break;
+                }
+                if (step.action == buffered_response_recovery_action::handle_error) {
+                    response = co_await routes.handleError(
+                        parsed.request, requestMemory, *step.error, requestServices);
+                }
                 preparation = co_await prepareBufferedHttpResponseAsync(parsed.request,
                     responseCodingPolicy, response, options_, workerRuntime_.handle());
-                if (httpBufferedResponsePreparationError(responseCodingPolicy, parsed.request,
-                        response, preparation.compressionResult())
-                        .has_value()) {
-                    // The negotiated coding could not be installed even on
-                    // the generated terminal error. Make the terminal error
-                    // state explicit before allowing identity bytes.
-                    responseCodingPolicy = HttpResponseCodingPolicy::disabled();
-                    preparation = co_await prepareBufferedHttpResponseAsync(parsed.request,
-                        responseCodingPolicy, response, options_, workerRuntime_.handle());
-                }
+            }
+            if (recovery.recovered()) {
                 connectionPlan = requireHttp1FinalResponseCommit(response, connectionPlan);
                 requestCompletion = requestCompletion->withBufferedConnectionPlan(connectionPlan);
                 connectionPlan = requestCompletion->connectionPlan();

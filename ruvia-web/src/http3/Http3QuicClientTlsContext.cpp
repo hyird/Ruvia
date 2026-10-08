@@ -40,20 +40,6 @@ bool expired(const SSL_SESSION* session) noexcept {
     return issued <= 0 || timeout <= 0 || issued > now || now - issued >= timeout;
 }
 
-int read_private_key_password(char* buffer, int size, int, void* argument) noexcept {
-    if (buffer == nullptr || size <= 0 || argument == nullptr) {
-        return 0;
-    }
-    const auto password = static_cast<const ClientTransportConfigView*>(argument)->privateKeyPassword;
-    if (password.size() > static_cast<std::size_t>(size)) {
-        return 0;
-    }
-    for (std::size_t index = 0; index < password.size(); ++index) {
-        buffer[index] = password[index];
-    }
-    return static_cast<int>(password.size());
-}
-
 }  // namespace
 
 http3_quic_client_tls_context::http3_quic_client_tls_context(ClientTransportConfigView config,
@@ -63,49 +49,11 @@ http3_quic_client_tls_context::http3_quic_client_tls_context(ClientTransportConf
     if (identity_generation_ == 0) {
         identity_generation_ = next_identity_generation.fetch_add(1, std::memory_order_relaxed);
     }
-    validateClientTransportConfig(config);
     context_.reset(SSL_CTX_new(TLS_method()));
-    if (context_ && (SSL_CTX_set_min_proto_version(context_.get(), TLS1_3_VERSION) != 1 ||
-                        SSL_CTX_set_max_proto_version(context_.get(), TLS1_3_VERSION) != 1)) {
-        throw std::runtime_error("failed to configure QUIC TLS 1.3");
-    }
     if (!context_) {
         throw std::runtime_error("failed to create QUIC client TLS context");
     }
-
-    SSL_CTX_set_verify(context_.get(),
-        config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify
-            ? SSL_VERIFY_PEER
-            : SSL_VERIFY_NONE,
-        nullptr);
-    if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
-        const int loaded = config.caFile.empty()
-                               ? SSL_CTX_set_default_verify_paths(context_.get())
-                               : SSL_CTX_load_verify_file(context_.get(),
-                                     std::string(config.caFile).c_str());
-        if (loaded != 1) {
-            throw std::runtime_error("failed to load client TLS trust store");
-        }
-    }
-
-    if (!config.certificateChainFile.empty()) {
-        if (SSL_CTX_use_certificate_chain_file(context_.get(),
-                std::string(config.certificateChainFile).c_str()) != 1) {
-            throw std::runtime_error("failed to load client certificate chain");
-        }
-        if (!config.privateKeyPassword.empty()) {
-            SSL_CTX_set_default_passwd_cb(context_.get(), &read_private_key_password);
-            SSL_CTX_set_default_passwd_cb_userdata(context_.get(), &config);
-        }
-        const int key_loaded = SSL_CTX_use_PrivateKey_file(context_.get(),
-            std::string(config.privateKeyFile).c_str(), SSL_FILETYPE_PEM);
-        // Never retain either the callback or its borrowed configuration view.
-        SSL_CTX_set_default_passwd_cb(context_.get(), nullptr);
-        SSL_CTX_set_default_passwd_cb_userdata(context_.get(), nullptr);
-        if (key_loaded != 1 || SSL_CTX_check_private_key(context_.get()) != 1) {
-            throw std::runtime_error("failed to load or match client TLS private key");
-        }
-    }
+    configure_client_tls_context(*context_, config, client_tls_protocol::quic);
 }
 
 http3_quic_client_tls_context::~http3_quic_client_tls_context() = default;

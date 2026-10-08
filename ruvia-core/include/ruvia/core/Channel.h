@@ -13,7 +13,6 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Task.h"
@@ -23,6 +22,7 @@
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
 #include "ruvia/core/detail/worker/WorkerWaitAwaiter.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/core/mpsc_ring_queue.h"
 
 namespace ruvia {
 
@@ -113,22 +113,16 @@ struct ChannelState final : WorkerShutdownListener {
     ChannelState(
         WorkerHandle target, std::size_t requestedCapacity, std::pmr::memory_resource* resource)
         : worker(std::move(target)),
-          slots(resource) {
+          queue(requestedCapacity, resource),
+          mutex(queue.synchronization_mutex()) {
         if (!worker.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
         }
-        if (requestedCapacity == 0) {
-            throw std::invalid_argument("channel capacity must be greater than zero");
-        }
-        slots.resize(requestedCapacity);
     }
 
     WorkerHandle worker;
-    std::pmr::vector<std::optional<T>> slots;
-    std::mutex mutex;
-    std::size_t head{0};
-    std::size_t tail{0};
-    std::size_t size{0};
+    mpsc_ring_queue<T> queue;
+    std::mutex& mutex;
     using Lifecycle = std::variant<ChannelOpen, ChannelClosed, ChannelWorkerStopping>;
     Lifecycle lifecycle;
     WorkerSingleWaitAwaiter<T, ChannelState<T>>* waiter{nullptr};
@@ -148,13 +142,11 @@ struct ChannelReceiveAwaiter final {
 
     [[nodiscard]] bool await_ready() {
         auto& owner = wait_.state();
-        std::lock_guard lock(owner.mutex);
-        if (owner.size != 0) {
+        auto queue = owner.queue.lock();
+        if (auto* item = queue.front()) {
             (void)wait_.completeResult(
-                WorkerWaitResultAccess::value(std::move(*owner.slots[owner.head])));
-            owner.slots[owner.head].reset();
-            owner.head = (owner.head + 1) % owner.slots.size();
-            --owner.size;
+                WorkerWaitResultAccess::value(std::move(*item)));
+            queue.pop();
             return true;
         }
         if (std::holds_alternative<ChannelWorkerStopping>(owner.lifecycle)) {
@@ -221,7 +213,7 @@ public:
             return ChannelSendResult<T>::reject(ChannelSendStatus::kClosed, std::move(value));
         }
         {
-            std::lock_guard lock(state_->mutex);
+            auto queue = state_->queue.lock();
             if (std::holds_alternative<detail::ChannelClosed>(state_->lifecycle)) {
                 return ChannelSendResult<T>::reject(ChannelSendStatus::kClosed, std::move(value));
             }
@@ -247,12 +239,9 @@ public:
                     waiter->wake();
                 }
             } else {
-                if (state_->size == state_->slots.size()) {
+                if (!queue.try_push(std::move(value))) {
                     return ChannelSendResult<T>::reject(ChannelSendStatus::kFull, std::move(value));
                 }
-                state_->slots[state_->tail].emplace(std::move(value));
-                state_->tail = (state_->tail + 1) % state_->slots.size();
-                ++state_->size;
             }
         }
         return ChannelSendResult<T>::accept();

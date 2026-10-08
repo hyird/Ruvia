@@ -88,6 +88,17 @@ private:
         for (const auto& subprotocol : source.subprotocols) {
             subprotocols.emplace_back(subprotocol);
         }
+        std::pmr::vector<HttpHeaderView> header_views(resource);
+        header_views.reserve(headers.size());
+        for (const auto& header : headers) {
+            header_views.emplace_back(header.name, header.value);
+        }
+        std::pmr::vector<std::string_view> protocol_views(resource);
+        protocol_views.reserve(subprotocols.size());
+        for (const auto& subprotocol : subprotocols) {
+            protocol_views.emplace_back(subprotocol);
+        }
+        validate_web_socket_client_protocols_and_headers(header_views, protocol_views, userAgent, deflate);
     }
 };
 

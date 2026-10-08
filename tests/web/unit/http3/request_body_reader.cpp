@@ -220,7 +220,7 @@ RUVIA_TEST(http3_request_body_reader_terminal_states_wake_blocked_producer) {
 
 RUVIA_TEST(http3_request_body_reader_owns_bounded_chunks_and_orders_fin) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 16});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 16});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     bool accepted = false;
@@ -276,7 +276,7 @@ RUVIA_TEST(http3_request_body_reader_owns_bounded_chunks_and_orders_fin) {
 
 RUVIA_TEST(http3_request_body_reader_repeated_reads_release_prior_chunk_without_losing_next) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     bool correct = true;
@@ -315,7 +315,7 @@ RUVIA_TEST(http3_request_body_reader_repeated_reads_release_prior_chunk_without_
 
 RUVIA_TEST(http3_request_body_reader_cancel_wakes_and_joins_a_suspended_read) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     bool cancelled = false;
@@ -339,7 +339,7 @@ RUVIA_TEST(http3_request_body_reader_cancel_wakes_and_joins_a_suspended_read) {
 
 RUVIA_TEST(http3_request_body_reader_error_discards_unread_bytes_without_invalidating_active_view) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     bool retained = false;
@@ -380,7 +380,7 @@ RUVIA_TEST(http3_request_body_reader_error_discards_unread_bytes_without_invalid
 
 RUVIA_TEST(http3_request_body_reader_shutdown_wakes_and_joins_a_suspended_read) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     bool shutdown = false;
@@ -404,7 +404,7 @@ RUVIA_TEST(http3_request_body_reader_shutdown_wakes_and_joins_a_suspended_read) 
 
 RUVIA_TEST(http3_request_body_reader_cold_task_does_not_allocate_body_storage) {
     auto& io = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     CountingResource resource;
     {

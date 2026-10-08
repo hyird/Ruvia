@@ -14,6 +14,7 @@
 #include "ruvia/http/Http3ServerRequestAdmission.h"
 #include "ruvia/http/Http3StreamFrames.h"
 #include "ruvia/http/Http3VarInt.h"
+#include "ruvia/http/HttpDatagram.h"
 #include "ruvia/web/detail/http3/Http3CriticalStreamDriver.h"
 #include "ruvia/web/detail/http3/Http3QuicWireOwner.h"
 #include "ruvia/web/detail/http3/Http3ServerStreamOutput.h"
@@ -156,6 +157,7 @@ private:
     [[nodiscard]] bool pump_input();
     [[nodiscard]] bool pump_output(bool transport_activity);
     [[nodiscard]] bool pump_datagrams();
+    [[nodiscard]] Http3DatagramReceiveStatus plan_datagram_receive(const Http3DatagramView& datagram) const noexcept;
     [[nodiscard]] tunnel_established_result accept_tunnel_established(const http3_stream_control& control, std::uint64_t accepted_wire_bytes) noexcept;
     [[nodiscard]] bool confirm_tunnel_established(std::uint64_t stream_id, std::uint64_t accepted_wire_bytes) noexcept;
     void note_peer_fin(std::uint64_t stream_id) noexcept;

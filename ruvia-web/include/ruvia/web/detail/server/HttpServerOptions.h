@@ -159,7 +159,7 @@ struct HttpServerOptions final {
     std::optional<std::chrono::milliseconds> idleTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Capacity of the explicit cross-thread queue for this Web worker.
-    std::size_t workerMailboxCapacity{1024};
+    std::size_t worker_queue_capacity{1024};
     MemoryPoolConfig memoryConfig{};
     HttpClientResultBudgetConfig httpClientResultBudget{};
     std::optional<std::chrono::milliseconds> requestHeaderTimeout{std::chrono::seconds(60)};

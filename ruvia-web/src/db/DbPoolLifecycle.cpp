@@ -54,7 +54,7 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, const WorkerHandle
       worker_(requireMariaDbWorker(worker)),
       slots_(resource_),
       scheduler_(1, worker_, resource_),
-      cancellationMailbox_(makeWorkerCancellationMailbox(*this, worker_)) {
+      cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
     if (config_.driver != DbDriver::kMariaDb) {
         throw std::invalid_argument("MariaDB pool requires the MariaDB driver");
     }
@@ -63,7 +63,7 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, const WorkerHandle
 }
 
 detail::MariaDbPool::~MariaDbPool() {
-    cancellationMailbox_->detach(*this);
+    cancellation_target_->detach(*this);
     closeNow();
 }
 

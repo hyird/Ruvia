@@ -51,21 +51,17 @@ inline void validateWebSocketClientConfig(const WebSocketClientConfig& config) {
     validateWebSocketHeartbeatConfig(config.heartbeat);
     validateClientTransportConfig(clientTransportConfigView(config));
 
-    std::pmr::vector<HttpHeaderView> headers(std::pmr::get_default_resource());
-    headers.reserve(config.headers.size());
-    for (const auto& [name, value] : config.headers) {
-        headers.emplace_back(name, value);
-    }
-    std::pmr::vector<std::string_view> subprotocols(std::pmr::get_default_resource());
-    subprotocols.reserve(config.subprotocols.size());
-    for (const auto& subprotocol : config.subprotocols) {
-        subprotocols.push_back(subprotocol);
-    }
-    Http1WebSocketClientHandshake::validateConfiguration(headers, subprotocols, config.userAgent);
     if (config.compressionLevel < 0 || config.compressionLevel > 9) {
         throw std::invalid_argument("WebSocket client compression level must be between 0 and 9");
     }
-    WebSocketClientNegotiation negotiation({.headers = headers, .subprotocols = subprotocols, .deflate = config.deflate});
+}
+
+inline void validate_web_socket_client_protocols_and_headers(
+    std::span<const HttpHeaderView> headers, std::span<const std::string_view> subprotocols,
+    std::string_view userAgent, const WebSocketClientDeflateOffer& deflate) {
+    Http1WebSocketClientHandshake::validateConfiguration(headers, subprotocols, userAgent);
+    WebSocketClientNegotiation::validate_configuration(
+        {.headers = headers, .subprotocols = subprotocols, .deflate = deflate});
 }
 
 }  // namespace ruvia::detail

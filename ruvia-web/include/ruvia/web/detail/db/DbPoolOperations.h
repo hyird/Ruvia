@@ -21,9 +21,9 @@
 #include "ruvia/core/PoolLeaseScheduler.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerTimer.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/web/db/DbRows.h"
 #include "ruvia/web/db/DbTransaction.h"
 #include "ruvia/web/db/DbTypes.h"
@@ -41,27 +41,16 @@ enum class DbSlotAbortReason : std::uint8_t {
 };
 
 template <typename Pool>
-using DbOperationCancellationMailbox = WorkerCancellationMailbox<Pool>;
+using db_cancellation_target = worker_cancellation_target<Pool>;
 
 template <typename Pool>
 class DbSlotCancellationGuard final {
 public:
     DbSlotCancellationGuard(Pool& pool, std::size_t slot, const StopToken& stopToken)
-        : pool_(&pool),
-          slot_(slot) {
+        : cancellation_(pool.cancellation_target_, pool.slots_[slot].cancellationId) {
         auto& connection = pool.slots_[slot];
         connection.abortReason = DbSlotAbortReason::kNone;
-        if (!stopToken.stoppable()) {
-            return;
-        }
-        cancellationId_ = pool.cancellationMailbox_->nextOperationId();
-        connection.cancellationId = cancellationId_;
-        stopToken.registerCallback(
-            stopRegistration_, WorkerCancellationPost<DbOperationCancellationMailbox<Pool>>(
-                                   pool.cancellationMailbox_, cancellationId_));
-        if (stopToken.stopRequested()) {
-            pool_->cancelOperationById(cancellationId_);
-        }
+        cancellation_.arm(stopToken);
     }
 
     DbSlotCancellationGuard(const DbSlotCancellationGuard&) = delete;
@@ -72,21 +61,11 @@ public:
     }
 
     void finish() noexcept {
-        stopRegistration_.reset();
-        if (pool_ != nullptr) {
-            auto& connection = pool_->slots_[slot_];
-            if (connection.cancellationId == cancellationId_) {
-                connection.cancellationId = 0;
-            }
-            pool_ = nullptr;
-        }
+        cancellation_.reset();
     }
 
 private:
-    Pool* pool_;
-    std::size_t slot_;
-    std::uint64_t cancellationId_{0};
-    StopRegistration stopRegistration_;
+    worker_cancellation_registration<db_cancellation_target<Pool>> cancellation_;
 };
 
 // A pool slot held for the duration of one operation. Releasing it is the

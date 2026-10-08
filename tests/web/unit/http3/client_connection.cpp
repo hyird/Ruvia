@@ -3125,15 +3125,18 @@ ruvia::Task<void> nativeDatagramEcho(void*, ruvia::Context& context) {
     require_loopback_peer(context);
     auto datagrams = context.tunnel().datagrams();
     while (auto packet = co_await datagrams.read()) {
-        co_await datagrams.send(packet->payload());
+        const auto payload = packet->payload();
+        co_await datagrams.send(payload);
     }
     co_await datagrams.finish();
 }
+
 ruvia::Task<void> nativeUdpEcho(void*, ruvia::Context& context) {
     require_loopback_peer(context);
     ruvia::HttpUdpTunnel datagrams(context.tunnel().datagrams());
     while (auto packet = co_await datagrams.read()) {
-        co_await datagrams.send(packet->payload());
+        const auto payload = packet->payload();
+        co_await datagrams.send(payload);
     }
     co_await datagrams.finish();
 }
@@ -3153,7 +3156,7 @@ RUVIA_TEST(http3_native_datagram_server_and_client_route_packets_capsules_verify
     const std::array listeners{ruvia::detail::HttpServerListenerDefinition(
         {asio::ip::address_v4::loopback(), 0}, std::move(tls), ruvia::Http3ListenConfig{})};
     auto configuration = ruvia::detail::validateHttpServerConfiguration(listeners,
-        {.workerMailboxCapacity = 32, .maxConnections = 4, .maxRequestsPerConnection = 64});
+        {.worker_queue_capacity = 32, .maxConnections = 4, .maxRequestsPerConnection = 64});
     ruvia::detail::WebWorkerRuntime first(configuration, routes.routeTable(), {});
     ruvia::detail::WebWorkerRuntime second(configuration, routes.routeTable(), {});
     first.prepare();
@@ -3293,7 +3296,7 @@ public:
     production_quic_workers(std::span<const ruvia::detail::HttpServerListenerDefinition> listeners,
         const ruvia::detail::RouteTable& routes)
         : configuration(ruvia::detail::validateHttpServerConfiguration(listeners,
-              {.workerMailboxCapacity = 32, .maxConnections = 4, .maxRequestsPerConnection = 64})),
+              {.worker_queue_capacity = 32, .maxConnections = 4, .maxRequestsPerConnection = 64})),
           first(configuration, routes, {}),
           second(configuration, routes, {}),
           targets{production_quic_target(first), production_quic_target(second)},

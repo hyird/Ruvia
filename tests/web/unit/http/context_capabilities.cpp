@@ -176,7 +176,7 @@ RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
 
 RUVIA_TEST(context_services_borrows_address_stable_worker_and_stop_token) {
     auto& ioContext = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 8});
     const auto handle = attachment.loop().handle();
     const ruvia::StopToken stopToken;
     const ruvia::detail::ContextServices services(handle, stopToken);

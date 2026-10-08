@@ -289,19 +289,19 @@ struct EventLoopState final : WorkerShutdownListener,
                               std::enable_shared_from_this<EventLoopState> {
     using ContextOwnership = std::variant<worker_runtime, ExternalContextClaim>;
 
-    explicit EventLoopState(std::size_t mailboxCapacity)
+    explicit EventLoopState(std::size_t queue_capacity)
         : contextOwnership(std::in_place_type<worker_runtime>,
-              worker_runtime_options{.mailbox_capacity = mailboxCapacity}),
+              worker_runtime_options{.queue_capacity = queue_capacity}),
           ioContext(&owned_runtime().context().ioContext()),
           executor(ioContext->get_executor()),
           runtime(owned_runtime().context()) {}
 
-    EventLoopState(asio::io_context& externalContext, std::size_t mailboxCapacity)
+    EventLoopState(asio::io_context& externalContext, std::size_t queue_capacity)
         : contextOwnership(std::in_place_type<ExternalContextClaim>, externalContext),
           ioContext(std::addressof(externalContext)),
           executor(externalContext.get_executor()),
           work(asio::make_work_guard(*ioContext)),
-          attached_runtime(std::in_place, *ioContext, mailboxCapacity),
+          attached_runtime(std::in_place, *ioContext, queue_capacity),
           runtime(*attached_runtime) {}
 
     [[nodiscard]] worker_runtime& owned_runtime() noexcept {
@@ -764,7 +764,7 @@ void EventLoopAttachment::stop() noexcept {
 
 EventLoopAttachment attachEventLoop(
     asio::io_context& ioContext, EventLoopAttachmentOptions options) {
-    auto state = std::make_shared<detail::EventLoopState>(ioContext, options.mailboxCapacity);
+    auto state = std::make_shared<detail::EventLoopState>(ioContext, options.queue_capacity);
     const std::weak_ptr<detail::EventLoopState> weakState = state;
     // RootTask uses this sink directly; it must not call EventLoopState::reportFailure,
     // which would route back through this same sink.
@@ -784,13 +784,13 @@ EventLoopAttachment attachEventLoop(
 struct EventLoopPool::Impl {
     explicit Impl(EventLoopPoolOptions options) {
         const auto count = options.loopCount == 0 ? defaultLoopCount() : options.loopCount;
-        if (options.mailboxCapacity == 0) {
-            throw std::invalid_argument("event loop mailbox capacity must be greater than zero");
+        if (options.queue_capacity == 0) {
+            throw std::invalid_argument("event loop queue capacity must be greater than zero");
         }
         owner = std::make_shared<EventLoopPoolOwner>(count);
         loops.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-            loops.push_back(std::make_shared<detail::EventLoopState>(options.mailboxCapacity));
+            loops.push_back(std::make_shared<detail::EventLoopState>(options.queue_capacity));
             loops.back()->installLifecycleListener();
             owner->addLoop(loops.back());
             loops.back()->failureSink = [stableOwner = owner](std::exception_ptr failure) {

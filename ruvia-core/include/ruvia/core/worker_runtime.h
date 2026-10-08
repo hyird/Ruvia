@@ -14,7 +14,7 @@ enum class worker_io_policy { synchronized,
     single_owner };
 
 struct worker_runtime_options final {
-    std::size_t mailbox_capacity{4096};
+    std::size_t queue_capacity{4096};
     worker_io_policy io_policy{worker_io_policy::synchronized};
 };
 

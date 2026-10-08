@@ -16,7 +16,7 @@
 
 RUVIA_TEST(worker_capabilities_exposes_one_address_stable_capability_graph) {
     auto& ioContext = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 64});
+    auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 64});
     const auto worker = attachment.loop().handle();
     ruvia::WorkerMemory memory;
     ruvia::detail::WorkerCapabilities capabilities(ioContext, worker, memory.resource(), {}, {});

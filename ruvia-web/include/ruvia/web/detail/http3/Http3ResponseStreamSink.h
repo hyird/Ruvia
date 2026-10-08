@@ -17,7 +17,7 @@ namespace ruvia::detail {
 class Http3BufferedRequestDispatch;
 
 // One worker-owned response stream. The publisher parks on the connection's
-// bounded output mailbox; neither the sink nor the producer owns QUIC state.
+// bounded output buffer; neither the sink nor the producer owns QUIC state.
 class Http3ResponseStreamSink final {
 public:
     Http3ResponseStreamSink(Http3BufferedRequestDispatch& publisher,

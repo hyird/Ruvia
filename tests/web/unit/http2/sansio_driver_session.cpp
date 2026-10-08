@@ -13,6 +13,7 @@
 #include "ruvia/http/Http2Types.h"
 #include "ruvia/web/detail/http/context/ContextServices.h"
 #include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "ruvia/web/detail/http2/Http2SansIoSessionLifecycle.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/Router.h"
 #include "ruvia/web/detail/router/RouterImpl.h"
@@ -22,6 +23,63 @@
 #include "test_io_context.h"
 
 // Sans-I/O HTTP/2 driver: connection setup, round trips, multiplexing and teardown.
+
+RUVIA_TEST(http2_writer_completion_survives_reader_transition_order) {
+    for (const bool write_failure : {false, true}) {
+        for (const bool complete_before_stopping : {false, true}) {
+            ruvia::detail::Http2SansIoSessionLifecycle lifecycle;
+            RUVIA_CHECK(!lifecycle.writer_join_pending());
+            RUVIA_CHECK(!lifecycle.writerDone());
+            lifecycle.mark_writer_submitted();
+            // Submission, not entry into the task body, establishes the join.
+            RUVIA_CHECK(lifecycle.writer_join_pending());
+            if (write_failure) {
+                lifecycle.markWriteFailed();
+            }
+            if (complete_before_stopping) {
+                lifecycle.markWriterDone();
+                RUVIA_CHECK(lifecycle.writerDone());
+                RUVIA_CHECK(!lifecycle.stopping());
+            }
+            lifecycle.beginStopping();
+            if (!complete_before_stopping) {
+                RUVIA_CHECK(lifecycle.writer_join_pending());
+                lifecycle.markWriterDone();
+            }
+            RUVIA_CHECK(lifecycle.stopping());
+            RUVIA_CHECK(lifecycle.writerDone());
+            RUVIA_CHECK(!lifecycle.writer_join_pending());
+            RUVIA_CHECK(lifecycle.writeFailed() == write_failure);
+        }
+    }
+}
+
+RUVIA_TEST(http2_writer_unsuccessful_submission_has_no_join_obligation) {
+    ruvia::detail::Http2SansIoSessionLifecycle lifecycle;
+    lifecycle.mark_writer_submitted();
+    lifecycle.mark_writer_launch_failed();
+    lifecycle.beginStopping();
+    RUVIA_CHECK(!lifecycle.writer_join_pending());
+    RUVIA_CHECK(!lifecycle.writerDone());
+    RUVIA_CHECK(lifecycle.stopping());
+}
+
+RUVIA_TEST(http2_writer_failure_is_retained_after_early_completion) {
+    ruvia::detail::Http2SansIoSessionLifecycle lifecycle;
+    lifecycle.mark_writer_submitted();
+    lifecycle.recordWriterFailure(std::make_exception_ptr(std::runtime_error("writer allocation failure")));
+    lifecycle.markWriterDone();
+    lifecycle.beginStopping();
+    bool observed_failure = false;
+    try {
+        lifecycle.rethrowWriterFailure();
+    } catch (const std::runtime_error& error) {
+        observed_failure = std::string_view(error.what()) == "writer allocation failure";
+    }
+    RUVIA_CHECK(observed_failure);
+    RUVIA_CHECK(lifecycle.writerDone());
+    RUVIA_CHECK(!lifecycle.writer_join_pending());
+}
 
 RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
     using Phase = ruvia::ConnectionScanner::Phase;
@@ -37,7 +95,7 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
 
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     auto& ioContext = ruvia::test::newTestIoContext();
-    auto attachment = ruvia::attachEventLoop(ioContext, {.mailboxCapacity = 8});
+    auto attachment = ruvia::attachEventLoop(ioContext, {.queue_capacity = 8});
     const auto worker = attachment.loop().handle();
     ruvia::detail::HttpServerOptions options;
     ruvia::ConnectionScanner::Entry scannerEntry;
@@ -640,7 +698,7 @@ RUVIA_TEST(sansio_driver_h2_keepalive_requests_drains_connection) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            auto attachment = ruvia::attachEventLoop(io, {.mailboxCapacity = 64});
+            auto attachment = ruvia::attachEventLoop(io, {.queue_capacity = 64});
             const auto workerHandle = attachment.loop().handle();
             fixture.options.maxRequestsPerConnection = 1;
             co_await ruvia::asAwaitable(ruvia::detail::runHttp2SansIoSession(sock,

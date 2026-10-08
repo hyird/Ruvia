@@ -72,11 +72,13 @@ Task<void> runHttp2SansIoSessionImpl(Stream& stream, asio::ip::tcp::socket& sock
     auto executor = asio::any_io_executor(stream.get_executor());
     Http2SansIoSessionEngine engine(executor, socket, routes, worker, std::move(session));
 
+    engine.writer_submitting();
     try {
         asio::co_spawn(executor, ruvia::asAwaitable(runHttp2SansIoWriter(stream, engine)),
             [&engine](
                 std::exception_ptr exception) noexcept { engine.writerCompleted(exception); });
     } catch (...) {
+        engine.writer_launch_failed();
         engine.terminate(std::make_error_code(std::errc::operation_canceled));
         throw;
     }

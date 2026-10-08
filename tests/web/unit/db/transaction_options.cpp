@@ -141,7 +141,7 @@ RUVIA_TEST(db_transaction_options_cold_cancelled_and_invalid_operations_release_
     };
     for (const auto driver : drivers) {
         auto& context = test::newTestIoContext();
-        auto attachment = attachEventLoop(context, {.mailboxCapacity = 8});
+        auto attachment = attachEventLoop(context, {.queue_capacity = 8});
         const auto worker = attachment.loop().handle();
         test::CountingMemoryResource resource;
         detail::DbRegistry registry(context, worker, &resource,

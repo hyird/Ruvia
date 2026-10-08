@@ -21,6 +21,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/quic_server.h"
+#include "ruvia/web/detail/http3/http3_capacity.h"
 #include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
 #include "ruvia/web/detail/server/HttpServerListener.h"
 #include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
@@ -70,7 +71,7 @@ public:
 
 private:
     struct listener final {
-        listener(asio::io_context& context, asio::ip::tcp::endpoint configured, bool quic)
+        listener(asio::io_context& context, asio::ip::tcp::endpoint configured, std::optional<http3_capacity> quic)
             : socket(context),
               endpoint(std::move(configured)),
               retry(context),
@@ -78,7 +79,7 @@ private:
         asio::ip::tcp::acceptor socket;
         asio::ip::tcp::endpoint endpoint;
         asio::steady_timer retry;
-        bool quic{};
+        std::optional<http3_capacity> quic;
     };
     using listener_ptr = std::unique_ptr<listener, PmrObjectDeleter<listener>>;
     using channel_ptr = std::unique_ptr<http3_datagram_channel,

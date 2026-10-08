@@ -49,6 +49,7 @@ private:
     std::uint32_t streamId_{0};
     bool writerActive_{false};
     bool eof_{false};
+    bool clean_reset_{false};
     bool stopped_{false};
 };
 }  // namespace ruvia::detail

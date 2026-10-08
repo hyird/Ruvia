@@ -39,7 +39,7 @@ public:
 
     // Reconcile the outstanding_ reservation post() took for a start-lambda that
     // is destroyed without running (a rejected post, or a shutdown that abandons
-    // queued mailbox work behind a task that threw). Public only so the post()
+    // queued queue work behind a task that threw). Public only so the post()
     // reservation deleter can reach it; not a task-completion signal.
     void abandon() noexcept;
 

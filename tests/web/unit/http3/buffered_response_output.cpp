@@ -20,7 +20,7 @@
 namespace {
 
 using Output = ruvia::detail::Http3BufferedResponseOutput;
-using Mailbox = ruvia::detail::http3_stream_buffer;
+using buffer = ruvia::detail::http3_stream_buffer;
 using MessageId = ruvia::detail::http3_stream_id;
 using Control = ruvia::detail::http3_stream_control;
 
@@ -80,18 +80,18 @@ constexpr MessageId kMessageId{.epoch = 11, .connection_generation = 17, .stream
 
 Output makeOutput(const ruvia::HttpResponse& response,
     const ruvia::HttpBufferedResponseWritePlan& plan, ruvia::WorkerMemory& worker,
-    Mailbox& mailbox, std::optional<std::uint64_t> peerLimit = std::nullopt) {
-    auto output = Output::create(response, plan, worker, mailbox, kMessageId, peerLimit);
+    buffer& buffer, std::optional<std::uint64_t> peerLimit = std::nullopt) {
+    auto output = Output::create(response, plan, worker, buffer, kMessageId, peerLimit);
     if (!output) {
         throw std::runtime_error("failed to create buffered HTTP/3 response output");
     }
     return std::move(*output);
 }
 
-void collectOne(Mailbox& mailbox, std::string& wire, ruvia::testing::TestContext& ruvia_ctx,
+void collectOne(buffer& buffer, std::string& wire, ruvia::testing::TestContext& ruvia_ctx,
     std::optional<std::size_t> expectedSize = std::nullopt) {
-    Mailbox::borrowed_block block;
-    const bool received = mailbox.try_receive(block);
+    buffer::borrowed_block block;
+    const bool received = buffer.try_receive(block);
     RUVIA_CHECK(received);
     if (!received) {
         return;
@@ -105,7 +105,7 @@ void collectOne(Mailbox& mailbox, std::string& wire, ruvia::testing::TestContext
     }
     wire.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     block.release();
-    RUVIA_CHECK(!mailbox.has_pending());
+    RUVIA_CHECK(!buffer.has_pending());
 }
 
 RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin) {
@@ -113,10 +113,10 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(1, 1, 1, worker.resource());
+        buffer buffer(1, 1, 1, worker.resource());
         ruvia::HttpResponse response;
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        auto output = makeOutput(response, plan, worker, mailbox);
+        auto output = makeOutput(response, plan, worker, buffer);
         std::string wire;
 
         RUVIA_CHECK(output.nextStep() == Output::NextStep::bytes);
@@ -126,20 +126,20 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
         RUVIA_CHECK(headers.status == Output::Status::kBytes);
         RUVIA_CHECK(headers.bytesAccepted > 0);
         RUVIA_CHECK_EQ(headers.publishedWireBytes, headers.bytesAccepted);
-        collectOne(mailbox, wire, ruvia_ctx);
+        collectOne(buffer, wire, ruvia_ctx);
         RUVIA_CHECK(output.nextStep() == Output::NextStep::fin);
         RUVIA_CHECK_EQ(output.decodedFieldSectionSize(), decodedFieldSectionSize);
 
         const Control blocker{Control::kind::writable, kMessageId};
-        RUVIA_CHECK(mailbox.try_send_control(blocker) == Mailbox::control_result::sent);
+        RUVIA_CHECK(buffer.try_send_control(blocker) == buffer::control_result::sent);
         const auto blockedFin = output.publishStep();
         RUVIA_CHECK(blockedFin.status == Output::Status::kBackpressured);
         RUVIA_CHECK(blockedFin.blockReason == Output::BlockReason::kControl);
         RUVIA_CHECK_EQ(blockedFin.publishedWireBytes, headers.publishedWireBytes);
         Control blockerReceived;
-        RUVIA_CHECK(mailbox.try_receive_control(blockerReceived));
+        RUVIA_CHECK(buffer.try_receive_control(blockerReceived));
         RUVIA_CHECK(blockerReceived.kind == Control::kind::writable);
-        RUVIA_CHECK(!mailbox.has_pending());
+        RUVIA_CHECK(!buffer.has_pending());
 
         const auto finResult = output.publishStep();
         RUVIA_CHECK(finResult.status == Output::Status::kFin);
@@ -150,14 +150,14 @@ RUVIA_TEST(http3BufferedResponseOutputPublishesEmptyResponseHeadersThenExactFin)
         RUVIA_CHECK(!output.failed());
 
         Control fin;
-        RUVIA_CHECK(mailbox.try_receive_control(fin));
+        RUVIA_CHECK(buffer.try_receive_control(fin));
         RUVIA_CHECK(fin.kind == Control::kind::stream_fin);
         RUVIA_CHECK(fin.id.epoch == kMessageId.epoch);
         RUVIA_CHECK(fin.id.connection_generation == kMessageId.connection_generation);
         RUVIA_CHECK(fin.id.stream_id == kMessageId.stream_id);
         RUVIA_CHECK_EQ(fin.value, wire.size());
         RUVIA_CHECK_EQ(output.publishedWireBytes(), fin.value);
-        RUVIA_CHECK(!mailbox.has_pending());
+        RUVIA_CHECK(!buffer.has_pending());
         RUVIA_CHECK(output.publishStep().status == Output::Status::kComplete);
         RUVIA_CHECK(upstream.allocations > upstream.returns);
     }
@@ -169,17 +169,17 @@ RUVIA_TEST(http3BufferedResponseOutputResumesAfterDataBackpressureAndPublishesPa
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(1, 1, 1, worker.resource());
+        buffer buffer(1, 1, 1, worker.resource());
         ruvia::HttpResponse response;
-        const std::string body(Mailbox::max_block_bytes + 37, 'b');
+        const std::string body(buffer::max_block_bytes + 37, 'b');
         response.body(body);
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        auto output = makeOutput(response, plan, worker, mailbox);
+        auto output = makeOutput(response, plan, worker, buffer);
         std::string wire;
 
         const auto headers = output.publishStep();
         RUVIA_CHECK(headers.status == Output::Status::kBytes);
-        collectOne(mailbox, wire, ruvia_ctx);
+        collectOne(buffer, wire, ruvia_ctx);
 
         const auto dataFrame = output.publishStep();
         RUVIA_CHECK(dataFrame.status == Output::Status::kBytes);
@@ -187,30 +187,30 @@ RUVIA_TEST(http3BufferedResponseOutputResumesAfterDataBackpressureAndPublishesPa
         RUVIA_CHECK(blockedOnFrame.status == Output::Status::kBackpressured);
         RUVIA_CHECK(blockedOnFrame.blockReason == Output::BlockReason::kData);
         RUVIA_CHECK_EQ(blockedOnFrame.publishedWireBytes, dataFrame.publishedWireBytes);
-        collectOne(mailbox, wire, ruvia_ctx);
+        collectOne(buffer, wire, ruvia_ctx);
 
         const auto bodyBlock = output.publishStep();
         RUVIA_CHECK(bodyBlock.status == Output::Status::kBytes);
-        RUVIA_CHECK_EQ(bodyBlock.bytesAccepted, Mailbox::max_block_bytes);
+        RUVIA_CHECK_EQ(bodyBlock.bytesAccepted, buffer::max_block_bytes);
         const auto blockedOnBody = output.publishStep();
         RUVIA_CHECK(blockedOnBody.status == Output::Status::kBackpressured);
         RUVIA_CHECK(blockedOnBody.blockReason == Output::BlockReason::kData);
         RUVIA_CHECK_EQ(blockedOnBody.publishedWireBytes, bodyBlock.publishedWireBytes);
-        collectOne(mailbox, wire, ruvia_ctx, Mailbox::max_block_bytes);
+        collectOne(buffer, wire, ruvia_ctx, buffer::max_block_bytes);
 
         const auto bodyRemainder = output.publishStep();
         RUVIA_CHECK(bodyRemainder.status == Output::Status::kBytes);
         RUVIA_CHECK_EQ(bodyRemainder.bytesAccepted, 37U);
-        collectOne(mailbox, wire, ruvia_ctx, 37U);
+        collectOne(buffer, wire, ruvia_ctx, 37U);
         RUVIA_CHECK_EQ(output.publishedWireBytes(), wire.size());
 
         const auto finResult = output.publishStep();
         RUVIA_CHECK(finResult.status == Output::Status::kFin);
         RUVIA_CHECK_EQ(finResult.publishedWireBytes, wire.size());
         Control fin;
-        RUVIA_CHECK(mailbox.try_receive_control(fin));
+        RUVIA_CHECK(buffer.try_receive_control(fin));
         RUVIA_CHECK_EQ(fin.value, wire.size());
-        RUVIA_CHECK(mailbox.has_pending() == false);
+        RUVIA_CHECK(buffer.has_pending() == false);
         RUVIA_CHECK(output.complete());
         RUVIA_CHECK(upstream.allocations > upstream.returns);
     }
@@ -222,39 +222,39 @@ RUVIA_TEST(http3BufferedResponseOutputRejectsPeerFieldLimitBeforePublishingHeade
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(1, 1, 1, worker.resource());
+        buffer buffer(1, 1, 1, worker.resource());
         ruvia::HttpResponse response;
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        auto output = Output::create(response, plan, worker, mailbox, kMessageId, 0);
+        auto output = Output::create(response, plan, worker, buffer, kMessageId, 0);
         RUVIA_CHECK(!output);
         if (!output) {
             RUVIA_CHECK(output.error() == Output::Error::kPeerFieldSectionLimit);
         }
-        Mailbox::borrowed_block block;
+        buffer::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!mailbox.try_receive(block));
-        RUVIA_CHECK(!mailbox.try_receive_control(control));
+        RUVIA_CHECK(!buffer.try_receive(block));
+        RUVIA_CHECK(!buffer.try_receive_control(control));
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.returns);
 }
 
-RUVIA_TEST(http3_buffered_response_output_preserves_published_bytes_across_mailbox_stop) {
+RUVIA_TEST(http3_buffered_response_output_preserves_published_bytes_across_buffer_stop) {
     Watchdog watchdog;
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(1, 1, 1, worker.resource());
+        buffer buffer(1, 1, 1, worker.resource());
         ruvia::HttpResponse response;
         response.body("accepted before stop");
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        auto output = makeOutput(response, plan, worker, mailbox);
+        auto output = makeOutput(response, plan, worker, buffer);
 
         const auto published = output.publishStep();
         RUVIA_CHECK(published.status == Output::Status::kBytes);
         RUVIA_CHECK_EQ(published.publishedWireBytes, published.bytesAccepted);
         RUVIA_CHECK(!output.complete());
 
-        RUVIA_CHECK(mailbox.stop());
+        RUVIA_CHECK(buffer.stop());
         const auto stopped = output.publishStep();
         RUVIA_CHECK(stopped.status == Output::Status::kFailed);
         RUVIA_CHECK(stopped.error == Output::Error::buffer_stopped);
@@ -264,7 +264,7 @@ RUVIA_TEST(http3_buffered_response_output_preserves_published_bytes_across_mailb
         RUVIA_CHECK(output.publishStep().status == Output::Status::kFailed);
 
         std::string wire;
-        collectOne(mailbox, wire, ruvia_ctx);
+        collectOne(buffer, wire, ruvia_ctx);
         RUVIA_CHECK_EQ(wire.size(), published.bytesAccepted);
         RUVIA_CHECK(upstream.allocations > upstream.returns);
     }
@@ -276,11 +276,11 @@ RUVIA_TEST(http3BufferedResponseOutputExplicitStopNeverClaimsCompletion) {
     CountingResource upstream;
     {
         ruvia::WorkerMemory worker(upstream);
-        Mailbox mailbox(1, 1, 1, worker.resource());
+        buffer buffer(1, 1, 1, worker.resource());
         ruvia::HttpResponse response;
         response.body("not published");
         const auto plan = ruvia::planBufferedHttpResponseWrite(ruvia::HttpKnownMethod::kGet, response);
-        auto output = makeOutput(response, plan, worker, mailbox);
+        auto output = makeOutput(response, plan, worker, buffer);
 
         output.stop();
         RUVIA_CHECK(output.failed());
@@ -289,10 +289,10 @@ RUVIA_TEST(http3BufferedResponseOutputExplicitStopNeverClaimsCompletion) {
         RUVIA_CHECK(stopped.status == Output::Status::kFailed);
         RUVIA_CHECK(stopped.error == Output::Error::kStopped);
         RUVIA_CHECK_EQ(stopped.publishedWireBytes, 0U);
-        Mailbox::borrowed_block block;
+        buffer::borrowed_block block;
         Control control;
-        RUVIA_CHECK(!mailbox.try_receive(block));
-        RUVIA_CHECK(!mailbox.try_receive_control(control));
+        RUVIA_CHECK(!buffer.try_receive(block));
+        RUVIA_CHECK(!buffer.try_receive_control(control));
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.returns);
 }

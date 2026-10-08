@@ -18,8 +18,8 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/TcpSocketOptions.h"
-#include "ruvia/core/WorkerCancellationPost.h"
 #include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRequestTarget.h"
@@ -101,7 +101,7 @@ std::size_t httpClientSchedulerSlots(const HttpClientConfigStorage& config) noex
 
 }  // namespace
 
-static_assert(workerCancellationPostIsInline<HttpClientOperationCancellationMailbox>);
+static_assert(worker_cancellation_post_is_inline<http_client_cancellation_target>);
 
 HttpClientPool::Connection::Connection(asio::io_context& ioContext, asio::ssl::context& tlsContext,
     const WorkerHandle& worker, std::pmr::memory_resource* resource)
@@ -164,14 +164,14 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
         }
     } else {
         if (config_.scheme == HttpScheme::kHttps) {
-            configureClientTlsContext(tlsContext_, config_.transport.view());
+            configure_client_tls_context(*tlsContext_.native_handle(), config_.transport.view());
         }
         connections_.reserve(config_.connectionCount);
         for (std::size_t i = 0; i < config_.connectionCount; ++i) {
             connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
         }
     }
-    cancellationMailbox_ = makeWorkerCancellationMailbox(*this, worker_);
+    cancellation_target_ = make_worker_cancellation_target(*this, worker_);
     responseMemory_ = HttpClientResponseMemoryDomain::create(worker_, resultBudgetDomain_);
 }
 
@@ -220,7 +220,7 @@ void HttpClientPool::close(Connection& connection) noexcept {
 }
 
 void HttpClientPool::closeNow() noexcept {
-    cancellationMailbox_->detach(*this);
+    cancellation_target_->detach(*this);
     if (!scheduler_.close()) {
         return;
     }
@@ -658,36 +658,22 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
             ++connection.generation;
         }
     } cancellationGeneration{connection};
-    connection.cancellationId = 0;
-    std::uint64_t cancellationId = 0;
-    StopRegistration stopRegistration;
-    if (stopToken.stoppable()) {
-        cancellationId = cancellationMailbox_->nextOperationId();
-        connection.cancellationId = cancellationId;
-        stopToken.registerCallback(
-            stopRegistration, WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                                  cancellationMailbox_, cancellationId));
-    }
-    struct CancellationRegistrationGuard final {
-        Connection& connection;
-        std::uint64_t cancellationId;
-        StopRegistration& registration;
-
-        ~CancellationRegistrationGuard() {
-            if (connection.cancellationId == cancellationId) {
-                connection.cancellationId = 0;
-            }
-            registration.reset();
-        }
-    } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
-    if (stopToken.stopRequested()) {
-        cancelOperationById(cancellationId);
-    }
+    worker_cancellation_registration cancellation(cancellation_target_, connection.cancellationId);
+    cancellation.arm(stopToken);
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
         throwAbort(connection);
         co_await runtime.stateSignal.wait();
     }
     throwAbort(connection);
+    if (connection.transport_started) {
+        // All session drivers and the serialized HTTP/1 exchange have retired.
+        // SSL_clear alone cannot discard Asio's input cursor or its BIO pair.
+        // Swap through moved-from streams so each displaced SSL engine remains
+        // owned until destruction (rather than overwriting its native owner).
+        asio::ssl::stream<asio::ip::tcp::socket> fresh(ioContext_, tlsContext_);
+        std::swap(connection.stream, fresh);
+        connection.transport_started = false;
+    }
     runtime.connecting = true;
     struct ConnectGuard final {
         Http2Runtime& runtime;
@@ -740,6 +726,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
         connection.stream.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
 
     if (config_.scheme == HttpScheme::kHttps) {
+        connection.transport_started = true;
         const auto tlsSetup = prepareClientTlsStream(
             connection.stream, config_.host, transport, clientAlpnMode(config_.protocol));
         if (tlsSetup != ClientTlsSetupError::kNone) {
@@ -892,15 +879,11 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
     StopToken stopToken, HttpClientResponse& response) {
     struct CancellationGuard final {
         std::pmr::vector<Http3PendingCancellation>& pending;
-        StopRegistration& registration;
-        HttpClientResponseState& state;
+        worker_cancellation_registration<http_client_cancellation_target>& registration;
         std::uint64_t id;
 
         ~CancellationGuard() {
             registration.reset();
-            if (state.cancellationId == id) {
-                state.cancellationId = 0;
-            }
             std::erase_if(pending,
                 [id = id](const Http3PendingCancellation& item) {
                     return item.cancellationId == id;
@@ -951,20 +934,11 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
                     }
                 });
             }
-            StopRegistration stopRegistration;
-            const auto cancellationId = cancellationMailbox_->nextOperationId();
+            worker_cancellation_registration registration(cancellation_target_, response.state_->cancellationId);
+            const auto cancellationId = registration.id();
             http3PendingCancellations_.push_back({cancellationId, nullptr, 0});
-            response.state_->cancellationId = cancellationId;
-            CancellationGuard cancellation{
-                http3PendingCancellations_, stopRegistration, *response.state_, cancellationId};
-            if (stopToken.stoppable()) {
-                stopToken.registerCallback(stopRegistration,
-                    WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                        cancellationMailbox_, cancellationId));
-            }
-            if (stopToken.stopRequested()) {
-                cancelOperationById(cancellationId);
-            }
+            CancellationGuard cancellation{http3PendingCancellations_, registration, cancellationId};
+            registration.arm(stopToken);
             co_await http3GenerationSignal_.wait();
             timer.cancel();
         }
@@ -986,21 +960,11 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
         Http3ClientConnection::Outcome outcome = Http3ClientConnection::Outcome::kPending;
         std::optional<Http3ClientConnection::RejectedRequest> rejected;
         {
-            StopRegistration stopRegistration;
-            const auto cancellationId = cancellationMailbox_->nextOperationId();
-            http3PendingCancellations_.push_back(
-                {cancellationId, connection, submission.id});
-            response.state_->cancellationId = cancellationId;
-            CancellationGuard cancellation{
-                http3PendingCancellations_, stopRegistration, *response.state_, cancellationId};
-            if (stopToken.stoppable()) {
-                stopToken.registerCallback(stopRegistration,
-                    WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                        cancellationMailbox_, cancellationId));
-            }
-            if (stopToken.stopRequested()) {
-                cancelOperationById(cancellationId);
-            }
+            worker_cancellation_registration registration(cancellation_target_, response.state_->cancellationId);
+            const auto cancellationId = registration.id();
+            http3PendingCancellations_.push_back({cancellationId, connection, submission.id});
+            CancellationGuard cancellation{http3PendingCancellations_, registration, cancellationId};
+            registration.arm(stopToken);
 
             co_await connection->wait(submission.id);
             if (response.state_->http3Connection != connection) {
@@ -1268,7 +1232,12 @@ Task<void> HttpClientPool::executeRequestInto(
     state->connectionIndex = index % connections_.size();
     bool discardConnection = true;
     try {
-        co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
+        // A cancelled HTTP/1 producer still owns its SSL stream until its
+        // serialized exchange unwinds. Join that exchange before reconnecting,
+        // including when negotiated HTTP/2-capacity leases share the pool slot.
+        if (connection.connected || connection.http2Runtime->http1Operations == 0) {
+            co_await ensureConnected(connection, timeout, acquireTimeout, options.stopToken);
+        }
         if (connection.protocol == WireProtocol::kHttp2) {
             // This lease now shares a multiplexed session with background drivers
             // and possibly other requests. A request-local failure must not
@@ -1368,32 +1337,9 @@ Task<void> HttpClientPool::executeRequestInto(
                             ++connection.generation;
                         }
                     } cancellationGeneration{connection};
-                    connection.cancellationId = 0;
-                    std::uint64_t cancellationId = 0;
-                    StopRegistration stopRegistration;
-                    if (options.stopToken.stoppable()) {
-                        cancellationId = cancellationMailbox_->nextOperationId();
-                        connection.cancellationId = cancellationId;
-                        state->cancellationId = cancellationId;
-                        options.stopToken.registerCallback(stopRegistration,
-                            WorkerCancellationPost<HttpClientOperationCancellationMailbox>(
-                                cancellationMailbox_, cancellationId));
-                    }
-                    struct H1CancellationRegistrationGuard final {
-                        Connection& connection;
-                        std::uint64_t cancellationId;
-                        StopRegistration& registration;
-
-                        ~H1CancellationRegistrationGuard() {
-                            if (connection.cancellationId == cancellationId) {
-                                connection.cancellationId = 0;
-                            }
-                            registration.reset();
-                        }
-                    } cancellationRegistrationGuard{connection, cancellationId, stopRegistration};
-                    if (options.stopToken.stopRequested()) {
-                        cancelOperationById(cancellationId);
-                    }
+                    worker_cancellation_registration cancellation(cancellation_target_, connection.cancellationId);
+                    state->cancellationId = cancellation.id();
+                    cancellation.arm(options.stopToken);
                     connection.activeHttp1Response = state;
                     struct ActiveHttp1ResponseGuard final {
                         Connection& connection;
