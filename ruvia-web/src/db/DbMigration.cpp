@@ -12,12 +12,13 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/db/Db.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
-#include "ruvia/web/detail/db/DbMigrationChecksum.h"
-#include "ruvia/web/detail/db/DbMigrationValidation.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/web/detail/integration/NamedCapability.h"
+
+#include "db/DbConfigValidation.h"
+#include "db/DbMigrationChecksum.h"
+#include "db/DbMigrationValidation.h"
+#include "db/DbRegistry.h"
+#include "integration/NamedCapability.h"
 
 namespace ruvia {
 namespace {

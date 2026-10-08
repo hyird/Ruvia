@@ -5,10 +5,11 @@
 #include <new>
 #include <utility>
 
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
-#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "coding/HttpContentCodec.h"
+#include "coding/PmrCodecAllocation.h"
+#include "coding/ZlibPmrAllocation.h"
 
 // gzip (RFC 1952) and zlib-wrapped deflate through zlib, with zlib's allocator
 // routed to the caller's memory resource so neither direction makes a global allocation.

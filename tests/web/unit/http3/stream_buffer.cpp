@@ -7,8 +7,7 @@
 #include <new>
 #include <utility>
 
-#include "ruvia/web/detail/http3/http3_stream_buffer.h"
-
+#include "http3/http3_stream_buffer.h"
 #include "test_harness.h"
 
 namespace {

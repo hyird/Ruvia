@@ -6,9 +6,8 @@
 #include <memory_resource>
 #include <stdexcept>
 
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
-#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
-
+#include "coding/PmrCodecAllocation.h"
+#include "coding/ZlibPmrAllocation.h"
 #include "test_harness.h"
 
 namespace {

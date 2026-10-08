@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbSql.h"
+#include "db/DbSql.h"
 
 #include <mysql.h>
 

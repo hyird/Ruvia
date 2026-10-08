@@ -26,20 +26,20 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/Db.h"
-#include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbOperationState.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
-#include "ruvia/web/detail/db/DbPreparedStatement.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
+#include "db/DbConfigValidation.h"
+#include "db/DbPoolOperations.h"
+#include "db/DbPreparedStatement.h"
+#include "db/DbRegistry.h"
+#include "db/DbSlotSocket.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 #ifdef RUVIA_ENABLE_MARIADB
-#include "ruvia/web/detail/db/DbMysqlRuntime.h"
+#include "db/DbMysqlRuntime.h"
 #endif
 
 namespace {
@@ -93,7 +93,7 @@ struct ClosingResolveSlot final {
     bool throw_on_initiation{false};
     ruvia::WorkerTimerRegistration deadline_timer;
     ruvia::WorkerTimerRegistration* deadlineTimer{&deadline_timer};
-    ruvia::detail::OperationDeadline<DeadlineKind> deadline;
+    ruvia::operation_deadline<DeadlineKind> deadline;
 
     static void expire_deadline(ClosingResolveSlot& slot, DeadlineKind) noexcept {
         slot.resolver.cancel();
@@ -238,7 +238,7 @@ struct deadline_test_slot final {
 
     ruvia::WorkerTimerRegistration timer;
     ruvia::WorkerTimerRegistration* deadlineTimer{&timer};
-    ruvia::detail::OperationDeadline<deadline_kind> deadline;
+    ruvia::operation_deadline<deadline_kind> deadline;
     std::coroutine_handle<> deadlineContinuation{};
     unsigned expiry_count{0};
     std::optional<deadline_kind> last_expired;
@@ -398,7 +398,7 @@ RUVIA_TEST(db_resolve_shutdown_preserves_slot_until_it_reports_closing) {
     ClosingResolveSlot slot;
     auto future = asio::co_spawn(ioContext,
         ruvia::asAwaitable(ruvia::detail::resolveDbHost(
-            pool, slot, ruvia::detail::OperationTimeout(std::nullopt), "test database")),
+            pool, slot, ruvia::OperationTimeout(std::nullopt), "test database")),
         asio::use_future);
     ioContext.run();
 

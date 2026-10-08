@@ -1,8 +1,9 @@
 #include <utility>
 
 #include "ruvia/web/db/Db.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbRegistry.h"
 
 // A streaming query result: the rows arrive one at a time from a pooled
 // connection the result holds for as long as it is active, and every exit --

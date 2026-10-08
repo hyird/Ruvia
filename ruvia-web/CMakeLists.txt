@@ -51,6 +51,8 @@ if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPreparedStatement.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbProcedure.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQuery.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/query_compiler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/query_validation.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbQueryResultCache.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
@@ -130,6 +132,7 @@ target_link_libraries(ruvia-web
     PUBLIC
         ruvia::core
         ruvia::http
+    PRIVATE
         # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie
         # signing are Web-layer capabilities, so Web owns the direct OpenSSL
         # dependency while the sans-I/O HTTP target remains independent.
@@ -143,12 +146,12 @@ endif()
 
 if(RUVIA_ENABLE_MARIADB)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_MARIADB)
-    target_link_libraries(ruvia-web PUBLIC unofficial::libmariadb)
+    target_link_libraries(ruvia-web PRIVATE unofficial::libmariadb)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_POSTGRESQL)
-    target_link_libraries(ruvia-web PUBLIC PostgreSQL::PostgreSQL)
+    target_link_libraries(ruvia-web PRIVATE PostgreSQL::PostgreSQL)
     # vcpkg's static libpq splits internal frontend symbols between pgcommon
     # and pgport. GNU linkers need to rescan that cyclic pair.
     if(PostgreSQL_pgcommon_LIBRARY_DEBUG AND
@@ -167,9 +170,9 @@ if(RUVIA_ENABLE_POSTGRESQL)
                 ","
                 "${_ruvia_postgresql_pgport}"
                 ">")
-            target_link_libraries(ruvia-web PUBLIC "${_ruvia_postgresql_link_group}")
+            target_link_libraries(ruvia-web PRIVATE "${_ruvia_postgresql_link_group}")
         else()
-            target_link_libraries(ruvia-web PUBLIC
+            target_link_libraries(ruvia-web PRIVATE
                 "${_ruvia_postgresql_pgcommon}"
                 "${_ruvia_postgresql_pgport}")
         endif()
@@ -182,7 +185,7 @@ endif()
 
 if(RUVIA_ENABLE_REDIS)
     target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_REDIS)
-    target_link_libraries(ruvia-web PUBLIC hiredis::hiredis)
+    target_link_libraries(ruvia-web PRIVATE hiredis::hiredis)
 endif()
 
 if(RUVIA_ENABLE_JWT)

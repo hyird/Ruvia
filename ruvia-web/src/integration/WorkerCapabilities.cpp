@@ -1,10 +1,10 @@
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
+#include "integration/WorkerCapabilities.h"
 
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "context/ContextServices.h"
 
 namespace ruvia::detail {
 namespace {
@@ -25,7 +25,7 @@ WorkerCapabilities::WorkerCapabilities(asio::io_context& ioContext, const Worker
       redis_(ioContext, resource, definitions.redis, worker_),
       databases_(ioContext, worker_, resource, definitions.databases, &redis_),
       httpClientResultBudgetDomain_(
-          std::make_shared<HttpClientResultBudgetDomain>(options.httpClientResultBudget)),
+          std::make_shared<HttpClientResultBudgetDomain>(options.http_client_result_budget)),
       httpClients_(ioContext, worker_, resource, definitions.httpClients,
           httpClientResultBudgetDomain_),
       workerStates_(resource, definitions.workerStates),
@@ -66,20 +66,18 @@ void WorkerCapabilities::shutdownWorkerState() noexcept {
 }
 
 ContextServices WorkerCapabilities::contextServices(const StopToken& stopToken) {
-    ContextServices services(
-        worker_, stopToken, clientRegistries(), &rateLimiter_, options_.maxDecodedBodyBytes);
-    services = services.withWorkerStates(workerStates_)
-                   .withPrecompressedStaticFiles(options_.precompressedStaticFiles);
-    if (options_.blockingPool != nullptr) {
-        services = services.withBlockingPool(*options_.blockingPool);
-    }
-    if (options_.trustedProxies != nullptr) {
-        services = services.withTrustedProxies(*options_.trustedProxies);
-    }
-    if (options_.env != nullptr) {
-        services = services.withEnv(*options_.env);
-    }
-    return services;
+    return ContextServices(context_worker_services{
+                               .worker = worker_,
+                               .clients = clientRegistries(),
+                               .rate_limiter = &rateLimiter_,
+                               .env = options_.env,
+                               .max_decoded_body_bytes = options_.maxDecodedBodyBytes,
+                               .states = &workerStates_,
+                               .blocking_pool = options_.blockingPool,
+                               .precompressed_static_files = options_.precompressedStaticFiles,
+                               .trusted_proxies = options_.trustedProxies,
+                           },
+        stopToken);
 }
 
 WorkerClientRegistryView WorkerCapabilities::clientRegistries() noexcept {

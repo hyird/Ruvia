@@ -6,8 +6,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/web/detail/server/tls/HttpServerAutoHttps.h"
 
+#include "server/HttpServerAutoHttps.h"
 #include "test_harness.h"
 
 namespace {

@@ -7,10 +7,11 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 #include "ruvia/web/redis/Redis.h"
+
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia {
 namespace {

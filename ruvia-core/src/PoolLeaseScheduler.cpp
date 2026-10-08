@@ -10,8 +10,9 @@
 #include <vector>
 
 #include "ruvia/core/WorkerTimer.h"
-#include "ruvia/core/detail/pool/PoolWaiterQueue.h"
 #include "ruvia/core/memory/PmrResource.h"
+
+#include "PoolWaiterQueue.h"
 
 namespace ruvia {
 

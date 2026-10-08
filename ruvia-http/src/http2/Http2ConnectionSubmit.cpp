@@ -10,15 +10,16 @@
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HttpHeaderSectionSize.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/message/Http2ResponseHeaders.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
+#include "http2/Http2Connection.h"
+#include "http2/Http2FlowControl.h"
+#include "http2/Http2HeaderRules.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
+#include "http2/Http2ResponseHeaders.h"
+#include "http2/Http2WebSocketHandshake.h"
 
 namespace ruvia::detail {
 namespace {

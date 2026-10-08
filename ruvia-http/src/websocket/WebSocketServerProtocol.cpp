@@ -1,7 +1,8 @@
 #include "ruvia/http/WebSocketServerProtocol.h"
 
 #include "ruvia/http/detail/util/HttpPmrObject.h"
-#include "ruvia/http/detail/websocket/WsConnection.h"
+
+#include "websocket/WsConnection.h"
 
 namespace ruvia {
 

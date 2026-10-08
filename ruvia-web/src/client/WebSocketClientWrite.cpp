@@ -9,8 +9,9 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/web/detail/client/WebSocketClientInternal.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
+
+#include "client/WebSocketClientInternal.h"
+#include "client/WebSocketClientState.h"
 
 namespace ruvia::detail {
 
@@ -77,7 +78,7 @@ Task<void> WebSocketClientState::flushOutput() {
         auto& protocol = requireProtocol();
         const auto plan = protocol.outputPlan();
         if (!plan.bytes().empty()) {
-            co_await writeTransport(plan.bytes(), config_.writeTimeout);
+            co_await writeTransport(plan.bytes(), config_.write_timeout);
             if (protocol.consumeOutput(plan.bytes().size()) == WebSocketOutputConsumeStatus::kOutOfRange) {
                 std::terminate();
             }

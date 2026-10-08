@@ -4,9 +4,9 @@
 #include <utility>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/detail/response/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 
+#include "response/HttpResponseHeadersAccess.h"
 #include "test_harness.h"
 
 namespace {

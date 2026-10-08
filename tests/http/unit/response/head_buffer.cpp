@@ -8,8 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
-
+#include "server/HttpResponseHeadBuffer.h"
 #include "test_harness.h"
 
 namespace {

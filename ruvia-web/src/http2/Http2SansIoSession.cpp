@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
+#include "http2/Http2SansIoSession.h"
 
 #include <array>
 #include <cstddef>
@@ -16,8 +16,9 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/PmrString.h"
-#include "ruvia/web/detail/http2/Http2SansIoSessionEngine.h"
-#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
+
+#include "http2/Http2SansIoSessionEngine.h"
+#include "server/HttpResponseWriter.h"
 
 namespace ruvia::detail {
 namespace {

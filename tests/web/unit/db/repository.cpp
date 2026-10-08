@@ -17,13 +17,14 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/StopToken.h"
 #include "ruvia/web/db/DbRepository.h"
-#include "ruvia/web/detail/db/DbQueryCache.h"
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
+
+#include "db/DbQueryCache.h"
+#include "db/DbQueryCacheState.h"
+#include "db/DbRegistry.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisClientRuntime.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "redis/RedisClientRuntime.h"
+#include "redis/RedisRegistry.h"
 #endif
 
 #include "memory_resource_fixture.h"

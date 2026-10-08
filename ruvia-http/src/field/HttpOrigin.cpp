@@ -1,6 +1,6 @@
 #include "ruvia/http/HttpOrigin.h"
 
-#include "ruvia/http/detail/parser/HttpSerializedOrigin.h"
+#include "parser/HttpSerializedOrigin.h"
 
 namespace ruvia {
 

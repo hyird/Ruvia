@@ -1,9 +1,9 @@
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
+#include "http2/Http2RequestBuilder.h"
 #include "http2_connection_fixture.h"
+#include "request/HttpRequestAccess.h"
 
 // Http2Connection: HEADERS, CONTINUATION, HPACK and trailers.
 

@@ -13,9 +13,9 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/WebWorker.h"
-#include "ruvia/web/detail/app/WebWorkerDispatch.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 
+#include "app/WebWorkerDispatch.h"
+#include "integration/WorkerCapabilities.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -56,8 +56,8 @@ ruvia::Task<void> emptyTask(ruvia::WebWorkerContext&) {
 }  // namespace
 
 RUVIA_TEST(app_server_rejects_zero_http_client_result_budget) {
-    ruvia::ServerConfig config;
-    config.httpClientResultBudget.maxRetainedBytes = 0;
+    ruvia::server_config config;
+    config.http_client_result_budget.maxRetainedBytes = 0;
 
     bool rejected = false;
     try {

@@ -13,10 +13,11 @@
 #include <zstd.h>
 #undef ZSTD_STATIC_LINKING_ONLY
 
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
-#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
 #include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "coding/PmrCodecAllocation.h"
+#include "coding/ZlibPmrAllocation.h"
 
 namespace ruvia {
 namespace {

@@ -10,9 +10,10 @@
 #include <utility>
 
 #include "ruvia/http/HttpSetCookiePlan.h"
-#include "ruvia/http/detail/cookie/CookieValidation.h"
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
-#include "ruvia/http/detail/util/HttpNumberFormat.h"
+
+#include "cookie/CookieValidation.h"
+#include "field/HttpImfFixdate.h"
+#include "util/HttpNumberFormat.h"
 
 namespace ruvia {
 

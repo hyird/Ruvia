@@ -4,8 +4,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http2/stream/Http2StreamTable.h"
-
+#include "http2/Http2StreamTable.h"
 #include "test_harness.h"
 
 namespace {

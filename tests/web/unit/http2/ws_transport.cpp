@@ -18,10 +18,10 @@
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/Http2Framing.h"
-#include "ruvia/web/detail/http2/Http2DataOutputBudget.h"
-#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
-#include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 
+#include "http2/Http2DataOutputBudget.h"
+#include "http2/Http2SansIoStreamRuntime.h"
+#include "http2/Http2SansIoWsTransport.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

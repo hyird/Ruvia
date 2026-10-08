@@ -17,13 +17,15 @@
 #include "ruvia/http/HttpRepresentationResponsePlan.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/http/context/ContextResponseState.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/static/StaticFileVariant.h"
-#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+
+#include "context/ContextResponseState.h"
+#include "context/ContextServices.h"
+#include "http/SecureToken.h"
+#include "http/StaticFileMetadata.h"
+#include "http/StaticFileVariant.h"
+#include "http/StaticPathNormalization.h"
+#include "http/StaticRootIndex.h"
+#include "server/HttpNativeFile.h"
 
 namespace ruvia {
 namespace {
@@ -422,8 +424,8 @@ HttpResponse Context::file(FileResponseOptions options) const {
 }
 
 HttpResponse Context::staticFile(const StaticRoot& root, StaticFileResponseOptions options) const {
-    const auto mode = precompressedStaticFiles_ ? detail::StaticFileSelectionMode::kPrecompressed
-                                                : detail::StaticFileSelectionMode::kIdentityOnly;
+    const auto mode = services().precompressedStaticFiles() ? detail::StaticFileSelectionMode::kPrecompressed
+                                                            : detail::StaticFileSelectionMode::kIdentityOnly;
     return staticFile(root, options, mode);
 }
 

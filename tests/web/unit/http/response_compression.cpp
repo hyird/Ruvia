@@ -21,10 +21,10 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/response/HttpResponseCompression.h"
-#include "ruvia/web/detail/server/response/HttpStreamingResponseCompression.h"
 
+#include "server/HttpBufferedResponse.h"
+#include "server/HttpResponseCompression.h"
+#include "server/HttpStreamingResponseCompression.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

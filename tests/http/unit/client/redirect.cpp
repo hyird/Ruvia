@@ -7,9 +7,9 @@
 
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpClientRedirect.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
 
+#include "HttpHeaderAccess.h"
+#include "client/HttpClientAccess.h"
 #include "test_harness.h"
 
 namespace {

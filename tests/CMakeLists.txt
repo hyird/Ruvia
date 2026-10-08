@@ -15,6 +15,9 @@ endfunction()
 function(ruvia_apply_test_support_includes name lib)
     target_include_directories(${name} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    string(REPLACE "ruvia::" "ruvia-" _ruvia_test_component "${lib}")
+    target_include_directories(${name} PRIVATE
+        ${PROJECT_SOURCE_DIR}/${_ruvia_test_component}/src)
     if("${lib}" STREQUAL "ruvia::http")
         target_include_directories(${name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
@@ -94,6 +97,16 @@ if(RUVIA_BUILD_CORE)
 endif()
 
 if(RUVIA_BUILD_HTTP)
+    find_package(ZLIB REQUIRED)
+    find_package(unofficial-brotli CONFIG REQUIRED)
+    find_package(zstd CONFIG REQUIRED)
+    if(TARGET zstd::libzstd)
+        set(_ruvia_test_zstd_target zstd::libzstd)
+    elseif(TARGET zstd::libzstd_static)
+        set(_ruvia_test_zstd_target zstd::libzstd_static)
+    else()
+        set(_ruvia_test_zstd_target zstd::libzstd_shared)
+    endif()
     ruvia_collect_test_sources(_ruvia_http_unit_sources
         http/unit/*.cpp
         http/http1/*.cpp
@@ -109,7 +122,8 @@ if(RUVIA_BUILD_HTTP)
         target_compile_definitions(ruvia_http_unit_tests PRIVATE NOMINMAX)
         target_link_libraries(ruvia_http_unit_tests PRIVATE ws2_32)
     endif()
-    target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_http_ngtcp2_core)
+    target_link_libraries(ruvia_http_unit_tests PRIVATE ruvia_http_ngtcp2_core
+        ZLIB::ZLIB unofficial::brotli::brotlienc ${_ruvia_test_zstd_target})
 endif()
 
 if(RUVIA_BUILD_WEB)
@@ -179,6 +193,21 @@ if(RUVIA_BUILD_WEB)
         support/test_main.cpp)
     ruvia_add_test(ruvia_web_unit_tests ruvia::web TIMEOUT 360 SOURCES
         ${_ruvia_web_unit_sources})
+    # These functional fixtures exercise native TLS/coding/backend behavior.
+    # Declare their dependencies here instead of exposing implementation headers
+    # and compile options through the installed Web target.
+    find_package(OpenSSL 3.5 REQUIRED COMPONENTS SSL Crypto)
+    target_link_libraries(ruvia_web_unit_tests PRIVATE
+        OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB unofficial::brotli::brotlidec
+        ${_ruvia_test_zstd_target})
+    if(RUVIA_ENABLE_MARIADB)
+        find_package(unofficial-libmariadb CONFIG REQUIRED)
+        target_link_libraries(ruvia_web_unit_tests PRIVATE unofficial::libmariadb)
+    endif()
+    if(RUVIA_ENABLE_REDIS)
+        find_package(hiredis CONFIG REQUIRED)
+        target_link_libraries(ruvia_web_unit_tests PRIVATE hiredis::hiredis)
+    endif()
     if(WIN32)
         target_compile_definitions(ruvia_web_unit_tests PRIVATE NOMINMAX)
     endif()

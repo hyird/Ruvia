@@ -9,11 +9,12 @@
 #include <utility>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
-#include "ruvia/web/detail/db/DbPostgreSql.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbPoolOperations.h"
+#include "db/DbPostgreSql.h"
+#include "db/DbRegistry.h"
+#include "db/DbSlotSocket.h"
 
 namespace ruvia::detail {
 

@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <utility>
 
-#include "ruvia/http/detail/http3/quic_cid_partition.h"
-#include "ruvia/http/detail/http3/quic_cid_registry.h"
+#include "http3/quic_cid_partition.h"
+#include "http3/quic_cid_registry.h"
 
 namespace ruvia {
 namespace {

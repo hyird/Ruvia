@@ -49,7 +49,7 @@ struct WebSocketClientConfig final {
     std::size_t maxMessageBytes{kDefaultMaxWebSocketMessageBytes};
     std::chrono::milliseconds connectTimeout{5000};
     std::optional<std::chrono::milliseconds> readTimeout{};
-    std::optional<std::chrono::milliseconds> writeTimeout{30000};
+    std::optional<std::chrono::milliseconds> write_timeout{30000};
     // After a local Close is sent, the maximum time to wait for the peer Close.
     // nullopt disables this guard.
     std::optional<std::chrono::milliseconds> closeHandshakeTimeout{5000};

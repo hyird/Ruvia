@@ -7,8 +7,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/http3/Http3ClientRequestWrite.h"
-
+#include "http3/Http3ClientRequestWrite.h"
 #include "test_harness.h"
 
 namespace {

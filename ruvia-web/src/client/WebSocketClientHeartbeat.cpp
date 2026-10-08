@@ -13,8 +13,9 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/WorkerHandle.h"
 #include "ruvia/core/WorkerTimer.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
+
+#include "client/WebSocketClientState.h"
+#include "websocket/HttpWebSocketLiveness.h"
 
 namespace ruvia::detail {
 

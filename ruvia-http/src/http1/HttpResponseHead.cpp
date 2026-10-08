@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/server/HttpResponseHead.h"
+#include "server/HttpResponseHead.h"
 
 #include <array>
 #include <charconv>
@@ -10,16 +10,17 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
-#include "ruvia/http/detail/coding/HttpContentLength.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/field/HttpMediaType.h"
-#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
-#include "ruvia/http/detail/response/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/util/HttpOws.h"
+
+#include "coding/HttpContentCoding.h"
+#include "coding/HttpContentLength.h"
+#include "field/HttpMediaType.h"
+#include "http1/Http1ChunkedFraming.h"
+#include "response/HttpResponseHeaderAccess.h"
+#include "server/HttpDateCache.h"
 
 namespace ruvia::detail {
 

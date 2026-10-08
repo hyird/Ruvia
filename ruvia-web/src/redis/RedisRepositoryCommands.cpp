@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "redis/RedisHandleHelpers.h"
 
 namespace ruvia::detail {
 namespace {

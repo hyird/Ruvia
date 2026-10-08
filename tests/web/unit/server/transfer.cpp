@@ -6,10 +6,9 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/server/WebWorkerRuntime.h"
-
+#include "router/RouteTable.h"
+#include "server/HttpServerOptionsValidation.h"
+#include "server/WebWorkerRuntime.h"
 #include "test_harness.h"
 
 RUVIA_TEST(validated_web_worker_runs_without_binding_listeners) {

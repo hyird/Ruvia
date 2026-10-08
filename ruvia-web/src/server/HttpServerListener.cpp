@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/HttpServerListener.h"
+#include "server/HttpServerListener.h"
 
 #include <memory_resource>
 #include <type_traits>
@@ -31,6 +31,7 @@ HttpServerListenerDefinition::Tls cloneTls(
         sni.identity = cloneTlsIdentity(configured.identity, resource);
     }
     result.altSvc = source.altSvc;
+    result.http3_early_data = source.http3_early_data;
     return result;
 }
 
@@ -49,6 +50,10 @@ HttpServerListenerDefinition::Transport cloneTransport(
 }
 
 }  // namespace
+
+HttpServerListenerDefinition HttpServerListenerDefinition::clone(std::pmr::memory_resource* resource) const {
+    return HttpServerListenerDefinition(endpoint, cloneTransport(transport, pmrResourceOrDefault(resource)), http3);
+}
 
 HttpServerSessionConfig::HttpServerSessionConfig(
     const HttpServerListenerDefinition& definition, std::pmr::memory_resource* resource)

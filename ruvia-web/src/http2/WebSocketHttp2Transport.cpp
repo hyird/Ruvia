@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http2/WebSocketHttp2Transport.h"
+#include "http2/WebSocketHttp2Transport.h"
 
 #include <algorithm>
 #include <array>
@@ -7,7 +7,8 @@
 #include <vector>
 
 #include "ruvia/http/WebSocketClientNegotiation.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
+
+#include "client/WebSocketClientState.h"
 
 namespace ruvia::detail {
 
@@ -215,7 +216,7 @@ Task<void> WebSocketHttp2Transport::runWriter() {
             bytes.clear();
             (void)connection_.takeOutputBatch(16384, bytes);
             writerActive_ = true;
-            owner_.arm(timer, owner_.config_.writeTimeout, WebSocketClientState::AbortReason::kTimeout);
+            owner_.arm(timer, owner_.config_.write_timeout, WebSocketClientState::AbortReason::kTimeout);
             co_await owner_.writeSocket(bytes);
             owner_.disarm(timer);
             writerActive_ = false;

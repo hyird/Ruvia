@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/acceptor.h"
+#include "server/acceptor.h"
 
 #include <array>
 #include <atomic>
@@ -22,11 +22,11 @@
 
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerRuntimeContext.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/server/NativeAcceptedSocketTicket.h"
-#include "ruvia/web/detail/server/WebWorkerRuntime.h"
 
+#include "router/RouteTable.h"
+#include "server/HttpServerOptionsValidation.h"
+#include "server/NativeAcceptedSocketTicket.h"
+#include "server/WebWorkerRuntime.h"
 #include "test_harness.h"
 
 namespace {
@@ -287,6 +287,26 @@ RUVIA_TEST(acceptor_stop_before_serving_wakes_startup_waiters) {
     network.launch();
     network.wait_until_ready();
     network.stop();
+    RUVIA_CHECK(!network.wait_until_serving());
+    network.join();
+    RUVIA_CHECK_EQ(network.state(), ruvia::RuntimeLifecycle::State::kStopped);
+    RUVIA_CHECK(!network.failure());
+}
+
+RUVIA_TEST(acceptor_stop_before_launch_completes_waiters_without_runtime_failure) {
+    const std::array listeners{Listener({asio::ip::address_v4::loopback(), 0})};
+    const std::array<ruvia::detail::acceptor::worker_target, 0> targets{};
+    ruvia::detail::acceptor network(listeners, targets);
+    network.prepare();
+    network.stop();
+    bool launch_rejected = false;
+    try {
+        network.launch();
+    } catch (const std::logic_error&) {
+        launch_rejected = true;
+    }
+    RUVIA_CHECK(launch_rejected);
+    network.wait_until_ready();
     RUVIA_CHECK(!network.wait_until_serving());
     network.join();
     RUVIA_CHECK_EQ(network.state(), ruvia::RuntimeLifecycle::State::kStopped);

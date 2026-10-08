@@ -11,9 +11,10 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/RequestDeadline.h"
+
+#include "context/ContextServices.h"
+#include "router/RouteTable.h"
+#include "server/RequestDeadline.h"
 
 namespace ruvia {
 
@@ -27,10 +28,10 @@ std::optional<std::string_view> DispatchResponse::header(std::string_view name) 
 }
 
 ScopedOperation<DispatchResponse> Context::dispatch(DispatchOptions options) {
-    if (!routes_ || !capabilities_.worker().isCurrent()) {
+    if (!services().routes() || !capabilities_.worker().isCurrent()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
     }
-    if (dispatchDepth_ >= 8) {
+    if (services().dispatchDepth() >= 8) {
         throw std::logic_error("subrequest nesting limit exceeded");
     }
     if (!isValidHttpMethodToken(options.method) || !options.target.starts_with('/') || options.target.starts_with("//") ||
@@ -38,7 +39,7 @@ ScopedOperation<DispatchResponse> Context::dispatch(DispatchOptions options) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
     detail::validateOperationOptions(options.operation);
-    if (options.body.size() > maxDecodedBodyBytes_) {
+    if (options.body.size() > services().maxDecodedBodyBytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
     std::pmr::string wire(pool());
@@ -68,29 +69,13 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
         throw std::invalid_argument("invalid subrequest");
     }
     const auto& request = parsed.parsed()->request();
-    const auto resolution = routes_->resolve(request);
+    const auto resolution = services().routes()->resolve(request);
     const auto stop = combineStopTokens(capabilities_.stop_token(), std::move(options.stopToken));
     if (stop.stopRequested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
     detail::RequestDeadline deadline(stop);
-    auto services = detail::ContextServices(capabilities_.worker(), stop, clientRegistries_, rateLimiter_, maxDecodedBodyBytes_)
-                        .withSubrequest(connInfo_, dispatchDepth_ + 1)
-                        .withRoutes(*routes_)
-                        .withRequestDeadline(deadline);
-    if (inbound_buffer_pool_ != nullptr) {
-        services = services.with_inbound_buffer_pool(*inbound_buffer_pool_);
-    }
-    if (env_) {
-        services = services.withEnv(*env_);
-    }
-    if (const auto* worker_states = capabilities_.worker_states()) {
-        services = services.withWorkerStates(*worker_states);
-    }
-    if (auto* blocking_pool = capabilities_.blocking_pool()) {
-        services = services.withBlockingPool(*blocking_pool);
-    }
-    services = services.withErrorHandler(errorHandler_).withNotFoundHandler(notFoundHandler_);
+    auto subrequest_services = services().for_subrequest(connInfo_, services().dispatchDepth() + 1, stop).withRequestDeadline(deadline);
     auto timeout = options.timeout;
     std::optional<HttpResponse> rejected;
     if (const auto* resolved = resolution.resolved()) {
@@ -102,14 +87,14 @@ Task<DispatchResponse> Context::dispatchTask(std::pmr::string wire, OperationOpt
             }
         }
         if (route.maxRequestBodyBytes() && parsed.parsed()->wireBody().size() > route.maxRequestBodyBytes()) {
-            rejected = co_await routes_->handleError(request, memory,
-                HttpErrorInfo({.status = http_status::kContentTooLarge, .message = "subrequest body exceeds route limit"}), services);
+            rejected = co_await services().routes()->handleError(request, memory,
+                HttpErrorInfo({.status = http_status::kContentTooLarge, .message = "subrequest body exceeds route limit"}), subrequest_services);
         }
     }
     if (timeout) {
         deadline.arm(capabilities_.worker(), *timeout);
     }
-    auto response = rejected ? std::move(*rejected) : co_await routes_->dispatch(request, resolution, memory, services);
+    auto response = rejected ? std::move(*rejected) : co_await services().routes()->dispatch(request, resolution, memory, subrequest_services);
     if (response.fileBody()) {
         throw std::logic_error("dispatch requires a buffered response");
     }

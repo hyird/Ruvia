@@ -5,8 +5,8 @@
 
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3RequestWriter.h"
-#include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
 
+#include "http3/Http3FieldSectionEncoder.h"
 #include "test_harness.h"
 
 namespace {

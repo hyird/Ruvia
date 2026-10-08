@@ -128,7 +128,7 @@ void exerciseClient(ruvia::testing::TestContext& ruvia_ctx, bool resetPeer) {
                                                              .port = peer.local_endpoint().port(),
                                                              .deflate = {.enabled = true},
                                                              .readTimeout = std::chrono::milliseconds(2000),
-                                                             .writeTimeout = std::chrono::milliseconds(2000)});
+                                                             .write_timeout = std::chrono::milliseconds(2000)});
         std::exception_ptr failure;
         try {
             co_await client.connect();

@@ -26,13 +26,13 @@
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/tls/HttpServerAlpn.h"
-#include "ruvia/web/detail/server/tls/HttpServerTlsVerify.h"
 
+#include "http2/Http2SansIoSession.h"
 #include "http2_sansio_session_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
+#include "server/HttpServerAlpn.h"
+#include "server/HttpServerTlsVerify.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http3/quic_crypto_bridge.h"
+#include "http3/quic_crypto_bridge.h"
 
 #include <algorithm>
 #include <array>
@@ -10,8 +10,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/http3/quic_connection_state.h"
-#include "ruvia/http/detail/http3/quic_key_schedule.h"
+#include "http3/quic_connection_state.h"
+#include "http3/quic_key_schedule.h"
 
 namespace ruvia::detail {
 namespace {

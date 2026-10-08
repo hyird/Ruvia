@@ -1,7 +1,7 @@
 #include "ruvia/http/HttpRequestTarget.h"
 
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+#include "parser/HttpRequestTarget.h"
+#include "parser/HttpUriGrammar.h"
 
 namespace ruvia {
 

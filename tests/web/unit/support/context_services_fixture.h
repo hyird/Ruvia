@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ruvia/core/EventLoopAttachment.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
 
+#include "context/ContextServices.h"
 #include "test_io_context.h"
 
 namespace ruvia::test {

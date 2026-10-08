@@ -16,9 +16,10 @@
 #include "ruvia/http/Http1WebSocketClientHandshake.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/WebSocketClientInternal.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
+
+#include "client/ClientTransport.h"
+#include "client/WebSocketClientInternal.h"
+#include "client/WebSocketClientState.h"
 
 namespace ruvia::detail {
 
@@ -183,7 +184,7 @@ Task<void> WebSocketClientState::performHandshake() {
         throw WebSocketClientError(WebSocketClientError::Code::kInvalidConfig, message);
     }
     Http1ClientResponseParser parser(prepared->exchangeState(), {.resource = memory_.resource()});
-    co_await writeTransport(prepared->head(), config_.writeTimeout);
+    co_await writeTransport(prepared->head(), config_.write_timeout);
 
     std::array<char, kWebSocketClientTransportBufferBytes> bytes{};
     for (;;) {

@@ -26,10 +26,8 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/detail/redis/RedisMappedCommand.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisRepositoryCommands.h"
 #include "ruvia/web/detail/redis/RedisRepositoryMapping.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/RedisEntity.h"
 #include "ruvia/web/redis/RedisFindOptions.h"
 #include "ruvia/web/redis/RedisHandle.h"
@@ -38,6 +36,8 @@
 #include "ruvia/web/redis/RedisWriteResult.h"
 
 #include "memory_resource_fixture.h"
+#include "redis/RedisRegistry.h"
+#include "redis/RedisTypesAccess.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

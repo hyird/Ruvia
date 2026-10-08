@@ -55,7 +55,7 @@ private:
 int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8089})
-        .server({.workerCount = 1,
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.worker_count = 1,
+            .process_signal_handlers = ruvia::process_signal_handler_policy::install})
         .run();
 }

@@ -20,9 +20,9 @@
 #include "ruvia/http/Http1ServerRequestParser.h"
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/web/detail/body/HttpStreamBodyReader.h"
-#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
+#include "body/HttpStreamBodyReader.h"
+#include "server/inbound_buffer_resource.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

@@ -2,9 +2,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameTypes.h"
-
+#include "http2/Http2FramePayload.h"
+#include "http2/Http2FrameTypes.h"
 #include "test_harness.h"
 
 namespace {

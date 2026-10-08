@@ -3,7 +3,8 @@
 
 #include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/http/HttpRequestTarget.h"
-#include "ruvia/web/detail/router/RouteTable.h"
+
+#include "router/RouteTable.h"
 
 namespace ruvia {
 namespace {

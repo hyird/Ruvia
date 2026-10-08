@@ -3,8 +3,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/detail/http2/stream/Http2StreamState.h"
-
+#include "http2/Http2StreamState.h"
 #include "test_harness.h"
 
 namespace {

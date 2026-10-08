@@ -1,8 +1,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/detail/util/DnsHost.h"
-
+#include "DnsHost.h"
 #include "test_harness.h"
 
 namespace {

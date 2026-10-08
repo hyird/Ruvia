@@ -14,9 +14,10 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketHandshakeFields.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
+
+#include "server/HttpDateCache.h"
+#include "websocket/HttpWebSocketHandshakeFields.h"
+#include "websocket/WebSocketServerNegotiation.h"
 
 namespace ruvia {
 namespace {

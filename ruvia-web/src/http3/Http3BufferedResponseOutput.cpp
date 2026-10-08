@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3BufferedResponseOutput.h"
+#include "http3/Http3BufferedResponseOutput.h"
 
 #include <algorithm>
 #include <cstddef>

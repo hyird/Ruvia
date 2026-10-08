@@ -8,8 +8,9 @@
 
 #include "ruvia/core/Hex.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/web/detail/http/SecureToken.h"
 #include "ruvia/web/detail/util/RegistrationResource.h"
+
+#include "http/SecureToken.h"
 
 namespace ruvia::detail {
 

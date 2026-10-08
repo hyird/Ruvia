@@ -6,8 +6,8 @@
 #include "ruvia/http/Hpack.h"
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/Http2Framing.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
 
+#include "http2/Http2FrameCodec.h"
 #include "test_harness.h"
 
 namespace {

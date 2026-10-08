@@ -139,7 +139,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     }
     auto state = std::make_shared<startup_state>();
     auto& app = ruvia::app();
-    app.server({.workerCount = 2, .worker_queue_capacity = 16, .maxConnectionsPerWorker = 4})
+    app.server({.worker_count = 2, .worker_queue_capacity = 16, .max_connections_per_worker = 4})
         .blockingPool(nullptr)
         .useWorkerState<worker_state>([state] { return state; });
     app.onStart([state, &app] {

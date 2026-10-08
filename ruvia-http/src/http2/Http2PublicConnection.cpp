@@ -6,19 +6,20 @@
 
 #include "ruvia/http/Http2Connection.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/Http2ConnectionOwnerEndpoint.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
-#include "ruvia/http/detail/http2/message/Http2RequestBuilder.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/response/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketServerNegotiation.h"
+
+#include "HttpHeaderAccess.h"
+#include "client/HttpClientAccess.h"
+#include "http2/Http2Connection.h"
+#include "http2/Http2ConnectionOwnerEndpoint.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
+#include "http2/Http2RequestBuilder.h"
+#include "http2/Http2WebSocketHandshake.h"
+#include "request/HttpRequestAccess.h"
+#include "websocket/WebSocketServerNegotiation.h"
 
 namespace ruvia {
 

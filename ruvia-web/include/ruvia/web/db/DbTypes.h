@@ -64,7 +64,7 @@ struct DbConfig final {
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connectTimeout{std::chrono::seconds(5)};
     std::optional<std::chrono::milliseconds> readTimeout{};
-    std::optional<std::chrono::milliseconds> writeTimeout{};
+    std::optional<std::chrono::milliseconds> write_timeout{};
     std::optional<std::chrono::milliseconds> queryTimeout{std::chrono::seconds(30)};
     std::optional<std::chrono::milliseconds> acquireTimeout{std::chrono::seconds(5)};
 };

@@ -17,14 +17,16 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ModelJson.h"
-#include "ruvia/web/detail/auth/CookieSignature.h"
-#include "ruvia/web/detail/http/context/ContextRequestStorage.h"
-#include "ruvia/web/detail/http/request/RequestBodyLoader.h"
-#include "ruvia/web/detail/http/request/RequestFieldParsing.h"
 #include "ruvia/web/detail/http/request/RequestFieldsAccess.h"
-#include "ruvia/web/detail/http/request/RequestQueryValues.h"
-#include "ruvia/web/detail/http/request/UnsupportedRequestContentCoding.h"
 #include "ruvia/web/detail/model/parse/Parser.h"
+
+#include "auth/CookieSignature.h"
+#include "context/ContextRequestStorage.h"
+#include "context/ContextServices.h"
+#include "http/RequestBodyLoader.h"
+#include "http/RequestFieldParsing.h"
+#include "http/RequestQueryValues.h"
+#include "http/UnsupportedRequestContentCoding.h"
 
 namespace ruvia {
 
@@ -366,7 +368,7 @@ Task<std::string_view> Context::requestBody() const {
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
-    auto* const decodeResource = inbound_buffer_pool_ != nullptr ? inbound_buffer_pool_ : pool();
+    auto* const decodeResource = services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : pool();
     const auto parsedCoding = requestContentCoding(request_, decodeResource);
     if (const auto* invalid = parsedCoding.invalid()) {
         throw HttpProtocolError(invalid->status(), "invalid request Content-Encoding");
@@ -379,7 +381,7 @@ Task<std::string_view> Context::requestBody() const {
         co_return raw;
     }
     auto decodeResult = decodeHttpRequestContent(codings, raw,
-        {.maxDecodedBytes = maxDecodedBodyBytes_, .resource = decodeResource});
+        {.maxDecodedBytes = services().maxDecodedBodyBytes(), .resource = decodeResource});
     auto* decodedContent = decodeResult.decoded();
     if (decodedContent == nullptr) {
         if (const auto* failure = decodeResult.protocolFailure()) {

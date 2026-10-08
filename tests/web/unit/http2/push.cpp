@@ -13,12 +13,12 @@
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/web/HttpClient.h"
-#include "ruvia/web/detail/http2/Http2SansIoSession.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "http2/Http2SansIoSession.h"
 #include "http2_sansio_session_fixture.h"
 #include "memory_resource_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

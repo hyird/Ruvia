@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3ClientResponseDelivery.h"
+#include "http3/Http3ClientResponseDelivery.h"
 
 #include <algorithm>
 #include <exception>
@@ -9,7 +9,8 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/client/HttpClientResponseDecoding.h"
+
+#include "client/HttpClientResponseDecoding.h"
 
 namespace ruvia::detail {
 

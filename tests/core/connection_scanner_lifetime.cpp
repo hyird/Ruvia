@@ -94,7 +94,7 @@ int main() {
 
     {
         auto options = ruvia::ConnectionScannerOptions{};
-        options.idleTimeout = std::chrono::milliseconds(0);
+        options.idle_timeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 1;
         }
@@ -115,7 +115,7 @@ int main() {
     }
     {
         auto options = ruvia::ConnectionScannerOptions{};
-        options.writeTimeout = std::chrono::milliseconds(0);
+        options.write_timeout = std::chrono::milliseconds(0);
         if (!rejects(std::move(options))) {
             return 4;
         }
@@ -258,10 +258,10 @@ int main() {
     {
         using Scanner = ruvia::ConnectionScanner;
         Scanner scanner(worker, {.scanInterval = std::chrono::milliseconds(1),
-                                    .idleTimeout = std::chrono::milliseconds(1),
+                                    .idle_timeout = std::chrono::milliseconds(1),
                                     .initialReadTimeout = std::chrono::milliseconds(1),
                                     .payloadReadTimeout = std::chrono::milliseconds(1),
-                                    .writeTimeout = std::chrono::milliseconds(1)});
+                                    .write_timeout = std::chrono::milliseconds(1)});
         const std::array phases{Scanner::Phase::kIdle, Scanner::Phase::kReadingInitial,
             Scanner::Phase::kReadingPayload, Scanner::Phase::kWriting,
             Scanner::Phase::kLongLived, Scanner::Phase::kLongLived};

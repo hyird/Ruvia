@@ -7,8 +7,9 @@
 #include "ruvia/http/Http3PeerStreams.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
-#include "ruvia/http/detail/field/HttpStructuredFields.h"
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
+
+#include "field/HttpStructuredFields.h"
+#include "http2/Http2FrameCodec.h"
 
 namespace ruvia {
 namespace {

@@ -14,12 +14,12 @@
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/Http3ServerRequest.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/DocumentRootBinding.h"
 
 #include "context_services_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "routing_fixture.h"
+#include "server/DocumentRootBinding.h"
 #include "test_harness.h"
 
 namespace {

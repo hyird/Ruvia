@@ -3,9 +3,10 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+
+#include "coding/HttpContentCoding.h"
+#include "request/HttpRequestAccess.h"
 
 namespace ruvia {
 

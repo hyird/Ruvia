@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_worker_server.h"
+#include "http3/http3_worker_server.h"
 
 #include <algorithm>
 #include <exception>
@@ -10,11 +10,12 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "context/ContextServices.h"
+#include "integration/WorkerCapabilities.h"
+#include "router/RouteTable.h"
+#include "server/HttpServerOptions.h"
+#include "server/HttpServerOptionsValidation.h"
 
 namespace ruvia::detail {
 namespace {
@@ -446,7 +447,7 @@ bool http3_worker_server::construct_connection(slot& target,
         target.client_certificate_subject = binding.metadata.client_certificate_subject;
         target.remote_port = binding.metadata.remote_port;
         auto services = capabilities_.contextServices(stop_token_).withTlsTransport(target.remote_address, target.client_certificate_subject, target.remote_port);
-        const auto max_requests = options_.maxRequestsPerConnection.value_or(0);
+        const auto max_requests = options_.max_requests_per_connection.value_or(0);
         if (max_requests == 0) {
             return false;
         }
@@ -455,8 +456,8 @@ bool http3_worker_server::construct_connection(slot& target,
             .epoch = binding.identity.epoch,
             .connectionGeneration = binding.identity.connection_generation,
             .session = {
-                .maxBufferedBodyBytes = options_.maxBufferedBodyBytes,
-                .maxStreamBodyBytes = options_.maxStreamBodyBytes,
+                .max_buffered_body_bytes = options_.max_buffered_body_bytes,
+                .max_stream_body_bytes = options_.max_stream_body_bytes,
                 .maxLiveStreams = tracked,
                 .maxBufferedBytesInFlight = body_budget_bytes,
                 .connection = {.maxActiveStreams = tracked,

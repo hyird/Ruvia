@@ -1,8 +1,9 @@
 #include "ruvia/http/Hpack.h"
 
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
 #include "ruvia/http/detail/util/HttpPmrObject.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "http2/Http2Hpack.h"
 
 namespace ruvia {
 

@@ -1,11 +1,11 @@
-#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+#include "server/HttpResponseHeadBuffer.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cstring>
 #include <stdexcept>
 
-#include "ruvia/http/detail/util/PmrString.h"
+#include "util/PmrString.h"
 
 namespace ruvia {
 

@@ -23,18 +23,18 @@
 #include "ruvia/http/HttpResponseServer.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/http1/Http1RequestSequence.h"
-#include "ruvia/web/detail/server/response/HttpResponseWriter.h"
-#include "ruvia/web/detail/server/route/Http1RouteDispatch.h"
-#include "ruvia/web/detail/server/route/HttpServerWebSocketRoute.h"
-#include "ruvia/web/detail/server/stream/HttpServerResponseStreamRoute.h"
-#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
 
 #include "context_services_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
+#include "server/Http1RequestSequence.h"
+#include "server/Http1RouteDispatch.h"
+#include "server/HttpResponseWriter.h"
+#include "server/HttpServerResponseStreamRoute.h"
+#include "server/HttpServerWebSocketRoute.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "websocket/WebSocketResponseHeaders.h"
 
 namespace {
 

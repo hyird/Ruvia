@@ -2,8 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/message/Http2LocalContentState.h"
-
+#include "http2/Http2LocalContentState.h"
 #include "test_harness.h"
 
 namespace {

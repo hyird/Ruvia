@@ -3,9 +3,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/HttpBase64.h"
-
 #include "test_harness.h"
+#include "util/HttpBase64.h"
 
 namespace {
 

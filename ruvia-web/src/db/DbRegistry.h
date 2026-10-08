@@ -1,0 +1,446 @@
+#pragma once
+
+#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/core/WorkerTimer.h"
+#include "ruvia/core/operation_deadline.h"
+#include "ruvia/web/db/Db.h"
+#include "ruvia/web/detail/db/DbBackend.h"
+
+#include "db/DbConfigStorage.h"
+#include "db/DbPoolOperations.h"
+
+namespace ruvia {
+class RedisHandle;
+}
+
+#if !defined(RUVIA_ENABLE_MARIADB) && !defined(RUVIA_ENABLE_POSTGRESQL)
+
+#include <memory_resource>
+#include <span>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+
+namespace ruvia::detail {
+class RedisRegistry;
+
+class DbRegistry final {
+public:
+    DbRegistry(asio::io_context&, const WorkerHandle&, std::pmr::memory_resource*,
+        std::span<const DbDefinition>, RedisRegistry* = nullptr) {}
+
+    DbRegistry(const DbRegistry&) = delete;
+    DbRegistry& operator=(const DbRegistry&) = delete;
+
+    [[nodiscard]] Task<void> connect() {
+        co_return;
+    }
+    void closeNow() noexcept {}
+    [[nodiscard]] bool empty() const noexcept {
+        return true;
+    }
+};
+
+}  // namespace ruvia::detail
+
+#else
+
+#include <chrono>
+#include <coroutine>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/OperationTimeout.h"
+#include "ruvia/core/PoolLeaseScheduler.h"
+#include "ruvia/core/memory/PmrObject.h"
+
+#include "db/DbHostResolution.h"
+#include "integration/NamedCapability.h"
+
+struct st_mysql;
+struct st_mysql_res;
+struct pg_conn;
+struct pg_result;
+
+namespace ruvia::detail {
+
+class RedisRegistry;
+class DbQueryCacheState;
+struct DbSlotSocket;
+struct DbSlotSocketQuarantine;
+
+#ifdef RUVIA_ENABLE_MARIADB
+
+class MariaDbPool final {
+public:
+    MariaDbPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
+        std::pmr::memory_resource* resource = nullptr);
+    MariaDbPool(asio::io_context&, WorkerHandle&&, DbConfigStorage,
+        std::pmr::memory_resource* = nullptr) = delete;
+    ~MariaDbPool();
+
+    MariaDbPool(const MariaDbPool&) = delete;
+    MariaDbPool& operator=(const MariaDbPool&) = delete;
+
+    [[nodiscard]] Task<void> connect() {
+        return lifecycle_.connect();
+    }
+    void closeNow() noexcept {
+        lifecycle_.closeNow();
+    }
+    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken token) {
+        return lifecycle_.acquireSlot(timeout, std::move(token));
+    }
+    void releaseSlot(std::size_t slot) noexcept {
+        lifecycle_.releaseSlot(slot);
+    }
+    void cancelOperationById(std::uint64_t id) noexcept {
+        lifecycle_.cancelOperationById(id);
+    }
+    template <typename Slot>
+    void throwIfCancelled(const Slot& slot) const {
+        lifecycle_.throwIfCancelled(slot);
+    }
+
+    template <typename Pool>
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<DbTransaction> beginDbTransaction(
+        Pool&, std::pmr::memory_resource*, OperationOptions,
+        DbTransactionStartPlan);
+    template <typename Pool>
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
+    template <typename Pool>
+    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
+    template <typename Pool, typename Slot>
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, ruvia::OperationTimeout, std::string_view);
+    template <typename Pool>
+    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<std::size_t> acquireDbSlot(Pool&, ruvia::OperationTimeout, StopToken);
+    template <typename Pool>
+    friend void releaseDbSlot(Pool&, std::size_t) noexcept;
+    template <typename Pool>
+    friend class DbSlotCancellationGuard;
+    friend class db_pool_lifecycle<MariaDbPool>;
+    friend class worker_cancellation_target<MariaDbPool>;
+    friend class ::ruvia::DbHandle;
+    friend class ::ruvia::DbTransaction;
+    friend class ::ruvia::DbStreamResult;
+
+    using SlotGuard = DbSlotGuard<MariaDbPool>;
+
+    struct ConnectionSlot {
+        ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource = nullptr);
+        ~ConnectionSlot();
+        ConnectionSlot(ConnectionSlot&&) noexcept;
+        ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
+
+        using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
+        using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
+        using DeadlineTimerDeleter = PmrObjectDeleter<WorkerTimerRegistration>;
+
+        asio::ip::tcp::resolver resolver;
+        st_mysql* connection{nullptr};
+        std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
+        std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
+        std::unique_ptr<WorkerTimerRegistration, DeadlineTimerDeleter> deadlineTimer;
+        std::coroutine_handle<> deadlineContinuation{};
+        bool connected{false};
+        // Shutdown may request closure while an async descriptor wait still
+        // borrows both this slot and waitSocket. Keep the transport owner alive
+        // until that wait resumes and the driving coroutine performs the final
+        // close; destroying it immediately would leave the queued Asio handler
+        // with dangling references.
+        bool waitActive{false};
+        bool closeRequested{false};
+        DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
+        std::uint64_t cancellationId{0};
+        enum class DeadlineKind : std::uint8_t { kResolve,
+            kSocket,
+            kSleep };
+        operation_deadline<DeadlineKind> deadline;
+
+        static void expire_deadline(ConnectionSlot& slot, DeadlineKind kind) noexcept;
+    };
+
+    // Backend dispatch entry points. The class itself remains detail-only.
+    void closeSlot(ConnectionSlot& slot) noexcept;
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
+    Task<int> waitForMysql(ConnectionSlot& slot, int status, const ruvia::OperationTimeout& deadline);
+    Task<ruvia::OperationTimeout> runMysqlStatement(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<st_mysql_res*> storeMysqlResult(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<DbRows> queryOnSlot(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, std::string_view sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
+        std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout);
+    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result,
+        std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    void abortStream(std::size_t slot, void* result) noexcept;
+    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbTransaction> beginTransaction(
+        std::pmr::memory_resource* resource, OperationOptions operationOptions,
+        DbTransactionOptions transactionOptions);
+    Task<void> commitTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> rollbackTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    void abortTransaction(std::size_t slot) noexcept;
+
+private:
+    asio::io_context& ioContext_;
+    DbConfigStorage config_;
+    std::pmr::memory_resource* resource_;
+    const WorkerHandle& worker_;
+    std::pmr::vector<ConnectionSlot> slots_;
+    PoolLeaseScheduler scheduler_;
+    std::shared_ptr<db_cancellation_target<MariaDbPool>> cancellation_target_;
+    db_pool_lifecycle<MariaDbPool> lifecycle_{*this};
+};
+
+#endif  // RUVIA_ENABLE_MARIADB
+
+#ifdef RUVIA_ENABLE_POSTGRESQL
+
+class PostgreSqlPool final {
+public:
+    PostgreSqlPool(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config,
+        std::pmr::memory_resource* resource = nullptr);
+    PostgreSqlPool(asio::io_context&, WorkerHandle&&, DbConfigStorage,
+        std::pmr::memory_resource* = nullptr) = delete;
+    ~PostgreSqlPool();
+
+    PostgreSqlPool(const PostgreSqlPool&) = delete;
+    PostgreSqlPool& operator=(const PostgreSqlPool&) = delete;
+
+    [[nodiscard]] Task<void> connect() {
+        return lifecycle_.connect();
+    }
+    void closeNow() noexcept {
+        lifecycle_.closeNow();
+    }
+    [[nodiscard]] Task<std::size_t> acquireSlot(OperationTimeout timeout, StopToken token) {
+        return lifecycle_.acquireSlot(timeout, std::move(token));
+    }
+    void releaseSlot(std::size_t slot) noexcept {
+        lifecycle_.releaseSlot(slot);
+    }
+    void cancelOperationById(std::uint64_t id) noexcept {
+        lifecycle_.cancelOperationById(id);
+    }
+    template <typename Slot>
+    void throwIfCancelled(const Slot& slot) const {
+        lifecycle_.throwIfCancelled(slot);
+    }
+
+private:
+    template <typename Pool>
+    friend Task<void> finishDbTransaction(
+        Pool&, std::size_t, std::string_view, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<DbTransaction> beginDbTransaction(
+        Pool&, std::pmr::memory_resource*, OperationOptions,
+        DbTransactionStartPlan);
+    template <typename Pool>
+    friend Task<DbRows> executeDbQuery(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
+    template <typename Pool>
+    friend Task<DbExecResult> executeDbCommand(Pool&, std::pmr::string, std::pmr::vector<DbValue>,
+        std::pmr::memory_resource*, OperationOptions);
+    template <typename Pool, typename Slot>
+    friend Task<DbResolvedAddresses> resolveDbHost(
+        Pool&, Slot&, ruvia::OperationTimeout, std::string_view);
+    template <typename Pool>
+    friend Task<DbRows> queryOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<DbExecResult> executeOnDbTransactionSlot(Pool&, std::size_t, std::pmr::string,
+        std::pmr::vector<DbValue>, std::pmr::memory_resource*, const OperationOptions&);
+    template <typename Pool>
+    friend Task<std::size_t> acquireDbSlot(Pool&, ruvia::OperationTimeout, StopToken);
+    template <typename Pool>
+    friend void releaseDbSlot(Pool&, std::size_t) noexcept;
+    template <typename Pool>
+    friend class DbSlotCancellationGuard;
+    friend class db_pool_lifecycle<PostgreSqlPool>;
+    friend class worker_cancellation_target<PostgreSqlPool>;
+    friend class ::ruvia::DbHandle;
+    friend class ::ruvia::DbTransaction;
+    friend class ::ruvia::DbStreamResult;
+
+    using SlotGuard = DbSlotGuard<PostgreSqlPool>;
+
+    struct ConnectionSlot {
+        ConnectionSlot(asio::io_context& ioContext, std::pmr::memory_resource* resource = nullptr);
+        ~ConnectionSlot();
+        ConnectionSlot(ConnectionSlot&&) noexcept;
+        ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
+
+        using SlotSocketDeleter = PmrObjectDeleter<DbSlotSocket>;
+        using SlotSocketQuarantineDeleter = PmrObjectDeleter<DbSlotSocketQuarantine>;
+        using DeadlineTimerDeleter = PmrObjectDeleter<WorkerTimerRegistration>;
+
+        asio::ip::tcp::resolver resolver;
+        pg_conn* connection{nullptr};
+        std::unique_ptr<DbSlotSocket, SlotSocketDeleter> waitSocket;
+        std::unique_ptr<DbSlotSocketQuarantine, SlotSocketQuarantineDeleter> socketQuarantine;
+        std::unique_ptr<WorkerTimerRegistration, DeadlineTimerDeleter> deadlineTimer;
+        bool connected{false};
+        bool waitActive{false};
+        bool closeRequested{false};
+        DbSlotAbortReason abortReason{DbSlotAbortReason::kNone};
+        std::uint64_t cancellationId{0};
+        enum class DeadlineKind : std::uint8_t { kResolve,
+            kSocket };
+        operation_deadline<DeadlineKind> deadline;
+
+        static void expire_deadline(ConnectionSlot& slot, DeadlineKind kind) noexcept;
+    };
+
+public:
+    // Backend dispatch entry points. The class itself remains detail-only.
+    void closeSlot(ConnectionSlot& slot) noexcept;
+    Task<DbResolvedAddresses> resolveHost(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> connectUnlocked(ConnectionSlot& slot, const ruvia::OperationTimeout& operationTimeout);
+    Task<void> waitForPostgreSql(ConnectionSlot& slot, bool read, const ruvia::OperationTimeout& deadline);
+    Task<void> flushOutput(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> waitUntilResultReady(ConnectionSlot& slot, const ruvia::OperationTimeout& deadline);
+    Task<void> sendQuery(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, const ruvia::OperationTimeout& deadline, bool singleRow);
+    Task<DbRows> queryOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<DbExecResult> executeOnSlot(ConnectionSlot& slot, const std::pmr::string& sql,
+        std::span<const DbValue> params, std::pmr::memory_resource* resource,
+        const ruvia::OperationTimeout& operationTimeout);
+    Task<void> executeControl(ConnectionSlot& slot, std::string_view sql,
+        std::pmr::memory_resource* resource, const ruvia::OperationTimeout& operationTimeout);
+    Task<DbRows> query(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbExecResult> execute(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<DbStreamResult> stream(std::pmr::string sql, std::pmr::vector<DbValue> params,
+        std::pmr::memory_resource* resource, OperationOptions options);
+    Task<std::optional<DbRow>> readStreamRow(std::size_t slot, void* result,
+        std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    void abortStream(std::size_t slot, void* result) noexcept;
+    Task<DbRows> queryOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbExecResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql,
+        std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource,
+        const OperationOptions& options);
+    Task<DbTransaction> beginTransaction(
+        std::pmr::memory_resource* resource, OperationOptions operationOptions,
+        DbTransactionOptions transactionOptions);
+    Task<void> commitTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    Task<void> rollbackTransaction(
+        std::size_t slot, std::pmr::memory_resource* resource, const OperationOptions& options);
+    void abortTransaction(std::size_t slot) noexcept;
+
+private:
+    asio::io_context& ioContext_;
+    DbConfigStorage config_;
+    std::pmr::memory_resource* resource_;
+    const WorkerHandle& worker_;
+    std::pmr::vector<ConnectionSlot> slots_;
+    PoolLeaseScheduler scheduler_;
+    std::shared_ptr<db_cancellation_target<PostgreSqlPool>> cancellation_target_;
+    db_pool_lifecycle<PostgreSqlPool> lifecycle_{*this};
+};
+
+#endif  // RUVIA_ENABLE_POSTGRESQL
+
+class DbRegistry final {
+public:
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, const DbConfig& defaultConfig);
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, std::span<const DbDefinition> databases, RedisRegistry* redis = nullptr);
+    DbRegistry(asio::io_context& ioContext, const WorkerHandle& worker,
+        std::pmr::memory_resource* resource, const DbConfig& config,
+        const RedisHandle& redis, const DbCacheConfig& policy);
+    ~DbRegistry();
+
+    DbRegistry(const DbRegistry&) = delete;
+    DbRegistry& operator=(const DbRegistry&) = delete;
+
+    Task<void> connect();
+    void closeNow() noexcept;
+    [[nodiscard]] bool empty() const noexcept;
+    [[nodiscard]] DbHandle get(::ruvia::operation_scope& operationScope) const;
+    [[nodiscard]] DbHandle get(std::string_view alias, ::ruvia::operation_scope& operationScope) const;
+
+#ifdef RUVIA_ENABLE_MARIADB
+    using MariaDbPoolOwner = std::unique_ptr<MariaDbPool, PmrObjectDeleter<MariaDbPool>>;
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    using PostgreSqlPoolOwner = std::unique_ptr<PostgreSqlPool, PmrObjectDeleter<PostgreSqlPool>>;
+#endif
+
+#if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
+    using PoolOwner = std::variant<std::monostate, MariaDbPoolOwner, PostgreSqlPoolOwner>;
+#elif defined(RUVIA_ENABLE_MARIADB)
+    using PoolOwner = std::variant<std::monostate, MariaDbPoolOwner>;
+#else
+    using PoolOwner = std::variant<std::monostate, PostgreSqlPoolOwner>;
+#endif
+
+private:
+    void add(asio::io_context& ioContext, const WorkerHandle& worker, DbConfigStorage config);
+
+    void attach_cache(std::size_t index, const WorkerHandle& worker, const RedisHandle& redis,
+        const DbCacheConfigStorage& policy, const DbConfigStorage& config, std::string_view alias);
+    std::pmr::memory_resource* resource_;
+    ::ruvia::operation_scope cache_scope_;
+    struct Entry final {
+        PoolOwner pool;
+        std::unique_ptr<DbQueryCacheState, PmrObjectDeleter<DbQueryCacheState>> cache;
+    };
+    std::pmr::vector<Entry> entries_;
+    NamedCapabilityIndex aliasIndex_;
+};
+
+}  // namespace ruvia::detail
+
+#endif

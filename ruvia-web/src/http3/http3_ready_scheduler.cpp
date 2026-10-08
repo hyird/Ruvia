@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/http3_ready_scheduler.h"
+#include "http3/http3_ready_scheduler.h"
 
 #include <algorithm>
 #include <exception>
@@ -140,8 +140,8 @@ bool http3_ready_scheduler::retire(connection_token token) noexcept {
         return false;
     }
     auto* owner = slot->owner;
-    if (!owner->transportRetired_ && !owner->transportRetirementTakenOver_ &&
-        !owner->closeIntentHandedOff_) {
+    if (!owner->retirement_.retired() && !owner->retirement_.taken_over() &&
+        !owner->retirement_.handed_off()) {
         std::terminate();
     }
     clear_slot(*slot);

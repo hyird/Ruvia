@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http/context/ContextSessionState.h"
+#include "context/ContextSessionState.h"
 
 #include <stdexcept>
 

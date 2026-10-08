@@ -15,10 +15,10 @@
 #include "ruvia/http/Http1ClientResponseParser.h"
 #include "ruvia/http/HttpClientRedirect.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
-#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
 
+#include "client/HttpClientAccess.h"
+#include "client/HttpClientContentEncoding.h"
+#include "client/HttpClientResponseLimits.h"
 #include "test_harness.h"
 
 namespace http_client_response_test {

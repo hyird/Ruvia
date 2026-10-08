@@ -3,10 +3,11 @@
 #include <utility>
 
 #include "ruvia/http/HttpClientResponseHead.h"
-#include "ruvia/http/detail/client/HttpClientResponseHead.h"
 #include "ruvia/http/detail/coding/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
+
+#include "client/HttpClientResponseHead.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
 // protocols given what the request offered, does the body have a length, and

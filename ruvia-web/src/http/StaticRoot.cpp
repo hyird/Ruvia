@@ -21,11 +21,12 @@
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpDate.h"
 #include "ruvia/http/HttpMediaType.h"
-#include "ruvia/web/detail/http/static/StaticFileMetadata.h"
-#include "ruvia/web/detail/http/static/StaticFileTypes.h"
-#include "ruvia/web/detail/http/static/StaticRootIndex.h"
-#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
-#include "ruvia/web/detail/server/file/HttpNativeFile.h"
+
+#include "http/StaticFileMetadata.h"
+#include "http/StaticFileTypes.h"
+#include "http/StaticRootIndex.h"
+#include "http/StaticRootOptionsValidation.h"
+#include "server/HttpNativeFile.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after

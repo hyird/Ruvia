@@ -7,10 +7,11 @@
 
 #include "ruvia/core/DecimalNumber.h"
 #include "ruvia/core/NumberFormat.h"
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
 #include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/web/detail/json/JsonString.h"
+
+#include "auth/JwtPrimitives.h"
 
 namespace ruvia {
 namespace detail {

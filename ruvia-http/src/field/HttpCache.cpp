@@ -4,8 +4,9 @@
 #include <limits>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"  // httpTrimOws, httpAsciiEqualsIgnoreCase
-#include "ruvia/http/detail/field/HttpDate.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+
+#include "field/HttpDate.h"
 
 namespace ruvia {
 namespace {

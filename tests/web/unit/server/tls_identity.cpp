@@ -3,8 +3,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/system_error.hpp>
 
-#include "ruvia/web/detail/server/tls/HttpServerTlsIdentity.h"
-
+#include "server/HttpServerTlsIdentity.h"
 #include "test_harness.h"
 
 RUVIA_TEST(httpServerTlsIdentityRejectsInvalidConfiguration) {

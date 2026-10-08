@@ -27,18 +27,18 @@
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
-#include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
-#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
+#include "http/StreamingAccess.h"
+#include "router/RouteResolution.h"
+#include "router/RouteTable.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
+#include "server/HttpResponseStreamState.h"
 #include "test_harness.h"
+#include "websocket/WebSocketAccess.h"
 
 RUVIA_MODEL(ScopedValidationRequest, RUVIA_OPTIONAL_FIELD(value, ruvia::String));
 

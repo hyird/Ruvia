@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
+#include "parser/HttpChunkParser.h"
 
 #include <limits>
 #include <utility>

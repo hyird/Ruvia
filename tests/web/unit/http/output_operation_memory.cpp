@@ -16,11 +16,11 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/WebSocket.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/websocket/WebSocketAccess.h"
 
+#include "http/StreamingAccess.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
+#include "websocket/WebSocketAccess.h"
 
 namespace {
 

@@ -5,8 +5,8 @@
 #include <string>
 
 #include "ruvia/web/RateLimitRule.h"
-#include "ruvia/web/detail/ratelimit/RateLimiter.h"
 
+#include "ratelimit/RateLimiter.h"
 #include "test_harness.h"
 
 namespace {

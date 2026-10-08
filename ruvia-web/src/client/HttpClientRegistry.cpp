@@ -1,10 +1,11 @@
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+#include "client/HttpClientRegistry.h"
 
 #include <exception>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
+
+#include "client/HttpClientConfigStorage.h"
+#include "client/HttpClientPool.h"
 
 namespace ruvia::detail {
 namespace {

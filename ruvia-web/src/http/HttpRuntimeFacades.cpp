@@ -6,8 +6,9 @@
 #include "ruvia/core/Bytes.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextCapabilities.h"
-#include "ruvia/web/detail/util/operation_lane_lease.h"
+
+#include "context/ContextCapabilities.h"
+#include "util/operation_lane_lease.h"
 
 namespace {
 
@@ -104,7 +105,7 @@ ruvia::Task<void> closeWebSocketWithReason(void* target,
 
 }  // namespace
 
-#include "ruvia/web/detail/http/StreamingAccess.h"
+#include "http/StreamingAccess.h"
 
 namespace ruvia {
 

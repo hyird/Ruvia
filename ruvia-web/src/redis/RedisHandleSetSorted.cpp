@@ -1,9 +1,10 @@
 #include <string_view>
 
-#include "ruvia/web/detail/redis/RedisHandleCommandOps.h"
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 #include "ruvia/web/redis/Redis.h"
+
+#include "redis/RedisHandleCommandOps.h"
+#include "redis/RedisHandleHelpers.h"
 
 namespace ruvia {
 

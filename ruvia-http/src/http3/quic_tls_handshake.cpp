@@ -6,8 +6,8 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/http3/quic_connection_state.h"
-#include "ruvia/http/detail/http3/quic_crypto_bridge.h"
+#include "http3/quic_connection_state.h"
+#include "http3/quic_crypto_bridge.h"
 
 namespace ruvia {
 namespace {

@@ -60,18 +60,18 @@ int main() {
                               .get<std::uint16_t>("RUVIA_HTTP_PORT")
                               .value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
     app.server({
-        .workerCount = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
-        .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
-        .idleTimeout = std::chrono::seconds(75),
-        .connectionScanInterval = std::chrono::seconds(1),
-        .requestHeaderTimeout = std::chrono::seconds(60),
-        .requestBodyTimeout = std::chrono::seconds(60),
-        .writeTimeout = std::chrono::seconds(60),
-        .maxConnectionsPerWorker = 10000,
-        .maxRequestsPerConnection = 1000,
-        .maxBufferedBodyBytes = 16 * 1024 * 1024,
-        .maxWebSocketMessageBytes = 16 * 1024 * 1024,
-        .memoryPool =
+        .worker_count = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+        .process_signal_handlers = ruvia::process_signal_handler_policy::install,
+        .idle_timeout = std::chrono::seconds(75),
+        .connection_scan_interval = std::chrono::seconds(1),
+        .request_header_timeout = std::chrono::seconds(60),
+        .request_body_timeout = std::chrono::seconds(60),
+        .write_timeout = std::chrono::seconds(60),
+        .max_connections_per_worker = 10000,
+        .max_requests_per_connection = 1000,
+        .max_buffered_body_bytes = 16 * 1024 * 1024,
+        .max_web_socket_message_bytes = 16 * 1024 * 1024,
+        .memory_pool =
             {
                 .requestInitialBufferBytes = 4096,
             },

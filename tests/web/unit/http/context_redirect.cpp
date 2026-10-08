@@ -15,8 +15,8 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Model.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"

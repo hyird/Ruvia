@@ -7,9 +7,9 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/detail/http/SecureToken.h"
-#include "ruvia/web/detail/http/SessionAccess.h"
 
+#include "http/SecureToken.h"
+#include "http/SessionAccess.h"
 #include "test_harness.h"
 
 namespace {

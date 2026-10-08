@@ -2,10 +2,10 @@
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/web/detail/util/operation_lane_lease.h"
 
 #include "memory_resource_fixture.h"
 #include "streaming_fixture.h"
+#include "util/operation_lane_lease.h"
 
 // Writing a streamed response: exclusive output, writeln, the terminal trailer section and the
 // post-head phases.

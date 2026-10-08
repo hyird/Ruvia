@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <limits>
 
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
+#include "http2/Http2Hpack.h"
+#include "http2/Http2HpackHuffmanTables.h"
 
 namespace ruvia::detail {
 

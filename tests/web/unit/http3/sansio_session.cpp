@@ -22,12 +22,12 @@
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3LocalCriticalStreams.h"
-#include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
-#include "ruvia/web/detail/http3/Http3ServerBodyBudget.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
 
+#include "http3/Http3SansIoSessionEngine.h"
+#include "http3/Http3ServerBodyBudget.h"
 #include "memory_resource_fixture.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
 #include "routing_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
@@ -386,7 +386,7 @@ RUVIA_TEST(http3BufferedSansIoSessionRetiredLeaseKeepsItsBodyBudget) {
     implementation.finalize();
     ruvia::WorkerMemory worker;
     Engine session(implementation.routeTable(), worker,
-        {.maxBufferedBodyBytes = 8, .maxBufferedBytesInFlight = 6});
+        {.max_buffered_body_bytes = 8, .maxBufferedBytesInFlight = 6});
     const auto head = requestHeaders(worker, "POST", "/items");
     (void)session.feed(0, head);
     (void)session.feed(0, data("abc"), true);
@@ -418,7 +418,7 @@ RUVIA_TEST(http3BufferedSansIoSessionsShareWorkerBodyBudgetAcrossConnections) {
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3ServerBodyBudget budget(6);
-    const ruvia::detail::Http3SansIoSessionLimits limits{.maxBufferedBodyBytes = 16,
+    const ruvia::detail::Http3SansIoSessionLimits limits{.max_buffered_body_bytes = 16,
         .maxLiveStreams = 4,
         .maxBufferedBytesInFlight = 16};
     Engine first(implementation.routeTable(), worker, budget, limits);
@@ -459,7 +459,7 @@ RUVIA_TEST(http3BufferedSansIoSessionsKeepPerConnectionBodyLimitIndependent) {
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3ServerBodyBudget budget(32);
-    const ruvia::detail::Http3SansIoSessionLimits limits{.maxBufferedBodyBytes = 16,
+    const ruvia::detail::Http3SansIoSessionLimits limits{.max_buffered_body_bytes = 16,
         .maxLiveStreams = 4,
         .maxBufferedBytesInFlight = 3};
     Engine first(implementation.routeTable(), worker, budget, limits);
@@ -495,7 +495,7 @@ RUVIA_TEST(http3BufferedSansIoSessionResetAndStopKeepLeasedBodiesReserved) {
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3ServerBodyBudget budget(8);
-    const ruvia::detail::Http3SansIoSessionLimits limits{.maxBufferedBodyBytes = 8,
+    const ruvia::detail::Http3SansIoSessionLimits limits{.max_buffered_body_bytes = 8,
         .maxLiveStreams = 4,
         .maxBufferedBytesInFlight = 8};
     Engine resetSession(implementation.routeTable(), worker, budget, limits);
@@ -563,7 +563,7 @@ RUVIA_TEST(http3BufferedSansIoSessionReturnsSharedBudgetOnRepeatedRejectCancelAn
         ruvia::WorkerMemory worker(allocations);
         ruvia::detail::Http3ServerBodyBudget budget(11);
         Engine session(implementation.routeTable(), worker, budget,
-            {.maxBufferedBodyBytes = 16, .maxLiveStreams = 4, .maxBufferedBytesInFlight = 20});
+            {.max_buffered_body_bytes = 16, .maxLiveStreams = 4, .maxBufferedBytesInFlight = 20});
         const auto head = requestHeaders(worker, "POST", "/items");
         for (std::uint64_t step = 1; step <= 8; ++step) {
             const auto id = step * 16;
@@ -600,7 +600,7 @@ RUVIA_TEST(http3BufferedSansIoSessionReturnsSharedBudgetOnRepeatedRejectCancelAn
         RUVIA_CHECK_EQ(budget.used(), 0U);
         {
             Engine abandoned(implementation.routeTable(), worker, budget,
-                {.maxBufferedBodyBytes = 16,
+                {.max_buffered_body_bytes = 16,
                     .maxLiveStreams = 4,
                     .maxBufferedBytesInFlight = 20});
             RUVIA_CHECK(abandoned.feed(1000, head).scope ==
@@ -627,7 +627,7 @@ RUVIA_TEST(http3BufferedSansIoSessionRollsBackSharedReservationWhenAppendThrows)
         ruvia::WorkerMemory worker(upstream);
         ruvia::detail::Http3ServerBodyBudget budget(256 * 1024);
         Engine session(implementation.routeTable(), worker, budget,
-            {.maxBufferedBodyBytes = 256 * 1024,
+            {.max_buffered_body_bytes = 256 * 1024,
                 .maxLiveStreams = 4,
                 .maxBufferedBytesInFlight = 256 * 1024});
         const auto head = requestHeaders(worker, "POST", "/items");
@@ -761,7 +761,7 @@ RUVIA_TEST(http3BufferedSansIoSessionStagesIndependentStreamsAndCopiesRequests) 
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(
-        implementation.routeTable(), worker, {.maxBufferedBodyBytes = 16});
+        implementation.routeTable(), worker, {.max_buffered_body_bytes = 16});
     const auto headA = requestHeaders(worker, "POST", "/items", 3);
     const auto headB = requestHeaders(worker, "POST", "/missing");
     RUVIA_CHECK(session.feed(0, headA).status == ruvia::Http3ConnectionStatus::kNeedMoreData);
@@ -796,7 +796,7 @@ RUVIA_TEST(http3BufferedSansIoSessionDropsFailedStreamWithoutTerminatingPeers) {
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(
-        implementation.routeTable(), worker, {.maxBufferedBodyBytes = 16});
+        implementation.routeTable(), worker, {.max_buffered_body_bytes = 16});
     const auto badHead = requestHeaders(worker, "POST", "/items", 1);
     const auto goodHead = requestHeaders(worker, "POST", "/items");
     RUVIA_CHECK(session.feed(0, badHead).scope == ruvia::Http3ConnectionErrorScope::kNone);
@@ -821,7 +821,7 @@ RUVIA_TEST(http3BufferedSansIoSessionAppliesStrictBodyAndExpectationRejectionsEa
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(
-        implementation.routeTable(), worker, {.maxBufferedBodyBytes = 3});
+        implementation.routeTable(), worker, {.max_buffered_body_bytes = 3});
     const auto head = requestHeaders(worker, "POST", "/items");
     RUVIA_CHECK(session.feed(0, head).status == ruvia::Http3ConnectionStatus::kNeedMoreData);
     const auto first = data("ab");
@@ -849,7 +849,7 @@ RUVIA_TEST(http3BufferedSansIoSessionBoundsLiveRuntimesAfterRequestFin) {
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker,
-        {.maxBufferedBodyBytes = 4, .maxLiveStreams = 1, .maxBufferedBytesInFlight = 8});
+        {.max_buffered_body_bytes = 4, .maxLiveStreams = 1, .maxBufferedBytesInFlight = 8});
     const auto head = requestHeaders(worker, "POST", "/items");
     RUVIA_CHECK(session.feed(0, head, true).status == ruvia::Http3ConnectionStatus::kMessageEnd);
     RUVIA_CHECK(session.streamState(0) ==
@@ -871,7 +871,7 @@ RUVIA_TEST(http3BufferedSansIoSessionReleasesAggregateBodyBudgetOnRejectionAndRe
 
     ruvia::WorkerMemory worker;
     ruvia::detail::Http3SansIoSessionEngine session(implementation.routeTable(), worker,
-        {.maxBufferedBodyBytes = 4, .maxLiveStreams = 3, .maxBufferedBytesInFlight = 5});
+        {.max_buffered_body_bytes = 4, .maxLiveStreams = 3, .maxBufferedBytesInFlight = 5});
     const auto head = requestHeaders(worker, "POST", "/items");
     RUVIA_CHECK(session.feed(0, head).scope == ruvia::Http3ConnectionErrorScope::kNone);
     const auto four = data("abcd");

@@ -5,8 +5,8 @@
 #include <utility>
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/http/detail/http2/stream/Http2StreamRequestData.h"
 
+#include "http2/Http2StreamRequestData.h"
 #include "test_harness.h"
 
 namespace {

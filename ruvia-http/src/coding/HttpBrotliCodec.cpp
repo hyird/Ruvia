@@ -4,9 +4,10 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "coding/HttpContentCodec.h"
+#include "coding/PmrCodecAllocation.h"
 
 // br (RFC 7932) through the Brotli reference library.
 

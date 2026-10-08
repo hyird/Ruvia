@@ -1,8 +1,8 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackStaticTable.h"
+#include "http2/Http2Hpack.h"
+#include "http2/Http2HpackStaticTable.h"
 
 namespace ruvia::detail {
 

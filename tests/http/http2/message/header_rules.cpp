@@ -1,8 +1,8 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/http2/message/Http2HeaderRules.h"
 
+#include "http2/Http2HeaderRules.h"
 #include "test_harness.h"
 
 namespace {

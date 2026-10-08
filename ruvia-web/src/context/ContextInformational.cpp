@@ -3,14 +3,16 @@
 #include <vector>
 
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
+
+#include "context/ContextServices.h"
+#include "context/HttpInterimResponseOutput.h"
 
 namespace ruvia {
 ScopedOperation<void> Context::inform(const HttpInterimResponseHead& response) {
-    if (interimOutput_ == nullptr) {
+    if (services().interimOutput() == nullptr) {
         throw std::logic_error("this dispatch has no transport response output");
     }
-    return interimOutput_->inform(response);
+    return services().interimOutput()->inform(response);
 }
 }  // namespace ruvia
 

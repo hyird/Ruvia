@@ -6,8 +6,9 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/util/HttpBase64.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
+
+#include "util/HttpBase64.h"
+#include "websocket/HttpWebSocketAcceptKey.h"
 
 namespace ruvia::detail {
 namespace {

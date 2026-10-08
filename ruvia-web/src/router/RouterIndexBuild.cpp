@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/router/RouteTable.h"
+#include "router/RouteTable.h"
 
 namespace ruvia {
 

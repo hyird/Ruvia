@@ -10,7 +10,7 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/detail/worker/WorkerDispatcherImpl.h"
+#include "WorkerDispatcherImpl.h"
 namespace ruvia::detail {
 namespace {
 

@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/session/HttpConnectionState.h"
+#include "server/HttpConnectionState.h"
 
 #include <algorithm>
 #include <cstring>
@@ -8,7 +8,8 @@
 #include "ruvia/core/PmrString.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/web/detail/server/http1/Http1SessionRequestCompletion.h"
+
+#include "server/Http1SessionRequestCompletion.h"
 
 namespace ruvia::detail {
 namespace {

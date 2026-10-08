@@ -6,8 +6,8 @@
 #include <stdexcept>
 
 #include "ruvia/core/EventLoopPool.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
 
+#include "db/DbPoolOperations.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

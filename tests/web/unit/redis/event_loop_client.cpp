@@ -23,13 +23,15 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/core/Timer.h"
-#include "ruvia/web/detail/redis/RedisClientRuntime.h"
 #include "ruvia/web/redis/RedisClient.h"
+
+#include "redis/RedisClientRuntime.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbClient.h"
-#include "ruvia/web/detail/db/DbQueryCache.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
+
+#include "db/DbQueryCache.h"
+#include "db/DbRegistry.h"
 #endif
 
 #include "memory_resource_fixture.h"

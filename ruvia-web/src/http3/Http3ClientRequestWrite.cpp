@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3ClientRequestWrite.h"
+#include "http3/Http3ClientRequestWrite.h"
 
 #include <algorithm>
 #include <limits>
@@ -10,9 +10,10 @@
 #include "ruvia/http/Http3ClientRequestHead.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/Http3RequestWriter.h"
-#include "ruvia/web/detail/client/HttpClientTunnelState.h"
-#include "ruvia/web/detail/client/HttpClientUploadState.h"
-#include "ruvia/web/detail/http3/Http3ClientSansIoSessionEngine.h"
+
+#include "client/HttpClientTunnelState.h"
+#include "client/HttpClientUploadState.h"
+#include "http3/Http3ClientSansIoSessionEngine.h"
 
 namespace ruvia::detail {
 

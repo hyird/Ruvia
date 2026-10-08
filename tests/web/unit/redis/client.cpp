@@ -24,12 +24,12 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/App.h"
-#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/web/redis/RedisHandle.h"
 
 #include "memory_resource_fixture.h"
+#include "redis/RedisHandleHelpers.h"
+#include "redis/RedisRegistry.h"
+#include "redis/RedisTypesAccess.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

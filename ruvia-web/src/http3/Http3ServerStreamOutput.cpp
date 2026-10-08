@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3ServerStreamOutput.h"
+#include "http3/Http3ServerStreamOutput.h"
 
 #include <bit>
 #include <exception>
@@ -40,7 +40,7 @@ Http3ServerStreamOutput::Http3ServerStreamOutput(ruvia::quic_connection& connect
       maxTrackedStreams_(config.maxTrackedStreams),
       maxQueuedBlocks_(config.maxQueuedBlocks),
       maxDriveWorkItems_(config.maxDriveWorkItems),
-      writeTimeout_(config.writeTimeout),
+      writeTimeout_(config.write_timeout),
       ownerThread_(std::this_thread::get_id()),
       streams_(pmrResourceOrDefault(resource)),
       nodes_(pmrResourceOrDefault(resource)) {

@@ -12,7 +12,7 @@
 #endif
 // clang-format on
 
-#include "ruvia/web/detail/http3/Http3UdpSocket.h"
+#include "http3/Http3UdpSocket.h"
 
 #include <algorithm>
 #include <array>

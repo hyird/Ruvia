@@ -1,15 +1,15 @@
-#include "ruvia/web/detail/http/context/ContextServices.h"
+#include "context/ContextServices.h"
 
 #include <functional>
 
-#include "ruvia/web/detail/server/RequestDeadline.h"
+#include "server/RequestDeadline.h"
 
 namespace ruvia::detail {
 
 ContextServices ContextServices::withRequestDeadline(const RequestDeadline& value) const noexcept {
     auto services = *this;
-    services.stopToken_ = std::cref(value.token());
-    services.requestDeadline_ = &value;
+    services.request_services_.stop_token = std::cref(value.token());
+    services.request_services_.deadline = &value;
     return services;
 }
 

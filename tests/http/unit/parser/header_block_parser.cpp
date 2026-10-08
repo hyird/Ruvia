@@ -8,9 +8,9 @@
 #include <utility>
 
 #include "ruvia/http/HttpParseError.h"
-#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 
 #include "failing_memory_resource.h"
+#include "parser/HttpHeaderBlockParser.h"
 #include "test_harness.h"
 
 namespace {

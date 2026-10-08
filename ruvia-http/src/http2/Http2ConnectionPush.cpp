@@ -1,8 +1,8 @@
-#include "ruvia/http/detail/HttpHeaderAccess.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/frame/Http2FramePayload.h"
-#include "ruvia/http/detail/http2/hpack/Http2HeaderBlock.h"
-#include "ruvia/http/detail/http2/message/Http2RemoteReceiveSemantics.h"
+#include "HttpHeaderAccess.h"
+#include "http2/Http2Connection.h"
+#include "http2/Http2FramePayload.h"
+#include "http2/Http2HeaderBlock.h"
+#include "http2/Http2RemoteReceiveSemantics.h"
 
 namespace ruvia::detail {
 

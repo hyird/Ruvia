@@ -5,9 +5,10 @@
 #include <utility>
 
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/router/PathSegments.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
+
+#include "router/PathSegments.h"
+#include "router/RouterImpl.h"
 
 namespace ruvia {
 namespace {

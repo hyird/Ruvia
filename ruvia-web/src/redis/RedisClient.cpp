@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/redis/RedisClientState.h"
+#include "redis/RedisClientState.h"
 
 namespace ruvia::detail {
 

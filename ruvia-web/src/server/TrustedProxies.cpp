@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/TrustedProxies.h"
+#include "server/TrustedProxies.h"
 
 #include <algorithm>
 #include <array>

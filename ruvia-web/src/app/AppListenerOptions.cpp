@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/app/AppListenerOptions.h"
+#include "app/AppListenerOptions.h"
 
 #include <array>
 #include <charconv>
@@ -12,7 +12,8 @@
 #include "ruvia/core/IpAddress.h"
 #include "ruvia/core/NativePath.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
+
+#include "server/HttpServerOptionsValidation.h"
 
 namespace ruvia::detail {
 

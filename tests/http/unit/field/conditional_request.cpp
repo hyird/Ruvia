@@ -6,9 +6,9 @@
 #include "ruvia/http/HttpConditionalRequest.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/field/HttpEntityTag.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
+#include "field/HttpEntityTag.h"
+#include "request/HttpRequestAccess.h"
 #include "test_harness.h"
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling

@@ -21,8 +21,8 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/Streaming.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 
+#include "body/HttpRequestBodyFacade.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

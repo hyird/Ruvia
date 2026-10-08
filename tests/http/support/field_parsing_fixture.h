@@ -14,11 +14,11 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpRequestContentDecoding.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/field/HttpAcceptMediaType.h"
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
-#include "ruvia/http/detail/parser/MultipartDelimiter.h"
-#include "ruvia/http/detail/parser/MultipartPartHeaders.h"
 
+#include "field/HttpAcceptMediaType.h"
+#include "parser/HttpChunkParser.h"
+#include "parser/MultipartDelimiter.h"
+#include "parser/MultipartPartHeaders.h"
 #include "test_harness.h"
 
 namespace field_parsing_test {

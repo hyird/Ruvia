@@ -3,11 +3,12 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/field/HttpEntityTag.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/detail/util/HttpOws.h"
+
+#include "field/HttpDate.h"
+#include "field/HttpEntityTag.h"
+#include "request/HttpRequestAccess.h"
 
 namespace ruvia {
 

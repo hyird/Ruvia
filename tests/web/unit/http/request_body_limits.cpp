@@ -4,9 +4,9 @@
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/http/HttpContentCodec.h"
 #include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/web/detail/server/inbound_buffer_resource.h"
 
 #include "context_body_decoding_fixture.h"
+#include "server/inbound_buffer_resource.h"
 
 // The product limits a web request body is decoded under.
 

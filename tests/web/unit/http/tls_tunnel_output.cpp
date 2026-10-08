@@ -14,9 +14,9 @@
 #include "ruvia/core/Socket.h"
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/web/HttpClient.h"
-#include "ruvia/web/detail/http/HttpSocketTunnelTransport.h"
-#include "ruvia/web/detail/http/TlsTunnelOutput.h"
 
+#include "http/HttpSocketTunnelTransport.h"
+#include "http/TlsTunnelOutput.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

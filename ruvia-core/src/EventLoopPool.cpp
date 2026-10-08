@@ -20,9 +20,10 @@
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/detail/util/FailureReport.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerSelection.h"
 #include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/core/worker_runtime.h"
+
+#include "WorkerSelection.h"
 
 namespace ruvia {
 namespace {

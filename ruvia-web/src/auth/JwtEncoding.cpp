@@ -4,7 +4,8 @@
 #include <stdexcept>
 
 #include "ruvia/core/Base64Url.h"
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
+
+#include "auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
 

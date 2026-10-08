@@ -19,9 +19,10 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/server/TrustedProxies.h"
+
+#include "context/ContextAccess.h"
+#include "context/ContextServices.h"
+#include "server/TrustedProxies.h"
 
 namespace {
 

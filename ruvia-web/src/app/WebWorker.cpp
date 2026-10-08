@@ -9,9 +9,10 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/web/detail/app/WebWorkerDispatch.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
-#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
+
+#include "app/WebWorkerDispatch.h"
+#include "integration/WorkerCapabilities.h"
+#include "integration/WorkerClientRegistryView.h"
 
 namespace ruvia {
 

@@ -16,10 +16,11 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/TcpSocketOptions.h"
-#include "ruvia/web/detail/redis/RedisProtocol.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 #include "ruvia/web/redis/Redis.h"
+
+#include "redis/RedisProtocol.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 

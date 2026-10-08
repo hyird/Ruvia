@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/client/HttpClientState.h"
+#include "client/HttpClientState.h"
 
 namespace ruvia::detail {
 

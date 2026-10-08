@@ -8,8 +8,8 @@
 
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
 #include "test_harness.h"
 

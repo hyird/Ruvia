@@ -14,11 +14,11 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/http/detail/http3/quic_address_codec.h"
-#include "ruvia/http/detail/http3/quic_cid_partition.h"
-#include "ruvia/http/detail/http3/quic_connection_state.h"
-#include "ruvia/http/detail/http3/quic_crypto_bridge.h"
-#include "ruvia/http/detail/http3/quic_stream.h"
+#include "http3/quic_address_codec.h"
+#include "http3/quic_cid_partition.h"
+#include "http3/quic_connection_state.h"
+#include "http3/quic_crypto_bridge.h"
+#include "http3/quic_stream.h"
 
 namespace ruvia {
 namespace {

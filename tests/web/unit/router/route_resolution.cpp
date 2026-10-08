@@ -12,8 +12,8 @@
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/web/detail/router/RouteTable.h"
 
+#include "router/RouteTable.h"
 #include "test_harness.h"
 
 namespace {

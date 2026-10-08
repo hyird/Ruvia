@@ -13,11 +13,12 @@
 #include <utility>
 
 #include "ruvia/core/Async.h"
-#include "ruvia/web/detail/db/DbMysqlRuntime.h"
-#include "ruvia/web/detail/db/DbPoolOperations.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/db/DbSlotSocket.h"
-#include "ruvia/web/detail/db/DbSql.h"
+
+#include "db/DbMysqlRuntime.h"
+#include "db/DbPoolOperations.h"
+#include "db/DbRegistry.h"
+#include "db/DbSlotSocket.h"
+#include "db/DbSql.h"
 
 namespace ruvia {
 
@@ -81,7 +82,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(
             !detail::setMysqlTimeout(
                 *slot.connection, MYSQL_OPT_READ_TIMEOUT, config_.readTimeout) ||
             !detail::setMysqlTimeout(
-                *slot.connection, MYSQL_OPT_WRITE_TIMEOUT, config_.writeTimeout)) {
+                *slot.connection, MYSQL_OPT_WRITE_TIMEOUT, config_.write_timeout)) {
             throw mysqlError(
                 *slot.connection, "configuring MariaDB timeouts", DbError::Code::kConnectFailed);
         }

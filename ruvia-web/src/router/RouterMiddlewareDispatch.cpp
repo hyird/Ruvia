@@ -4,12 +4,13 @@
 #include <utility>
 
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
-#include "ruvia/web/detail/router/RouteStreamState.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
+
+#include "context/ContextAccess.h"
+#include "http/HttpErrorResponse.h"
+#include "http/SessionAccess.h"
+#include "router/RouteStreamState.h"
+#include "router/RouteTable.h"
+#include "server/HttpResponseStreamState.h"
 
 namespace ruvia {
 

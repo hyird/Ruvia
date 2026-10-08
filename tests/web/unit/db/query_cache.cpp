@@ -13,11 +13,11 @@
 
 #include "ruvia/core/AsioTask.h"
 #include "ruvia/web/db/DbQuery.h"
-#include "ruvia/web/detail/db/DbConfigStorage.h"
-#include "ruvia/web/detail/db/DbQueryCache.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbValueAccess.h"
 
+#include "db/DbConfigStorage.h"
+#include "db/DbQueryCache.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

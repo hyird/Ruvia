@@ -5,11 +5,12 @@
 
 #include "ruvia/web/HttpClientTypes.h"
 #include "ruvia/web/HttpUdpTunnel.h"
-#include "ruvia/web/detail/client/HttpClientOutputOperation.h"
-#include "ruvia/web/detail/client/HttpClientPool.h"
-#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/http3/Http3ClientConnection.h"
+
+#include "client/HttpClientOutputOperation.h"
+#include "client/HttpClientPool.h"
+#include "client/HttpClientResponseMemory.h"
+#include "client/HttpClientResponseState.h"
+#include "http3/Http3ClientConnection.h"
 
 namespace ruvia {
 namespace {

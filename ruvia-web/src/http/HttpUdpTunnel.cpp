@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "ruvia/web/detail/http/HttpCapsuleStreamState.h"
+#include "http/HttpCapsuleStreamState.h"
 namespace ruvia {
 ScopedOperation<std::optional<HttpUdpDatagram>> HttpUdpTunnel::read() & {
     auto* state = stream_.stream_.state_;

@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "ruvia/http/HttpContentEncoder.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
 
+#include "coding/HttpContentCoding.h"
 #include "content_decoding_fixture.h"
 
 using ruvia::http_content_encoder;

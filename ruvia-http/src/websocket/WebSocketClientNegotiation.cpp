@@ -6,10 +6,11 @@
 
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/HttpHeaderAccess.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
+
+#include "HttpHeaderAccess.h"
+#include "websocket/HttpWebSocketPermessageDeflate.h"
+#include "websocket/WebSocketSubprotocolSet.h"
 
 namespace ruvia {
 namespace {

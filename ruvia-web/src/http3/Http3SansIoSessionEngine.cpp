@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3SansIoSessionEngine.h"
+#include "http3/Http3SansIoSessionEngine.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -13,9 +13,10 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/web/detail/router/RouteEndpoint.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/request/RequestBodyLimit.h"
+
+#include "router/RouteEndpoint.h"
+#include "router/RouteTable.h"
+#include "server/RequestBodyLimit.h"
 
 namespace ruvia::detail {
 
@@ -74,7 +75,7 @@ Http3SansIoSessionEngine::Http3SansIoSessionEngine(const RouteTable& routes,
       connection_(Http3PeerRole::kServer, worker.resource(), limits.connection),
       controlOutput_(worker.resource()),
       streams_(worker.resource()) {
-    if (limits_.maxBufferedBodyBytes == 0 || limits_.maxLiveStreams == 0 ||
+    if (limits_.max_buffered_body_bytes == 0 || limits_.maxLiveStreams == 0 ||
         limits_.maxBufferedBytesInFlight == 0 || limits_.maxTunnelBufferedBytes == 0 || limits_.maxStreamBacklogBytes < 4096) {
         throw std::invalid_argument("HTTP/3 session limits must be greater than zero");
     }
@@ -330,7 +331,7 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
         stream->resolution = routes_.resolve(route_request_view{request.knownMethod(),
             request.method(), request.path(), request.authority(), stream->request->extendedConnectProtocol()});
         stream->bodyLimit = requestBodyByteLimit(RequestBodyMode::kBuffered,
-            std::nullopt, limits_.maxBufferedBodyBytes)
+            std::nullopt, limits_.max_buffered_body_bytes)
                                 .readCeiling();
 
         const auto expectation = stream->request->expectationPlan(HttpUnsupportedExpectationPolicy::kReject);
@@ -354,7 +355,7 @@ void Http3SansIoSessionEngine::handleEvent(const Http3ConnectionEvent& event) {
             } else if (const auto* buffered = endpoint.buffered()) {
                 stream->streamingBody = buffered->requestBodyMode() == RequestBodyMode::kStream;
                 stream->bodyLimit = requestBodyByteLimit(buffered->requestBodyMode(),
-                    limits_.maxStreamBodyBytes, limits_.maxBufferedBodyBytes,
+                    limits_.max_stream_body_bytes, limits_.max_buffered_body_bytes,
                     resolved->route().maxRequestBodyBytes())
                                         .readCeiling();
                 if (stream->streamingBody) {

@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http3/quic_address_codec.h"
+#include "http3/quic_address_codec.h"
 
 #include <bit>
 #include <cstddef>

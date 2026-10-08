@@ -11,7 +11,8 @@
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/client/HttpClientAdvertisementQueue.h"
+
+#include "client/HttpClientAdvertisementQueue.h"
 
 namespace ruvia::detail {
 

@@ -20,21 +20,21 @@
 #include "ruvia/core/ConfigValidation.h"
 #include "ruvia/web/App.h"
 #include "ruvia/web/HttpClientTypes.h"
-#include "ruvia/web/detail/app/AppListenerOptions.h"
-#include "ruvia/web/detail/app/AppState.h"
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/HttpClientConfigStorage.h"
-#include "ruvia/web/detail/client/WebSocketClientConfigStorage.h"
-#include "ruvia/web/detail/db/DbConfigStorage.h"
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
-#include "ruvia/web/detail/server/HttpServerListener.h"
-#include "ruvia/web/detail/server/HttpServerOptions.h"
-#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/web/detail/tls/TlsHost.h"
 
+#include "app/AppListenerOptions.h"
+#include "app/AppState.h"
+#include "client/ClientTransport.h"
+#include "client/HttpClientConfigStorage.h"
+#include "client/WebSocketClientConfigStorage.h"
+#include "db/DbConfigStorage.h"
 #include "failing_memory_resource.h"
 #include "memory_resource_fixture.h"
+#include "redis/RedisConfigStorage.h"
+#include "server/HttpServerListener.h"
+#include "server/HttpServerOptions.h"
+#include "server/HttpServerOptionsValidation.h"
 #include "test_harness.h"
+#include "tls/TlsHost.h"
 
 namespace {
 
@@ -198,7 +198,7 @@ RUVIA_TEST(app_http3_mode_normalizes_against_https_and_validates_effective_confi
     auto& app = ruvia::app();
     app.server({});
     app.listen({.address = "127.0.0.1", .http = 8080});
-    app.server({.maxConnectionsPerWorker = std::nullopt});
+    app.server({.max_connections_per_worker = std::nullopt});
 
     // Automatic mode remains off for HTTP-only listeners, even without an H3
     // connection cap.
@@ -313,23 +313,23 @@ RUVIA_TEST(http3_server_limits_bound_every_downstream_capacity) {
     RUVIA_CHECK(rejects(std::move(options)));
 
     options = HttpServerOptions{};
-    options.maxRequestsPerConnection.reset();
+    options.max_requests_per_connection.reset();
     RUVIA_CHECK(rejects(std::move(options)));
 
     options = HttpServerOptions{};
     constexpr auto maxPowerOfTwo =
         std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 1);
-    options.maxRequestsPerConnection = maxPowerOfTwo / 2 + 1;
+    options.max_requests_per_connection = maxPowerOfTwo / 2 + 1;
     RUVIA_CHECK(rejects(std::move(options)));
 
     options = HttpServerOptions{};
-    options.maxRequestsPerConnection = 1000;
+    options.max_requests_per_connection = 1000;
     RUVIA_CHECK(!rejects(std::move(options)));
     RUVIA_CHECK_EQ(ruvia::detail::http3WorkerTrackedStreamCapacity(1000), std::size_t{1192});
     RUVIA_CHECK_EQ(ruvia::detail::http3TransportLifetimeStreamCapacity(1000), std::size_t{1128});
 
     options = HttpServerOptions{};
-    options.maxRequestsPerConnection = std::numeric_limits<std::size_t>::max();
+    options.max_requests_per_connection = std::numeric_limits<std::size_t>::max();
     RUVIA_CHECK(rejects(std::move(options)));
 
     const auto maxConnectionCapacity =

@@ -8,7 +8,8 @@
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/field/HttpConnectionFields.h"
-#include "ruvia/http/detail/parser/HttpUriGrammar.h"
+
+#include "parser/HttpUriGrammar.h"
 
 namespace ruvia {
 namespace {

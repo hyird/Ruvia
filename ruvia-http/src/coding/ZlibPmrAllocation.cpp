@@ -1,8 +1,8 @@
-#include "ruvia/http/detail/coding/ZlibPmrAllocation.h"
+#include "coding/ZlibPmrAllocation.h"
 
 #include <limits>
 
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
+#include "coding/PmrCodecAllocation.h"
 
 namespace ruvia::detail {
 

@@ -14,8 +14,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/web/detail/http3/Http3QuicClientTlsContext.h"
-
+#include "http3/Http3QuicClientTlsContext.h"
 #include "test_harness.h"
 
 namespace {

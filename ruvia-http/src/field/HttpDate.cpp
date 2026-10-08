@@ -1,6 +1,6 @@
 #include "ruvia/http/HttpDate.h"
 
-#include "ruvia/http/detail/field/HttpImfFixdate.h"
+#include "field/HttpImfFixdate.h"
 
 namespace ruvia {
 

@@ -15,9 +15,9 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/SecurityHeaders.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
 
+#include "context/ContextAccess.h"
+#include "context/ContextServices.h"
 #include "context_services_fixture.h"
 #include "test_harness.h"
 

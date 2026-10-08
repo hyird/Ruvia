@@ -1,7 +1,6 @@
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/stream/Http2ClosedStreams.h"
-
+#include "http2/Http2ClosedStreams.h"
 #include "test_harness.h"
 
 namespace {

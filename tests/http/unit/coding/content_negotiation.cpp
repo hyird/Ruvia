@@ -5,8 +5,8 @@
 
 #include "ruvia/http/HttpAcceptEncoding.h"
 #include "ruvia/http/HttpContentCoding.h"
-#include "ruvia/http/detail/field/HttpQualityValue.h"
 
+#include "field/HttpQualityValue.h"
 #include "test_harness.h"
 
 RUVIA_TEST(response_coding_sets_and_selection_snapshots_distinguish_every_supported_coding) {

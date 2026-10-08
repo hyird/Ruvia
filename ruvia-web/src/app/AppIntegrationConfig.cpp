@@ -1,11 +1,11 @@
-#include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/web/detail/integration/NamedCapability.h"
+#include "app/AppConfigMutation.h"
+#include "integration/NamedCapability.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/detail/db/DbConfigStorage.h"
+#include "db/DbConfigStorage.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisConfigStorage.h"
+#include "redis/RedisConfigStorage.h"
 #endif
 
 namespace ruvia {

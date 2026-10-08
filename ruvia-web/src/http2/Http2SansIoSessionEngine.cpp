@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http2/Http2SansIoSessionEngine.h"
+#include "http2/Http2SansIoSessionEngine.h"
 
 #include <array>
 #include <chrono>
@@ -23,27 +23,28 @@
 #include "ruvia/http/HttpRequestTarget.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseServer.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/http/HttpTunnelSession.h"
-#include "ruvia/web/detail/http/context/HttpConnectionAdvertisementOutput.h"
-#include "ruvia/web/detail/http/context/HttpInterimResponseOutput.h"
-#include "ruvia/web/detail/http/context/HttpPushOutput.h"
-#include "ruvia/web/detail/http/error/HttpProtocolErrorInfo.h"
-#include "ruvia/web/detail/http2/Http2SansIoRequestBody.h"
-#include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
-#include "ruvia/web/detail/http2/Http2SansIoRouteSelection.h"
-#include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
-#include "ruvia/web/detail/ratelimit/RateLimitDecision.h"
-#include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/HttpServerAccessLog.h"
-#include "ruvia/web/detail/server/request/RequestBodyLimit.h"
-#include "ruvia/web/detail/server/request/RequestMemoryArena.h"
-#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
+
+#include "body/HttpRequestBodyFacade.h"
+#include "context/HttpConnectionAdvertisementOutput.h"
+#include "context/HttpInterimResponseOutput.h"
+#include "context/HttpPushOutput.h"
+#include "http/HttpProtocolErrorInfo.h"
+#include "http/HttpTunnelSession.h"
+#include "http2/Http2SansIoRequestBody.h"
+#include "http2/Http2SansIoResponseStreamSink.h"
+#include "http2/Http2SansIoRouteSelection.h"
+#include "http2/Http2SansIoWsTransport.h"
+#include "ratelimit/RateLimitDecision.h"
+#include "router/RouteResolution.h"
+#include "router/RouteTable.h"
+#include "server/HttpBufferedResponse.h"
+#include "server/HttpResponseStreamDispatch.h"
+#include "server/HttpServerAccessLog.h"
+#include "server/RequestBodyLimit.h"
+#include "server/RequestMemoryArena.h"
+#include "websocket/HttpWebSocketConnection.h"
+#include "websocket/HttpWebSocketSession.h"
+#include "websocket/WebSocketResponseHeaders.h"
 
 namespace ruvia::detail {
 
@@ -490,7 +491,7 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
                         WsTransport(connection_, streamId, streamingBody->queue(), *streamSignal,
                             writeSignal_, outputBudget_, executor_),
                         baseServices.worker(), scannerEntry, webSocketEndpoint->lifecycle(),
-                        ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
+                        ProtocolByteLimit::limited(options.max_web_socket_message_bytes),
                         &inbound_buffers_, std::string_view{},
                         submittedHandshake->compression(), webSocketEndpoint->deflate().compressionLevel);
                     co_await invokeWebSocketHandler(
@@ -567,22 +568,14 @@ Task<void> Http2SansIoSessionEngine::dispatchOneInner(std::uint32_t streamId) {
 
     } while (false);
 
-    buffered_response_recovery recovery;
-    auto preparation = co_await prepareBufferedHttpResponseAsync(
-        request, responseCodingPolicy, response, options, baseServices.worker());
-    for (;;) {
-        const auto step = recovery.advance(
-            responseCodingPolicy, request, response, preparation.compressionResult());
-        if (step.action == buffered_response_recovery_action::ready) {
-            break;
-        }
-        if (step.action == buffered_response_recovery_action::handle_error) {
-            response = co_await routes_.handleError(request, requestMemory, *step.error, requestServices);
-        }
-        preparation = co_await prepareBufferedHttpResponseAsync(
-            request, responseCodingPolicy, response, options, baseServices.worker());
+    const auto preparation = co_await prepare_application_response(
+        request, responseCodingPolicy, response, options, routes_, requestMemory, requestServices);
+    if (!preparation) {
+        resetStreamNoThrow(streamId, Http2ErrorCode::kCancel);
+        wakeWriter();
+        co_return;
     }
-    const auto writePlan = preparation.writePlan();
+    const auto writePlan = preparation->write_plan;
     const auto result = co_await bufferedResponseWriter_.write(streamId, response, writePlan);
     if (const auto committedStatus = result.committedStatus()) {
         recordHttpAccess(options.accessLog, request,
@@ -663,8 +656,8 @@ void Http2SansIoSessionEngine::drainEvents() {
     const auto onMessageHead = [&](Http2RequestHeadEvent* messageHead) {
         const auto streamId = messageHead->streamId();
         ++acceptedRequestHeads_;
-        if (!connection_.draining() && options.maxRequestsPerConnection.has_value() &&
-            acceptedRequestHeads_ >= *options.maxRequestsPerConnection) {
+        if (!connection_.draining() && options.max_requests_per_connection.has_value() &&
+            acceptedRequestHeads_ >= *options.max_requests_per_connection) {
             connection_.beginDrain();
             wakeWriter();
         }
@@ -714,16 +707,16 @@ void Http2SansIoSessionEngine::drainEvents() {
         }
         auto& requestBody = selectedRoute->body();
         const auto* resolvedRoute = selectedRoute->resolution().resolved();
-        const auto totalLimit = requestBodyByteLimit(requestBody.mode(), options.maxStreamBodyBytes,
-            options.maxBufferedBodyBytes,
+        const auto totalLimit = requestBodyByteLimit(requestBody.mode(), options.max_stream_body_bytes,
+            options.max_buffered_body_bytes,
             resolvedRoute != nullptr ? resolvedRoute->route().maxRequestBodyBytes() : 0);
         auto stored = [&] {
             if (requestBody.streaming() != nullptr) {
                 return requestBody.store(bodyChunk->bytes(), totalLimit,
-                    options.maxBufferedBodyBytes, std::move(bodyChunk->takeCredit()));
+                    options.max_buffered_body_bytes, std::move(bodyChunk->takeCredit()));
             }
             return requestBody.store(
-                bodyChunk->bytes(), totalLimit, options.maxBufferedBodyBytes);
+                bodyChunk->bytes(), totalLimit, options.max_buffered_body_bytes);
         }();
         if (stored.stored() == nullptr) {
             const bool knownRejection =
@@ -759,7 +752,7 @@ void Http2SansIoSessionEngine::drainEvents() {
             return;
         }
         if (!streamingBody->queue().enqueueBounded(tunnelData->bytes(),
-                std::move(tunnelData->takeCredit()), options.maxBufferedBodyBytes)) {
+                std::move(tunnelData->takeCredit()), options.max_buffered_body_bytes)) {
             resetEventStream(streamId, Http2ErrorCode::kCancel);
             return;
         }

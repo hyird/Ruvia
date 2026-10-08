@@ -7,7 +7,8 @@
 #include <openssl/hmac.h>
 
 #include "ruvia/core/ConstantTime.h"
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
+
+#include "auth/JwtPrimitives.h"
 
 namespace ruvia::detail {
 namespace {

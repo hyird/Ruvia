@@ -4,8 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/flow/Http2FlowControl.h"
-
+#include "http2/Http2FlowControl.h"
 #include "test_harness.h"
 
 namespace {

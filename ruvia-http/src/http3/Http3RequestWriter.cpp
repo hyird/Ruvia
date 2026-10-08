@@ -5,7 +5,8 @@
 
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/http3/Http3FieldSectionEncoder.h"
+
+#include "http3/Http3FieldSectionEncoder.h"
 
 namespace ruvia {
 namespace {

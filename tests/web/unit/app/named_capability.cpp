@@ -8,9 +8,8 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
-#include "ruvia/web/detail/integration/NamedCapability.h"
-
+#include "client/HttpClientRegistry.h"
+#include "integration/NamedCapability.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

@@ -9,9 +9,9 @@
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRepresentationResponsePlan.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 
+#include "request/HttpRequestAccess.h"
 #include "test_harness.h"
 
 namespace {

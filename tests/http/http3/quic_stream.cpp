@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http3/quic_stream.h"
+#include "http3/quic_stream.h"
 
 #include <array>
 #include <limits>

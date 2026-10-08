@@ -9,7 +9,8 @@
 
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/web/detail/app/EnvState.h"
+
+#include "app/EnvState.h"
 
 namespace ruvia {
 namespace {

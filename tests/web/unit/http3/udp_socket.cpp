@@ -13,8 +13,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/web/detail/http3/Http3UdpSocket.h"
-
+#include "http3/Http3UdpSocket.h"
 #include "test_harness.h"
 
 namespace {

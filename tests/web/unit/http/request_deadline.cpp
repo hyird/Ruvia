@@ -8,7 +8,8 @@
 #include <optional>
 
 #include "ruvia/core/StopToken.h"
-#include "ruvia/web/detail/server/RequestDeadline.h"
+
+#include "server/RequestDeadline.h"
 
 using namespace std::chrono_literals;
 using ruvia::StopSource;

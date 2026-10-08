@@ -10,9 +10,9 @@
 #include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/http/HttpSetCookiePlan.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/response/ResponseHeaderUtils.h"
 
 #include "failing_memory_resource.h"
+#include "response/ResponseHeaderUtils.h"
 #include "test_harness.h"
 
 namespace {

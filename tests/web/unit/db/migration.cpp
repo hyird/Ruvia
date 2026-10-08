@@ -14,10 +14,10 @@
 
 #include "ruvia/web/db/DbMigration.h"
 #include "ruvia/web/db/DbTypes.h"
-#include "ruvia/web/detail/db/DbMigrationChecksum.h"
-#include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSqlScan.h"
 
+#include "db/DbMigrationChecksum.h"
+#include "db/DbMigrationValidation.h"
 #include "test_harness.h"
 
 using ruvia::testing::throwsOn;

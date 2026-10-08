@@ -12,11 +12,11 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 
+#include "client/HttpClientRegistry.h"
+#include "db/DbRegistry.h"
 #include "memory_resource_fixture.h"
+#include "redis/RedisRegistry.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

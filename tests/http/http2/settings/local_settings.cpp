@@ -3,10 +3,9 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/frame/Http2FrameCodec.h"
-#include "ruvia/http/detail/http2/settings/Http2LocalSettings.h"
-#include "ruvia/http/detail/http2/settings/Http2PeerSettings.h"
-
+#include "http2/Http2FrameCodec.h"
+#include "http2/Http2LocalSettings.h"
+#include "http2/Http2PeerSettings.h"
 #include "test_harness.h"
 
 namespace {

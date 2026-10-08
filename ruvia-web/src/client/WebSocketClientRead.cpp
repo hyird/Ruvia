@@ -12,9 +12,10 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/StopToken.h"
-#include "ruvia/web/detail/client/WebSocketClientInternal.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
+
+#include "client/WebSocketClientInternal.h"
+#include "client/WebSocketClientState.h"
+#include "websocket/HttpWebSocketLiveness.h"
 
 namespace ruvia::detail {
 

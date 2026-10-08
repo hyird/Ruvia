@@ -14,8 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/auth/JwtPrimitives.h"
-
+#include "auth/JwtPrimitives.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

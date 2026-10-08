@@ -5,8 +5,8 @@
 #include <utility>
 
 #include "ruvia/core/EventLoopPool.h"
-#include "ruvia/web/detail/client/ClientCloseState.h"
 
+#include "client/ClientCloseState.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 

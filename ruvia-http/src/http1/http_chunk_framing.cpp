@@ -4,9 +4,10 @@
 #include <utility>
 
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
+#include "parser/HttpChunkParser.h"
 
 namespace ruvia::detail {
 

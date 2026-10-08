@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "ruvia/http/ProtocolByteLimit.h"
-#include "ruvia/http/detail/websocket/WsConnection.h"
 
 #include "test_harness.h"
+#include "websocket/WsConnection.h"
 
 namespace {
 

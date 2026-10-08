@@ -11,8 +11,8 @@
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpSetCookie.h"
 #include "ruvia/http/HttpSetCookiePlan.h"
-#include "ruvia/http/detail/cookie/CookieValidation.h"
 
+#include "cookie/CookieValidation.h"
 #include "test_harness.h"
 
 namespace {

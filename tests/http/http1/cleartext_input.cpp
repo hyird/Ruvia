@@ -1,7 +1,6 @@
 #include <string_view>
 
-#include "ruvia/http/detail/http1/Http1CleartextInput.h"
-
+#include "http1/Http1CleartextInput.h"
 #include "test_harness.h"
 
 namespace {

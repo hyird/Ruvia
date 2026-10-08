@@ -5,8 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/detail/auth/CookieSignature.h"
-
+#include "auth/CookieSignature.h"
 #include "test_harness.h"
 
 namespace {

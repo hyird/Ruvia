@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/WebSocketHttp3Transport.h"
+#include "http3/WebSocketHttp3Transport.h"
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,8 @@
 #include "ruvia/core/Async.h"
 #include "ruvia/http/Http3Frames.h"
 #include "ruvia/http/WebSocketClientNegotiation.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
+
+#include "client/WebSocketClientState.h"
 
 namespace ruvia::detail {
 namespace {
@@ -336,7 +337,7 @@ bool WebSocketHttp3Transport::driveOutput() {
         if (bytes.empty() && !pending.empty()) {
             bytes.assign(pending.data(), std::min(pending.size(), kWireBlockBytes));
             offset = 0;
-            owner_.arm(criticalTimers_[index], owner_.config_.writeTimeout, WebSocketClientState::AbortReason::kTimeout);
+            owner_.arm(criticalTimers_[index], owner_.config_.write_timeout, WebSocketClientState::AbortReason::kTimeout);
         }
         if (bytes.empty()) {
             continue;
@@ -353,7 +354,7 @@ bool WebSocketHttp3Transport::driveOutput() {
             }
             offset += written.accepted;
             progress = true;
-            owner_.arm(criticalTimers_[index], owner_.config_.writeTimeout, WebSocketClientState::AbortReason::kTimeout);
+            owner_.arm(criticalTimers_[index], owner_.config_.write_timeout, WebSocketClientState::AbortReason::kTimeout);
             if (offset == bytes.size()) {
                 bytes.clear();
                 offset = 0;

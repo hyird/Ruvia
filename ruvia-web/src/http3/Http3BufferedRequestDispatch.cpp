@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/http3/Http3BufferedRequestDispatch.h"
+#include "http3/Http3BufferedRequestDispatch.h"
 
 #include <algorithm>
 #include <array>
@@ -18,18 +18,19 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpConnectUdp.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/HttpTunnelSession.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http3/Http3ResponseStreamSink.h"
-#include "ruvia/web/detail/router/RouteEndpoint.h"
-#include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/file/HttpFileOpen.h"
-#include "ruvia/web/detail/server/response/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
-#include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
+
+#include "context/ContextAccess.h"
+#include "http/HttpTunnelSession.h"
+#include "http3/Http3ResponseStreamSink.h"
+#include "router/RouteEndpoint.h"
+#include "router/RouteResolution.h"
+#include "router/RouteTable.h"
+#include "server/HttpBufferedResponse.h"
+#include "server/HttpFileOpen.h"
+#include "server/HttpResponseStreamDispatch.h"
+#include "websocket/HttpWebSocketConnection.h"
+#include "websocket/HttpWebSocketSession.h"
+#include "websocket/WebSocketResponseHeaders.h"
 
 namespace ruvia::detail {
 namespace {
@@ -313,9 +314,6 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
             resolved->route().endpoint().buffered()->replay_safe());
     const bool web_socket_response = earlyRequestSafe && resolved != nullptr &&
                                      resolved->route().endpoint().webSocket() != nullptr;
-    const auto recovery_mode = web_socket_response
-                                   ? buffered_response_recovery_mode::immediately_disabled
-                                   : buffered_response_recovery_mode::negotiated_then_disabled;
     std::optional<HttpResponse> selectedResponse;
     if (!earlyRequestSafe) {
         selectedResponse.emplace(HttpResponse::Options{.resource = worker_.resource()});
@@ -393,41 +391,18 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
     }
     response_.emplace(std::move(response));
 
-    buffered_response_recovery recovery(recovery_mode);
-    auto preparation = co_await prepareBufferedHttpResponseAsync(
-        request, codingPolicy, *response_, options_, services_.worker());
-    if (cancellationRequested()) {
+    auto preparation = co_await prepare_application_response(
+        request, codingPolicy, *response_, options_, routes_, *requestMemory_, *requestServices_,
+        {.terminal_stop = &requestServices_->stopToken(),
+            .recovery_mode = web_socket_response ? buffered_response_recovery_mode::immediately_disabled : buffered_response_recovery_mode::negotiated_then_disabled});
+    if (!preparation || cancellationRequested()) {
         co_return RunStatus::kCancelled;
     }
-    for (;;) {
-        const auto step = recovery.advance(
-            codingPolicy, request, *response_, preparation.compressionResult());
-        if (step.action == buffered_response_recovery_action::ready) {
-            break;
-        }
-        if (step.action == buffered_response_recovery_action::handle_error) {
-            response_.reset();
-            auto error_response = co_await routes_.handleError(
-                request, *requestMemory_, *step.error, *requestServices_);
-            if (cancellationRequested()) {
-                co_return RunStatus::kCancelled;
-            }
-            response_.emplace(std::move(error_response));
-        }
-        preparation = co_await prepareBufferedHttpResponseAsync(
-            request, codingPolicy, *response_, options_, services_.worker());
-        // The WebSocket immediate-disabled terminal preparation retains its
-        // existing publication boundary; ordinary recovery checks each suspension.
-        if (recovery_mode == buffered_response_recovery_mode::negotiated_then_disabled &&
-            cancellationRequested()) {
-            co_return RunStatus::kCancelled;
-        }
-    }
 
-    if (!web_socket_response && response_->fileBody().has_value() && preparation.writePlan().sendBody() && preparation.writePlan().contentLength() != 0) {
+    if (!web_socket_response && response_->fileBody().has_value() && preparation->write_plan.sendBody() && preparation->write_plan.contentLength() != 0) {
         std::exception_ptr fileFailure;
         try {
-            co_return co_await writeFileResponse(preparation.writePlan());
+            co_return co_await writeFileResponse(preparation->write_plan);
         } catch (...) {
             fileFailure = std::current_exception();
         }
@@ -441,19 +416,24 @@ Task<Http3BufferedRequestDispatch::RunStatus> Http3BufferedRequestDispatch::runH
         }
         response_.reset();
         response_.emplace(co_await routes_.handleException(request, *requestMemory_, fileFailure, *requestServices_));
-        preparation = co_await prepareBufferedHttpResponseAsync(request, HttpResponseCodingPolicy::disabled(), *response_, options_, services_.worker());
+        preparation = co_await prepare_application_response(request, HttpResponseCodingPolicy::disabled(),
+            *response_, options_, routes_, *requestMemory_, *requestServices_,
+            {.terminal_stop = &requestServices_->stopToken()});
+        if (!preparation || cancellationRequested()) {
+            co_return RunStatus::kCancelled;
+        }
     }
     if (!web_socket_response && streamOutputActive_) {
-        co_return co_await writeBufferedAfterInterim(preparation.writePlan());
+        co_return co_await writeBufferedAfterInterim(preparation->write_plan);
     }
-    auto encodedHead = session_.encodeResponseHead(messageId_.stream_id, *response_, preparation.writePlan());
+    auto encodedHead = session_.encodeResponseHead(messageId_.stream_id, *response_, preparation->write_plan);
     if (!encodedHead) {
         co_return encodedHead.error().kind == Http3ResponseHeadError::peer_field_section_limit
             ? RunStatus::peer_field_section_limit
             : RunStatus::kFailed;
     }
     auto output = Http3BufferedResponseOutput::create(
-        *response_, preparation.writePlan(), std::move(*encodedHead), worker_, outbound_, messageId_);
+        *response_, preparation->write_plan, std::move(*encodedHead), worker_, outbound_, messageId_);
     if (!output) {
         co_return output.error() == Http3BufferedResponseOutputError::kFileBodyUnsupported
             ? RunStatus::kFilePayloadUnsupported
@@ -749,7 +729,7 @@ Http3BufferedRequestDispatch::runWebSocketHandler() {
         }
         webSocketConnection.emplace(Http3WebSocketTransport{*this}, services_.worker(),
             scannerEntry_, endpoint.lifecycle(),
-            ProtocolByteLimit::limited(options_.maxWebSocketMessageBytes),
+            ProtocolByteLimit::limited(options_.max_web_socket_message_bytes),
             session_.inbound_buffer_pool(), std::string_view{}, handshake->compression(),
             endpoint.deflate().compressionLevel);
         co_await invokeWebSocketHandler(*webSocketConnection, scannerEntry_,

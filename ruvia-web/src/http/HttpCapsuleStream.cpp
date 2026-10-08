@@ -10,9 +10,10 @@
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/web/HttpClientTunnel.h"
 #include "ruvia/web/HttpTunnel.h"
-#include "ruvia/web/detail/client/HttpClientResponseMemory.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/http/HttpCapsuleStreamState.h"
+
+#include "client/HttpClientResponseMemory.h"
+#include "client/HttpClientResponseState.h"
+#include "http/HttpCapsuleStreamState.h"
 
 namespace ruvia {
 HttpCapsule::HttpCapsule(detail::HttpCapsuleStreamState& state, std::uint64_t type, std::pmr::string payload) noexcept

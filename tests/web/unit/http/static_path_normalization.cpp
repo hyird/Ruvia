@@ -3,8 +3,8 @@
 #include <string_view>
 
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/static/StaticPathNormalization.h"
 
+#include "http/StaticPathNormalization.h"
 #include "test_harness.h"
 
 namespace {

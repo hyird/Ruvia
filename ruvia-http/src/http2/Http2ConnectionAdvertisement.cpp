@@ -1,5 +1,6 @@
 #include "ruvia/http/HttpConnectionAdvertisement.h"
-#include "ruvia/http/detail/http2/Http2Connection.h"
+
+#include "http2/Http2Connection.h"
 
 namespace ruvia::detail {
 bool Http2Connection::processAdvertisement(const Http2FrameHeader& header, std::string_view payload) {

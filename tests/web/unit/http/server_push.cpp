@@ -10,10 +10,10 @@
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/http/Http1ServerRequestParser.h"
-#include "ruvia/web/detail/client/HttpClientConfigValidation.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/http/context/HttpPushOutput.h"
 
+#include "client/HttpClientConfigValidation.h"
+#include "context/ContextAccess.h"
+#include "context/HttpPushOutput.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

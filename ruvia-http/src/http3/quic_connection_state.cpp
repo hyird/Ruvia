@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http3/quic_connection_state.h"
+#include "http3/quic_connection_state.h"
 
 #include <algorithm>
 #include <limits>
@@ -6,8 +6,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/http3/quic_address_codec.h"
 #include "ruvia/http/quic_connection.h"
+
+#include "http3/quic_address_codec.h"
 
 namespace ruvia::detail {
 namespace {

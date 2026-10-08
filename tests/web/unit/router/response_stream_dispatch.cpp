@@ -22,14 +22,14 @@
 #include "ruvia/http/HttpResponseStream.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Session.h"
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamSink.h"
 
 #include "context_services_fixture.h"
+#include "http/SessionAccess.h"
+#include "router/RouteTable.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
+#include "server/HttpResponseStreamDispatch.h"
+#include "server/HttpResponseStreamSink.h"
 #include "test_harness.h"
 
 namespace {

@@ -4,12 +4,13 @@
 #include <stdexcept>
 
 #include "ruvia/http/Http1ClientResponseParser.h"
-#include "ruvia/http/detail/client/Http1ClientRequestHeaders.h"
 #include "ruvia/http/detail/field/HeaderTokenUtils.h"
 #include "ruvia/http/detail/util/AsciiCase.h"
-#include "ruvia/http/detail/util/HttpBase64.h"
-#include "ruvia/http/detail/websocket/handshake/HttpWebSocketAcceptKey.h"
-#include "ruvia/http/detail/websocket/handshake/WebSocketSubprotocolSet.h"
+
+#include "client/Http1ClientRequestHeaders.h"
+#include "util/HttpBase64.h"
+#include "websocket/HttpWebSocketAcceptKey.h"
+#include "websocket/WebSocketSubprotocolSet.h"
 
 namespace ruvia {
 namespace {

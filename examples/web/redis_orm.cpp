@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     config.password = app.env().get("RUVIA_REDIS_PASSWORD").value_or("");
     app.redis({.config = config})
         .listen({.address = "127.0.0.1", .http = 8091})
-        .server({.workerCount = 1, .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall})
+        .server({.worker_count = 1, .process_signal_handlers = ruvia::process_signal_handler_policy::install})
         .onStart([createIndex, &failed] {
             if (!createIndex) {
                 return;

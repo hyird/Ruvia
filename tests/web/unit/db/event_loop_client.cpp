@@ -63,7 +63,7 @@ public:
         return {.driver = ruvia::DbDriver::kPostgreSql, .host = "127.0.0.1", .port = port_, .username = "test", .tls = {.mode = ruvia::client_tls_mode::disabled}, .database = "test", .connectTimeout = std::chrono::seconds(5)};
     }
 
-    void waitForStartup() {
+    void wait_for_startup() {
         auto started = started_.get_future();
         if (started.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
             throw std::runtime_error("PostgreSQL test peer did not receive startup");
@@ -169,7 +169,7 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_interrupting_startup) {
     ruvia::DbClient client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
-    peer.waitForStartup();
+    peer.wait_for_startup();
     bool rejected = false;
     try {
         loop.start(client.connect()).get();
@@ -197,7 +197,7 @@ RUVIA_TEST(db_client_rejects_duplicate_connect_without_closing_connected_client)
     ruvia::DbClient client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
-    peer.waitForStartup();
+    peer.wait_for_startup();
     peer.authenticate();
     first.get();
     bool rejected = false;
@@ -256,7 +256,7 @@ RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication
                 io.run();
             }
         });
-        peer.waitForStartup();
+        peer.wait_for_startup();
         attachment.stop();
         driver.join();
         root.get();
@@ -272,7 +272,7 @@ RUVIA_TEST(db_client_shutdown_joins_pending_authentication) {
     ruvia::DbClient client(loop, peer.config());
     pool.start();
     auto first = loop.start(client.connect());
-    peer.waitForStartup();
+    peer.wait_for_startup();
     auto closing = loop.start(client.shutdown());
     bool cancelled = false;
     try {

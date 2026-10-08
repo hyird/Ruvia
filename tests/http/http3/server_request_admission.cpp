@@ -19,25 +19,25 @@ using ruvia::Http3ServerRequestAdmissionRejection;
 }  // namespace
 
 RUVIA_TEST(http3_server_request_admission_uses_checked_finite_limits) {
-    const auto zero = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 0});
+    const auto zero = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 0});
     RUVIA_CHECK(!zero.has_value());
     if (!zero) {
         RUVIA_CHECK(zero.error() == Http3ServerRequestAdmissionError::kZeroRequestLimit);
     }
 
     const auto tooLarge = Http3ServerRequestAdmissionPlanner::create(
-        {.maxRequestsPerConnection = ruvia::kHttp3VarIntMax / 4 + 1});
+        {.max_requests_per_connection = ruvia::kHttp3VarIntMax / 4 + 1});
     RUVIA_CHECK(!tooLarge.has_value());
     if (!tooLarge) {
         RUVIA_CHECK(tooLarge.error() == Http3ServerRequestAdmissionError::kRequestLimitOutOfRange);
     }
 
-    auto one = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 1});
+    auto one = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 1});
     RUVIA_CHECK(one.has_value());
     if (!one) {
         return;
     }
-    RUVIA_CHECK_EQ(one->maxRequestsPerConnection(), std::uint64_t{1});
+    RUVIA_CHECK_EQ(one->max_requests_per_connection(), std::uint64_t{1});
     RUVIA_CHECK_EQ(one->goawayId(), std::uint64_t{4});
 
     const auto overLimit = one->admit(4);
@@ -62,7 +62,7 @@ RUVIA_TEST(http3_server_request_admission_uses_checked_finite_limits) {
 }
 
 RUVIA_TEST(http3_server_request_admission_keeps_the_fixed_cutoff_for_out_of_order_streams) {
-    auto planner = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 126});
+    auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 126});
     RUVIA_CHECK(planner.has_value());
     if (!planner) {
         return;
@@ -82,7 +82,7 @@ RUVIA_TEST(http3_server_request_admission_keeps_the_fixed_cutoff_for_out_of_orde
     RUVIA_CHECK(!laterHighStream.emitGoaway);
     RUVIA_CHECK(!planner->announceGoaway().emitGoaway);
 
-    auto reverseOrder = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 126});
+    auto reverseOrder = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 126});
     RUVIA_CHECK(reverseOrder.has_value());
     if (reverseOrder) {
         RUVIA_CHECK(reverseOrder->admit(0).action == Http3ServerRequestAdmissionAction::kAdmit);
@@ -92,7 +92,7 @@ RUVIA_TEST(http3_server_request_admission_keeps_the_fixed_cutoff_for_out_of_orde
 }
 
 RUVIA_TEST(http3_server_request_admission_enforces_the_thousand_request_boundary) {
-    auto planner = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 1000});
+    auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 1000});
     RUVIA_CHECK(planner.has_value());
     if (!planner) {
         return;
@@ -110,7 +110,7 @@ RUVIA_TEST(http3_server_request_admission_enforces_the_thousand_request_boundary
 }
 
 RUVIA_TEST(http3_server_request_admission_rejects_non_request_stream_ids) {
-    auto planner = Http3ServerRequestAdmissionPlanner::create({.maxRequestsPerConnection = 1000});
+    auto planner = Http3ServerRequestAdmissionPlanner::create({.max_requests_per_connection = 1000});
     RUVIA_CHECK(planner.has_value());
     if (!planner) {
         return;
@@ -171,7 +171,7 @@ RUVIA_TEST(http3_server_request_admission_accepts_the_largest_checked_finite_lim
     constexpr auto maxRequests = ruvia::kHttp3VarIntMax / 4;
     constexpr auto maxGoawayId = ruvia::kHttp3VarIntMax & ~std::uint64_t{3};
     auto planner = Http3ServerRequestAdmissionPlanner::create(
-        Http3ServerRequestAdmissionConfig{.maxRequestsPerConnection = maxRequests});
+        Http3ServerRequestAdmissionConfig{.max_requests_per_connection = maxRequests});
     RUVIA_CHECK(planner.has_value());
     if (planner) {
         RUVIA_CHECK_EQ(planner->goawayId(), maxGoawayId);

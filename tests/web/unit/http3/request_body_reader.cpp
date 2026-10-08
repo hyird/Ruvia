@@ -18,9 +18,9 @@
 #include "ruvia/core/TaskScope.h"
 #include "ruvia/core/Timer.h"
 #include "ruvia/core/WorkerSignal.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
-#include "ruvia/web/detail/http3/Http3RequestBodyReader.h"
 
+#include "body/HttpRequestBodyFacade.h"
+#include "http3/Http3RequestBodyReader.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

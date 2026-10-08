@@ -11,8 +11,8 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpRequestContentDecoding.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
 
+#include "request/HttpRequestAccess.h"
 #include "request_header_memory_fixture.h"
 #include "test_harness.h"
 

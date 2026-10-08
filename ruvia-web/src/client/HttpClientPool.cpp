@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/HttpClientPool.h"
+#include "client/HttpClientPool.h"
 
 #include <algorithm>
 #include <array>
@@ -23,10 +23,11 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpRequestTarget.h"
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/client/HttpClientResponseState.h"
-#include "ruvia/web/detail/client/HttpClientResultBudget.h"
-#include "ruvia/web/detail/http3/Http3ClientConnection.h"
+
+#include "client/ClientTransport.h"
+#include "client/HttpClientResponseState.h"
+#include "client/HttpClientResultBudget.h"
+#include "http3/Http3ClientConnection.h"
 
 namespace ruvia::detail {
 namespace {
@@ -47,16 +48,12 @@ ClientAlpnMode clientAlpnMode(HttpClientProtocol protocol) noexcept {
     std::terminate();
 }
 
-constexpr std::size_t kHttp3ConcurrentRequestsPerConnection =
-    ruvia::quic_limits{}.max_local_streams - 3;
-constexpr std::size_t kHttp3PoolReceiveBodyBytes = std::size_t{64} * 1024 * 1024;
-
 std::size_t httpClientSchedulerSlots(const HttpClientConfigStorage& config) noexcept {
     if (config.protocol == HttpClientProtocol::kHttp1Only) {
         return config.connectionCount;
     }
     if (config.protocol == HttpClientProtocol::kHttp3Only) {
-        return config.connectionCount * kHttp3ConcurrentRequestsPerConnection;
+        return config.connectionCount * client_quic_connections::requests_per_connection;
     }
     return config.connectionCount * config.maxConcurrentHttp2StreamsPerConnection;
 }
@@ -104,14 +101,13 @@ std::size_t httpClientSchedulerSlots(const HttpClientConfigStorage& config) noex
 static_assert(worker_cancellation_post_is_inline<http_client_cancellation_target>);
 
 HttpClientPool::Connection::Connection(asio::io_context& ioContext, asio::ssl::context& tlsContext,
-    const WorkerHandle& worker, std::pmr::memory_resource* resource)
-    : resolver(ioContext),
-      stream(ioContext, tlsContext),
+    const WorkerHandle& worker, const HttpClientConfigStorage& config, client_wire_counters& counters,
+    std::pmr::memory_resource* resource)
+    : transport(ioContext, tlsContext, worker, config, counters, resource),
       readBuffer(pmrResourceOrDefault(resource)),
       writeBuffer(pmrResourceOrDefault(resource)),
       http2(nullptr, PmrObjectDeleter<::ruvia::Http2Connection>{pmrResourceOrDefault(resource)}),
-      http2Runtime(makePmrObject<Http2Runtime>(resource, worker, resource)),
-      deadlineTimer(makePmrObject<WorkerTimerRegistration>(resource)) {
+      http2Runtime(makePmrObject<Http2Runtime>(resource, worker, resource)) {
     readBuffer.reserve(kConnectionReadBufferInitialBytes);
 }
 
@@ -132,6 +128,7 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
       worker_(worker),
       resource_(pmrResourceOrDefault(resource)),
       config_(std::move(config)),
+      policy_(config_, resource_),
       advertisements_(worker_, config_.advertisements, resource_),
       pushes_(resource_),
       resultBudgetDomain_(requireHttpClientResultBudgetDomain(resultBudgetDomain)),
@@ -139,36 +136,23 @@ HttpClientPool::HttpClientPool(asio::io_context& ioContext, const WorkerHandle& 
       connections_(resource_),
       scheduler_(httpClientSchedulerSlots(config_), worker_, resource_),
       backgroundTasks_(worker_, {.resource = resource_}),
-      http3Tls_(nullptr, PmrObjectDeleter<http3_quic_client_tls_context>{resource_}),
-      http3BodyBudget_(nullptr, PmrObjectDeleter<Http3ClientBodyBudget>{resource_}),
-      http3Connections_(resource_),
-      http3GenerationSignal_(worker_),
-      http3PendingCancellations_(resource_),
-      cookies_(resource_) {
-    for (const auto& [name, value] : config_.cookies) {
-        addCookie(name, value);
-    }
-    if (config_.protocol == HttpClientProtocol::kHttp3Only) {
-        http3Tls_ = makePmrObject<http3_quic_client_tls_context>(
-            resource_, config_.transport.view(), resource_);
-        http3BodyBudget_ =
-            makePmrObject<Http3ClientBodyBudget>(resource_, kHttp3PoolReceiveBodyBytes);
-        http3Connections_.reserve(config_.connectionCount);
-        for (std::size_t i = 0; i < config_.connectionCount; ++i) {
-            // HttpClientPool is staged before the business worker starts, but
-            // QUIC connection owners capture and enforce worker-thread
-            // affinity. Keep stable pool slots and construct each owner lazily
-            // from the first request running on that worker.
-            http3Connections_.emplace_back(
-                nullptr, PmrObjectDeleter<Http3ClientConnection>{resource_});
-        }
-    } else {
+
+      quic_(ioContext_, worker_, backgroundTasks_, config_, advertisements_,
+          config_.push.enabled ? Http3ClientPushObserver{
+                                     .context = this,
+                                     .config = config_.push,
+                                     .receive = [](void* raw, std::size_t slot, Http3ClientConnection& connection, std::uint64_t id, const Http3MessageHead& head) { return static_cast<HttpClientPool*>(raw)->acceptHttp3Push(slot, connection, id, head); },
+                                     .finished = [](void* raw) noexcept { --static_cast<HttpClientPool*>(raw)->activePushes_; },
+                                 }
+                               : Http3ClientPushObserver{},
+          resource_) {
+    if (config_.protocol != HttpClientProtocol::kHttp3Only) {
         if (config_.scheme == HttpScheme::kHttps) {
             configure_client_tls_context(*tlsContext_.native_handle(), config_.transport.view());
         }
         connections_.reserve(config_.connectionCount);
         for (std::size_t i = 0; i < config_.connectionCount; ++i) {
-            connections_.emplace_back(ioContext_, tlsContext_, worker_, resource_);
+            connections_.emplace_back(ioContext_, tlsContext_, worker_, config_, wire_counters_, resource_);
         }
     }
     cancellation_target_ = make_worker_cancellation_target(*this, worker_);
@@ -187,11 +171,7 @@ HttpClientPool::Lease::~Lease() {
 }
 
 void HttpClientPool::close(Connection& connection) noexcept {
-    if (connection.activeHttp1Response != nullptr) {
-        if (auto* output = connection.activeHttp1Response->output()) {
-            output->stop();
-        }
-    }
+    connection.transport.stop_output();
     auto& runtime = *connection.http2Runtime;
     if (runtime.running) {
         // A multiplexed connection owns background reader/writer tasks. Route
@@ -201,12 +181,7 @@ void HttpClientPool::close(Connection& connection) noexcept {
             connection, runtime.generation, std::make_error_code(std::errc::operation_canceled));
         return;
     }
-    connection.deadlineTimer->cancel();
-    connection.deadline.reset();
-    connection.resolver.cancel();
-    std::error_code ignored;
-    (void)connection.stream.lowest_layer().cancel(ignored);
-    (void)connection.stream.lowest_layer().close(ignored);
+    connection.transport.close();
     connection.connected = false;
     connection.protocol = WireProtocol::kUnknown;
     if (runtime.sessionTasks == 0) {
@@ -224,20 +199,10 @@ void HttpClientPool::closeNow() noexcept {
     if (!scheduler_.close()) {
         return;
     }
-    for (auto& connection : http3Connections_) {
-        if (connection) {
-            connection->requestStop();
-        }
-    }
+    quic_.request_stop();
     backgroundTasks_.requestStop();
     for (auto& connection : connections_) {
-        if (connection.activeHttp1Response != nullptr) {
-            if (auto* output = connection.activeHttp1Response->output()) {
-                output->stop();
-            }
-            connection.activeHttp1Response->spaceSignal.notify();
-        }
-        connection.abortReason = AbortReason::kClosing;
+        connection.transport.abort_output(client_abort_reason::closing);
         auto& runtime = *connection.http2Runtime;
         (void)runtime.connectScheduler.close();
         (void)runtime.http1Scheduler.close();
@@ -276,121 +241,28 @@ Task<void> HttpClientPool::join() {
     // Destroy QUIC SSL/socket/session owners while the worker loop and its PMR
     // owner are still alive. HttpClientPool itself is later destroyed by the
     // App lifecycle thread after the worker has joined.
-    if (quic_migration_ && quic_migration_->slot < http3Connections_.size()) {
-        const auto& connection = http3Connections_[quic_migration_->slot];
-        if (connection) {
-            if (const auto migration =
-                    connection->path_migration(quic_migration_->connection_migration_id)) {
-                quic_migration_->result = *migration;
-                quic_migration_->result.id = quic_migration_->id;
-            }
-        }
-        if (quic_migration_->result.status == ruvia::quic_migration_status::started) {
-            quic_migration_->result.status = ruvia::quic_migration_status::aborted;
-        }
-    }
-    for (auto& connection : http3Connections_) {
-        connection.reset();
-    }
+    quic_.retire();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
 }
 
-ruvia::quic_path_migration HttpClientPool::start_quic_path_migration(
-    const asio::ip::udp::endpoint& local_endpoint) {
-    if (!worker_.isCurrent() || backgroundJoined_) {
+ruvia::quic_path_migration HttpClientPool::start_quic_path_migration(const asio::ip::udp::endpoint& endpoint) {
+    if (backgroundJoined_) {
         return {.status = ruvia::quic_migration_status::rejected};
     }
-    if (quic_migration_ && quic_migration_->result.status == ruvia::quic_migration_status::started) {
-        const auto& active = quic_migration_;
-        if (active->slot < http3Connections_.size()) {
-            const auto& connection = http3Connections_[active->slot];
-            if (connection) {
-                const auto status = connection->path_migration(active->connection_migration_id);
-                if (status) {
-                    quic_migration_->result = *status;
-                    quic_migration_->result.id = active->id;
-                    if (status->status == ruvia::quic_migration_status::started) {
-                        return {.status = ruvia::quic_migration_status::rejected};
-                    }
-                }
-            }
-        }
-        if (quic_migration_->result.status == ruvia::quic_migration_status::started) {
-            quic_migration_->result.status = ruvia::quic_migration_status::aborted;
-        }
-    }
-    for (std::size_t slot = 0; slot < http3Connections_.size(); ++slot) {
-        const auto& connection = http3Connections_[slot];
-        if (!connection || !connection->running()) {
-            continue;
-        }
-        const auto result = connection->start_path_migration(local_endpoint);
-        if (result.status == ruvia::quic_migration_status::started ||
-            result.status == ruvia::quic_migration_status::validated) {
-            auto id = next_quic_migration_id_++;
-            if (id == 0) {
-                id = next_quic_migration_id_++;
-            }
-            quic_migration_ = quic_migration_tracking{
-                id, slot, connection->quic_generation(), result.id, result};
-            quic_migration_->result.id = id;
-            return quic_migration_->result;
-        }
-        if (result.status == ruvia::quic_migration_status::would_block) {
-            return result;
-        }
-    }
-    return {.status = ruvia::quic_migration_status::rejected};
+    return quic_.start_path_migration(endpoint);
 }
-
-std::optional<ruvia::quic_path_migration> HttpClientPool::path_migration(
-    std::uint64_t id) const noexcept {
-    if (!worker_.isCurrent() || !quic_migration_ || quic_migration_->id != id) {
-        return std::nullopt;
-    }
-    const auto& migration = *quic_migration_;
-    const auto fallback = [&migration, id] {
-        auto result = migration.result;
-        result.id = id;
-        if (result.status == ruvia::quic_migration_status::started) {
-            result.status = ruvia::quic_migration_status::aborted;
-        }
-        return result;
-    };
-    if (migration.slot >= http3Connections_.size()) {
-        return fallback();
-    }
-    const auto& connection = http3Connections_[migration.slot];
-    if (!connection) {
-        return fallback();
-    }
-    const auto status = connection->path_migration(migration.connection_migration_id);
-    if (!status) {
-        return fallback();
-    }
-    auto result = *status;
-    result.id = id;
-    return result;
+std::optional<ruvia::quic_path_migration> HttpClientPool::path_migration(std::uint64_t id) const noexcept {
+    return quic_.path_migration(id);
 }
-
 ruvia::quic_operation_status HttpClientPool::cancel_quic_path_migration(std::uint64_t id) {
-    if (!worker_.isCurrent() || !quic_migration_ || quic_migration_->id != id ||
-        quic_migration_->slot >= http3Connections_.size()) {
-        return ruvia::quic_operation_status::retired;
-    }
-    const auto& migration = *quic_migration_;
-    const auto& connection = http3Connections_[migration.slot];
-    if (!connection || connection->quic_generation() != migration.generation) {
-        return ruvia::quic_operation_status::retired;
-    }
-    return connection->cancel_path_migration(migration.connection_migration_id);
+    return quic_.cancel_path_migration(id);
 }
 
 HttpClientStats HttpClientPool::stats() const noexcept {
-    return {requestsBuffered_, requestsInFlight_, completedRequests_, failedRequests_, bytesSent_,
-        bytesReceived_, advertisements_.dropped(), receivedPushes_, rejectedPushes_};
+    return {requestsBuffered_, requestsInFlight_, completedRequests_, failedRequests_, wire_counters_.sent,
+        wire_counters_.received, advertisements_.dropped(), receivedPushes_, rejectedPushes_};
 }
 
 std::uint16_t HttpClientPool::port() const noexcept {
@@ -426,23 +298,14 @@ void HttpClientPool::cancelOperationById(std::uint64_t cancellationId) noexcept 
     if (cancellationId == 0) {
         return;
     }
-    const auto http3 = std::ranges::find_if(http3PendingCancellations_,
-        [cancellationId](const Http3PendingCancellation& pending) {
-            return pending.cancellationId == cancellationId;
-        });
-    if (http3 != http3PendingCancellations_.end()) {
-        if (http3->connection == nullptr) {
-            http3GenerationSignal_.notify();
-        } else {
-            http3->connection->cancel(http3->requestId);
-        }
+    if (quic_.cancel(cancellationId)) {
         return;
     }
     for (std::size_t index = 0; index < connections_.size(); ++index) {
         auto& connection = connections_[index];
         if (connection.cancellationId == cancellationId) {
             connection.cancellationId = 0;
-            cancelOperation(index, connection.generation, AbortReason::kCancelled);
+            cancelOperation(index, connection.generation, client_abort_reason::cancelled);
             return;
         }
         auto& runtime = *connection.http2Runtime;
@@ -456,58 +319,14 @@ void HttpClientPool::cancelOperationById(std::uint64_t cancellationId) noexcept 
             });
         if (pending != runtime.pending.end()) {
             (*pending)->cancellationId = 0;
-            cancelHttp2Stream(connection, (*pending)->requestId, AbortReason::kCancelled);
+            cancelHttp2Stream(connection, (*pending)->requestId, client_abort_reason::cancelled);
             return;
         }
     }
-}
-
-bool HttpClientPool::armDeadline(
-    Connection& connection, const ruvia::OperationTimeout& timeout, DeadlineKind kind) {
-    connection.deadlineTimer->cancel();
-    const auto remaining = timeout.remaining();
-    if (!remaining) {
-        connection.deadline.reset();
-        return true;
-    }
-    if (remaining->count() == 0) {
-        connection.deadline.reset();
-        return false;
-    }
-    const auto deadline = *timeout.deadline();
-    connection.deadline.arm(deadline, kind);
-    (worker_).schedule_timer(*connection.deadlineTimer, deadline, [&connection](WorkerTimerOutcome outcome) noexcept {
-        if (outcome != WorkerTimerOutcome::kExpired) {
-            return;
-        }
-        const auto expired = connection.deadline.expire(std::chrono::steady_clock::now());
-        if (!expired) {
-            return;
-        }
-        connection.abortReason = AbortReason::kTimeout;
-        if (connection.activeHttp1Response != nullptr) {
-            if (auto* output = connection.activeHttp1Response->output()) {
-                output->stop();
-            }
-            connection.activeHttp1Response->spaceSignal.notify();
-        }
-        std::error_code ignored;
-        if (*expired == DeadlineKind::kResolve) {
-            connection.resolver.cancel();
-        } else if (*expired == DeadlineKind::kSocket) {
-            (void)connection.stream.lowest_layer().cancel(ignored);
-        }
-    });
-    return true;
-}
-
-bool HttpClientPool::clearDeadline(Connection& connection) noexcept {
-    connection.deadlineTimer->cancel();
-    return connection.deadline.clear();
 }
 
 void HttpClientPool::cancelOperation(
-    std::size_t index, std::uint64_t generation, AbortReason reason) noexcept {
+    std::size_t index, std::uint64_t generation, client_abort_reason reason) noexcept {
     if (connections_.empty()) {
         return;
     }
@@ -515,105 +334,11 @@ void HttpClientPool::cancelOperation(
     if (connection.generation != generation) {
         return;
     }
-    connection.abortReason = reason;
-    if (connection.activeHttp1Response != nullptr) {
-        if (auto* output = connection.activeHttp1Response->output()) {
-            output->stop();
-        }
-        connection.activeHttp1Response->spaceSignal.notify();
-    }
-    std::error_code ignored;
-    connection.resolver.cancel();
-    (void)connection.stream.lowest_layer().cancel(ignored);
-    (void)connection.stream.lowest_layer().close(ignored);
+    connection.transport.cancel(reason);
     connection.connected = false;
     connection.protocol = WireProtocol::kUnknown;
     connection.http2Runtime->writeSignal.notify();
     connection.http2Runtime->stateSignal.notify();
-}
-
-void HttpClientPool::throwAbort(const Connection& connection) const {
-    switch (connection.abortReason) {
-        case AbortReason::kNone:
-            return;
-        case AbortReason::kTimeout:
-            throw HttpClientError(HttpClientError::Code::kTimeout, "http client request timed out");
-        case AbortReason::kCancelled:
-            throw HttpClientError(
-                HttpClientError::Code::kCancelled, "http client request cancelled");
-        case AbortReason::kClosing:
-            throw HttpClientError(HttpClientError::Code::kClosing, "http client pool is closing");
-    }
-}
-
-HttpClientError::Code HttpClientPool::transportErrorCode(
-    const std::error_code& error) const noexcept {
-    return config_.scheme == HttpScheme::kHttps &&
-                   (error.category() == asio::error::get_ssl_category() ||
-                       error == asio::ssl::error::stream_truncated)
-               ? HttpClientError::Code::kTlsFailed
-               : HttpClientError::Code::kIoError;
-}
-
-Task<void> HttpClientPool::write(
-    Connection& connection, std::string_view bytes, const ruvia::OperationTimeout& timeout) {
-    if (bytes.empty()) {
-        co_return;
-    }
-    const auto writeTimeout = timeout.constrainedBy(config_.writeTimeout);
-    if (!armDeadline(connection, writeTimeout, DeadlineKind::kSocket)) {
-        throw HttpClientError(HttpClientError::Code::kTimeout, "http client write timed out");
-    }
-    AsioCompletion<std::size_t> completion =
-        config_.scheme == HttpScheme::kHttps
-            ? co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
-                  asio::async_write(connection.stream, asio::buffer(bytes), std::move(handler));
-              })
-            : co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
-                  asio::async_write(
-                      connection.stream.next_layer(), asio::buffer(bytes), std::move(handler));
-              });
-    const bool timedOut = clearDeadline(connection) || writeTimeout.expired();
-    throwAbort(connection);
-    if (timedOut) {
-        throw HttpClientError(HttpClientError::Code::kTimeout, "http client write timed out");
-    }
-    if (completion.errorCode()) {
-        throw HttpClientError(
-            transportErrorCode(completion.errorCode()), completion.errorCode().message());
-    }
-    bytesSent_ += completion.result();
-}
-
-Task<std::size_t> HttpClientPool::readSome(
-    Connection& connection, std::span<char> bytes, const ruvia::OperationTimeout& timeout, bool allowEof) {
-    if (!armDeadline(connection, timeout, DeadlineKind::kSocket)) {
-        throw HttpClientError(HttpClientError::Code::kTimeout, "http client request timed out");
-    }
-    AsioCompletion<std::size_t> completion =
-        config_.scheme == HttpScheme::kHttps
-            ? co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
-                  connection.stream.async_read_some(
-                      asio::buffer(bytes.data(), bytes.size()), std::move(handler));
-              })
-            : co_await ruvia::asyncAsio<std::size_t>([&connection, bytes](auto handler) mutable {
-                  connection.stream.next_layer().async_read_some(
-                      asio::buffer(bytes.data(), bytes.size()), std::move(handler));
-              });
-    const bool timedOut = clearDeadline(connection) || timeout.expired();
-    throwAbort(connection);
-    if (timedOut) {
-        throw HttpClientError(HttpClientError::Code::kTimeout, "http client request timed out");
-    }
-    if (completion.errorCode()) {
-        if (allowEof && completion.errorCode() == asio::error::eof) {
-            co_return 0;
-        }
-        throw HttpClientError(
-            transportErrorCode(completion.errorCode()), completion.errorCode().message());
-    }
-    bytesReceived_ += completion.result();
-    co_return completion.result();
 }
 
 Task<void> HttpClientPool::ensureConnected(Connection& connection,
@@ -647,7 +372,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     if (connection.connected) {
         co_return;
     }
-    connection.abortReason = AbortReason::kNone;
+    connection.transport.reset_abort();
     ++connection.generation;
     if (connection.generation == 0) {
         ++connection.generation;
@@ -661,19 +386,11 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     worker_cancellation_registration cancellation(cancellation_target_, connection.cancellationId);
     cancellation.arm(stopToken);
     while (runtime.sessionTasks != 0 || !runtime.pending.empty()) {
-        throwAbort(connection);
+        connection.transport.throw_if_aborted();
         co_await runtime.stateSignal.wait();
     }
-    throwAbort(connection);
-    if (connection.transport_started) {
-        // All session drivers and the serialized HTTP/1 exchange have retired.
-        // SSL_clear alone cannot discard Asio's input cursor or its BIO pair.
-        // Swap through moved-from streams so each displaced SSL engine remains
-        // owned until destruction (rather than overwriting its native owner).
-        asio::ssl::stream<asio::ip::tcp::socket> fresh(ioContext_, tlsContext_);
-        std::swap(connection.stream, fresh);
-        connection.transport_started = false;
-    }
+    connection.transport.throw_if_aborted();
+    connection.transport.prepare_reconnect(tlsContext_);
     runtime.connecting = true;
     struct ConnectGuard final {
         Http2Runtime& runtime;
@@ -689,15 +406,15 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     const auto timeout = operationTimeout.constrainedBy(config_.connectTimeout);
     ClientPortTextBuffer portBuffer{};
     const auto port = formatClientPort(httpClientPort(config_), portBuffer);
-    if (!armDeadline(connection, timeout, DeadlineKind::kResolve)) {
+    if (!connection.transport.arm_deadline(timeout, client_deadline_kind::resolve)) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client resolve timed out");
     }
     auto resolve = co_await ruvia::asyncAsio<asio::ip::tcp::resolver::results_type>(
         [&connection, this, port](auto handler) mutable {
-            connection.resolver.async_resolve(config_.host, port, std::move(handler));
+            connection.transport.resolver().async_resolve(config_.host, port, std::move(handler));
         });
-    const bool resolveTimedOut = clearDeadline(connection) || timeout.expired();
-    throwAbort(connection);
+    const bool resolveTimedOut = connection.transport.clear_deadline() || timeout.expired();
+    connection.transport.throw_if_aborted();
     if (resolveTimedOut) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client resolve timed out");
     }
@@ -706,14 +423,14 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     }
     auto endpoints = std::move(resolve).takeResult();
 
-    if (!armDeadline(connection, timeout, DeadlineKind::kSocket)) {
+    if (!connection.transport.arm_deadline(timeout, client_deadline_kind::socket)) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client connect timed out");
     }
     auto connected = co_await ruvia::asyncAsio([&connection, &endpoints](auto handler) mutable {
-        asio::async_connect(connection.stream.lowest_layer(), endpoints, std::move(handler));
+        asio::async_connect(connection.transport.stream().lowest_layer(), endpoints, std::move(handler));
     });
-    const bool connectTimedOut = clearDeadline(connection) || timeout.expired();
-    throwAbort(connection);
+    const bool connectTimedOut = connection.transport.clear_deadline() || timeout.expired();
+    connection.transport.throw_if_aborted();
     if (connectTimedOut) {
         throw HttpClientError(HttpClientError::Code::kTimeout, "http client connect timed out");
     }
@@ -723,25 +440,25 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
     }
     const auto transport = config_.transport.view();
     ruvia::applyTcpSocketPolicies(
-        connection.stream.next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
+        connection.transport.stream().next_layer(), transport.tcpNoDelay, transport.tcpKeepAlive);
 
     if (config_.scheme == HttpScheme::kHttps) {
-        connection.transport_started = true;
+        connection.transport.mark_tls_started();
         const auto tlsSetup = prepareClientTlsStream(
-            connection.stream, config_.host, transport, clientAlpnMode(config_.protocol));
+            connection.transport.stream(), config_.host, transport, clientAlpnMode(config_.protocol));
         if (tlsSetup != ClientTlsSetupError::kNone) {
             throw HttpClientError(
                 HttpClientError::Code::kTlsFailed, clientTlsSetupErrorMessage(tlsSetup));
         }
-        if (!armDeadline(connection, timeout, DeadlineKind::kSocket)) {
+        if (!connection.transport.arm_deadline(timeout, client_deadline_kind::socket)) {
             throw HttpClientError(
                 HttpClientError::Code::kTimeout, "http client TLS handshake timed out");
         }
         auto handshake = co_await ruvia::asyncAsio([&connection](auto handler) mutable {
-            connection.stream.async_handshake(asio::ssl::stream_base::client, std::move(handler));
+            connection.transport.stream().async_handshake(asio::ssl::stream_base::client, std::move(handler));
         });
-        const bool handshakeTimedOut = clearDeadline(connection) || timeout.expired();
-        throwAbort(connection);
+        const bool handshakeTimedOut = connection.transport.clear_deadline() || timeout.expired();
+        connection.transport.throw_if_aborted();
         if (handshakeTimedOut) {
             throw HttpClientError(
                 HttpClientError::Code::kTimeout, "http client TLS handshake timed out");
@@ -750,7 +467,7 @@ Task<void> HttpClientPool::ensureConnected(Connection& connection,
             throw HttpClientError(
                 HttpClientError::Code::kTlsFailed, handshake.errorCode().message());
         }
-        const auto alpn = selectedClientAlpn(connection.stream.native_handle());
+        const auto alpn = selectedClientAlpn(connection.transport.stream().native_handle());
         if (config_.protocol == HttpClientProtocol::kHttp2Only && alpn != "h2") {
             throw HttpClientError(
                 HttpClientError::Code::kProtocolUnavailable, "upstream did not negotiate HTTP/2");
@@ -772,7 +489,7 @@ HttpClientRequestStorage HttpClientPool::makeHttp3Request(
     std::pmr::vector<HttpHeaderView> headers(resource_);
     auto source = HttpClientRequestStorageAccess::view(request, headers);
     std::pmr::string cookieHeader(resource_);
-    appendAutomaticHeaders(request, headers, cookieHeader);
+    policy_.append_headers(request, headers, cookieHeader);
 
     HttpClientRequestStorage wire(source.method.view(), source.target.view(), resource_);
     wire.set_replay_safe(source.replay_safe);
@@ -792,42 +509,6 @@ HttpClientRequestStorage HttpClientPool::makeHttp3Request(
         wire.bindTunnel(*request.tunnel());
     }
     return wire;
-}
-
-Http3ClientConnection& HttpClientPool::http3Connection(std::size_t connectionIndex) {
-    if (http3Connections_.empty() || http3Tls_ == nullptr || http3BodyBudget_ == nullptr) {
-        throw HttpClientError(
-            HttpClientError::Code::kProtocolUnavailable, "HTTP/3 client is not configured");
-    }
-    auto& owner = http3Connections_.at(connectionIndex % http3Connections_.size());
-    if (!owner || (owner->terminal() && !owner->running() && owner->retainedRequests() == 0)) {
-        const auto origin = HttpOriginView::https(
-            {.host = config_.host, .port = config_.port});
-        owner = makePmrObject<Http3ClientConnection>(resource_, ioContext_, worker_,
-            backgroundTasks_, *http3Tls_, origin, config_.connectTimeout, resource_,
-            kHttp3ConcurrentRequestsPerConnection, config_.maxResponseBytes,
-            std::chrono::seconds(30), http3BodyBudget_.get(), config_.writeTimeout,
-            Http3ClientConnection::LifecycleNotification{
-                .context = &http3GenerationSignal_,
-                .notify = [](void* context) noexcept {
-                    static_cast<WorkerSignal*>(context)->notify();
-                },
-            },
-            config_.http3Qpack, config_.advertisements.receiveOrigins ? Http3ClientOriginObserver{.context = &advertisements_, .connectionSlot = connectionIndex % http3Connections_.size(), .receive = [](void* raw, std::size_t slot, const HttpOriginAdvertisement& origins) {
-                                                                                                      (void)static_cast<HttpClientAdvertisementQueue*>(raw)->retain(slot, HttpProtocolVersion::kHttp3, origins);
-                                                                                                  }}
-                                                                      : Http3ClientOriginObserver{},
-            config_.push.enabled ? Http3ClientPushObserver{
-                                       .context = this,
-                                       .connectionSlot = connectionIndex % http3Connections_.size(),
-                                       .config = config_.push,
-                                       .receive = [](void* raw, std::size_t slot, Http3ClientConnection& connection, std::uint64_t id, const Http3MessageHead& head) { return static_cast<HttpClientPool*>(raw)->acceptHttp3Push(slot, connection, id, head); },
-                                       .finished = [](void* raw) noexcept { --static_cast<HttpClientPool*>(raw)->activePushes_; },
-                                   }
-                                 : Http3ClientPushObserver{},
-            config_.initial_quic_version, config_.http3_early_data);
-    }
-    return *owner;
 }
 
 HttpClientResponseState* HttpClientPool::acceptHttp3Push(std::size_t slot, Http3ClientConnection& connection,
@@ -878,16 +559,13 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
     const HttpClientRequestStorage& request, const ruvia::OperationTimeout& timeout,
     StopToken stopToken, HttpClientResponse& response) {
     struct CancellationGuard final {
-        std::pmr::vector<Http3PendingCancellation>& pending;
+        client_quic_connections& connections;
         worker_cancellation_registration<http_client_cancellation_target>& registration;
         std::uint64_t id;
 
         ~CancellationGuard() {
             registration.reset();
-            std::erase_if(pending,
-                [id = id](const Http3PendingCancellation& item) {
-                    return item.cancellationId == id;
-                });
+            connections.unregister_cancellation(id);
         }
     };
 
@@ -895,7 +573,7 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
     wire.emplace(makeHttp3Request(request));
     auto absoluteDeadline = timeout.deadline();
     bool retriedRejectedRequest = false;
-    const auto connectionCount = http3Connections_.size();
+    const auto connectionCount = quic_.size();
     if (connectionCount == 0) {
         throw HttpClientError(
             HttpClientError::Code::kProtocolUnavailable, "HTTP/3 client is not configured");
@@ -907,7 +585,7 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
         for (;;) {
             for (std::size_t offset = 0; offset < connectionCount; ++offset) {
                 const auto candidateIndex = (connectionIndex + offset) % connectionCount;
-                auto& candidate = http3Connection(candidateIndex);
+                auto& candidate = quic_.acquire(candidateIndex);
                 if (candidate.accepting()) {
                     connection = &candidate;
                     selectedIndex = candidateIndex;
@@ -930,16 +608,16 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
             if (const auto remaining = timeout.remaining()) {
                 (worker_).schedule_timer(timer, workerTimerDeadlineAfter(*remaining), [this](WorkerTimerOutcome outcome) noexcept {
                     if (outcome == WorkerTimerOutcome::kExpired) {
-                        http3GenerationSignal_.notify();
+                        quic_.generation_signal().notify();
                     }
                 });
             }
             worker_cancellation_registration registration(cancellation_target_, response.state_->cancellationId);
             const auto cancellationId = registration.id();
-            http3PendingCancellations_.push_back({cancellationId, nullptr, 0});
-            CancellationGuard cancellation{http3PendingCancellations_, registration, cancellationId};
+            quic_.register_cancellation(cancellationId, nullptr, 0);
+            CancellationGuard cancellation{quic_, registration, cancellationId};
             registration.arm(stopToken);
-            co_await http3GenerationSignal_.wait();
+            co_await quic_.generation_signal().wait();
             timer.cancel();
         }
 
@@ -962,15 +640,15 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
         {
             worker_cancellation_registration registration(cancellation_target_, response.state_->cancellationId);
             const auto cancellationId = registration.id();
-            http3PendingCancellations_.push_back({cancellationId, connection, submission.id});
-            CancellationGuard cancellation{http3PendingCancellations_, registration, cancellationId};
+            quic_.register_cancellation(cancellationId, connection, submission.id);
+            CancellationGuard cancellation{quic_, registration, cancellationId};
             registration.arm(stopToken);
 
             co_await connection->wait(submission.id);
             if (response.state_->http3Connection != connection) {
                 // The public response may be abandoned and retired by its
                 // waiter before this terminal notification is dispatched.
-                http3GenerationSignal_.notify();
+                quic_.generation_signal().notify();
                 co_return;
             }
             const auto* result = connection->result(submission.id);
@@ -990,7 +668,7 @@ Task<void> HttpClientPool::executeHttp3(std::size_t connectionIndex,
                 std::terminate();
             }
         }
-        http3GenerationSignal_.notify();
+        quic_.generation_signal().notify();
 
         if (rejected) {
             wire.emplace(std::move(rejected->request));
@@ -1207,12 +885,12 @@ Task<void> HttpClientPool::executeRequestInto(
     ++requestsInFlight_;
     Lease lease(*this, index);
     if (config_.protocol == HttpClientProtocol::kHttp3Only) {
-        state->connectionIndex = index % http3Connections_.size();
+        state->connectionIndex = index % quic_.size();
         try {
             co_await executeHttp3(
                 state->connectionIndex, request, timeout, options.stopToken, response);
             if (state->headReady && !state->failure && !state->errorCode) {
-                retainResponseCookies(request, response);
+                policy_.retain_response_cookies(request, response);
             }
             --requestsInFlight_;
             if (state->failure || state->errorCode) {
@@ -1326,7 +1004,7 @@ Task<void> HttpClientPool::executeRequestInto(
                 if (connection.protocol == WireProtocol::kHttp2) {
                     retryAsHttp2 = true;
                 } else {
-                    connection.abortReason = AbortReason::kNone;
+                    connection.transport.reset_abort();
                     ++connection.generation;
                     if (connection.generation == 0) {
                         ++connection.generation;
@@ -1340,11 +1018,11 @@ Task<void> HttpClientPool::executeRequestInto(
                     worker_cancellation_registration cancellation(cancellation_target_, connection.cancellationId);
                     state->cancellationId = cancellation.id();
                     cancellation.arm(options.stopToken);
-                    connection.activeHttp1Response = state;
+                    connection.transport.bind_response(state);
                     struct ActiveHttp1ResponseGuard final {
                         Connection& connection;
                         ~ActiveHttp1ResponseGuard() {
-                            connection.activeHttp1Response = nullptr;
+                            connection.transport.bind_response(nullptr);
                         }
                     } activeHttp1ResponseGuard{connection};
                     try {
@@ -1364,7 +1042,7 @@ Task<void> HttpClientPool::executeRequestInto(
                 co_await executeHttp2(connection, request, timeout, options.stopToken, response);
             }
         }
-        retainResponseCookies(request, response);
+        policy_.retain_response_cookies(request, response);
         --requestsInFlight_;
         ++completedRequests_;
         co_return;
@@ -1387,7 +1065,7 @@ void HttpClientPool::abandonResponse(HttpClientResponseState& state) noexcept {
         case HttpClientResponseTransport::kHttp2:
             if (state.connectionIndex < connections_.size() && state.requestId != 0) {
                 cancelHttp2Stream(
-                    connections_[state.connectionIndex], state.requestId, AbortReason::kCancelled);
+                    connections_[state.connectionIndex], state.requestId, client_abort_reason::cancelled);
             }
             break;
         case HttpClientResponseTransport::kHttp3:
@@ -1400,7 +1078,7 @@ void HttpClientPool::abandonResponse(HttpClientResponseState& state) noexcept {
         case HttpClientResponseTransport::kHttp1:
             if (state.cancellationId != 0) {
                 cancelOperationById(state.cancellationId);
-            } else if (state.connectionIndex < connections_.size() && connections_[state.connectionIndex].activeHttp1Response == &state) {
+            } else if (state.connectionIndex < connections_.size() && connections_[state.connectionIndex].transport.response() == &state) {
                 close(connections_[state.connectionIndex]);
             }
             break;

@@ -7,9 +7,11 @@
 
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/context/ContextResponseState.h"
-#include "ruvia/web/detail/http/error/HttpErrorResponse.h"
-#include "ruvia/web/detail/router/RouteTable.h"
+
+#include "context/ContextResponseState.h"
+#include "context/ContextServices.h"
+#include "http/HttpErrorResponse.h"
+#include "router/RouteTable.h"
 
 namespace ruvia {
 
@@ -38,10 +40,10 @@ void Context::status(HttpStatusCode statusCode) {
 
 std::pmr::string Context::urlFor(
     std::string_view pattern, std::initializer_list<std::string_view> values) const {
-    if (routes_ == nullptr) {
+    if (services().routes() == nullptr) {
         throw std::logic_error("urlFor requires a route table bound to this context");
     }
-    return routes_->urlFor(
+    return services().routes()->urlFor(
         pattern, std::span<const std::string_view>(values.begin(), values.size()), arena());
 }
 
@@ -168,8 +170,8 @@ ScopedOperation<HttpResponse> Context::notFound() {
 }
 
 Task<HttpResponse> Context::notFoundTask() {
-    if (notFoundHandler_ != nullptr) {
-        co_return co_await notFoundHandler_(*this);
+    if (services().notFoundHandler() != nullptr) {
+        co_return co_await services().notFoundHandler()(*this);
     }
 
     auto response = detail::makeDefaultErrorResponse(arena(),

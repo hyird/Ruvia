@@ -7,8 +7,8 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/web/detail/client/ClientTransport.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
+#include "client/ClientTransport.h"
+#include "redis/RedisRegistry.h"
 
 namespace ruvia::detail {
 namespace {

@@ -113,10 +113,10 @@ int main() {
 
     auto& app = ruvia::app();
     app.listen(listener).server({
-        .workerCount = 4,
-        .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
-        .maxConnectionsPerWorker = 20000,
-        .maxRequestsPerConnection = 1u << 30,
+        .worker_count = 4,
+        .process_signal_handlers = ruvia::process_signal_handler_policy::install,
+        .max_connections_per_worker = 20000,
+        .max_requests_per_connection = 1u << 30,
     });
 
     // Response compression is off by default. Enable it explicitly when the

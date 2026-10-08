@@ -7,8 +7,9 @@
 #include "ruvia/http/Http3QpackConnection.h"
 #include "ruvia/http/Http3StreamFrames.h"
 #include "ruvia/http/Http3VarInt.h"
-#include "ruvia/http/detail/http3/http3_trailer_collector.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
+
+#include "http3/http3_trailer_collector.h"
 
 namespace ruvia {
 namespace {

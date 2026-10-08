@@ -192,15 +192,15 @@ int main() {
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8080})
         .server({
-            .workerCount = 2,
-            .processSignalHandlers = ruvia::ProcessSignalHandlerPolicy::kInstall,
-            .idleTimeout = std::chrono::seconds(75),
-            .requestHeaderTimeout = std::chrono::seconds(60),
-            .requestBodyTimeout = std::chrono::seconds(60),
-            .writeTimeout = std::chrono::seconds(60),
-            .maxConnectionsPerWorker = 10000,
-            .maxRequestsPerConnection = 1000,
-            .memoryPool = memory,
+            .worker_count = 2,
+            .process_signal_handlers = ruvia::process_signal_handler_policy::install,
+            .idle_timeout = std::chrono::seconds(75),
+            .request_header_timeout = std::chrono::seconds(60),
+            .request_body_timeout = std::chrono::seconds(60),
+            .write_timeout = std::chrono::seconds(60),
+            .max_connections_per_worker = 10000,
+            .max_requests_per_connection = 1000,
+            .memory_pool = memory,
         })
         .onError(&exampleErrorHandler)
         .onError({.prefix = "/api", .handler = &apiError})

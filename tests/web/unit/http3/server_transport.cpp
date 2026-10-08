@@ -35,13 +35,13 @@
 #include "ruvia/http/Http3LocalCriticalStreams.h"
 #include "ruvia/http/quic_connection.h"
 #include "ruvia/http/quic_server.h"
-#include "ruvia/web/detail/http3/Http3CriticalStreamDriver.h"
-#include "ruvia/web/detail/http3/Http3QuicClientTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicServerTransport.h"
-#include "ruvia/web/detail/http3/Http3QuicSocketAddress.h"
-#include "ruvia/web/detail/http3/openssl_quic_crypto_provider.h"
-#include "ruvia/web/detail/http3/openssl_quic_tls_session.h"
 
+#include "http3/Http3CriticalStreamDriver.h"
+#include "http3/Http3QuicClientTransport.h"
+#include "http3/Http3QuicServerTransport.h"
+#include "http3/Http3QuicSocketAddress.h"
+#include "http3/openssl_quic_crypto_provider.h"
+#include "http3/openssl_quic_tls_session.h"
 #include "test_harness.h"
 
 namespace {

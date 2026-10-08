@@ -2,8 +2,8 @@
 #include <string_view>
 
 #include "ruvia/http/HttpParseError.h"
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
 
+#include "parser/HttpChunkParser.h"
 #include "test_harness.h"
 
 namespace {

@@ -4,7 +4,7 @@
 #include <limits>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
+#include "http2/Http2HpackHuffmanTables.h"
 
 namespace ruvia {
 namespace {

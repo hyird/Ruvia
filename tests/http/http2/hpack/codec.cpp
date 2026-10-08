@@ -10,10 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http2/hpack/Http2Hpack.h"
-#include "ruvia/http/detail/http2/hpack/Http2HpackHuffmanTables.h"
-#include "ruvia/http/detail/http2/message/Http2RequestHeaders.h"
-
+#include "http2/Http2Hpack.h"
+#include "http2/Http2HpackHuffmanTables.h"
+#include "http2/Http2RequestHeaders.h"
 #include "test_harness.h"
 
 namespace {

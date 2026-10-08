@@ -1,20 +1,23 @@
-#include "ruvia/web/detail/integration/WorkerClientRegistryView.h"
+#include "integration/WorkerClientRegistryView.h"
 
 #include <optional>
 
 #include "ruvia/core/OperationOptions.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/HttpClientHandle.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
+
+#include "client/HttpClientRegistry.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/DbHandle.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
+
+#include "db/DbRegistry.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/detail/redis/RedisRegistry.h"
 #include "ruvia/web/redis/RedisHandle.h"
+
+#include "redis/RedisRegistry.h"
 #endif
 
 namespace ruvia::detail {

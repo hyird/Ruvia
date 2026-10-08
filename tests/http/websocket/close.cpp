@@ -5,11 +5,10 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketClosePayload.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketFrameCodec.h"
-#include "ruvia/http/detail/websocket/frame/HttpWebSocketPayloadValidation.h"
-
 #include "test_harness.h"
+#include "websocket/HttpWebSocketClosePayload.h"
+#include "websocket/HttpWebSocketFrameCodec.h"
+#include "websocket/HttpWebSocketPayloadValidation.h"
 
 namespace {
 

@@ -1,0 +1,136 @@
+#pragma once
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+#include "ruvia/core/ConfigValidation.h"
+#include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/web/HttpClientTypes.h"
+
+#include "client/ClientTransport.h"
+#include "http3/Http3QpackConfigValidation.h"
+
+namespace ruvia::detail {
+
+inline void validateHttpClientUserAgent(std::string_view userAgent) {
+    if (!userAgent.empty() && !isValidHttpHeaderValue(userAgent)) {
+        throw std::invalid_argument("http client user agent is invalid");
+    }
+}
+
+inline void validateHttpClientConfig(const HttpClientConfig& config) {
+    validateHttp3QpackConfig(config.qpack);
+    if (config.push.maxQueuedPushes == 0 || config.push.maxConcurrentPushes == 0 ||
+        (config.push.timeout && config.push.timeout->count() <= 0)) {
+        throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
+    }
+    if (config.push.enabled && config.protocol == HttpClientProtocol::kHttp3Only && config.push.maxConcurrentPushes > 25) {
+        throw std::invalid_argument("HTTP/3 push concurrency must leave room for critical streams and requests");
+    }
+    if (config.push.enabled && config.scheme == HttpScheme::kHttps &&
+        config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify) {
+        throw std::invalid_argument("HTTPS push requires authenticated origin authority");
+    }
+    if (config.advertisements.maxQueuedAdvertisements == 0 || config.advertisements.maxRetainedBytes == 0) {
+        throw std::invalid_argument("HTTP advertisement bounds must be positive");
+    }
+    if (config.advertisements.receiveOrigins && (config.scheme != HttpScheme::kHttps || config.tlsPeerVerification != TlsPeerVerificationPolicy::kVerify)) {
+        throw std::invalid_argument("ORIGIN advertisements require authenticated HTTPS");
+    }
+    const auto scheme = config.scheme;
+    const std::string_view host = config.host;
+    const auto port = config.port.value_or(scheme == HttpScheme::kHttps ? 443 : 80);
+    if (scheme != HttpScheme::kHttp && scheme != HttpScheme::kHttps) {
+        throw std::invalid_argument("http client scheme is invalid");
+    }
+    if (config.initial_quic_version != quic_version::v1 &&
+        config.initial_quic_version != quic_version::v2) {
+        throw std::invalid_argument("HTTP client QUIC version is invalid");
+    }
+    if (config.protocol != HttpClientProtocol::kNegotiate &&
+        config.protocol != HttpClientProtocol::kHttp1Only &&
+        config.protocol != HttpClientProtocol::kHttp2Only &&
+        config.protocol != HttpClientProtocol::kHttp3Only) {
+        throw std::invalid_argument("http client protocol is invalid");
+    }
+    if (config.protocol == HttpClientProtocol::kHttp3Only && scheme != HttpScheme::kHttps) {
+        throw std::invalid_argument("HTTP/3 client requires the HTTPS scheme");
+    }
+    if (config.http3_early_data &&
+        (scheme != HttpScheme::kHttps || config.protocol == HttpClientProtocol::kHttp1Only ||
+            config.protocol == HttpClientProtocol::kHttp2Only)) {
+        throw std::invalid_argument("HTTP/3 early data requires an HTTPS client with HTTP/3 enabled");
+    }
+    validateClientTransportConfig(clientTransportConfigView(config));
+    if (config.receivedCookies != HttpClientReceivedCookiePolicy::kIgnore &&
+        config.receivedCookies != HttpClientReceivedCookiePolicy::kRetainAndSend) {
+        throw std::invalid_argument("http client received cookie policy is invalid");
+    }
+    validateClientOriginHost(
+        host, "http client host must not be empty", "http client host is invalid");
+    if (port == 0) {
+        throw std::invalid_argument("http client port must be greater than zero");
+    }
+    ruvia::ensurePositiveSize(
+        config.connectionCount, "http client connection count must be greater than zero");
+    ruvia::ensurePositiveSize(config.maxConcurrentHttp2StreamsPerConnection,
+        "http client HTTP/2 stream limit per connection must be greater than zero");
+    if (config.maxConcurrentHttp2StreamsPerConnection >
+        std::numeric_limits<std::size_t>::max() / config.connectionCount) {
+        throw std::invalid_argument(
+            "HTTP client connection and HTTP/2 stream capacity is too large");
+    }
+    constexpr std::size_t kHttp3ConcurrentRequestsPerConnection = 29;
+    if (config.protocol == HttpClientProtocol::kHttp3Only &&
+        config.connectionCount >
+            std::numeric_limits<std::size_t>::max() /
+                kHttp3ConcurrentRequestsPerConnection) {
+        throw std::invalid_argument("HTTP/3 client connection capacity is too large");
+    }
+    ruvia::ensurePositiveSize(
+        config.maxBufferedRequests, "http client buffered request limit must be greater than zero");
+    ruvia::ensurePositiveSize(config.maxCookies, "http client cookie limit must be greater than zero");
+    ruvia::ensurePositiveSize(
+        config.maxCookieBytes, "http client cookie byte limit must be greater than zero");
+    ruvia::ensurePositiveSize(
+        config.maxResponseBytes, "http client response byte limit must be greater than zero");
+    constexpr std::size_t kMaxHttp3ResponseBytes = std::size_t{64} * 1024 * 1024;
+    if (config.protocol == HttpClientProtocol::kHttp3Only &&
+        config.maxResponseBytes > kMaxHttp3ResponseBytes) {
+        throw std::invalid_argument(
+            "HTTP/3 client response byte limit must not exceed 64 MiB");
+    }
+    ruvia::ensurePositiveOptionalDurations("configured http client timeouts must be greater than zero",
+        std::optional{config.connectTimeout}, config.write_timeout, config.requestTimeout,
+        config.acquireTimeout);
+    validateHttpClientUserAgent(config.userAgent);
+    if (config.cookies.size() > config.maxCookies) {
+        throw std::invalid_argument(
+            "configured HTTP client cookies exceed the client cookie limit");
+    }
+    std::size_t cookieBytes = 0;
+    for (const auto& [name, value] : config.cookies) {
+        if (!isValidHttpHeaderName(name) || !::ruvia::isValidCookieValue(value)) {
+            throw std::invalid_argument("configured HTTP client cookie is invalid");
+        }
+        if (name.size() > config.maxCookieBytes - cookieBytes) {
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
+        }
+        cookieBytes += name.size();
+        if (value.size() > config.maxCookieBytes - cookieBytes) {
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
+        }
+        cookieBytes += value.size();
+        if (cookieBytes == config.maxCookieBytes) {
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client byte limit");
+        }
+        ++cookieBytes;  // Every configured cookie is stored with the default "/" path.
+    }
+}
+
+}  // namespace ruvia::detail

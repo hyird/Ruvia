@@ -22,13 +22,13 @@ constexpr std::uint64_t kMaxRequestsPerConnection = kMaxServerGoawayId / 4;
 
 std::expected<Http3ServerRequestAdmissionPlanner, Http3ServerRequestAdmissionError>
 Http3ServerRequestAdmissionPlanner::create(Http3ServerRequestAdmissionConfig config) noexcept {
-    if (config.maxRequestsPerConnection == 0) {
+    if (config.max_requests_per_connection == 0) {
         return std::unexpected(Http3ServerRequestAdmissionError::kZeroRequestLimit);
     }
-    if (config.maxRequestsPerConnection > kMaxRequestsPerConnection) {
+    if (config.max_requests_per_connection > kMaxRequestsPerConnection) {
         return std::unexpected(Http3ServerRequestAdmissionError::kRequestLimitOutOfRange);
     }
-    return Http3ServerRequestAdmissionPlanner(config.maxRequestsPerConnection);
+    return Http3ServerRequestAdmissionPlanner(config.max_requests_per_connection);
 }
 
 Http3ServerRequestAdmissionDecision Http3ServerRequestAdmissionPlanner::admit(

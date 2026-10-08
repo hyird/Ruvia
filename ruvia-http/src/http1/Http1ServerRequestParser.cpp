@@ -3,10 +3,11 @@
 #include "ruvia/http/Http1RequestParser.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequestContentSemantics.h"
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
-#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
-#include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/detail/request/HttpRequestAccess.h"
+
+#include "parser/HttpChunkParser.h"
+#include "parser/HttpHeaderBlockParser.h"
+#include "parser/HttpRequestTarget.h"
+#include "request/HttpRequestAccess.h"
 
 namespace ruvia {
 namespace {

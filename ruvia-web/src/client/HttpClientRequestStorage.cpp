@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/client/HttpClientRequestStorage.h"
+#include "client/HttpClientRequestStorage.h"
 
 #include <initializer_list>
 #include <type_traits>
@@ -6,8 +6,9 @@
 
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/HttpAscii.h"
-#include "ruvia/web/detail/client/HttpClientTunnelState.h"
-#include "ruvia/web/detail/client/HttpClientUploadState.h"
+
+#include "client/HttpClientTunnelState.h"
+#include "client/HttpClientUploadState.h"
 
 namespace ruvia::detail {
 

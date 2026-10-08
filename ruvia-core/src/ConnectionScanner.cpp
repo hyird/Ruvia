@@ -1,4 +1,4 @@
-#include "ruvia/core/detail/io/ConnectionScanner.h"
+#include "ConnectionScanner.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -157,10 +157,10 @@ ConnectionScanner::Impl::Impl(
     if (options_.scanInterval.count() <= 0) {
         throw std::invalid_argument("connection scanner interval must be greater than zero");
     }
-    validateScannerTimeout(options_.idleTimeout);
+    validateScannerTimeout(options_.idle_timeout);
     validateScannerTimeout(options_.initialReadTimeout);
     validateScannerTimeout(options_.payloadReadTimeout);
-    validateScannerTimeout(options_.writeTimeout);
+    validateScannerTimeout(options_.write_timeout);
     validateScannerTimeout(options_.initial_read_completion_timeout);
     validateScannerTimeout(options_.payload_read_completion_timeout);
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
@@ -334,8 +334,8 @@ void ConnectionScanner::Impl::detachWorkerMaintenance() noexcept {
     }
 }
 bool ConnectionScanner::Impl::hasScanningWork() const noexcept {
-    return options_.idleTimeout.has_value() || options_.initialReadTimeout.has_value() ||
-           options_.payloadReadTimeout.has_value() || options_.writeTimeout.has_value() ||
+    return options_.idle_timeout.has_value() || options_.initialReadTimeout.has_value() ||
+           options_.payloadReadTimeout.has_value() || options_.write_timeout.has_value() ||
            options_.initial_read_completion_timeout.has_value() ||
            options_.payload_read_completion_timeout.has_value() ||
            workerMaintenance_ != nullptr || periodicCheckCount_ != 0;
@@ -389,12 +389,12 @@ bool ConnectionScanner::Impl::isTimedOut(const Entry& entry, std::int64_t now) c
             return timeoutExpired(options_.payloadReadTimeout, inactiveMs) ||
                    timeoutExpired(options_.payload_read_completion_timeout, now - entry.phase_started_ms_);
         case Phase::kWriting:
-            return timeoutExpired(options_.writeTimeout, inactiveMs);
+            return timeoutExpired(options_.write_timeout, inactiveMs);
         case Phase::kLongLived:
             return false;
         case Phase::kIdle:
         default:
-            return timeoutExpired(options_.idleTimeout, inactiveMs);
+            return timeoutExpired(options_.idle_timeout, inactiveMs);
     }
 }
 

@@ -35,8 +35,9 @@
 #include "ruvia/core/WorkerSignal.h"
 #include "ruvia/core/detail/io/AsioAwait.h"
 #include "ruvia/core/detail/worker/WorkerDispatcher.h"
-#include "ruvia/core/detail/worker/WorkerSelection.h"
 #include "ruvia/core/worker_cancellation.h"
+
+#include "WorkerSelection.h"
 
 namespace {
 

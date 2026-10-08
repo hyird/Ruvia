@@ -14,8 +14,8 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/WorkerSignal.h"
-#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 
+#include "body/HttpRequestBodyFacade.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 

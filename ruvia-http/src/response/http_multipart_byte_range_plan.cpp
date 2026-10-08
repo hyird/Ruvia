@@ -7,7 +7,8 @@
 #include <stdexcept>
 
 #include "ruvia/http/HttpMediaType.h"
-#include "ruvia/http/detail/coding/HttpContentCoding.h"
+
+#include "coding/HttpContentCoding.h"
 
 namespace ruvia {
 namespace {

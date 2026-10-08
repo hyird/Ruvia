@@ -20,12 +20,13 @@
 #include "ruvia/http/HttpRequestContentSemantics.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
-#include "ruvia/web/detail/http/context/ContextServices.h"
-#include "ruvia/web/detail/integration/WorkerCapabilities.h"
 #include "ruvia/web/detail/router/PrefixFallback.h"
-#include "ruvia/web/detail/router/Router.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/RequestDeadline.h"
+
+#include "context/ContextServices.h"
+#include "integration/WorkerCapabilities.h"
+#include "router/Router.h"
+#include "router/RouterImpl.h"
+#include "server/RequestDeadline.h"
 
 namespace ruvia {
 

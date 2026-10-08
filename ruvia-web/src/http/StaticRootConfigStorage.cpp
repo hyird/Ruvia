@@ -1,9 +1,9 @@
-#include "ruvia/web/detail/http/static/StaticRootConfigStorage.h"
+#include "http/StaticRootConfigStorage.h"
 
 #include <algorithm>
 #include <string_view>
 
-#include "ruvia/web/detail/http/static/StaticRootOptionsValidation.h"
+#include "http/StaticRootOptionsValidation.h"
 
 namespace ruvia::detail {
 

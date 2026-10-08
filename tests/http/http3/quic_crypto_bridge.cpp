@@ -1,4 +1,4 @@
-#include "ruvia/http/detail/http3/quic_crypto_bridge.h"
+#include "http3/quic_crypto_bridge.h"
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -17,8 +17,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/http3/quic_connection_state.h"
-
+#include "http3/quic_connection_state.h"
 #include "test_harness.h"
 
 namespace {

@@ -5,8 +5,9 @@
 #include "ruvia/http/HttpAscii.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/field/HttpTrailerFields.h"
-#include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+
+#include "parser/HttpChunkParser.h"
 
 namespace ruvia {
 HttpRequestTrailers::HttpRequestTrailers(std::pmr::memory_resource* resource)

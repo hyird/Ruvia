@@ -10,8 +10,8 @@
 
 #include "ruvia/core/WorkerRuntimeContext.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/web/detail/http3/http3_datagram_endpoint.h"
 
+#include "http3/http3_datagram_endpoint.h"
 #include "test_harness.h"
 
 namespace {

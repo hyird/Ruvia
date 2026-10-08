@@ -1,15 +1,16 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/http/detail/coding/HttpContentCodec.h"
+#include "coding/HttpContentCodec.h"
 
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 #undef ZSTD_STATIC_LINKING_ONLY
 #include <zstd_errors.h>
 
-#include "ruvia/http/detail/coding/PmrCodecAllocation.h"
 #include "ruvia/http/detail/util/PmrResource.h"
+
+#include "coding/PmrCodecAllocation.h"
 
 // zstd (RFC 8878) with the mandatory 8 MiB HTTP window limit of RFC 9659.
 

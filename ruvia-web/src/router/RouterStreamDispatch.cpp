@@ -1,13 +1,13 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/http/StreamingAccess.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/router/RouteDispatchServices.h"
-#include "ruvia/web/detail/router/RouteStreamState.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamState.h"
+#include "context/ContextAccess.h"
+#include "http/SessionAccess.h"
+#include "http/StreamingAccess.h"
+#include "router/RouteDispatchServices.h"
+#include "router/RouteStreamState.h"
+#include "router/RouteTable.h"
+#include "server/HttpResponseStreamState.h"
 
 // Running a route that streams its response: binding the writer to the Context
 // for the handler's lifetime, producing the head the h1/h2 sinks commit, and

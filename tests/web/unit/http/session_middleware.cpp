@@ -22,19 +22,19 @@
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Session.h"
-#include "ruvia/web/detail/client/HttpClientRegistry.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
-#include "ruvia/web/detail/http/SessionAccess.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
-#include "ruvia/web/detail/redis/RedisRegistry.h"
-#include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/detail/router/RouterImpl.h"
-#include "ruvia/web/detail/server/stream/HttpResponseStreamDispatch.h"
-#include "ruvia/web/detail/websocket/WebSocketResponseHeaders.h"
 
+#include "client/HttpClientRegistry.h"
+#include "context/ContextAccess.h"
+#include "db/DbRegistry.h"
+#include "http/SessionAccess.h"
 #include "memory_resource_fixture.h"
+#include "redis/RedisRegistry.h"
+#include "router/RouteTable.h"
+#include "router/RouterImpl.h"
+#include "server/HttpResponseStreamDispatch.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "websocket/WebSocketResponseHeaders.h"
 
 namespace {
 

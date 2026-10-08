@@ -12,11 +12,11 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/response/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/server/HttpResponseHead.h"
-#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
+#include "http1/Http1ServerSemantics.h"
+#include "server/HttpResponseHead.h"
+#include "server/HttpResponseHeadBuffer.h"
 #include "test_harness.h"
 
 namespace {

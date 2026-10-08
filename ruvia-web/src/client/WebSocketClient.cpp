@@ -9,8 +9,9 @@
 #include <openssl/rand.h>
 
 #include "ruvia/core/WorkerHandle.h"
-#include "ruvia/web/detail/client/WebSocketClientInternal.h"
-#include "ruvia/web/detail/client/WebSocketClientState.h"
+
+#include "client/WebSocketClientInternal.h"
+#include "client/WebSocketClientState.h"
 
 namespace ruvia::detail {
 namespace {

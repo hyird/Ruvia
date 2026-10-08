@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/db/DbPostgreSql.h"
+#include "db/DbPostgreSql.h"
 
 #include <libpq-fe.h>
 

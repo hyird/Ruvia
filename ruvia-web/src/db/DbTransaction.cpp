@@ -2,11 +2,12 @@
 
 #include "ruvia/web/db/Db.h"
 #include "ruvia/web/db/DbQuery.h"
-#include "ruvia/web/detail/db/DbPreparedStatement.h"
-#include "ruvia/web/detail/db/DbQueryCacheState.h"
-#include "ruvia/web/detail/db/DbRegistry.h"
 #include "ruvia/web/detail/db/DbResultAccess.h"
 #include "ruvia/web/detail/db/DbUtils.h"
+
+#include "db/DbPreparedStatement.h"
+#include "db/DbQueryCacheState.h"
+#include "db/DbRegistry.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
 // destruction, and a transaction abandoned by an unwinding scope must roll back

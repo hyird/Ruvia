@@ -9,8 +9,8 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/WebSocketHandshake.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
-#include "ruvia/http/detail/http2/message/Http2WebSocketHandshake.h"
 
+#include "http2/Http2WebSocketHandshake.h"
 #include "test_harness.h"
 
 namespace {

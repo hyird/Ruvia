@@ -15,8 +15,8 @@
 #include "ruvia/http/Http2Framing.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpResponseStream.h"
-#include "ruvia/http/detail/http2/flow/Http2ReceiveWindowCredit.h"
 
+#include "http2/Http2ReceiveWindowCredit.h"
 #include "test_harness.h"
 
 namespace {

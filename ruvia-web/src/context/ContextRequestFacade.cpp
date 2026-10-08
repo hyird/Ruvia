@@ -3,7 +3,9 @@
 
 #include "ruvia/http/HttpRequestTrailers.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/detail/http/request/RequestQueryValues.h"
+
+#include "context/ContextServices.h"
+#include "http/RequestQueryValues.h"
 
 namespace ruvia {
 
@@ -57,8 +59,8 @@ std::string_view ContextRequest::routePath() const noexcept {
     return context_->routePath_;
 }
 HttpPriority ContextRequest::priority() const noexcept {
-    if (context_->requestPriorityUpdate_ != nullptr && *context_->requestPriorityUpdate_) {
-        return **context_->requestPriorityUpdate_;
+    if (context_->services().requestPriorityUpdate() != nullptr && *context_->services().requestPriorityUpdate()) {
+        return **context_->services().requestPriorityUpdate();
     }
     const auto parsed = parseHttpPriority(context_->request_.headers());
     return parsed ? parsed->requestPriority() : HttpPriority{};
@@ -76,10 +78,10 @@ std::optional<std::string_view> ContextRequest::header(std::string_view name) co
     return context_->requestHeader(name);
 }
 std::span<const HttpHeader> ContextRequest::trailers() const noexcept {
-    return context_->requestTrailers_ != nullptr ? context_->requestTrailers_->fields() : std::span<const HttpHeader>{};
+    return context_->services().requestTrailers() != nullptr ? context_->services().requestTrailers()->fields() : std::span<const HttpHeader>{};
 }
 std::optional<std::string_view> ContextRequest::trailer(std::string_view name) const noexcept {
-    return context_->requestTrailers_ != nullptr ? context_->requestTrailers_->field(name) : std::nullopt;
+    return context_->services().requestTrailers() != nullptr ? context_->services().requestTrailers()->field(name) : std::nullopt;
 }
 
 bool ContextRequest::accepts(std::string_view mediaType) const noexcept {

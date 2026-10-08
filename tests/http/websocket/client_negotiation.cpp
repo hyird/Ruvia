@@ -9,9 +9,9 @@
 #include "ruvia/http/Http1WebSocketClientHandshake.h"
 #include "ruvia/http/Http3MessageHead.h"
 #include "ruvia/http/WebSocketClientNegotiation.h"
-#include "ruvia/http/detail/websocket/message/HttpWebSocketPermessageDeflate.h"
 
 #include "test_harness.h"
+#include "websocket/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 void add(ruvia::Http3MessageHead& head, std::string_view name, std::string_view value) {

@@ -3,9 +3,8 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/detail/field/HttpDate.h"
-#include "ruvia/http/detail/server/HttpDateCache.h"
-
+#include "field/HttpDate.h"
+#include "server/HttpDateCache.h"
 #include "test_harness.h"
 
 namespace {

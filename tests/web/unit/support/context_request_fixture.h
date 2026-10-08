@@ -22,8 +22,8 @@
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Error.h"
-#include "ruvia/web/detail/http/context/ContextAccess.h"
 
+#include "context/ContextAccess.h"
 #include "context_services_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"

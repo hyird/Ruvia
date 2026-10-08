@@ -1,4 +1,4 @@
-#include "ruvia/web/detail/server/acceptor.h"
+#include "server/acceptor.h"
 
 #include <algorithm>
 #include <chrono>
@@ -13,7 +13,8 @@
 
 #include "ruvia/core/Async.h"
 #include "ruvia/core/memory/ProcessResource.h"
-#include "ruvia/web/detail/http3/http3_datagram_channel.h"
+
+#include "http3/http3_datagram_channel.h"
 
 namespace ruvia::detail {
 namespace {
@@ -66,11 +67,11 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
     runtime_.configure({
         .startup = [this] {
             prepare_quic();
-            const std::lock_guard lock(mutex_);
-            if (failure_ == nullptr && runtime_.state() == RuntimeLifecycle::State::kRunning) {
-                ready_ = true;
-            }
-            condition_.notify_all(); },
+            if (runtime_.state() == RuntimeLifecycle::State::kRunning) {
+                (void)completion_.mark_startup_ready();
+            } else {
+                completion_.mark_startup_aborted();
+            } },
         .stop_admission = [this] { stop_on_owner(); },
         .failure = [this](std::exception_ptr error) noexcept { fail(std::move(error)); },
         .shutdown = [this]() noexcept {
@@ -78,8 +79,8 @@ acceptor::acceptor(std::span<const HttpServerListenerDefinition> listeners,
             udp_.reset();
             quic_channels_.clear();
             quic_pool_.reset();
-            const std::lock_guard lock(mutex_);
-            condition_.notify_all(); },
+            completion_.mark_startup_aborted();
+            completion_.mark_serving_aborted(); },
     });
 }
 
@@ -279,38 +280,33 @@ void acceptor::prepare() {
 }
 
 void acceptor::launch() {
-    const std::lock_guard lock(mutex_);
     if (!prepared_) {
         throw std::logic_error("acceptor must be prepared before launch");
     }
     try {
         runtime_.start();
     } catch (...) {
-        condition_.notify_all();
+        if (const auto failure = runtime_.failure()) {
+            (void)completion_.record_failure(failure);
+        } else if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
+            completion_.mark_startup_aborted();
+            completion_.mark_serving_aborted();
+        }
         throw;
     }
 }
 
 void acceptor::wait_until_ready() {
-    std::unique_lock lock(mutex_);
-    condition_.wait(lock, [this] {
-        const auto current = runtime_.state();
-        return ready_ || current == RuntimeLifecycle::State::kStopping || current == RuntimeLifecycle::State::kStopped;
-    });
+    completion_.wait_for_startup();
 }
 
 void acceptor::request_serve() {
-    {
-        const std::lock_guard lock(mutex_);
-        if (runtime_.state() != RuntimeLifecycle::State::kRunning || serve_requested_) {
-            return;
-        }
-        serve_requested_ = true;
+    if (runtime_.state() != RuntimeLifecycle::State::kRunning || serve_requested_.exchange(true)) {
+        return;
     }
     const auto posted = runtime_.post_control([this] {
         if (runtime_.state() != RuntimeLifecycle::State::kRunning) {
-            const std::lock_guard lock(mutex_);
-            condition_.notify_all();
+            completion_.mark_serving_aborted();
             return;
         }
         try {
@@ -320,11 +316,11 @@ void acceptor::request_serve() {
             for (std::size_t i = 0; i < listeners_.size(); ++i) {
                 begin_accept(i);
             }
-            const std::lock_guard lock(mutex_);
-            if (runtime_.state() == RuntimeLifecycle::State::kRunning && failure_ == nullptr) {
-                serving_ = true;
+            if (runtime_.state() == RuntimeLifecycle::State::kRunning && completion_.failure() == nullptr) {
+                (void)completion_.mark_serving();
+            } else {
+                completion_.mark_serving_aborted();
             }
-            condition_.notify_all();
         } catch (...) {
             fail(std::current_exception());
         }
@@ -335,18 +331,13 @@ void acceptor::request_serve() {
 }
 
 bool acceptor::wait_until_serving() {
-    std::unique_lock lock(mutex_);
-    condition_.wait(lock, [this] {
-        const auto current = runtime_.state();
-        return serving_ || failure_ != nullptr || current == RuntimeLifecycle::State::kStopping || current == RuntimeLifecycle::State::kStopped;
-    });
-    return serving_ && failure_ == nullptr;
+    return completion_.wait_for_serving();
 }
 
 void acceptor::stop() noexcept {
     runtime_.request_stop();
-    const std::lock_guard lock(mutex_);
-    condition_.notify_all();
+    completion_.mark_startup_aborted();
+    completion_.mark_serving_aborted();
 }
 
 void acceptor::stop_on_owner() noexcept {
@@ -364,14 +355,14 @@ void acceptor::stop_on_owner() noexcept {
         quic_notification_.close();
         runtime_.finalize();
     }
-    const std::lock_guard lock(mutex_);
-    condition_.notify_all();
+    completion_.mark_startup_aborted();
+    completion_.mark_serving_aborted();
 }
 
 void acceptor::join() {
     runtime_.join();
-    const std::lock_guard lock(mutex_);
-    condition_.notify_all();
+    completion_.mark_startup_aborted();
+    completion_.mark_serving_aborted();
 }
 
 asio::ip::tcp::endpoint acceptor::local_endpoint(std::size_t index) const {
@@ -379,8 +370,7 @@ asio::ip::tcp::endpoint acceptor::local_endpoint(std::size_t index) const {
 }
 
 std::exception_ptr acceptor::failure() const noexcept {
-    const std::lock_guard lock(mutex_);
-    return failure_;
+    return completion_.failure();
 }
 
 void acceptor::rethrow_failure() const {
@@ -489,13 +479,7 @@ void acceptor::schedule_retry(std::size_t index) noexcept {
 }
 
 void acceptor::fail(std::exception_ptr error) noexcept {
-    {
-        const std::lock_guard lock(mutex_);
-        if (failure_ == nullptr) {
-            failure_ = std::move(error);
-        }
-        condition_.notify_all();
-    }
+    (void)completion_.record_failure(std::move(error));
     runtime_.request_stop();
     if (failure_callback_ != nullptr) {
         failure_callback_(failure_target_);
