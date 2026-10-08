@@ -1,12 +1,22 @@
 // Outbound HTTP client usage from a Ruvia Controller.
+// First run ruvia_example_http_features (localhost:8093), then this gateway
+// (localhost:8080). POST /api/forward or GET /api/forward-stream.
+// RUVIA_UPSTREAM_HOST/PORT override the fixed upstream; RUVIA_UPSTREAM_TLS=true
+// enables HTTPS and RUVIA_TLS_CA selects a custom CA file. Verification stays on.
+// One configured pool per worker is reused across requests. The handle borrows
+// that pool and must not escape its worker; retained bytes have their own owner.
 
 #include <array>
 #include <chrono>
 #include <span>
+#include <string>
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/Dotenv.h"
 #include "ruvia/web/HttpClientHandle.h"
+
+#include "environment.h"
 
 class GatewayController final : public ruvia::Controller<GatewayController> {
 public:
@@ -39,7 +49,7 @@ private:
                     })
                     .send({
                         .method = "POST",
-                        .target = "/v1/orders",
+                        .target = "/features/upload",
                         .headers = std::span(headers).first(headerCount),
                         .content = ruvia::HttpClientRequestContentView::bytes(incomingBody),
                     });
@@ -70,7 +80,7 @@ private:
         std::string errorBody;
         try {
             auto response = co_await client.send({
-                .target = "/v1/events",
+                .target = "/features/download",
                 .headers = std::span(headers).first(headerCount),
             });
             c.status(response.status());
@@ -91,16 +101,21 @@ private:
 };
 
 int main() {
+    const example::environment env;
+    const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
     ruvia::app()
         .listen({.address = "0.0.0.0", .http = 8080})
+        .server({.worker_count = 2, .process_signal_handlers = ruvia::process_signal_handler_policy::install})
         .httpClient({
             .config =
                 {
-                    .scheme = ruvia::HttpScheme::kHttps,
-                    .host = "api.example.com",
+                    .scheme = tls ? ruvia::HttpScheme::kHttps : ruvia::HttpScheme::kHttp,
+                    .host = std::string(env.get("RUVIA_UPSTREAM_HOST").value_or("localhost")),
+                    .port = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
                     .connectionCount = 4,
                     .protocol = ruvia::HttpClientProtocol::kNegotiate,
                     .receivedCookies = ruvia::HttpClientReceivedCookiePolicy::kRetainAndSend,
+                    .caFile = std::string(env.get("RUVIA_TLS_CA").value_or("")),
                 },
         })
         .run();

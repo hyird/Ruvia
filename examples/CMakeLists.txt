@@ -1,5 +1,9 @@
+# Each executable is independent. Enable optional backends at configure time.
+add_custom_target(ruvia_examples_web)
+
 function(ruvia_add_example name)
     add_executable(${name} ${ARGN})
+    add_dependencies(ruvia_examples_web ${name})
     target_link_libraries(${name} PRIVATE ruvia::web)
     target_compile_definitions(${name}
         PRIVATE
@@ -22,6 +26,12 @@ ruvia_add_example(ruvia_example_ops web/ops.cpp)
 ruvia_add_example(ruvia_example_middleware_next web/middleware_next.cpp)
 ruvia_add_example(ruvia_example_workers_blocking web/workers_blocking.cpp)
 ruvia_add_example(ruvia_example_testing web/testing.cpp)
+ruvia_add_example(ruvia_example_request_policies web/request_policies.cpp)
+ruvia_add_example(ruvia_example_http_features web/http_features.cpp)
+ruvia_add_example(ruvia_example_http_client_advanced web/http_client_advanced.cpp)
+ruvia_add_example(ruvia_example_websocket_client web/websocket_client.cpp)
+ruvia_add_example(ruvia_example_tunnels web/tunnels.cpp)
+ruvia_add_example(ruvia_example_model_values web/model_values.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt web/auth_jwt.cpp)
@@ -29,6 +39,7 @@ endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_database web/database.cpp)
+    ruvia_add_example(ruvia_example_sql_queries web/sql_queries.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL AND RUVIA_ENABLE_REDIS)
@@ -42,6 +53,8 @@ if(RUVIA_ENABLE_POSTGRESQL)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
+    ruvia_add_example(ruvia_example_sessions web/sessions.cpp)
     ruvia_add_example(ruvia_example_redis web/redis.cpp)
     ruvia_add_example(ruvia_example_redis_orm web/redis_orm.cpp)
+    ruvia_add_example(ruvia_example_redis_streams web/redis_streams.cpp)
 endif()

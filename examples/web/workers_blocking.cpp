@@ -3,6 +3,10 @@
 // via App::workerFor / WebWorkerHandle::post, and Context::runBlocking() --
 // the escape hatch for calls that block, which run on App::blockingPool()'s
 // threads so the worker stays free to serve its other connections.
+// Run ruvia_example_workers_blocking on port 8090; inspect its route macros
+// for stats, awaited dispatch, fanout and overload shedding endpoints.
+// Offloaded work takes owned input. Do not capture Context or worker state
+// in a blocking job: stopping a request does not stop that native thread.
 
 #include <chrono>
 #include <cstdint>

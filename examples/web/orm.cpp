@@ -1,5 +1,10 @@
 // PostgreSQL ORM example. With no arguments, print the generated migration. --migrate applies the demo migration; --run executes the demo on the
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
+// Build with RUVIA_ENABLE_POSTGRESQL=ON. Covers typed CRUD, projections,
+// CTE writes, locks, returning rows, arrays, trigger functions and query caches.
+// RUVIA_ORM_CACHE_REDIS_HOST/PORT opt into the Redis cache provider when built.
+// Use a demo database: --run inserts, changes and deletes demonstration rows.
+// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
 
 #include <array>
 #include <chrono>
@@ -15,6 +20,8 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/DbSchema.h"
+
+#include "backend_tls.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/RedisClient.h"
 #endif
@@ -158,6 +165,7 @@ Task<void> run(const DbConfig& settings, EventLoopAttachment& attachment) {
                 throw std::invalid_argument("invalid cache Redis port");
             }
             RedisConfig config{.port = static_cast<std::uint16_t>(value)};
+            config.tls = example::backend_tls("RUVIA_ORM_CACHE_REDIS");
             if (const auto* host = std::getenv("RUVIA_ORM_CACHE_REDIS_HOST")) {
                 config.host = host;
             }
@@ -199,6 +207,7 @@ Task<void> run(const DbConfig& settings, EventLoopAttachment& attachment) {
 
 DbConfig config() {
     DbConfig result{.driver = DbDriver::kPostgreSql};
+    result.tls = example::backend_tls("RUVIA_DB");
     auto read = [](const char* key, std::string& target) {
         if (const auto* value = std::getenv(key)) {
             target = value;

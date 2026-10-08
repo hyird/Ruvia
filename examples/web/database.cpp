@@ -2,6 +2,17 @@
 // streaming query, transaction and optional migration. Built with either
 // database feature.
 
+// Direct SQL, buffered/streamed rows, transactions, and startup migrations.
+// Build with a SQL backend and set RUVIA_DB_DRIVER=postgresql or mariadb,
+// RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE. Run on port 8086.
+// RUVIA_DB_MIGRATE=true explicitly enables the demo schema migrations.
+// POST a name to /db/users, then GET /db/users or /db/users/1.
+// /db/transfer expects accounts 1 and 2 to exist; it commits both updates
+// together. An uncommitted transaction rolls back when released.
+// Use a dedicated demo database: writes and migration history persist.
+// See backend_tls.h for RUVIA_DB_TLS/CA/CERT/KEY. Local plaintext servers
+// require the explicit setting RUVIA_DB_TLS=false.
+
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -13,6 +24,8 @@
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/db/Db.h"
 
+#include "backend_tls.h"
+
 namespace {
 
 void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
@@ -21,7 +34,7 @@ void assignIfPresent(std::string& target, std::optional<std::string_view> value)
     }
 }
 
-ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
+ruvia::DbConfig dbConfigFromEnv(const example::environment& env) {
 #if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
     const auto driver = env.get("RUVIA_DB_DRIVER");
     auto config = driver && *driver == "postgresql"
@@ -36,6 +49,7 @@ ruvia::DbConfig dbConfigFromEnv(const ruvia::Env& env) {
     assignIfPresent(config.username, env.get("RUVIA_DB_USER"));
     assignIfPresent(config.password, env.get("RUVIA_DB_PASSWORD"));
     assignIfPresent(config.database, env.get("RUVIA_DB_DATABASE"));
+    config.tls = example::backend_tls("RUVIA_DB", env);
     if (const auto port = env.get<std::uint16_t>("RUVIA_DB_PORT")) {
         config.port = *port;
     }
@@ -159,8 +173,9 @@ private:
 int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
+    const example::environment env(&app.env());
 
-    const auto config = dbConfigFromEnv(app.env());
+    const auto config = dbConfigFromEnv(env);
     if (!config.username.empty() && !config.database.empty()) {
         static const std::array mariaDbMigrations{
             ruvia::DbMigration{{.id = "001_create_users",
@@ -183,7 +198,7 @@ int main() {
                        "balance BIGINT NOT NULL)"}},
         };
 
-        if (app.env().get<bool>("RUVIA_DB_MIGRATE").value_or(false)) {
+        if (env.get<bool>("RUVIA_DB_MIGRATE").value_or(false)) {
             if (config.driver == ruvia::DbDriver::kPostgreSql) {
                 (void)ruvia::DbMigrator::migrate(config, postgreSqlMigrations);
             } else {

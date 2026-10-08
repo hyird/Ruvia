@@ -2,6 +2,11 @@
 // source with JsonBody/FormBody/Query/Path/Header/Cookie.
 // Handlers return HTTP responses using c.json(model).
 // jsonIf/formIf still parse without field rules.
+// Run ruvia_example_models_validation on port 8081.
+// curl "http://127.0.0.1:8081/models/search?q=hello&page=2"
+// POST JSON to /models/register and form data to /models/contact.
+// Missing required values and invalid fields become structured HTTP errors
+// before a handler runs. Keep parsed request-backed models inside the request.
 
 #include <charconv>
 #include <cstdint>

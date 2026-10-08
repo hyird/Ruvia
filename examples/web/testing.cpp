@@ -3,6 +3,8 @@
 // fallbacks, urlFor and worker state -- without opening a socket. This is the
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
+// Run ruvia_example_testing with no arguments or external services.
+// Assertions below check functional responses; TestApp owns startup/teardown.
 
 #include "ruvia/web/Testing.h"
 
