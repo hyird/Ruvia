@@ -1,5 +1,9 @@
 // Prints the schema by default. --migrate --run creates and queries demo data
 // in a PostgreSQL database selected by the RUVIA_DB_* environment variables.
+// Build with RUVIA_ENABLE_POSTGRESQL=ON. Demonstrates relation loading,
+// joins, junction tables, relation mutations and cascading entity operations.
+// Keep writes in one explicit transaction when several entities must agree.
+// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 #include <chrono>
 #include <cstdint>
@@ -17,6 +21,8 @@
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/DbRepository.h"
 #include "ruvia/web/db/DbSchema.h"
+
+#include "backend_tls.h"
 
 namespace ruvia::examples {
 
@@ -208,6 +214,7 @@ Task<void> run(DbClient& db, EventLoopAttachment& attachment) {
 
 DbConfig config() {
     DbConfig result{.driver = DbDriver::kPostgreSql};
+    result.tls = example::backend_tls("RUVIA_DB");
     auto read = [](const char* key, std::string& target) {
         if (const auto* value = std::getenv(key)) {
             target = value;

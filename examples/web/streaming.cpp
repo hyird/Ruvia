@@ -1,5 +1,10 @@
 // Streaming: streaming request bodies, typed multipart chunk phases, chunked
 // response streaming and server-sent events.
+// Run ruvia_example_streaming on port 8082. Try:
+// curl -N http://127.0.0.1:8082/streaming/events
+// curl --data-binary @file.bin http://127.0.0.1:8082/streaming/upload/raw
+// curl -F file=@file.bin http://127.0.0.1:8082/streaming/upload/multipart
+// A chunk borrows reusable reader storage; consume it before the next read.
 
 #include <charconv>
 #include <chrono>

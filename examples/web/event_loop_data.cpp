@@ -1,6 +1,11 @@
 // Standalone PostgreSQL + Redis ORM on application-owned loops, without App.
 // Read-only demo: use the orm example's orm_demo_device table (run its migration
 // first). Redis HASH lookup needs ordinary Redis, not Redis Search.
+// Build with RUVIA_ENABLE_POSTGRESQL=ON and RUVIA_ENABLE_REDIS=ON.
+// Configure the RUVIA_DB_* and RUVIA_REDIS_HOST variables used in main().
+// Each service is constructed and shut down on its own loop. Request data
+// may be borrowed only while that loop and its resource owners remain alive.
+// backend_tls.h defines RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -13,6 +18,8 @@
 #include "ruvia/core/EventLoopPool.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/redis/RedisClient.h"
+
+#include "backend_tls.h"
 
 namespace {
 using namespace ruvia;
@@ -89,13 +96,17 @@ int main(int argc, char** argv) {
         return 0;
     }
     try {
+        const example::environment env;
         DbConfig sql{.driver = DbDriver::kPostgreSql,
             .host = setting("RUVIA_DB_HOST", "127.0.0.1"),
-            .port = 5432,
+            .port = env.get<std::uint16_t>("RUVIA_DB_PORT").value_or(5432),
             .username = setting("RUVIA_DB_USER", "postgres"),
             .password = setting("RUVIA_DB_PASSWORD", ""),
+            .tls = example::backend_tls("RUVIA_DB"),
             .database = setting("RUVIA_DB_DATABASE", "postgres")};
         RedisConfig cache{.host = setting("RUVIA_REDIS_HOST", "127.0.0.1"),
+            .port = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
+            .tls = example::backend_tls("RUVIA_REDIS"),
             .poolSizePerWorker = 1};
         EventLoopPool pool({.loopCount = 2});
         std::pmr::vector<std::unique_ptr<WorkerData>> workers;

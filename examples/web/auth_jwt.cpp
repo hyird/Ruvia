@@ -1,5 +1,8 @@
 // JWT auth: signing, verification, bearer-token middleware and protected
 // routes. Built only with RUVIA_ENABLE_JWT=ON.
+// Run ruvia_example_auth_jwt on port 8085. POST /auth/token to issue a demo
+// token; send it as Authorization: Bearer <token> to GET /auth/me.
+// The demo issuer grants a fixed identity; replace it with real authentication.
 
 #include <chrono>
 #include <memory_resource>

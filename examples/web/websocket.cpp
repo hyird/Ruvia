@@ -1,5 +1,8 @@
 // WebSocket: upgrade routes, subprotocol options, lifecycle timeouts,
 // text/binary echo and the RFC close handshake.
+// Run ruvia_example_websocket, then connect to ws://localhost:8084/ws/echo.
+// /ws/chat requires one of chatOptions()'s advertised subprotocols.
+// Read until close; join the close handshake before releasing the connection.
 
 #include <chrono>
 

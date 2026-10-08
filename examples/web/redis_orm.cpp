@@ -1,6 +1,10 @@
 // HASH CRUD works with ordinary Redis. Run once with --create-index against
 // Redis Search before using GET /users. Index creation is explicit and errors
 // if the index already exists; this example never drops existing data/indexes.
+// Build with RUVIA_ENABLE_REDIS=ON; configure RUVIA_REDIS_HOST/PORT/USER/PASSWORD.
+// Run on port 8091. POST {"id":"1","name":"Ada","age":30} as JSON to
+// /users, then GET /users/1. GET /users performs the indexed adult search.
+// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -13,6 +17,8 @@
 #include "ruvia/web/Controller.h"
 #include "ruvia/web/redis/RedisEntity.h"
 #include "ruvia/web/redis/RedisRepository.h"
+
+#include "backend_tls.h"
 
 RUVIA_REDIS_ENTITY(CachedUser, "users",
     RUVIA_REDIS_COLUMN(id, ruvia::String, ruvia::RedisColumnOptions{.primaryKey = true}),
@@ -102,11 +108,13 @@ int main(int argc, char** argv) {
     bool failed = false;
     auto& app = ruvia::app();
     app.loadDotenv();
+    const example::environment env(&app.env());
     ruvia::RedisConfig config;
-    config.host = app.env().get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
-    config.port = app.env().get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
-    config.username = app.env().get("RUVIA_REDIS_USER").value_or("");
-    config.password = app.env().get("RUVIA_REDIS_PASSWORD").value_or("");
+    config.tls = example::backend_tls("RUVIA_REDIS", env);
+    config.host = env.get("RUVIA_REDIS_HOST").value_or("127.0.0.1");
+    config.port = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379);
+    config.username = env.get("RUVIA_REDIS_USER").value_or("");
+    config.password = env.get("RUVIA_REDIS_PASSWORD").value_or("");
     app.redis({.config = config})
         .listen({.address = "127.0.0.1", .http = 8091})
         .server({.worker_count = 1, .process_signal_handlers = ruvia::process_signal_handler_policy::install})

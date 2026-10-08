@@ -1,3 +1,5 @@
+#include "ruvia/core/Timer.h"
+
 #include "http3_client_connection_fixture.h"
 
 namespace {
@@ -8,6 +10,15 @@ void require_loopback_peer(ruvia::Context& context) {
         info.tls() == nullptr || info.scheme() != ruvia::HttpScheme::kHttps) {
         throw std::runtime_error("HTTP/3 tunnel lost its peer metadata during worker handoff");
     }
+}
+
+ruvia::Task<void> byte_echo(void*, ruvia::Context& context) {
+    require_loopback_peer(context);
+    auto& tunnel = context.tunnel();
+    while (auto bytes = co_await tunnel.read()) {
+        co_await tunnel.write(std::move(*bytes));
+    }
+    co_await tunnel.finish();
 }
 
 ruvia::Task<void> nativeDatagramEcho(void*, ruvia::Context& context) {
@@ -38,6 +49,7 @@ RUVIA_TEST(http3_native_datagram_server_and_client_route_packets_capsules_verify
     auto attachment = ruvia::attachEventLoop(io);
     ruvia::detail::Router router;
     auto& routes = ruvia::detail::RouterImpl::from(router);
+    routes.registerTunnelRoute("", std::pmr::string("target.test:443"), {nullptr, byte_echo}, {}, {});
     routes.registerTunnelRoute("test-datagram", std::pmr::string("/datagrams"), {nullptr, nativeDatagramEcho}, {}, {}, {.datagrams = true});
     routes.registerTunnelRoute("connect-udp", std::pmr::string("/udp/:host/:port"), {nullptr, nativeUdpEcho}, {}, {});
     routes.finalize();
@@ -83,6 +95,37 @@ RUVIA_TEST(http3_native_datagram_server_and_client_route_packets_capsules_verify
         {
             ruvia::HttpClient client(attachment.loop(), {.host = "127.0.0.1", .port = network.local_endpoint(0).port(), .requestTimeout = 5s, .protocol = ruvia::HttpClientProtocol::kHttp3Only, .caFile = identity.certificate().string()});
             try {
+                {
+                    auto connected = co_await client.openTunnel({.authority = "target.test:443"});
+                    if (!connected.tunnel()) {
+                        throw std::runtime_error("ordinary CONNECT rejected");
+                    }
+                    auto& bytes = *connected.tunnel();
+                    co_await bytes.write("ordinary CONNECT");
+                    co_await bytes.finish();
+                    std::string echoed;
+                    while (const auto chunk = co_await bytes.read()) {
+                        echoed.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                    }
+                    RUVIA_CHECK_EQ(echoed, "ordinary CONNECT");
+                }
+                asio::ip::udp::socket reservation(io,
+                    {asio::ip::address_v4::loopback(), 0});
+                const auto candidate = reservation.local_endpoint();
+                reservation.close();
+                auto migration = client.start_quic_path_migration(candidate);
+                const auto migration_deadline = std::chrono::steady_clock::now() + 5s;
+                while (migration.status == ruvia::quic_migration_status::started &&
+                       std::chrono::steady_clock::now() < migration_deadline) {
+                    (void)co_await ruvia::sleepFor(worker, 1ms);
+                    const auto observed = client.path_migration(migration.id);
+                    if (!observed) {
+                        throw std::runtime_error("migration state retired before observation");
+                    }
+                    migration = *observed;
+                }
+                RUVIA_CHECK(migration.status == ruvia::quic_migration_status::validated);
+                RUVIA_CHECK_EQ(migration.local_address.port, candidate.port());
                 auto opened = co_await client.openTunnel({.authority = "target.test:443", .protocol = "test-datagram", .target = "/datagrams"}, {.datagrams = true});
                 if (!opened.tunnel()) {
                     throw std::runtime_error("native HTTP Datagram tunnel rejected");

@@ -1,6 +1,9 @@
 // PostgreSQL computed columns and transaction options. Print the migration by
 // default; --migrate --run applies it and exercises the repository against the
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
+// Build with RUVIA_ENABLE_POSTGRESQL=ON. Includes generated columns, RETURNING,
+// retained entity results, transaction isolation and read-only transactions.
+// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 #include <cstdlib>
 #include <exception>
@@ -12,6 +15,8 @@
 #include "ruvia/core/EventLoopAttachment.h"
 #include "ruvia/web/db/DbClient.h"
 #include "ruvia/web/db/DbSchema.h"
+
+#include "backend_tls.h"
 
 namespace {
 using namespace ruvia;
@@ -109,6 +114,7 @@ Task<void> run(DbClient& db, DbClient& concurrent, EventLoopAttachment& attachme
 
 DbConfig config() {
     DbConfig result{.driver = DbDriver::kPostgreSql};
+    result.tls = example::backend_tls("RUVIA_DB");
     const auto read = [](const char* key, std::string& target) {
         if (const auto* value = std::getenv(key)) {
             target = value;

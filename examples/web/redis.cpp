@@ -1,6 +1,13 @@
 // Redis: configuration, aliases, strings, hashes, lists, sets, sorted sets,
 // scans, scripts, blocking pops, pipelines and transactions. Built only with
 // RUVIA_ENABLE_REDIS=ON.
+// Set RUVIA_REDIS_HOST/PORT/USER/PASSWORD and RUVIA_REDIS_DATABASE;
+// defaults use localhost:6379.
+// Run on port 8090 (RUVIA_PORT overrides it), then GET /redis/ping.
+// Use a disposable Redis database: collection routes, scripts and transactions
+// write demo keys. Blocking reads use the separate blocking pool.
+// See backend_tls.h for RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
+// requires the explicit setting RUVIA_REDIS_TLS=false.
 
 #include <array>
 #include <charconv>
@@ -17,6 +24,8 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
+#include "backend_tls.h"
+
 namespace {
 
 void assignIfPresent(std::string& target, std::optional<std::string_view> value) {
@@ -25,8 +34,9 @@ void assignIfPresent(std::string& target, std::optional<std::string_view> value)
     }
 }
 
-ruvia::RedisConfig redisConfig(const ruvia::Env& env) {
+ruvia::RedisConfig redisConfig(const example::environment& env) {
     ruvia::RedisConfig config;
+    config.tls = example::backend_tls("RUVIA_REDIS", env);
     assignIfPresent(config.host, env.get("RUVIA_REDIS_HOST"));
     assignIfPresent(config.username, env.get("RUVIA_REDIS_USER"));
     assignIfPresent(config.password, env.get("RUVIA_REDIS_PASSWORD"));
@@ -175,9 +185,13 @@ public:
         auto deleted = co_await c.redis().getDel("ruvia:example:nx");
         co_await c.redis().mset("ruvia:example:mset:a", "one", "ruvia:example:mset:b", "two");
         auto values = co_await c.redis().mget("ruvia:example:mset:a", "ruvia:example:mset:b");
-        const auto decremented = co_await c.redis().decr(key);
-        const auto decrementedBy = co_await c.redis().decrBy(key, 2);
-        const auto incrementedBy = co_await c.redis().incrBy(key, 3);
+        // Redis counters must contain integer text. Keep them separate from
+        // the string value above, which now contains "replaced+tail".
+        constexpr std::string_view counter_key = "ruvia:example:number";
+        (void)co_await c.redis().set(counter_key, "10");
+        const auto decremented = co_await c.redis().decr(counter_key);
+        const auto decrementedBy = co_await c.redis().decrBy(counter_key, 2);
+        const auto incrementedBy = co_await c.redis().incrBy(counter_key, 3);
 
         std::pmr::string body(c.allocator<char>());
         body.append("previous=");
@@ -458,13 +472,14 @@ public:
 int main() {
     auto& app = ruvia::app();
     app.loadDotenv();
-    auto config = redisConfig(app.env());
+    const example::environment env(&app.env());
+    auto config = redisConfig(env);
     app.redis({.config = config})
         .redis({.alias = "cache", .config = config})
         .listen({.address = "0.0.0.0",
-            .http = app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
+            .http = env.get<std::uint16_t>("RUVIA_PORT").value_or(8090)})
         .server({
-            .worker_count = app.env().get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
+            .worker_count = env.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
             .process_signal_handlers = ruvia::process_signal_handler_policy::install,
         })
         .run();

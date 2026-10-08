@@ -3,6 +3,12 @@
 //
 // A standalone StaticRoot is immutable. App document roots refresh every
 // second; see the commented interval configuration below.
+// Run ruvia_example_files_static, then GET http://127.0.0.1:8083/index.html
+// or /files/assets/hello.txt. /files/download describes a file-backed response.
+// Try Range: bytes=0-4 (206), If-None-Match with the returned ETag (304), and
+// Accept-Encoding: gzip. Compression depends on type, size, and negotiation.
+// The document root refreshes; the explicitly constructed StaticRoot is a
+// snapshot. Keep it alive until App::run() returns and all file responses retire.
 
 #include <filesystem>
 #include <memory>
@@ -47,8 +53,12 @@ int main() {
         ruvia::StaticRootOptions{
             .cacheControl = "public, max-age=3600",
             .indexFile = "index.html",
+            .mimeTypes = {{"txt", "text/plain; charset=utf-8"}},
+            .fileTypes = {.kind = ruvia::StaticFileTypePolicy::Kind::kOnly,
+                .extensions = {"html", "txt"}},
             .rangeRequests = ruvia::StaticRangeRequestPolicy::kHonor,
             .responseValidators = ruvia::StaticResponseValidatorPolicy::kEmit,
+            .dotfiles = ruvia::StaticDotfilePolicy::kDeny,
         });
 
     auto documentRoot = ruvia::DocumentRootConfig{

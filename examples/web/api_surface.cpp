@@ -1,6 +1,9 @@
 // A server exercising the HTTP context surface: route metadata and decoded
 // paths, Accept checks, buffered multipart, explicit body discard, response
 // cookies, manual HttpResponse body ownership and PUT/PATCH streaming.
+// Run ruvia_example_api_surface on port 8088; GET /surface/request?tag=demo.
+// Use curl -i to inspect response slots, cookies, redirects and middleware.
+// POST -F file=@file.bin to /surface/multipart for buffered upload parsing.
 
 #include <array>
 #include <charconv>
@@ -41,21 +44,7 @@
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/redis/RedisTypes.h"
 
-namespace ruvia::detail {
-class RouteRateLimitResult;
-}  // namespace ruvia::detail
-
 RUVIA_MODEL(SurfaceJsonMessage, RUVIA_OPTIONAL_FIELD(message, ruvia::String));
-
-#ifdef RUVIA_GET_DYNAMIC
-#error \
-    "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
-#endif
-
-#ifdef RUVIA_POST_DYNAMIC
-#error \
-    "RUVIA_POST_DYNAMIC must not be public; ordinary routes must not enter response streaming dynamically"
-#endif
 
 namespace {
 
@@ -217,10 +206,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
-        body.append("session=");
-        const auto session = c.session();
-        body.append(session.data());
-        body.append("\nenv-vars=");
+        // Session capability requires SessionMiddleware; see sessions.cpp for
+        // its Redis setup. This standalone example only installs App services.
+        body.append("env-vars=");
         appendUnsigned(body, c.env().size());
         body.push_back('\n');
         co_return c.text(std::move(body));

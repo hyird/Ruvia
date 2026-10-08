@@ -45,6 +45,8 @@ ruvia::quic_server_config transport_config(
     config.local_transport_parameters.idle_timeout_ms =
         worker.idle_timeout ? static_cast<std::uint64_t>(worker.idle_timeout->count()) : 0;
     config.local_transport_parameters.max_datagram_frame_size = 65536;
+    // New peer paths remain on this worker through its CID partition.
+    config.local_transport_parameters.disable_active_migration = false;
     return config;
 }
 

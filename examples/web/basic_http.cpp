@@ -2,6 +2,9 @@
 // wildcard routes, query/header/cookie helpers, body reads, urlFor links,
 // text/JSON/redirect/error responses including HEAD and OPTIONS, and
 // prefix-scoped notFound/onError fallbacks layered under the app-wide one.
+// Run ruvia_example_basic_http; curl http://127.0.0.1:8080/api/hello.
+// Try /api/users/42, /api/files/a/b, and /api/inputs?name=Ada.
+// Use Ctrl+C to stop servers built with process signal handlers installed.
 
 #include <algorithm>
 #include <charconv>

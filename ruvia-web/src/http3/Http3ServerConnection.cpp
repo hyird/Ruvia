@@ -1325,7 +1325,9 @@ Http3ServerConnection::handleInputResult(std::uint64_t streamId,
             result.status == Input::Status::kFinished) &&
         session_.streamState(streamId) == Session::StreamState::kReady) {
         const auto* request = session_.request(streamId);
-        if (request != nullptr && (!request->extendedConnectProtocol().empty() || session_.streamingRequest(streamId))) {
+        // Both ordinary and extended CONNECT wait for a successful response
+        // before sending tunnel data or FIN. Admit their ready heads now.
+        if (request != nullptr && (request->request().knownMethod() == HttpKnownMethod::kConnect || session_.streamingRequest(streamId))) {
             return admitFinishedRequest(streamId, result);
         }
     }
