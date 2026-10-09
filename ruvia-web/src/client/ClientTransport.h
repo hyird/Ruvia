@@ -79,6 +79,7 @@ enum class ClientTlsSetupError : std::uint8_t {
     kResetFailed,
     kSniFailed,
     kAlpnFailed,
+    kPeerIdentityFailed,
 };
 
 using ClientPortTextBuffer = std::array<char, std::numeric_limits<std::uint16_t>::digits10 + 1>;
@@ -100,6 +101,8 @@ enum class client_tls_protocol : std::uint8_t { stream,
 // protocol-specific ALPN and QUIC callbacks are installed by the transport.
 void configure_client_tls_context(SSL_CTX& context, ClientTransportConfigView config,
     client_tls_protocol protocol = client_tls_protocol::stream);
+[[nodiscard]] bool configure_client_tls_peer_identity(
+    SSL& connection, const char* host, bool ip_address) noexcept;
 [[nodiscard]] ClientTlsSetupError prepareClientTlsStream(
     asio::ssl::stream<asio::ip::tcp::socket>& stream, const std::pmr::string& host,
     ClientTransportConfigView config, ClientAlpnMode alpnMode);

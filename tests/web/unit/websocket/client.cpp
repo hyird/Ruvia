@@ -30,6 +30,7 @@
 
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -411,14 +412,14 @@ RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {
         }
     };
     std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> generator(
-        EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+        EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr), EVP_PKEY_CTX_free);
     require(generator != nullptr);
     require(EVP_PKEY_keygen_init(generator.get()) == 1);
     require(EVP_PKEY_CTX_set_rsa_keygen_bits(generator.get(), 2048) == 1);
     EVP_PKEY* rawKey = nullptr;
-    require(EVP_PKEY_keygen(generator.get(), &rawKey) == 1);
+    require(EVP_PKEY_generate(generator.get(), &rawKey) == 1);
     std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-    std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+    std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
     require(certificate != nullptr);
     require(ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) == 1);
     require(X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) != nullptr);
@@ -430,7 +431,7 @@ RUVIA_TEST(websocket_client_rejects_untrusted_tls_peer) {
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) == 1);
     require(X509_set_subject_name(certificate.get(), name.get()) == 1);
     require(X509_set_issuer_name(certificate.get(), name.get()) == 1);
-    require(X509_sign(certificate.get(), key.get(), EVP_sha256()) > 0);
+    require(ruvia::test::sign_tls_certificate(certificate.get(), key.get()) > 0);
     require(SSL_CTX_use_certificate(tls.native_handle(), certificate.get()) == 1);
     require(SSL_CTX_use_PrivateKey(tls.native_handle(), key.get()) == 1);
 

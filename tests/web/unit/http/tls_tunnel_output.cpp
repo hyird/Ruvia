@@ -20,6 +20,7 @@
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
 namespace {
 void certificate(asio::ssl::context& context) {
@@ -28,8 +29,8 @@ void certificate(asio::ssl::context& context) {
             throw std::runtime_error("test TLS certificate creation failed");
         }
     };
-    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_RSA_gen(2048), &EVP_PKEY_free);
-    std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new(), &X509_free);
+    std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}), &EVP_PKEY_free);
+    std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new_ex(nullptr, nullptr), &X509_free);
     require(key && cert);
     require(ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1) == 1);
     require(X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60) != nullptr);
@@ -41,7 +42,7 @@ void certificate(asio::ssl::context& context) {
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) == 1);
     require(X509_set_subject_name(cert.get(), name.get()) == 1);
     require(X509_set_issuer_name(cert.get(), name.get()) == 1);
-    require(X509_sign(cert.get(), key.get(), EVP_sha256()) > 0);
+    require(ruvia::test::sign_tls_certificate(cert.get(), key.get()) > 0);
     require(SSL_CTX_use_certificate(context.native_handle(), cert.get()) == 1);
     require(SSL_CTX_use_PrivateKey(context.native_handle(), key.get()) == 1);
 }

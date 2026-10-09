@@ -35,6 +35,7 @@
 #include "server/HttpServerTlsVerify.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -82,8 +83,8 @@ struct SelfSignedPem {
 };
 
 SelfSignedPem makeSelfSignedPem() {
-    EVP_PKEY* pkey = EVP_RSA_gen(2048);
-    X509* x509 = X509_new();
+    EVP_PKEY* pkey = EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048});
+    X509* x509 = X509_new_ex(nullptr, nullptr);
     ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
     X509_gmtime_adj(X509_getm_notBefore(x509), 0);
     X509_gmtime_adj(X509_getm_notAfter(x509), 60 * 60);  // 1 hour
@@ -93,7 +94,7 @@ SelfSignedPem makeSelfSignedPem() {
         name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0);
     X509_set_subject_name(x509, name.get());
     X509_set_issuer_name(x509, name.get());
-    X509_sign(x509, pkey, EVP_sha256());
+    ruvia::test::sign_tls_certificate(x509, pkey);
 
     SelfSignedPem out;
     BIO* certBio = BIO_new(BIO_s_mem());
@@ -102,7 +103,7 @@ SelfSignedPem makeSelfSignedPem() {
     const long certLen = BIO_get_mem_data(certBio, &certData);
     out.cert.assign(certData, static_cast<std::size_t>(certLen));
     BIO* keyBio = BIO_new(BIO_s_mem());
-    PEM_write_bio_PrivateKey(keyBio, pkey, nullptr, nullptr, 0, nullptr, nullptr);
+    ruvia::test::write_tls_private_key(keyBio, pkey);
     char* keyData = nullptr;
     const long keyLen = BIO_get_mem_data(keyBio, &keyData);
     out.key.assign(keyData, static_cast<std::size_t>(keyLen));

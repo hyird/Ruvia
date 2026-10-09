@@ -21,6 +21,7 @@
 #include "http3/openssl_quic_crypto_provider.h"
 #include "http3/openssl_quic_tls_session.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -565,11 +566,11 @@ struct retaining_tls_driver final {
 };
 
 certificate_owner make_certificate(EVP_PKEY* key) {
-    certificate_owner certificate(X509_new(), X509_free);
+    certificate_owner certificate(X509_new_ex(nullptr, nullptr), X509_free);
     if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
         ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-        X509_gmtime_adj(X509_get_notBefore(certificate.get()), -60) == nullptr ||
-        X509_gmtime_adj(X509_get_notAfter(certificate.get()), 3600) == nullptr ||
+        X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) == nullptr ||
+        X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 3600) == nullptr ||
         X509_set_pubkey(certificate.get(), key) != 1) {
         throw std::runtime_error("failed to construct QUIC test certificate");
     }
@@ -583,16 +584,16 @@ certificate_owner make_certificate(EVP_PKEY* key) {
     X509V3_CTX extensions;
     X509V3_set_ctx(&extensions, certificate.get(), certificate.get(), nullptr, nullptr, 0);
     std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> san(
-        X509V3_EXT_conf_nid(nullptr, &extensions, NID_subject_alt_name,
+        X509V3_EXT_nconf_nid(nullptr, &extensions, NID_subject_alt_name,
             const_cast<char*>("DNS:localhost")),
         X509_EXTENSION_free);
     std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> constraints(
-        X509V3_EXT_conf_nid(nullptr, &extensions, NID_basic_constraints,
+        X509V3_EXT_nconf_nid(nullptr, &extensions, NID_basic_constraints,
             const_cast<char*>("critical,CA:TRUE")),
         X509_EXTENSION_free);
     if (!san || !constraints || X509_add_ext(certificate.get(), san.get(), -1) != 1 ||
         X509_add_ext(certificate.get(), constraints.get(), -1) != 1 ||
-        X509_sign(certificate.get(), key, EVP_sha256()) <= 0) {
+        ruvia::test::sign_tls_certificate(certificate.get(), key) <= 0) {
         throw std::runtime_error("failed to sign QUIC test certificate");
     }
     return certificate;

@@ -55,6 +55,7 @@
 #include "server/HttpServerListener.h"
 #include "server/HttpServerOptions.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 using namespace std::chrono_literals;
@@ -105,7 +106,6 @@ private:
     std::size_t outstanding_{};
 };
 
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 struct version_negotiation_pump_state final {
     bool routed_{};
     bool sent_{};
@@ -274,22 +274,22 @@ struct TestIdentityFiles final {
         certificate = directory / "certificate.pem";
         privateKey = directory / "private-key.pem";
         std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> keyContext(
-            EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+            EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr), EVP_PKEY_CTX_free);
         EVP_PKEY* rawKey = nullptr;
         if (!keyContext || EVP_PKEY_keygen_init(keyContext.get()) <= 0 ||
             EVP_PKEY_CTX_set_rsa_keygen_bits(keyContext.get(), 2048) <= 0 ||
-            EVP_PKEY_keygen(keyContext.get(), &rawKey) <= 0) {
+            EVP_PKEY_generate(keyContext.get(), &rawKey) <= 0) {
             throw std::runtime_error("could not generate QUIC test TLS key");
         }
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-        std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new(), X509_free);
+        std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new_ex(nullptr, nullptr), X509_free);
         if (!cert || X509_set_version(cert.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(cert.get()), 0) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(cert.get()), 86400) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(cert.get()), 86400) == nullptr ||
             X509_set_pubkey(cert.get(), key.get()) != 1 ||
             X509_set_issuer_name(cert.get(), X509_get_subject_name(cert.get())) != 1 ||
-            X509_sign(cert.get(), key.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(cert.get(), key.get()) <= 0) {
             throw std::runtime_error("could not create QUIC test TLS certificate");
         }
         std::unique_ptr<BIO, decltype(&BIO_free)> certBio(
@@ -297,8 +297,7 @@ struct TestIdentityFiles final {
         std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(
             BIO_new_file(privateKey.string().c_str(), "w"), BIO_free);
         if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), cert.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr,
-                nullptr) != 1) {
+            ruvia::test::write_tls_private_key(keyBio.get(), key.get()) != 1) {
             throw std::runtime_error("could not write QUIC test TLS identity");
         }
     }
@@ -704,13 +703,9 @@ struct runtime_burst_fixture final {
     }
 };
 
-#endif
 }  // namespace
 
 RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edges_and_yields) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using channel = ruvia::detail::http3_datagram_channel;
     constexpr std::size_t burst_size = 256;
     constexpr std::size_t output_window = 16;
@@ -816,13 +811,9 @@ RUVIA_TEST(http3_worker_runtime_coalesced_drop_burst_drains_without_external_edg
     RUVIA_CHECK(packets.worker_closed());
     RUVIA_CHECK(packets.acceptor_finalize());
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
-#endif
 }
 
 RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_and_returns_channel_loans) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using channel = ruvia::detail::http3_datagram_channel;
     TestIdentityFiles files;
     ruvia::detail::HttpServerListenerDefinition::Tls tls;
@@ -886,7 +877,6 @@ RUVIA_TEST(http3_worker_server_cold_protocol_retirement_joins_started_handler_an
         return drained;
     }));
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
-#endif
 }
 
 RUVIA_TEST(http3_network_queue_deduplicates_initial_offers_and_preserves_capacity) {
@@ -908,9 +898,6 @@ RUVIA_TEST(http3_network_queue_deduplicates_initial_offers_and_preserves_capacit
 }
 
 RUVIA_TEST(http3_network_sends_version_negotiation_from_owned_udp_slot_without_admission) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -986,13 +973,9 @@ RUVIA_TEST(http3_network_sends_version_negotiation_from_owned_udp_slot_without_a
         RUVIA_CHECK(owner.stopStatus().complete());
         RUVIA_CHECK(!owner.stopStatus().failed);
     });
-#endif
 }
 
 RUVIA_TEST(http3_network_quic_wire_owner_handles_initial_and_bounds_timer_progress) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1079,13 +1062,9 @@ RUVIA_TEST(http3_network_quic_wire_owner_handles_initial_and_bounds_timer_progre
         RUVIA_CHECK(owner.stopStatus().complete());
         RUVIA_CHECK(!owner.stopStatus().failed);
     });
-#endif
 }
 
 RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_window_is_full) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using channel = ruvia::detail::http3_datagram_channel;
     TestIdentityFiles files;
     ruvia::detail::HttpServerListenerDefinition::Tls tls_config;
@@ -1280,37 +1259,25 @@ RUVIA_TEST(http3_forwarded_wire_owner_drives_input_and_timer_while_udp_output_wi
     });
     RUVIA_CHECK(packets.acceptor_finalize());
     RUVIA_CHECK_EQ(pool.outstanding(), std::size_t{0});
-#endif
 }
 
 RUVIA_TEST(http3NetworkQuicWireOwnerAsyncWaitSubmissionFailureDrainsHandlers) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
         exercise_owner_allocation_failure(ruvia_ctx, 1, worker_context);
     });
-#endif
 }
 
 RUVIA_TEST(http3_network_quic_wire_owner_allocation_failure_drains_handlers) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
         exercise_owner_allocation_failure(ruvia_ctx, 4, worker_context);
     });
-#endif
 }
 
 RUVIA_TEST(http3NetworkQuicWireOwnerFatalFailureWaitsForNetworkRetirementGate) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1350,13 +1317,9 @@ RUVIA_TEST(http3NetworkQuicWireOwnerFatalFailureWaitsForNetworkRetirementGate) {
         RUVIA_CHECK(owner.stopStatus().complete());
         RUVIA_CHECK(owner.stopStatus().failed);
     });
-#endif
 }
 
 RUVIA_TEST(http3NetworkQuicWireOwnerStopWaitsForBorrowedDatagramSendAndHandlers) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1410,13 +1373,9 @@ RUVIA_TEST(http3NetworkQuicWireOwnerStopWaitsForBorrowedDatagramSendAndHandlers)
         RUVIA_CHECK(!done.outbound_pending);
         RUVIA_CHECK(!done.failed);
     });
-#endif
 }
 
 RUVIA_TEST(http3NetworkQuicWireOwnerConstructionFailureDrainsBeforeAllocatorRetires) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1439,13 +1398,9 @@ RUVIA_TEST(http3NetworkQuicWireOwnerConstructionFailureDrainsBeforeAllocatorReti
         RUVIA_CHECK(owner.failure() != nullptr);
         RUVIA_CHECK(ruvia::testing::throwsOn([&] { owner.rethrowFailure(); }));
     });
-#endif
 }
 
 RUVIA_TEST(http3NetworkQuicWireOwnerPreparedListenerStopsWithoutServing) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     wire_worker runner;
     runner.invoke([&] {
         auto& worker_context = runner.runtime();
@@ -1473,5 +1428,4 @@ RUVIA_TEST(http3NetworkQuicWireOwnerPreparedListenerStopsWithoutServing) {
         Udp::socket rebound(io, Udp::endpoint(asio::ip::address_v4::loopback(), port));
         RUVIA_CHECK(rebound.local_endpoint().port() == port);
     });
-#endif
 }

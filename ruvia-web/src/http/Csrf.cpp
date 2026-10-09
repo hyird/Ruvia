@@ -20,7 +20,7 @@ SecureTokenResult generateSecureToken(std::span<char> buffer) noexcept {
         return SecureTokenResult::makeFailure();
     }
     unsigned char raw[kRandomBytes];
-    if (RAND_bytes(raw, static_cast<int>(kRandomBytes)) != 1) {
+    if (RAND_bytes_ex(nullptr, raw, kRandomBytes, 0) != 1) {
         return SecureTokenResult::makeFailure();
     }
     for (std::size_t i = 0; i < kRandomBytes; ++i) {

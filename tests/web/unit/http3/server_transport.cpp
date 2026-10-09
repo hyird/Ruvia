@@ -44,6 +44,7 @@
 #include "http3/openssl_quic_crypto_provider.h"
 #include "http3/openssl_quic_tls_session.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -56,7 +57,7 @@ struct IdentityFiles final {
         if (!std::filesystem::create_directory(directory)) {
             throw std::runtime_error("failed to create temporary TLS directory");
         }
-        EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+        EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
         if (rawContext == nullptr) {
             throw std::runtime_error("failed to create key generator");
         }
@@ -65,18 +66,18 @@ struct IdentityFiles final {
         EVP_PKEY* rawKey = nullptr;
         if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
             EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) <= 0 ||
-            EVP_PKEY_keygen(context.get(), &rawKey) <= 0) {
+            EVP_PKEY_generate(context.get(), &rawKey) <= 0) {
             throw std::runtime_error("failed to generate TLS key");
         }
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-        std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new(), X509_free);
+        std::unique_ptr<X509, decltype(&X509_free)> cert(X509_new_ex(nullptr, nullptr), X509_free);
         if (!cert || X509_set_version(cert.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(cert.get()), 1) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(cert.get()), 0) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(cert.get()), 86400) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(cert.get()), 86400) == nullptr ||
             X509_set_pubkey(cert.get(), key.get()) != 1 ||
             X509_set_issuer_name(cert.get(), X509_get_subject_name(cert.get())) != 1 ||
-            X509_sign(cert.get(), key.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(cert.get(), key.get()) <= 0) {
             throw std::runtime_error("failed to create self-signed test certificate");
         }
         certificate = directory / "cert.pem";
@@ -86,8 +87,7 @@ struct IdentityFiles final {
         std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(
             BIO_new_file(privateKey.string().c_str(), "w"), BIO_free);
         if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), cert.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr,
-                nullptr) != 1) {
+            ruvia::test::write_tls_private_key(keyBio.get(), key.get()) != 1) {
             throw std::runtime_error("failed to write test certificate");
         }
     }
@@ -108,12 +108,11 @@ struct IdentityFiles final {
     }
 };
 
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 using TestPrivateKey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 using TestCertificate = std::unique_ptr<X509, decltype(&X509_free)>;
 
 TestPrivateKey generateTestKey() {
-    EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+    EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
     if (rawContext == nullptr) {
         throw std::runtime_error("failed to create mTLS test key generator");
     }
@@ -122,7 +121,7 @@ TestPrivateKey generateTestKey() {
     EVP_PKEY* rawKey = nullptr;
     if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
         EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) <= 0 ||
-        EVP_PKEY_keygen(context.get(), &rawKey) <= 0) {
+        EVP_PKEY_generate(context.get(), &rawKey) <= 0) {
         throw std::runtime_error("failed to generate mTLS test key");
     }
     return TestPrivateKey(rawKey, EVP_PKEY_free);
@@ -134,7 +133,7 @@ void addCertificateExtension(X509* certificate, X509* issuer, int extensionId,
     X509V3_set_ctx(&context, issuer == nullptr ? certificate : issuer, certificate,
         nullptr, nullptr, 0);
     std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-        X509V3_EXT_conf_nid(nullptr, &context, extensionId, const_cast<char*>(value)),
+        X509V3_EXT_nconf_nid(nullptr, &context, extensionId, value),
         X509_EXTENSION_free);
     if (!extension || X509_add_ext(certificate, extension.get(), -1) != 1) {
         throw std::runtime_error("failed to add mTLS test certificate extension");
@@ -143,11 +142,11 @@ void addCertificateExtension(X509* certificate, X509* issuer, int extensionId,
 
 TestCertificate generateTestCertificate(EVP_PKEY* subjectKey, const char* commonName,
     long serial, X509* issuer, EVP_PKEY* issuerKey, bool isAuthority, bool isServer) {
-    TestCertificate certificate(X509_new(), X509_free);
+    TestCertificate certificate(X509_new_ex(nullptr, nullptr), X509_free);
     if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
         ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), serial) != 1 ||
-        X509_gmtime_adj(X509_get_notBefore(certificate.get()), -60) == nullptr ||
-        X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+        X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) == nullptr ||
+        X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
         X509_set_pubkey(certificate.get(), subjectKey) != 1) {
         throw std::runtime_error("failed to initialize mTLS test certificate");
     }
@@ -176,7 +175,7 @@ TestCertificate generateTestCertificate(EVP_PKEY* subjectKey, const char* common
     }
 
     EVP_PKEY* const signingKey = issuerKey == nullptr ? subjectKey : issuerKey;
-    if (X509_sign(certificate.get(), signingKey, EVP_sha256()) <= 0) {
+    if (ruvia::test::sign_tls_certificate(certificate.get(), signingKey) <= 0) {
         throw std::runtime_error("failed to sign mTLS test certificate");
     }
     return certificate;
@@ -197,8 +196,7 @@ void writeTestIdentity(const std::filesystem::path& certificateFile,
     std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(
         BIO_new_file(privateKeyFile.string().c_str(), "w"), BIO_free);
     if (!certificateBio || !keyBio || PEM_write_bio_X509(certificateBio.get(), certificate) != 1 ||
-        PEM_write_bio_PrivateKey(keyBio.get(), privateKey, nullptr, nullptr, 0, nullptr,
-            nullptr) != 1) {
+        ruvia::test::write_tls_private_key(keyBio.get(), privateKey) != 1) {
         throw std::runtime_error("failed to write mTLS test identity");
     }
 }
@@ -247,7 +245,6 @@ struct MutualTlsFiles final {
     std::filesystem::path untrustedClientCertificate;
     std::filesystem::path untrustedClientPrivateKey;
 };
-#endif
 
 class CountingMemoryResource final : public std::pmr::memory_resource {
 public:
@@ -599,7 +596,6 @@ private:
     std::size_t last_client_packets_{};
 };
 
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 struct ClientCertificateObservation final {
     std::size_t callbackCount{};
     bool sawLeaf{};
@@ -926,7 +922,6 @@ MutualTlsHandshake performRequiredMutualTlsHandshake(const MutualTlsFiles& files
     }
     return result;
 }
-#endif
 
 }  // namespace
 
@@ -1517,7 +1512,6 @@ RUVIA_TEST(http3QuicServerTransportRejectsInvalidUdpAddressWithoutTakingSocketOw
     RUVIA_CHECK(socket.is_open());
     RUVIA_CHECK_EQ(socket.local_endpoint(), owned_endpoint);
 }
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 RUVIA_TEST(http3QuicServerTransportRequiresAndValidatesMutualTlsCertificates) {
     IdentityFiles temporaryFiles;
     MutualTlsFiles files(temporaryFiles.directory);
@@ -1562,4 +1556,3 @@ RUVIA_TEST(http3QuicServerTransportRequiresAndValidatesMutualTlsCertificates) {
                        static_cast<std::size_t>(untrusted.clientCertificate.leafNameLength)),
         std::string_view("untrusted-client"));
 }
-#endif

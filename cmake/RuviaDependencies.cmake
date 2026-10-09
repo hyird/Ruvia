@@ -105,6 +105,8 @@ function(ruvia_fetch_web_dependencies mariadb postgresql redis)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     ruvia_fetch_openssl()
     add_library(ruvia_dependencies_web INTERFACE IMPORTED GLOBAL)
+    target_compile_definitions(ruvia_dependencies_web INTERFACE
+        OPENSSL_API_COMPAT=40000 OPENSSL_NO_DEPRECATED)
     target_link_libraries(ruvia_dependencies_web INTERFACE ruvia_openssl_ssl)
     if(mariadb)
         ruvia_fetch_mariadb()

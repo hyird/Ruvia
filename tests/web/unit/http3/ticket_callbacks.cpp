@@ -19,6 +19,7 @@
 #include "http3/openssl_quic_crypto_provider.h"
 #include "http3/openssl_quic_tls_session.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -79,12 +80,12 @@ struct tls_pair final {
 
         key_owner key(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1"));
         require(key != nullptr);
-        certificate_owner certificate(X509_new());
+        certificate_owner certificate(X509_new_ex(nullptr, nullptr));
         require(certificate != nullptr);
         require(X509_set_version(certificate.get(), 2) == 1);
         require(ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) == 1);
-        require(X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) != nullptr);
-        require(X509_gmtime_adj(X509_get_notAfter(certificate.get()), 3600) != nullptr);
+        require(X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) != nullptr);
+        require(X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 3600) != nullptr);
         require(X509_set_pubkey(certificate.get(), key.get()) == 1);
         const auto name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
         require(name != nullptr);
@@ -92,7 +93,7 @@ struct tls_pair final {
         require(X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, common_name, -1, -1, 0) == 1);
         require(X509_set_subject_name(certificate.get(), name.get()) == 1);
         require(X509_set_issuer_name(certificate.get(), name.get()) == 1);
-        require(X509_sign(certificate.get(), key.get(), EVP_sha256()) > 0);
+        require(ruvia::test::sign_tls_certificate(certificate.get(), key.get()) > 0);
         require(SSL_CTX_use_certificate(server_context.get(), certificate.get()) == 1);
         require(SSL_CTX_use_PrivateKey(server_context.get(), key.get()) == 1);
         SSL_CTX_set_verify(client_context.get(), SSL_VERIFY_NONE, nullptr);

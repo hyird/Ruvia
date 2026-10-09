@@ -423,9 +423,6 @@ ruvia::Task<void> exercise_migration_retirement(asio::io_context& io,
 }  // namespace
 
 RUVIA_TEST(http3ClientConnectionRetainsValidatedMigrationAfterIdleSessionRetirement) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -435,13 +432,9 @@ RUVIA_TEST(http3ClientConnectionRetainsValidatedMigrationAfterIdleSessionRetirem
         exercise_migration_retirement(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientPoolRetainsValidatedMigrationAfterSessionRetirement) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -451,13 +444,9 @@ RUVIA_TEST(http3ClientPoolRetainsValidatedMigrationAfterSessionRetirement) {
         exercisePublicHttp3ClientPool(io, worker, attachment, peer, ruvia_ctx, false, {}, true));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionWriteInactivityTimeoutStopsAFlowControlledRequest) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity, false, false);
     auto& io = ruvia::test::newTestIoContext();
@@ -467,13 +456,9 @@ RUVIA_TEST(http3ClientConnectionWriteInactivityTimeoutStopsAFlowControlledReques
         exerciseWriteInactivityTimeout(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionColdCancelAndStartedDriverStopJoinAreWorkerOwned) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     const auto worker = attachment.loop().handle();
@@ -484,13 +469,9 @@ RUVIA_TEST(http3ClientConnectionColdCancelAndStartedDriverStopJoinAreWorkerOwned
     RUVIA_CHECK(observed.coldCancelled && observed.runningCancelled && observed.joined);
     RUVIA_CHECK(observed.storageReleased);
     RUVIA_CHECK(observed.invalidIdleTimeoutRejected);
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionRequestDeadlineDoesNotFailOtherPendingRequests) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     asio::ip::udp::socket blackhole(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
@@ -503,13 +484,9 @@ RUVIA_TEST(http3ClientConnectionRequestDeadlineDoesNotFailOtherPendingRequests) 
     root.get();
     RUVIA_CHECK(observed.coldCancelled && observed.runningCancelled && observed.joined);
     RUVIA_CHECK(observed.storageReleased);
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionTerminalHandshakeTimeoutRejectsNewRequests) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     asio::ip::udp::socket blackhole(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
@@ -521,13 +498,9 @@ RUVIA_TEST(http3ClientConnectionTerminalHandshakeTimeoutRejectsNewRequests) {
     attachment.run();
     root.get();
     RUVIA_CHECK(observed.runningCancelled && observed.joined && observed.storageReleased);
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionStopWakesPendingQuicSocketWaitAndJoinsDriver) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     asio::ip::udp::socket blackhole(io,
         asio::ip::udp::endpoint(asio::ip::address_v4::loopback(), 0));
@@ -542,5 +515,4 @@ RUVIA_TEST(http3ClientConnectionStopWakesPendingQuicSocketWaitAndJoinsDriver) {
     root.get();
     RUVIA_CHECK(observed.coldCancelled && observed.runningCancelled && observed.joined);
     RUVIA_CHECK(observed.storageReleased);
-#endif
 }

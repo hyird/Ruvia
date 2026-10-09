@@ -15,6 +15,8 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
+#include "test_tls_crypto.h"
+
 namespace ruvia::test {
 
 class tls_identity final {
@@ -34,8 +36,8 @@ public:
         }
         try {
             std::filesystem::permissions(directory_, std::filesystem::perms::owner_all);
-            std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_RSA_gen(2048), EVP_PKEY_free);
-            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+            std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(EVP_PKEY_Q_keygen(nullptr, nullptr, "RSA", std::size_t{2048}), EVP_PKEY_free);
+            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
             if (!key || !certificate || X509_set_version(certificate.get(), 2) != 1 ||
                 ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
                 !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) ||
@@ -53,9 +55,9 @@ public:
             X509V3_set_ctx(&extension_context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
             const auto san = std::string("DNS:") + name;
             std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-                X509V3_EXT_conf_nid(nullptr, &extension_context, NID_subject_alt_name, san.c_str()), X509_EXTENSION_free);
+                X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, san.c_str()), X509_EXTENSION_free);
             if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1 ||
-                X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0 ||
+                ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 ||
                 SSL_CTX_use_certificate(context.native_handle(), certificate.get()) != 1 ||
                 SSL_CTX_use_PrivateKey(context.native_handle(), key.get()) != 1) {
                 throw std::runtime_error("cannot sign TLS test identity");
