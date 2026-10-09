@@ -19,7 +19,7 @@ const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> TlsTunnelOutput::bio
         BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "Ruvia TLS tunnel output"), &BIO_meth_free);
     if (!method || BIO_meth_set_create(method.get(), &createBio) != 1 ||
         BIO_meth_set_destroy(method.get(), &destroyBio) != 1 ||
-        BIO_meth_set_write(method.get(), &writeBio) != 1 ||
+        BIO_meth_set_write_ex(method.get(), &writeBio) != 1 ||
         BIO_meth_set_ctrl(method.get(), &controlBio) != 1) {
         throw std::bad_alloc();
     }
@@ -82,19 +82,20 @@ int TlsTunnelOutput::destroyBio(BIO* bio) noexcept {
     BIO_set_init(bio, 0);
     return 1;
 }
-int TlsTunnelOutput::writeBio(BIO* bio, const char* bytes, int size) noexcept {
+int TlsTunnelOutput::writeBio(BIO* bio, const char* bytes, std::size_t size, std::size_t* written) noexcept {
+    *written = 0;
     auto& output = *static_cast<TlsTunnelOutput*>(BIO_get_data(bio));
     if (!output.worker_.isCurrent()) {
         std::terminate();
     }
     BIO_clear_retry_flags(bio);
-    if (size <= 0) {
-        return 0;
+    if (size == 0) {
+        return 1;
     }
-    const auto count = static_cast<std::size_t>(size);
+    const auto count = size;
     if (output.error_ || output.stopping_ || count > output.bytes_.size() - output.size_) {
         output.fail(std::make_error_code(std::errc::no_buffer_space));
-        return -1;
+        return 0;
     }
     const auto tail = (output.head_ + output.size_) % output.bytes_.size();
     const auto first = std::min(count, output.bytes_.size() - tail);
@@ -102,7 +103,8 @@ int TlsTunnelOutput::writeBio(BIO* bio, const char* bytes, int size) noexcept {
     std::memcpy(output.bytes_.data(), bytes + first, count - first);
     output.size_ += count;
     output.available_.notify();
-    return size;
+    *written = size;
+    return 1;
 }
 long TlsTunnelOutput::controlBio(BIO*, int command, long, void*) noexcept {
     return command == BIO_CTRL_FLUSH ? 1 : 0;

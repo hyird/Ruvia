@@ -26,6 +26,7 @@
 #include "http3_quic_udp_pair.h"
 #include "server/HttpServerOptions.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace ruvia::detail {
 struct Http3QuicClientSocketSessionTestAccess final {
@@ -93,11 +94,11 @@ public:
             throw std::runtime_error("failed to create QUIC test identity directory");
         }
         key_.reset(EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "prime256v1"));
-        certificate_.reset(X509_new());
+        certificate_.reset(X509_new_ex(nullptr, nullptr));
         if (!key_ || !certificate_ || X509_set_version(certificate_.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(certificate_.get()), 1) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(certificate_.get()), -60) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(certificate_.get()), 3600) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(certificate_.get()), -60) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(certificate_.get()), 3600) == nullptr ||
             X509_set_pubkey(certificate_.get(), key_.get()) != 1) {
             throw std::runtime_error("failed to create QUIC test certificate");
         }
@@ -107,7 +108,7 @@ public:
                 reinterpret_cast<const unsigned char*>("localhost"), -1, -1, 0) != 1 ||
             X509_set_subject_name(certificate_.get(), subject.get()) != 1 ||
             X509_set_issuer_name(certificate_.get(), subject.get()) != 1 ||
-            X509_sign(certificate_.get(), key_.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(certificate_.get(), key_.get()) <= 0) {
             throw std::runtime_error("failed to sign QUIC test certificate");
         }
         certificate_path_ = directory_ / "certificate.pem";
@@ -118,7 +119,7 @@ public:
             BIO_new_file(private_key_path_.string().c_str(), "w"), BIO_free);
         if (!certificate_bio || !key_bio ||
             PEM_write_bio_X509(certificate_bio.get(), certificate_.get()) != 1 ||
-            PEM_write_bio_PrivateKey(key_bio.get(), key_.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+            ruvia::test::write_tls_private_key(key_bio.get(), key_.get()) != 1) {
             throw std::runtime_error("failed to write QUIC test certificate");
         }
     }
@@ -146,9 +147,6 @@ private:
 }  // namespace
 
 RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -177,13 +175,9 @@ RUVIA_TEST(http3QuicClientSocketSessionOwnsConcreteConnectedSocket) {
     session.close();
     RUVIA_CHECK(session.pump().status == Http3QuicClientSocketSession::PumpStatus::kClosed);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionKeepsPollingDuringSendBackpressure) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peer(io,
@@ -201,13 +195,9 @@ RUVIA_TEST(http3QuicClientSocketSessionKeepsPollingDuringSendBackpressure) {
     RUVIA_CHECK(tick.received > 0);
     RUVIA_CHECK(tick.eventTimeout.has_value());
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionMigratesWithTwoLiveUdpPaths) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     using udp = asio::ip::udp;
     quic_test_identity identity;
@@ -356,13 +346,9 @@ RUVIA_TEST(http3QuicClientSocketSessionMigratesWithTwoLiveUdpPaths) {
     const auto cancelled = session.path_migration(cancel.id);
     RUVIA_CHECK(cancelled.has_value());
     RUVIA_CHECK(cancelled->status == ruvia::quic_migration_status::aborted);
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionWriteWaitCompletesWhenSocketIsReady) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -373,13 +359,9 @@ RUVIA_TEST(http3QuicClientSocketSessionWriteWaitCompletesWhenSocketIsReady) {
     io.run();
     RUVIA_CHECK(!ruvia::testing::throwsOn([&] { future.get(); }));
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitWakesOnReadableDatagram) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -393,13 +375,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitWakesOnReadableDatagram) {
     io.run();
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kReadable);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRetriesFullInputViaQuicTimer) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -415,13 +393,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRetriesFullInputViaQuicTimer)
     io.run();
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kQuicEvent);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadAndTimerAfterWritable) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -437,13 +411,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadAndTimerAfterWritab
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kWritable);
     RUVIA_CHECK_EQ(io.poll(), 0U);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitPreservesAbsoluteDeadlineAcrossTicks) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -472,13 +442,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitPreservesAbsoluteDeadlineAcro
     }
     RUVIA_CHECK(expired && quicEvents > 0);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadWriteTimerOnStop) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -497,13 +463,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitDrainsReadWriteTimerOnStop) {
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kStopped);
     RUVIA_CHECK_EQ(io.poll(), 0U);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitCloseJoinsAllPendingHandlers) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -521,13 +483,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitCloseJoinsAllPendingHandlers)
     io.run();
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kStopped);
     RUVIA_CHECK_EQ(io.poll(), 0U);
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRejectsConcurrentCyclesWithoutLosingOwner) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -551,13 +509,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitRejectsConcurrentCyclesWithou
         RUVIA_CHECK(duplicate.get() == Http3QuicClientSocketSession::WakeReason::kFatal);
     }
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeIsLatchedBeforeArming) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -581,13 +535,9 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeIsLatchedBeforeArming) {
     io.run();
     RUVIA_CHECK(next.get() == Http3QuicClientSocketSession::WakeReason::kQuicEvent);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeDrainsAllArmedHandlers) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -607,13 +557,9 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeDrainsAllArmedHandlers) {
     RUVIA_CHECK(session.consumeWorkNotification());
     RUVIA_CHECK(!session.consumeWorkNotification());
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeCannotOverrideStop) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -632,13 +578,9 @@ RUVIA_TEST(http3QuicClientSocketSessionApplicationWakeCannotOverrideStop) {
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kStopped);
     RUVIA_CHECK_EQ(io.poll(), 0U);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionActivityWaitColdDropAndCloseBeforeStart) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -654,13 +596,9 @@ RUVIA_TEST(http3QuicClientSocketSessionActivityWaitColdDropAndCloseBeforeStart) 
     io.run();
     RUVIA_CHECK(future.get() == Http3QuicClientSocketSession::WakeReason::kStopped);
     session.close();
-#endif
 }
 
 RUVIA_TEST(http3QuicClientSocketSessionCloseWakesJoinedReadWait) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     using namespace ruvia::detail;
     asio::io_context io;
     asio::ip::udp::socket peerSocket(io,
@@ -674,5 +612,4 @@ RUVIA_TEST(http3QuicClientSocketSessionCloseWakesJoinedReadWait) {
     io.restart();
     io.run();
     RUVIA_CHECK(ruvia::testing::throwsOn([&] { future.get(); }));
-#endif
 }

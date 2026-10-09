@@ -49,6 +49,7 @@
 #include "http3/Http3QuicTlsContext.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
 namespace {
 using namespace std::chrono_literals;
@@ -367,7 +368,7 @@ public:
             throw std::runtime_error("failed to create HTTP/3 GOAWAY test identity directory");
         }
         try {
-            EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+            EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
             if (rawContext == nullptr) {
                 throw std::runtime_error("failed to create HTTP/3 GOAWAY test key generator");
             }
@@ -376,18 +377,18 @@ public:
             EVP_PKEY* rawKey = nullptr;
             if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
                 EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) <= 0 ||
-                EVP_PKEY_keygen(context.get(), &rawKey) <= 0) {
+                EVP_PKEY_generate(context.get(), &rawKey) <= 0) {
                 throw std::runtime_error("failed to generate HTTP/3 GOAWAY test key");
             }
             std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
             if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
                 ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-                X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) == nullptr ||
-                X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+                X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) == nullptr ||
+                X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
                 X509_set_pubkey(certificate.get(), key.get()) != 1 ||
                 X509_set_issuer_name(certificate.get(), X509_get_subject_name(certificate.get())) != 1 ||
-                X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+                ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
                 throw std::runtime_error("failed to create HTTP/3 GOAWAY test certificate");
             }
             certificateFile_ = directory_ / "cert.pem";
@@ -398,8 +399,7 @@ public:
                 BIO_new_file(privateKeyFile_.string().c_str(), "w"), BIO_free);
             if (!certificateBio || !privateKeyBio ||
                 PEM_write_bio_X509(certificateBio.get(), certificate.get()) != 1 ||
-                PEM_write_bio_PrivateKey(privateKeyBio.get(), key.get(), nullptr, nullptr,
-                    0, nullptr, nullptr) != 1) {
+                ruvia::test::write_tls_private_key(privateKeyBio.get(), key.get()) != 1) {
                 throw std::runtime_error("failed to write HTTP/3 GOAWAY test identity");
             }
         } catch (...) {
@@ -1118,9 +1118,6 @@ ruvia::Task<void> exercisePublicHttp3GoAwayReplay(
 }  // namespace
 
 RUVIA_TEST(http3PublicHttpClientConstructedBeforeWorkerLaunchBindsQuicOwnerOnWorker) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     QuicUdpBlackhole peer(io);
@@ -1145,13 +1142,9 @@ RUVIA_TEST(http3PublicHttpClientConstructedBeforeWorkerLaunchBindsQuicOwnerOnWor
     RUVIA_CHECK(result.finished);
     RUVIA_CHECK(result.error == ruvia::HttpClientError::Code::kCancelled);
     RUVIA_CHECK(peer.quicLongHeaders() >= 1);
-#endif
 }
 
 RUVIA_TEST(http3PublicHttpClientHandleDispatchesUdpAndMapsPoolSlotsToConnections) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     auto& io = ruvia::test::newTestIoContext();
     auto attachment = ruvia::attachEventLoop(io);
     QuicUdpBlackhole peer(io);
@@ -1159,13 +1152,9 @@ RUVIA_TEST(http3PublicHttpClientHandleDispatchesUdpAndMapsPoolSlotsToConnections
         exercisePublicHttp3Dispatch(attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3PublicHttpClientRotatesConnectionAfterPeerGoAway) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     GoAwayRotationPeer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -1174,13 +1163,9 @@ RUVIA_TEST(http3PublicHttpClientRotatesConnectionAfterPeerGoAway) {
         exercisePublicHttp3GoAwayRotation(io, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3PublicHttpClientRetriesPeerReportedUnprocessedRequest) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     GoAwayRotationPeer peer(identity, true);
     auto& io = ruvia::test::newTestIoContext();
@@ -1189,5 +1174,4 @@ RUVIA_TEST(http3PublicHttpClientRetriesPeerReportedUnprocessedRequest) {
         exercisePublicHttp3GoAwayReplay(io, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }

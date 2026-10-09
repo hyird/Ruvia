@@ -186,8 +186,8 @@ void appendMigrationId(std::pmr::vector<std::pmr::string>& ids, std::string_view
 std::pmr::string detail::migrationChecksum(
     std::string_view sql, std::pmr::memory_resource* resource) {
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    unsigned int digestSize = 0;
-    if (EVP_Digest(sql.data(), sql.size(), digest.data(), &digestSize, EVP_sha256(), nullptr) !=
+    std::size_t digestSize = 0;
+    if (EVP_Q_digest(nullptr, "SHA256", nullptr, sql.data(), sql.size(), digest.data(), &digestSize) !=
             1 ||
         digestSize * 2 != kMigrationChecksumSize) {
         throw std::runtime_error("database migration checksum could not be computed");
@@ -196,7 +196,7 @@ std::pmr::string detail::migrationChecksum(
     static constexpr char kHexDigits[] = "0123456789abcdef";
     std::pmr::string hex(detail::pmrResourceOrDefault(resource));
     hex.reserve(kMigrationChecksumSize);
-    for (unsigned int i = 0; i < digestSize; ++i) {
+    for (std::size_t i = 0; i < digestSize; ++i) {
         hex.push_back(kHexDigits[digest[i] >> 4]);
         hex.push_back(kHexDigits[digest[i] & 0x0F]);
     }

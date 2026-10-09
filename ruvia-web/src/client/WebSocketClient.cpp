@@ -89,7 +89,7 @@ std::uint16_t WebSocketClientState::port() const noexcept {
 }
 
 bool WebSocketClientState::generateMask(void*, WebSocketMaskKey& key) noexcept {
-    return RAND_bytes(reinterpret_cast<unsigned char*>(key.data()), static_cast<int>(key.size())) ==
+    return RAND_bytes_ex(nullptr, reinterpret_cast<unsigned char*>(key.data()), key.size(), 0) ==
            1;
 }
 

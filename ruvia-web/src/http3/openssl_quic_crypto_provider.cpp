@@ -8,8 +8,10 @@
 #include <new>
 #include <stdexcept>
 
+#include <openssl/core_names.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
+#include <openssl/params.h>
 #include <openssl/rand.h>
 
 namespace ruvia::detail {
@@ -32,6 +34,35 @@ cipher_spec spec_for(quic_cipher_suite suite) {
             return {"CHACHA20-POLY1305", "CHACHA20", "SHA256", 32};
     }
     throw std::invalid_argument("unsupported QUIC TLS cipher suite");
+}
+
+void derive_hkdf(EVP_KDF* algorithm, int mode, const char* digest,
+    std::span<const std::byte> salt, std::span<const std::byte> key,
+    std::span<const std::byte> info, std::span<std::byte> output) {
+    std::unique_ptr<EVP_KDF_CTX, decltype(&EVP_KDF_CTX_free)> context(
+        EVP_KDF_CTX_new(algorithm), EVP_KDF_CTX_free);
+    if (!context) {
+        throw std::runtime_error("OpenSSL HKDF context allocation failed");
+    }
+    std::array<char, 7> digest_name{};
+    std::memcpy(digest_name.data(), digest, std::strlen(digest));
+    std::byte empty_input{};
+    const auto octets = [&empty_input](const char* name, std::span<const std::byte> bytes) {
+        // OSSL_PARAM requires non-null storage even for an empty octet string.
+        auto* data = bytes.empty() ? &empty_input : const_cast<std::byte*>(bytes.data());
+        return OSSL_PARAM_construct_octet_string(name, data, bytes.size());
+    };
+    const OSSL_PARAM parameters[]{
+        OSSL_PARAM_construct_int(OSSL_KDF_PARAM_MODE, &mode),
+        OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, digest_name.data(), 0),
+        octets(OSSL_KDF_PARAM_KEY, key),
+        octets(OSSL_KDF_PARAM_SALT, salt),
+        octets(OSSL_KDF_PARAM_INFO, info),
+        OSSL_PARAM_construct_end()};
+    if (EVP_KDF_derive(context.get(), reinterpret_cast<unsigned char*>(output.data()),
+            output.size(), parameters) != 1) {
+        throw std::runtime_error("OpenSSL HKDF derivation failed");
+    }
 }
 
 struct key_state {
@@ -65,6 +96,10 @@ void aead_seal(void* opaque, std::span<const std::byte, 12> nonce,
     int aad_length{};
     int payload_length{};
     int final_length{};
+    OSSL_PARAM tag_parameters[]{
+        OSSL_PARAM_construct_octet_string(OSSL_CIPHER_PARAM_AEAD_TAG,
+            output.data() + plaintext.size(), 16),
+        OSSL_PARAM_construct_end()};
     if (EVP_EncryptInit_ex2(state.context, state.cipher, state.key.data(),
             reinterpret_cast<const unsigned char*>(nonce.data()), nullptr) != 1 ||
         (!aad.empty() && EVP_EncryptUpdate(state.context, nullptr, &aad_length,
@@ -78,8 +113,7 @@ void aead_seal(void* opaque, std::span<const std::byte, 12> nonce,
         EVP_EncryptFinal_ex(state.context,
             reinterpret_cast<unsigned char*>(output.data()) + payload_length, &final_length) != 1 ||
         final_length != 0 ||
-        EVP_CIPHER_CTX_ctrl(state.context, EVP_CTRL_AEAD_GET_TAG, 16,
-            reinterpret_cast<unsigned char*>(output.data()) + plaintext.size()) != 1) {
+        EVP_CIPHER_CTX_get_params(state.context, tag_parameters) != 1) {
         throw std::runtime_error("OpenSSL QUIC AEAD finalization failed");
     }
 }
@@ -109,7 +143,10 @@ quic_aead_key_operations::open_result aead_open(void* opaque,
     }
     std::array<unsigned char, 16> tag{};
     std::memcpy(tag.data(), input.data() + data_size, tag.size());
-    if (EVP_CIPHER_CTX_ctrl(state.context, EVP_CTRL_AEAD_SET_TAG, 16, tag.data()) != 1) {
+    const OSSL_PARAM tag_parameters[]{
+        OSSL_PARAM_construct_octet_string(OSSL_CIPHER_PARAM_AEAD_TAG, tag.data(), tag.size()),
+        OSSL_PARAM_construct_end()};
+    if (EVP_CIPHER_CTX_set_params(state.context, tag_parameters) != 1) {
         throw std::runtime_error("OpenSSL QUIC AEAD tag setup failed");
     }
     std::array<unsigned char, 16> final_buffer{};
@@ -163,16 +200,18 @@ struct openssl_quic_crypto_provider::impl {
             auto& slot = entries[index(suite)];
             slot.aead.reset(EVP_CIPHER_fetch(nullptr, spec.aead, nullptr));
             slot.hp.reset(EVP_CIPHER_fetch(nullptr, spec.header_protection, nullptr));
-            slot.digest.reset(EVP_MD_fetch(nullptr, spec.digest, nullptr));
-            if (!slot.aead || !slot.hp || !slot.digest) {
+            if (!slot.aead || !slot.hp) {
                 throw std::runtime_error("OpenSSL QUIC algorithm fetch failed");
             }
+        }
+        hkdf.reset(EVP_KDF_fetch(nullptr, "HKDF", nullptr));
+        if (!hkdf) {
+            throw std::runtime_error("OpenSSL QUIC HKDF fetch failed");
         }
     }
     struct entry {
         std::unique_ptr<EVP_CIPHER, decltype(&EVP_CIPHER_free)> aead{nullptr, EVP_CIPHER_free};
         std::unique_ptr<EVP_CIPHER, decltype(&EVP_CIPHER_free)> hp{nullptr, EVP_CIPHER_free};
-        std::unique_ptr<EVP_MD, decltype(&EVP_MD_free)> digest{nullptr, EVP_MD_free};
     };
     static std::size_t index(quic_cipher_suite suite) {
         switch (suite) {
@@ -187,6 +226,7 @@ struct openssl_quic_crypto_provider::impl {
     }
     std::pmr::memory_resource* resource;
     std::array<entry, 3> entries;
+    std::unique_ptr<EVP_KDF, decltype(&EVP_KDF_free)> hkdf{nullptr, EVP_KDF_free};
 };
 
 openssl_quic_crypto_provider::openssl_quic_crypto_provider(std::pmr::memory_resource* resource) {
@@ -212,7 +252,7 @@ openssl_quic_crypto_provider::~openssl_quic_crypto_provider() noexcept {
 quic_crypto_provider_view openssl_quic_crypto_provider::view() noexcept {
     return {impl_,
         [](void*, std::span<std::byte> output) {
-            if (output.size() > INT_MAX || RAND_bytes(reinterpret_cast<unsigned char*>(output.data()), static_cast<int>(output.size())) != 1) {
+            if (output.size() > INT_MAX || RAND_bytes_ex(nullptr, reinterpret_cast<unsigned char*>(output.data()), output.size(), 0) != 1) {
                 throw std::runtime_error("OpenSSL QUIC random generation failed");
             }
         },
@@ -222,21 +262,8 @@ quic_crypto_provider_view openssl_quic_crypto_provider::view() noexcept {
             if (salt.size() > INT_MAX || ikm.size() > INT_MAX || output.size() > INT_MAX) {
                 throw std::invalid_argument("QUIC HKDF input exceeds OpenSSL limits");
             }
-            EVP_PKEY_CTX* raw = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
-            if (!raw) {
-                throw std::runtime_error("OpenSSL HKDF context allocation failed");
-            }
-            std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(raw, EVP_PKEY_CTX_free);
-            const auto* digest = self.entries[impl::index(suite)].digest.get();
-            if (EVP_PKEY_derive_init(raw) <= 0 || EVP_PKEY_CTX_hkdf_mode(raw, EVP_PKEY_HKDEF_MODE_EXTRACT_ONLY) <= 0 ||
-                EVP_PKEY_CTX_set_hkdf_md(raw, digest) <= 0 || EVP_PKEY_CTX_set1_hkdf_salt(raw, reinterpret_cast<const unsigned char*>(salt.data()), static_cast<int>(salt.size())) <= 0 ||
-                EVP_PKEY_CTX_set1_hkdf_key(raw, reinterpret_cast<const unsigned char*>(ikm.data()), static_cast<int>(ikm.size())) <= 0) {
-                throw std::runtime_error("OpenSSL HKDF extract setup failed");
-            }
-            std::size_t size = output.size();
-            if (EVP_PKEY_derive(raw, reinterpret_cast<unsigned char*>(output.data()), &size) <= 0 || size != output.size()) {
-                throw std::runtime_error("OpenSSL HKDF extract failed");
-            }
+            derive_hkdf(self.hkdf.get(), EVP_KDF_HKDF_MODE_EXTRACT_ONLY,
+                spec_for(suite).digest, salt, ikm, {}, output);
         },
         [](void* opaque, quic_cipher_suite suite, std::span<const std::byte> secret,
             std::span<const std::byte> info, std::span<std::byte> output) {
@@ -244,21 +271,8 @@ quic_crypto_provider_view openssl_quic_crypto_provider::view() noexcept {
             if (secret.size() > INT_MAX || info.size() > INT_MAX || output.size() > INT_MAX) {
                 throw std::invalid_argument("QUIC HKDF input exceeds OpenSSL limits");
             }
-            EVP_PKEY_CTX* raw = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
-            if (!raw) {
-                throw std::runtime_error("OpenSSL HKDF context allocation failed");
-            }
-            std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(raw, EVP_PKEY_CTX_free);
-            if (EVP_PKEY_derive_init(raw) <= 0 || EVP_PKEY_CTX_hkdf_mode(raw, EVP_PKEY_HKDEF_MODE_EXPAND_ONLY) <= 0 ||
-                EVP_PKEY_CTX_set_hkdf_md(raw, self.entries[impl::index(suite)].digest.get()) <= 0 ||
-                EVP_PKEY_CTX_set1_hkdf_key(raw, reinterpret_cast<const unsigned char*>(secret.data()), static_cast<int>(secret.size())) <= 0 ||
-                EVP_PKEY_CTX_add1_hkdf_info(raw, reinterpret_cast<const unsigned char*>(info.data()), static_cast<int>(info.size())) <= 0) {
-                throw std::runtime_error("OpenSSL HKDF expand setup failed");
-            }
-            std::size_t size = output.size();
-            if (EVP_PKEY_derive(raw, reinterpret_cast<unsigned char*>(output.data()), &size) <= 0 || size != output.size()) {
-                throw std::runtime_error("OpenSSL HKDF expand failed");
-            }
+            derive_hkdf(self.hkdf.get(), EVP_KDF_HKDF_MODE_EXPAND_ONLY,
+                spec_for(suite).digest, {}, secret, info, output);
         },
         [](void* opaque, quic_cipher_suite suite, quic_crypto_direction,
             std::span<const std::byte> key) {

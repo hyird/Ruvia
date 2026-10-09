@@ -16,11 +16,9 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
-#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
     if (ERR_SYSTEM_ERROR(error)) {
         return asio::error_code(ERR_GET_REASON(error), asio::error::get_system_category());
     }
-#endif
     return asio::error_code(static_cast<int>(error), asio::error::get_ssl_category());
 }
 
@@ -88,7 +86,7 @@ void configureHttpServerTlsIdentity(SSL_CTX* context,
         return;
     }
     ::ERR_clear_error();
-    if (::SSL_CTX_load_verify_locations(context, clientCertificates->verifyFile.c_str(), nullptr) !=
+    if (::SSL_CTX_load_verify_file(context, clientCertificates->verifyFile.c_str()) !=
         1) {
         throwTlsIdentityError("load_verify_file");
     }

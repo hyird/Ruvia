@@ -16,6 +16,7 @@
 
 #include "http3/Http3QuicClientTlsContext.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -64,19 +65,19 @@ struct TemporaryDirectory final {
 struct IdentityFiles final {
     explicit IdentityFiles(const std::filesystem::path& directory, std::string_view password = {}) {
         std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> keyContext(
-            EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+            EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr), EVP_PKEY_CTX_free);
         EVP_PKEY* rawKey = nullptr;
         if (!keyContext || EVP_PKEY_keygen_init(keyContext.get()) <= 0 ||
             EVP_PKEY_CTX_set_rsa_keygen_bits(keyContext.get(), 2048) <= 0 ||
-            EVP_PKEY_keygen(keyContext.get(), &rawKey) <= 0) {
+            EVP_PKEY_generate(keyContext.get(), &rawKey) <= 0) {
             throw std::runtime_error("could not generate test key");
         }
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-        std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+        std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
         if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
             X509_set_pubkey(certificate.get(), key.get()) != 1) {
             throw std::runtime_error("could not initialize test certificate");
         }
@@ -85,7 +86,7 @@ struct IdentityFiles final {
         X509V3_CTX extensionContext;
         X509V3_set_ctx(&extensionContext, certificate.get(), certificate.get(), nullptr, nullptr, 0);
         std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> san(
-            X509V3_EXT_conf_nid(nullptr, &extensionContext, NID_subject_alt_name,
+            X509V3_EXT_nconf_nid(nullptr, &extensionContext, NID_subject_alt_name,
                 const_cast<char*>("DNS:client.ruvia-test.local")),
             X509_EXTENSION_free);
         if (name == nullptr || !san ||
@@ -94,7 +95,7 @@ struct IdentityFiles final {
             X509_add_ext(certificate.get(), san.get(), -1) != 1 ||
             X509_set_subject_name(certificate.get(), name.get()) != 1 ||
             X509_set_issuer_name(certificate.get(), name.get()) != 1 ||
-            X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
             throw std::runtime_error("could not sign test certificate");
         }
         certificateFile = directory / "certificate.pem";
@@ -104,8 +105,7 @@ struct IdentityFiles final {
             BIO_free);
         std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(BIO_new_file(keyFile.string().c_str(), "wb"), BIO_free);
         if (!certificateBio || !keyBio || PEM_write_bio_X509(certificateBio.get(), certificate.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), password.empty() ? nullptr : EVP_aes_256_cbc(),
-                reinterpret_cast<const unsigned char*>(password.data()), static_cast<int>(password.size()), nullptr, nullptr) != 1) {
+            ruvia::test::write_tls_private_key(keyBio.get(), key.get(), password, !password.empty()) != 1) {
             throw std::runtime_error("could not write test credentials");
         }
     }

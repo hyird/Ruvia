@@ -9,7 +9,6 @@
 #include <string>
 
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 
 #include "ruvia/core/Base64.h"
 #include "ruvia/core/ConstantTime.h"
@@ -68,10 +67,10 @@ void writeCookieSignature(
     message.append(value.data(), value.size());
 
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    unsigned int digestSize = 0;
-    if (HMAC(EVP_sha256(), secret.data(), static_cast<int>(secret.size()),
+    std::size_t digestSize = 0;
+    if (EVP_Q_mac(nullptr, "HMAC", nullptr, "SHA256", nullptr, secret.data(), secret.size(),
             reinterpret_cast<const unsigned char*>(message.data()), message.size(), digest.data(),
-            &digestSize) == nullptr ||
+            digest.size(), &digestSize) == nullptr ||
         digestSize != kHmacSha256Size) {
         throw std::runtime_error("signed cookie HMAC failed");
     }

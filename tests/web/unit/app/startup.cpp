@@ -22,6 +22,7 @@
 #include "ruvia/web/Controller.h"
 
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 namespace {
@@ -133,7 +134,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     const auto private_key = identity.ca_file.parent_path() / "key.pem";
     {
         std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(private_key.string().c_str(), "w"), BIO_free);
-        if (!output || PEM_write_bio_PrivateKey(output.get(), SSL_CTX_get0_privatekey(identity.context.native_handle()), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+        if (!output || ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(identity.context.native_handle())) != 1) {
             throw std::runtime_error("cannot write startup test private key");
         }
     }

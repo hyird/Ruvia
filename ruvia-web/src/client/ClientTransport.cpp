@@ -10,7 +10,6 @@
 #include <system_error>
 #include <utility>
 
-#include <asio/ssl/host_name_verification.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/ConfigValidation.h"
@@ -165,6 +164,11 @@ void configure_client_tls_context(SSL_CTX& context, ClientTransportConfigView co
     }
 }
 
+bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
+    return SSL_set1_dnsname(&connection, ip_address ? nullptr : host) == 1 &&
+           SSL_set1_ipaddr(&connection, ip_address ? host : nullptr) == 1;
+}
+
 ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
     const std::pmr::string& host, ClientTransportConfigView config, ClientAlpnMode alpnMode) {
     if (SSL_clear(stream.native_handle()) != 1) {
@@ -189,7 +193,9 @@ ClientTlsSetupError prepareClientTlsStream(asio::ssl::stream<asio::ip::tcp::sock
         return ClientTlsSetupError::kSniFailed;
     }
     if (config.tlsPeerVerification == TlsPeerVerificationPolicy::kVerify) {
-        stream.set_verify_callback(asio::ssl::host_name_verification(std::string(tlsHost)));
+        if (!configure_client_tls_peer_identity(*stream.native_handle(), tlsHost.data(), isIpAddress)) {
+            return ClientTlsSetupError::kPeerIdentityFailed;
+        }
     }
     const auto protocols = clientAlpnBytes(alpnMode);
     if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
@@ -209,6 +215,8 @@ std::string_view clientTlsSetupErrorMessage(ClientTlsSetupError error) noexcept 
             return "failed to set TLS SNI host";
         case ClientTlsSetupError::kAlpnFailed:
             return "failed to configure TLS ALPN";
+        case ClientTlsSetupError::kPeerIdentityFailed:
+            return "failed to configure TLS peer identity";
     }
     std::terminate();
 }

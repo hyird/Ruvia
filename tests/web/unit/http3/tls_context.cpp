@@ -17,6 +17,7 @@
 
 #include "http3/Http3QuicTlsContext.h"
 #include "test_harness.h"
+#include "test_tls_crypto.h"
 
 namespace {
 
@@ -86,7 +87,7 @@ struct TestIdentityFiles final {
         using Certificate = std::unique_ptr<X509, CertificateDeleter>;
         using Bio = std::unique_ptr<BIO, BioDeleter>;
 
-        EVP_PKEY_CTX* rawKeyContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+        EVP_PKEY_CTX* rawKeyContext = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
         if (rawKeyContext == nullptr) {
             throw std::runtime_error("could not create RSA key generator");
         }
@@ -95,16 +96,16 @@ struct TestIdentityFiles final {
         EVP_PKEY* rawKey = nullptr;
         if (EVP_PKEY_keygen_init(keyContext.get()) <= 0 ||
             EVP_PKEY_CTX_set_rsa_keygen_bits(keyContext.get(), 2048) <= 0 ||
-            EVP_PKEY_keygen(keyContext.get(), &rawKey) <= 0) {
+            EVP_PKEY_generate(keyContext.get(), &rawKey) <= 0) {
             throw std::runtime_error("could not generate RSA key");
         }
         Key key(rawKey);
 
-        Certificate certificate(X509_new());
+        Certificate certificate(X509_new_ex(nullptr, nullptr));
         if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), serial) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
             X509_set_pubkey(certificate.get(), key.get()) != 1) {
             throw std::runtime_error("could not initialize self-signed certificate");
         }
@@ -113,14 +114,14 @@ struct TestIdentityFiles final {
         X509V3_set_ctx(&extensionContext, certificate.get(), certificate.get(), nullptr, nullptr, 0);
         const std::string san = std::string("DNS:") + commonName;
         std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> sanExtension(
-            X509V3_EXT_conf_nid(nullptr, &extensionContext, NID_subject_alt_name,
+            X509V3_EXT_nconf_nid(nullptr, &extensionContext, NID_subject_alt_name,
                 const_cast<char*>(san.c_str())),
             X509_EXTENSION_free);
         if (!name || X509_NAME_add_entry_by_txt(name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(commonName), -1, -1, 0) != 1 ||
             X509_add_ext(certificate.get(), sanExtension.get(), -1) != 1 ||
             X509_set_subject_name(certificate.get(), name.get()) != 1 ||
             X509_set_issuer_name(certificate.get(), name.get()) != 1 ||
-            X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
             throw std::runtime_error("could not sign self-signed certificate");
         }
 
@@ -128,7 +129,7 @@ struct TestIdentityFiles final {
         Bio keyBio(BIO_new(BIO_s_mem()));
         if (!certificateBio || !keyBio ||
             PEM_write_bio_X509(certificateBio.get(), certificate.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) !=
+            ruvia::test::write_tls_private_key(keyBio.get(), key.get()) !=
                 1) {
             throw std::runtime_error("could not encode generated PEM data");
         }

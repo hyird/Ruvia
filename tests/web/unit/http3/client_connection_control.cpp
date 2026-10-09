@@ -249,9 +249,6 @@ ruvia::Task<void> exerciseEarlyDataRejectionRecovery(asio::io_context& io,
 }  // namespace
 
 RUVIA_TEST(http3ClientReplaysBodylessGetAfterRejectedEarlyDataOnRebuiltCriticalStreams) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     auto serverTlsConfig = ruvia::detail::HttpServerListenerDefinition::Tls{};
     serverTlsConfig.identity.certificateChainFile = identity.certificate().string();
@@ -273,13 +270,9 @@ RUVIA_TEST(http3ClientReplaysBodylessGetAfterRejectedEarlyDataOnRebuiltCriticalS
         io, worker, attachment, ticketPeer, acceptingPeer, rejectingPeer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3_client_observes_origin_frame_over_authenticated_quic_and_retains_after_shutdown) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity, false, true, false, true);
     auto& io = ruvia::test::newTestIoContext();
@@ -290,13 +283,9 @@ RUVIA_TEST(http3_client_observes_origin_frame_over_authenticated_quic_and_retain
         exercisePublicHttp3ClientPool(io, worker, attachment, peer, ruvia_ctx, true, caFile));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientUploadExchangeWakesQuicDriverAndWaitsForContinueWithoutWriteTimeout) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -343,7 +332,6 @@ RUVIA_TEST(http3ClientUploadExchangeWakesQuicDriverAndWaitsForContinueWithoutWri
     attachment.run();
     root.get();
     peer.rethrow_if_failed();
-#endif
 }
 
 RUVIA_TEST(http3_client_push_owns_promises_reclaims_repeated_streams_and_retains_results_after_shutdown) {

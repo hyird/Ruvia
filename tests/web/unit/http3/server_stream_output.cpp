@@ -43,8 +43,8 @@
 #include "server/HttpServerOptions.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 namespace {
 
 using namespace ruvia::detail;
@@ -67,22 +67,22 @@ public:
         }
 
         std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> context(
-            EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
+            EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr), EVP_PKEY_CTX_free);
         EVP_PKEY* rawKey = nullptr;
         if (!context || EVP_PKEY_keygen_init(context.get()) <= 0 ||
             EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) <= 0 ||
-            EVP_PKEY_keygen(context.get(), &rawKey) <= 0) {
+            EVP_PKEY_generate(context.get(), &rawKey) <= 0) {
             throw std::runtime_error("failed to generate TLS key");
         }
         std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-        std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+        std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
         if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
             ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-            X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) == nullptr ||
-            X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+            X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) == nullptr ||
+            X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
             X509_set_pubkey(certificate.get(), key.get()) != 1 ||
             X509_set_issuer_name(certificate.get(), X509_get_subject_name(certificate.get())) != 1 ||
-            X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+            ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
             throw std::runtime_error("failed to create self-signed test certificate");
         }
 
@@ -94,7 +94,7 @@ public:
             BIO_new_file(privateKeyFile_.string().c_str(), "w"), BIO_free);
         if (!certificateBio || !keyBio ||
             PEM_write_bio_X509(certificateBio.get(), certificate.get()) != 1 ||
-            PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+            ruvia::test::write_tls_private_key(keyBio.get(), key.get()) != 1) {
             throw std::runtime_error("failed to write test certificate");
         }
     }
@@ -486,12 +486,8 @@ struct PatternSupply final {
 }
 
 }  // namespace
-#endif
 
 RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto firstId = pair.openRequestStream();
@@ -595,13 +591,9 @@ RUVIA_TEST(http3ServerStreamOutputWritesFairlyAndClientDecodesResponse) {
     RUVIA_CHECK(output.connectionRetired());
     RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputIdlePumpDoesNotRequestContinuation) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     ruvia::WorkerMemory worker;
@@ -614,13 +606,9 @@ RUVIA_TEST(http3ServerStreamOutputIdlePumpDoesNotRequestContinuation) {
         RUVIA_CHECK(!result.needsReschedule);
     }
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream();
@@ -655,13 +643,9 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutACompletedTombstone) {
                                          .value = 0})
                     .status == Output::Status::kDuplicateFin);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutADeferredFinWithoutPendingBytes) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -678,13 +662,9 @@ RUVIA_TEST(http3ServerStreamOutputDoesNotTimeoutADeferredFinWithoutPendingBytes)
     RUVIA_CHECK(!output.connectionRetired());
     RUVIA_CHECK_EQ(output.pendingStreamCount(), std::size_t{0});
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputKeepsReceiveHalfOpenAfterResponseFin) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -743,13 +723,9 @@ RUVIA_TEST(http3ServerStreamOutputKeepsReceiveHalfOpenAfterResponseFin) {
     RUVIA_CHECK_EQ(repeated.finishedStreams, std::size_t{0});
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputDrainsBufferedRequestBeforeNormalRetirement) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -784,13 +760,9 @@ RUVIA_TEST(http3ServerStreamOutputDrainsBufferedRequestBeforeNormalRetirement) {
     info = output.streamInfo(streamId);
     RUVIA_CHECK(info && info->state == Output::StreamState::kFinished);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputRetiresAfterPeerReset) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -832,13 +804,9 @@ RUVIA_TEST(http3ServerStreamOutputRetiresAfterPeerReset) {
     RUVIA_CHECK_EQ(pair.server().read_health(streamId).status,
         ruvia::quic_stream_read_status::closed);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputStopForceClosesAnOpenReceiveHalf) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -858,13 +826,9 @@ RUVIA_TEST(http3ServerStreamOutputStopForceClosesAnOpenReceiveHalf) {
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK_EQ(pair.server().read_health(streamId).status,
         ruvia::quic_stream_read_status::closed);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputSendsTypedPeerResetCode) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream();
@@ -897,13 +861,9 @@ RUVIA_TEST(http3ServerStreamOutputSendsTypedPeerResetCode) {
     const auto info = output.streamInfo(streamId);
     RUVIA_CHECK(info && info->state == Output::StreamState::kReset);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputCancellationTerminatesUnfinishedBidirectionalStream) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream(false);
@@ -945,11 +905,9 @@ RUVIA_TEST(http3ServerStreamOutputCancellationTerminatesUnfinishedBidirectionalS
     RUVIA_CHECK_EQ(peerResetCode, static_cast<std::uint64_t>(cancelCode));
     RUVIA_CHECK(peerSendStopped);
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
-#endif
 }
 
 RUVIA_TEST(http3_peer_response_cancel_releases_only_its_blocks_and_preserves_sibling_response) {
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
     QuicPair pair;
     pair.connect();
     const auto cancelled_id = pair.openRequestStream();
@@ -1023,13 +981,9 @@ RUVIA_TEST(http3_peer_response_cancel_releases_only_its_blocks_and_preserves_sib
     RUVIA_CHECK(received.fin);
     RUVIA_CHECK(output.stop().status != Output::Status::kUnsafeToRelease);
     RUVIA_CHECK(available_blocks(buffer) == buffer.block_capacity());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto firstId = pair.openRequestStream();
@@ -1073,13 +1027,9 @@ RUVIA_TEST(http3ServerStreamOutputBackpressureCancelStopAndPmrLifetime) {
         RUVIA_CHECK(buffer.stop());
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.deallocations);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto blockedId = pair.openRequestStream();
@@ -1264,13 +1214,9 @@ RUVIA_TEST(http3ServerStreamOutputTimesOutOnlyTheFlowControlledStream) {
         RUVIA_CHECK(buffer.stop());
     }
     RUVIA_CHECK_EQ(upstream.allocations, upstream.deallocations);
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputKeepsSiblingAliveAfterExternalStreamClose) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto closedId = pair.openRequestStream();
@@ -1312,13 +1258,9 @@ RUVIA_TEST(http3ServerStreamOutputKeepsSiblingAliveAfterExternalStreamClose) {
     RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafely) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto firstId = pair.openRequestStream();
@@ -1451,13 +1393,9 @@ RUVIA_TEST(http3ServerStreamOutputParksAfterBoundedWouldBlockScansAndCancelsSafe
     RUVIA_CHECK(!output.connectionRetired());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3_server_stream_output_sparse_capacity_resumes_pressure_and_fresh_responses) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto streamId = pair.openRequestStream();
@@ -1596,13 +1534,9 @@ RUVIA_TEST(http3_server_stream_output_sparse_capacity_resumes_pressure_and_fresh
     RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputClosesOnTrackingExhaustionAndRejectsInvalidIds) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     {
         QuicPair pair;
         pair.connect();
@@ -1642,13 +1576,9 @@ RUVIA_TEST(http3ServerStreamOutputClosesOnTrackingExhaustionAndRejectsInvalidIds
         RUVIA_CHECK(output.connectionRetired());
         RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
     }
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndReturnsCredit) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto opened = pair.server().open_stream(true);
@@ -1688,13 +1618,9 @@ RUVIA_TEST(http3ServerStreamOutputPublishesTypedCriticalStreamWithoutFinAndRetur
     RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kConnectionClosed);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosingParent) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto parent = pair.openRequestStream();
@@ -1765,13 +1691,9 @@ RUVIA_TEST(http3ServerStreamOutputBindsPushStreamsFinishesAndCancelsWithoutClosi
     RUVIA_CHECK_EQ(available_blocks(buffer), buffer.block_capacity() - output.queuedBlockCount());
     RUVIA_CHECK(output.stop().status == Output::Status::kStopped);
     RUVIA_CHECK(buffer.stop());
-#endif
 }
 
 RUVIA_TEST(http3QuicClientStreamReadHealthObservesPeerResetBeforeReadingBufferedBytes) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     const auto id = pair.openRequestStream();
@@ -1793,10 +1715,8 @@ RUVIA_TEST(http3QuicClientStreamReadHealthObservesPeerResetBeforeReadingBuffered
     RUVIA_CHECK_EQ(health.peer_reset_error_code, std::optional{code});
     std::array<char, 1> output{};
     RUVIA_CHECK(pair.client().read_stream(id, std::as_writable_bytes(std::span(output))).status == ruvia::quic_stream_read_status::reset);
-#endif
 }
 
-#if OPENSSL_VERSION_NUMBER >= 0x30600000L
 namespace {
 struct PushRouteState final {
     std::filesystem::path filePath;
@@ -1979,12 +1899,8 @@ ruvia::Task<void> exerciseQuicPushRoutes(ruvia::EventLoopAttachment& attachment,
     }
 }
 }  // namespace
-#endif
 
 RUVIA_TEST(http3ServerPushBufferedStreamingAndFileRoutesUseRealQuicUnidirectionalStreams) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     QuicPair pair;
     pair.connect();
     auto requestHead = ruvia::encodeHttp3ClientRequestHead({.method = "GET", .scheme = "https", .authority = "example.test", .path = "/push"});
@@ -2031,5 +1947,4 @@ RUVIA_TEST(http3ServerPushBufferedStreamingAndFileRoutesUseRealQuicUnidirectiona
     std::filesystem::remove(state.filePath);
     RUVIA_CHECK_EQ(upstream.liveAllocations(), std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocationCount(), upstream.deallocationCount());
-#endif
 }

@@ -13,6 +13,7 @@
 #include <openssl/ssl.h>
 #include <openssl/ui.h>
 
+#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 namespace ruvia::test {
@@ -26,9 +27,7 @@ inline std::filesystem::path write_encrypted_key(tls_identity& files,
     const auto path = directory / filename;
     std::unique_ptr<BIO, decltype(&BIO_free)> output(BIO_new_file(path.string().c_str(), "wb"), BIO_free);
     if (!output || password.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)()) ||
-        PEM_write_bio_PKCS8PrivateKey(output.get(), SSL_CTX_get0_privatekey(files.context.native_handle()),
-            EVP_aes_256_cbc(), password.empty() ? "" : password.data(),
-            static_cast<int>(password.size()), nullptr, nullptr) != 1) {
+        ruvia::test::write_tls_private_key(output.get(), SSL_CTX_get0_privatekey(files.context.native_handle()), password, true) != 1) {
         throw std::runtime_error("cannot write encrypted TLS test key");
     }
     return path;

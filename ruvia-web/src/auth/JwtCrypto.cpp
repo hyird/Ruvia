@@ -4,7 +4,6 @@
 #include <stdexcept>
 
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 
 #include "ruvia/core/ConstantTime.h"
 
@@ -13,14 +12,19 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] const EVP_MD* digestFor(JwtAlgorithm algorithm) {
+struct HmacDigest final {
+    const char* name;
+    std::size_t size;
+};
+
+[[nodiscard]] HmacDigest digestFor(JwtAlgorithm algorithm) {
     switch (algorithm) {
         case JwtAlgorithm::kHs256:
-            return EVP_sha256();
+            return {"SHA256", 32};
         case JwtAlgorithm::kHs384:
-            return EVP_sha384();
+            return {"SHA384", 48};
         case JwtAlgorithm::kHs512:
-            return EVP_sha512();
+            return {"SHA512", 64};
     }
     throw std::invalid_argument("unsupported JWT algorithm");
 }
@@ -57,14 +61,15 @@ std::string_view jwtAlgorithmName(JwtAlgorithm algorithm) {
 
 std::pmr::string jwtHmacSign(JwtAlgorithm algorithm, std::string_view secret, std::string_view data,
     std::pmr::memory_resource* resource) {
-    const auto* const method = digestFor(algorithm);
-    validateSecret(secret, static_cast<std::size_t>(EVP_MD_size(method)));
+    const auto method = digestFor(algorithm);
+    validateSecret(secret, method.size);
     validateHmacData(data);
-    unsigned int length = 0;
+    std::size_t length = 0;
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
-    if (HMAC(method, secret.data(), static_cast<int>(secret.size()),
+    if (EVP_Q_mac(nullptr, "HMAC", nullptr, method.name, nullptr, secret.data(), secret.size(),
             reinterpret_cast<const unsigned char*>(data.data()), data.size(), digest.data(),
-            &length) == nullptr) {
+            digest.size(), &length) == nullptr ||
+        length != method.size) {
         throw std::runtime_error("JWT HMAC signing failed");
     }
     return jwtBase64UrlEncode(

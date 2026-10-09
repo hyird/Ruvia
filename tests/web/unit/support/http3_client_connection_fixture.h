@@ -66,6 +66,7 @@
 #include "server/acceptor.h"
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_crypto.h"
 
 namespace ruvia::detail {
 struct http3_client_connection_test_access final {
@@ -195,7 +196,7 @@ public:
             throw std::runtime_error("failed to create HTTP/3 test identity directory");
         }
         try {
-            EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+            EVP_PKEY_CTX* rawContext = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
             if (rawContext == nullptr) {
                 throw std::runtime_error("failed to create test key generator");
             }
@@ -204,18 +205,18 @@ public:
             EVP_PKEY* rawKey = nullptr;
             if (EVP_PKEY_keygen_init(context.get()) <= 0 ||
                 EVP_PKEY_CTX_set_rsa_keygen_bits(context.get(), 2048) <= 0 ||
-                EVP_PKEY_keygen(context.get(), &rawKey) <= 0) {
+                EVP_PKEY_generate(context.get(), &rawKey) <= 0) {
                 throw std::runtime_error("failed to generate HTTP/3 test key");
             }
             std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(rawKey, EVP_PKEY_free);
-            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new(), X509_free);
+            std::unique_ptr<X509, decltype(&X509_free)> certificate(X509_new_ex(nullptr, nullptr), X509_free);
             if (!certificate || X509_set_version(certificate.get(), 2) != 1 ||
                 ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 1) != 1 ||
-                X509_gmtime_adj(X509_get_notBefore(certificate.get()), 0) == nullptr ||
-                X509_gmtime_adj(X509_get_notAfter(certificate.get()), 86400) == nullptr ||
+                X509_gmtime_adj(X509_getm_notBefore(certificate.get()), 0) == nullptr ||
+                X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) == nullptr ||
                 X509_set_pubkey(certificate.get(), key.get()) != 1 ||
                 X509_set_issuer_name(certificate.get(), X509_get_subject_name(certificate.get())) != 1 ||
-                X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+                ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
                 throw std::runtime_error("failed to create HTTP/3 test certificate");
             }
             const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
@@ -229,12 +230,12 @@ public:
                 std::pair{NID_basic_constraints, "critical,CA:TRUE"}};
             for (const auto& [nid, value] : extensions) {
                 std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-                    X509V3_EXT_conf_nid(nullptr, nullptr, nid, value), X509_EXTENSION_free);
+                    X509V3_EXT_nconf_nid(nullptr, nullptr, nid, value), X509_EXTENSION_free);
                 if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1) {
                     throw std::runtime_error("failed to authenticate HTTP/3 test identity");
                 }
             }
-            if (X509_sign(certificate.get(), key.get(), EVP_sha256()) <= 0) {
+            if (ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0) {
                 throw std::runtime_error("failed to sign HTTP/3 test identity");
             }
             certificateFile_ = directory_ / "cert.pem";
@@ -244,7 +245,7 @@ public:
             std::unique_ptr<BIO, decltype(&BIO_free)> keyBio(
                 BIO_new_file(privateKeyFile_.string().c_str(), "w"), BIO_free);
             if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), certificate.get()) != 1 ||
-                PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+                ruvia::test::write_tls_private_key(keyBio.get(), key.get()) != 1) {
                 throw std::runtime_error("failed to write HTTP/3 test identity");
             }
         } catch (...) {

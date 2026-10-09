@@ -484,9 +484,6 @@ RUVIA_TEST(http3ClientConnectionResponsePlanMovesAcrossResourceHandoffAsAnOwnedV
 }
 
 RUVIA_TEST(http3ClientConnectionPublishesRealQuicResponseIncrementallyAndReclaimsRequestState) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -495,13 +492,9 @@ RUVIA_TEST(http3ClientConnectionPublishesRealQuicResponseIncrementallyAndReclaim
     auto root = attachment.loop().start(exerciseRealResponse(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientPoolPublishesIncrementalResponseThroughPublicResponseApi) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -511,13 +504,9 @@ RUVIA_TEST(http3ClientPoolPublishesIncrementalResponseThroughPublicResponseApi) 
         exercisePublicHttp3ClientPool(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionResponseReleasePreservesDataAndWakesTheNextBudgetGeneration) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer firstPeer(identity);
     local_quic_response_peer secondPeer(identity);
@@ -528,13 +517,9 @@ RUVIA_TEST(http3ClientConnectionResponseReleasePreservesDataAndWakesTheNextBudge
         io, worker, attachment, firstPeer, secondPeer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionParserRegistrationAllocationFailureClosesAndJoinsTheConnection) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity);
     auto& io = ruvia::test::newTestIoContext();
@@ -544,13 +529,9 @@ RUVIA_TEST(http3ClientConnectionParserRegistrationAllocationFailureClosesAndJoin
         exerciseParserRegistrationAllocationFailure(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3ClientConnectionProtocolErrorWinsOverCallbackAllocationFailureInOneFeed) {
-#if OPENSSL_VERSION_NUMBER < 0x30600000L
-    RUVIA_CHECK(true);
-#else
     TestIdentityFiles identity;
     local_quic_response_peer peer(identity, true);
     auto& io = ruvia::test::newTestIoContext();
@@ -559,7 +540,6 @@ RUVIA_TEST(http3ClientConnectionProtocolErrorWinsOverCallbackAllocationFailureIn
     auto root = attachment.loop().start(exerciseConnectionErrorPriority(io, worker, attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
-#endif
 }
 
 RUVIA_TEST(http3_public_client_pool_preserves_owned_response_and_priority) {

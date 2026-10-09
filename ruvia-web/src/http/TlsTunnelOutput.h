@@ -40,7 +40,7 @@ private:
     static const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> bioMethod_;
     static int createBio(BIO* bio) noexcept;
     static int destroyBio(BIO* bio) noexcept;
-    static int writeBio(BIO* bio, const char* bytes, int size) noexcept;
+    static int writeBio(BIO* bio, const char* bytes, std::size_t size, std::size_t* written) noexcept;
     static long controlBio(BIO*, int command, long, void*) noexcept;
     [[nodiscard]] Task<void> runWriter();
     [[nodiscard]] Task<void> runWriterInner();

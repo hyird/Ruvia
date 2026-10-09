@@ -146,7 +146,7 @@ Task<void> WebSocketClientState::connectOwned(std::shared_ptr<WebSocketClientSta
 
 Task<void> WebSocketClientState::performHandshake() {
     std::array<std::uint8_t, kWebSocketClientHandshakeNonceBytes> nonce{};
-    if (RAND_bytes(nonce.data(), static_cast<int>(nonce.size())) != 1) {
+    if (RAND_bytes_ex(nullptr, nonce.data(), nonce.size(), 0) != 1) {
         throw WebSocketClientError(WebSocketClientError::Code::kHandshakeRejected,
             "failed to generate WebSocket handshake key");
     }

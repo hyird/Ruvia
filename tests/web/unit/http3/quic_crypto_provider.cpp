@@ -148,6 +148,14 @@ RUVIA_TEST(openssl_quic_crypto_provider_matches_rfc5869_sha256_vector) {
     crypto.hkdf_expand(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, info, okm);
     RUVIA_CHECK(std::vector<std::byte>(okm.begin(), okm.end()) ==
                 hex_bytes("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"));
+
+    // RFC 5869 A.3 includes zero-length salt and info.
+    crypto.hkdf_extract(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, {}, ikm, prk);
+    RUVIA_CHECK(std::vector<std::byte>(prk.begin(), prk.end()) ==
+                hex_bytes("19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"));
+    crypto.hkdf_expand(crypto.context, ruvia::quic_cipher_suite::aes_128_gcm_sha256, prk, {}, okm);
+    RUVIA_CHECK(std::vector<std::byte>(okm.begin(), okm.end()) ==
+                hex_bytes("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"));
 }
 
 RUVIA_TEST(openssl_quic_crypto_provider_rejects_invalid_provider_inputs) {

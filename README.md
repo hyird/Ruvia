@@ -13,6 +13,8 @@ Requires CMake 3.28+ and a C++20 compiler. All third-party libraries are
 downloaded from pinned, SHA-256-verified release archives by CMake FetchContent.
 Windows builds use MSVC with static dependencies and runtime.
 Result-returning APIs use C++20 `std::variant` value and error alternatives.
+Web code targets the OpenSSL 4 API with deprecated interfaces disabled. Crypto
+operations use provider-based EVP APIs; no older OpenSSL compatibility path is built.
 
 Web builds also require Perl and Make (Jom on Windows) for OpenSSL.
 PostgreSQL support additionally requires Python, Meson, Ninja, Bison, and Flex.
